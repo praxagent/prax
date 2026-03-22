@@ -1,0 +1,107 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+.installed.cfg
+MANIFEST
+build/
+dist/
+eggs/
+.eggs/
+develop-eggs/
+sdist/
+wheels/
+share/python-wheels/
+*.manifest
+*.spec
+
+# ---- Environments ----
+.env
+.venv
+env/
+venv/
+
+# ---- Testing / coverage ----
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+.hypothesis/
+nosetests.xml
+coverage.xml
+
+# ---- Type checkers ----
+.mypy_cache/
+.dmypy.json
+.pytype/
+.pyre/
+cython_debug/
+
+# ---- Editors / IDEs ----
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ---- OS junk ----
+.DS_Store
+Thumbs.db
+
+# ---- Logs ----
+*.log
+
+# ---- Databases ----
+*.db
+*.db-journal
+db.sqlite3
+db.sqlite3-journal
+
+# ---- Media (generated at runtime) ----
+*.mp3
+*.mp4
+*.mpeg
+*.png
+*.pdf
+
+# ---- Prax runtime / state ----
+conversations.db
+app.log
+.ngrok_url
+.self-improve-state.yaml
+flask_session/
+static/temp/
+static/mp3/
+
+# ---- Prax workspaces & user data ----
+workspaces/
+browser_profiles/
+adapters/
+
+# ---- Prax plugin runtime ----
+prax/plugins/registry.json
+prax/plugins/tools/CATALOG.md
+plugin_repo/
+*.prev
+
+# ---- Credentials / secrets ----
+credentials.json
+google.json
+token.json
+nyt_cookies.json
+sites.yaml
+
+# ---- Docker ----
+# (docker-compose.yml and .dockerignore ARE tracked — don't ignore them)
+
+# ---- Claude Code ----
+.claude/
+
+# ---- Misc ----
+pip-log.txt
+pip-delete-this-directory.txt

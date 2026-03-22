@@ -1,0 +1,29 @@
+# LLM routing configuration — which model/provider to use per component.
+#
+# The agent can modify this file at runtime to switch models.
+# Each key is a component name; values override the global defaults
+# from settings (LLM_PROVIDER, BASE_MODEL, AGENT_TEMPERATURE).
+#
+# Supported providers: openai, anthropic, google, ollama, vllm
+
+defaults:
+  provider: null   # null = use env LLM_PROVIDER
+  model: null      # null = use env BASE_MODEL
+  temperature: null  # null = use env AGENT_TEMPERATURE
+
+# Per-component overrides (uncomment to use):
+# components:
+#   orchestrator:
+#     provider: anthropic
+#     model: claude-sonnet-4-20250514
+#     temperature: 0.7
+#
+#   subagent_research:
+#     provider: openai
+#     model: gpt-4o
+#     temperature: 0.3
+#
+#   subagent_coding:
+#     provider: anthropic
+#     model: claude-sonnet-4-20250514
+#     temperature: 0.2

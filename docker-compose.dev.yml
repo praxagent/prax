@@ -1,0 +1,22 @@
+services:
+  sandbox:
+    volumes:
+      # In dev mode, sandbox gets read-write source access for self-improvement.
+      - ./prax:/source/prax
+      - ./app.py:/source/app.py
+      - ./config.py:/source/config.py
+      - ./tests:/source/tests
+
+  app:
+    volumes:
+      # Mount source code for live reload — changes take effect without rebuilding.
+      - ./prax:/app/prax
+      - ./app.py:/app/app.py
+      - ./config.py:/app/config.py
+      - ./scripts:/app/scripts
+      - ./tests:/app/tests
+      - ./sandbox:/app/sandbox
+      # Git repo needed for self-improve deploys (must be read-write for commits).
+      - ./.git:/app/.git
+    environment:
+      - DEBUG=true

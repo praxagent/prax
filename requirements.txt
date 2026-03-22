@@ -1,0 +1,5 @@
+# Dependencies are managed via pyproject.toml + uv.
+# Install locally with:
+#   uv sync
+# Export a traditional requirements file (if needed) with:
+#   uv pip compile pyproject.toml -o requirements.txt

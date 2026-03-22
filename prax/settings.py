@@ -1,0 +1,130 @@
+"""Application settings loaded via Pydantic for validation and reuse."""
+from functools import lru_cache
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class AppSettings(BaseSettings):
+    """Central configuration object loaded from environment or .env file."""
+
+    # Flask / Server
+    flask_secret_key: str = Field(alias="FLASK_SECRET_KEY")
+    session_type: str = Field(default="filesystem", alias="SESSION_TYPE")
+    ngrok_url: str | None = Field(default=None, alias="NGROK_URL")
+    root_phone_number: str | None = Field(default=None, alias="ROOT_PHONE_NUMBER")
+    debug: bool = Field(default=False, alias="DEBUG")
+    log_path: str = Field(default="app.log", alias="LOG_PATH")
+    port: int = Field(default=5001, alias="PORT")
+    database_name: str = Field(default="conversations.db", alias="DATABASE_NAME")
+
+    # Providers / API Keys
+    openai_key: str | None = Field(default=None, alias="OPENAI_KEY")
+    anthropic_key: str | None = Field(default=None, alias="ANTHROPIC_KEY")
+    google_api_key: str | None = Field(default=None, alias="GOOGLE_API_KEY")
+    google_cse_id: str | None = Field(default=None, alias="GOOGLE_CSE_ID")
+    google_vertex_project: str | None = Field(default=None, alias="GOOGLE_VERTEX_PROJECT")
+    google_vertex_location: str | None = Field(default=None, alias="GOOGLE_VERTEX_LOCATION")
+    elevenlabs_api_key: str | None = Field(default=None, alias="ELEVENLABS_API_KEY")
+    twilio_account_sid: str | None = Field(default=None, alias="TWILIO_ACCOUNT_SID")
+    twilio_auth_token: str | None = Field(default=None, alias="TWILIO_AUTH_TOKEN")
+
+    # Models / Agents
+    agent_name: str = Field(default="Prax", alias="AGENT_NAME")
+    base_model: str = Field(default="gpt-4o", alias="BASE_MODEL")
+    default_llm_provider: str = Field(default="openai", alias="LLM_PROVIDER")
+    agent_temperature: float = Field(default=0.7, alias="AGENT_TEMPERATURE")
+
+    # Workspace
+    workspace_dir: str = Field(default="./workspaces", alias="WORKSPACE_DIR")
+
+    # Runtime environment
+    running_in_docker: bool = Field(default=False, alias="RUNNING_IN_DOCKER")
+
+    # Sandbox
+    sandbox_image: str = Field(default="prax-sandbox:latest", alias="SANDBOX_IMAGE")
+    sandbox_host: str = Field(default="localhost", alias="SANDBOX_HOST")
+    sandbox_timeout: int = Field(default=1800, alias="SANDBOX_TIMEOUT")
+    sandbox_max_concurrent: int = Field(default=5, alias="SANDBOX_MAX_CONCURRENT")
+    sandbox_default_model: str = Field(default="openai/gpt-5.4", alias="SANDBOX_DEFAULT_MODEL")
+    sandbox_mem_limit: str = Field(default="1g", alias="SANDBOX_MEM_LIMIT")
+    sandbox_cpu_limit: int = Field(default=2_000_000_000, alias="SANDBOX_CPU_LIMIT")
+    sandbox_max_rounds: int = Field(default=10, alias="SANDBOX_MAX_ROUNDS")
+
+    @property
+    def sandbox_persistent(self) -> bool:
+        """True when the sandbox is always-on (docker-compose deployment)."""
+        return self.running_in_docker
+
+    # Fine-tuning / Local Models (optional — GPU required)
+    finetune_enabled: bool = Field(default=False, alias="FINETUNE_ENABLED")
+    vllm_base_url: str = Field(default="http://localhost:8000/v1", alias="VLLM_BASE_URL")
+    local_model: str = Field(default="Qwen/Qwen3-8B", alias="LOCAL_MODEL")
+    finetune_base_model: str = Field(default="unsloth/Qwen3-8B-unsloth-bnb-4bit", alias="FINETUNE_BASE_MODEL")
+    finetune_output_dir: str = Field(default="./adapters", alias="FINETUNE_OUTPUT_DIR")
+    finetune_max_steps: int = Field(default=60, alias="FINETUNE_MAX_STEPS")
+    finetune_learning_rate: float = Field(default=2e-4, alias="FINETUNE_LEARNING_RATE")
+    finetune_lora_rank: int = Field(default=16, alias="FINETUNE_LORA_RANK")
+
+    # Browser
+    browser_headless: bool = Field(default=True, alias="BROWSER_HEADLESS")
+    browser_timeout: int = Field(default=30000, alias="BROWSER_TIMEOUT")
+    sites_credentials_path: str | None = Field(default=None, alias="SITES_CREDENTIALS_PATH")
+    browser_profile_dir: str | None = Field(default=None, alias="BROWSER_PROFILE_DIR")
+    browser_vnc_enabled: bool = Field(default=False, alias="BROWSER_VNC_ENABLED")
+    browser_vnc_base_port: int = Field(default=5900, alias="BROWSER_VNC_BASE_PORT")
+
+    # Self-improvement (code modification via PRs)
+    self_improve_enabled: bool = Field(default=False, alias="SELF_IMPROVE_ENABLED")
+    self_improve_repo_path: str | None = Field(default=None, alias="SELF_IMPROVE_REPO_PATH")
+
+    # Prax SSH key — base64-encoded private key for pushing workspaces
+    prax_ssh_key_b64: str | None = Field(default=None, alias="PRAX_SSH_KEY_B64")
+
+    # Legacy plugin repo settings (deprecated — use PRAX_SSH_KEY_B64 + workspace push)
+    plugin_repo_url: str | None = Field(default=None, alias="PLUGIN_REPO_URL")
+    plugin_repo_ssh_key_b64: str | None = Field(default=None, alias="PLUGIN_REPO_SSH_KEY_B64")
+    plugin_repo_branch: str = Field(default="plugins", alias="PLUGIN_REPO_BRANCH")
+    plugin_repo_local_path: str = Field(default="./plugin_repo", alias="PLUGIN_REPO_LOCAL_PATH")
+
+    @property
+    def ssh_key_b64(self) -> str | None:
+        """Return the SSH key, preferring PRAX_SSH_KEY_B64 over the legacy setting."""
+        return self.prax_ssh_key_b64 or self.plugin_repo_ssh_key_b64
+
+    # Discord
+    discord_bot_token: str | None = Field(default=None, alias="DISCORD_BOT_TOKEN")
+    discord_allowed_users: str | None = Field(default=None, alias="DISCORD_ALLOWED_USERS")
+    discord_allowed_channels: str | None = Field(default=None, alias="DISCORD_ALLOWED_CHANNELS")
+    discord_to_phone_map: str | None = Field(default=None, alias="DISCORD_TO_PHONE_MAP")
+
+    # External logins
+    nyt_username: str | None = Field(default=None, alias="NYT_USERNAME")
+    nyt_password: str | None = Field(default=None, alias="NYT_PASSWORD")
+
+    # Phone metadata
+    phone_to_name_map: str | None = Field(default=None, alias="PHONE_TO_NAME_MAP")
+    phone_to_email_map: str | None = Field(default=None, alias="PHONE_TO_EMAIL_MAP")
+    phone_to_greeting_map: str | None = Field(default=None, alias="PHONE_TO_GREETING_MAP")
+
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+
+_WEAK_SECRET_KEYS = frozenset({"change-me", "changeme", "secret", "dev", "test", ""})
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> AppSettings:
+    """Return cached settings instance."""
+    s = AppSettings()
+    if s.flask_secret_key.lower().strip() in _WEAK_SECRET_KEYS:
+        import logging
+        logging.getLogger(__name__).warning(
+            "FLASK_SECRET_KEY is set to a weak placeholder ('%s'). "
+            "Generate a strong key for production: python -c \"import secrets; print(secrets.token_urlsafe(32))\"",
+            s.flask_secret_key,
+        )
+    return s
+
+
+settings = get_settings()

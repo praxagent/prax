@@ -1,0 +1,119 @@
+[project]
+name = "prax"
+version = "0.1.0"
+description = "Multi-channel (Twilio + Discord) AI assistant with agentic workflows"
+readme = "README.md"
+requires-python = ">=3.13"
+license = {text = "MIT"}
+dependencies = [
+    "twilio==8.12.0",
+    "openai>=1.104.2",
+    "Flask[async]==3.0.1",
+    "python-dotenv==1.0.1",
+    "pyngrok==7.0.5",
+    "pydub==0.25.1",
+    "tiktoken>=0.9",
+    "pydantic==2.10.4",
+    "pydantic-settings==2.11.0",
+    "langchain>=1.2.13",
+    "langchain-openai>=1.1.11",
+    "langchain-anthropic>=1.4.0",
+    "langchain-google-vertexai>=2.1.2",
+    "langchain-community>=0.3.31",
+    "playwright==1.51.0",
+    "beautifulsoup4==4.12.3",
+    "pytrie==0.4.0",
+    "ffmpeg-python==0.2.0",
+    "google-api-python-client==2.115.0",
+    "google-auth-httplib2==0.2.0",
+    "google-auth-oauthlib==1.2.0",
+    "google-cloud-aiplatform==1.97.0",
+    "yt-dlp>=2025.1.15",
+    "sendgrid @ git+https://github.com/sendgrid/sendgrid-python.git@9515dce6c8229c9cf7272701d0c2664c05727f16",
+    "mutagen==1.47.0",
+    "duckduckgo-search==6.2.7",
+    "ddgs==9.8.0",
+    "nltk==3.8.1",
+    "opendataloader-pdf",
+    "docker>=7.0.0",
+    "requests==2.32.5",
+    "discord.py>=2.4.0",
+    "APScheduler>=3.10.0,<4",
+    "PyYAML>=6.0",
+    "pytest==8.0.0",
+    "Flask-Testing==0.8.1",
+    "coverage[toml]==7.6.4",
+    "langgraph>=1.1.3",
+    "pillow>=12.1.1",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest==8.0.0",
+    "Flask-Testing==0.8.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["prax"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "prax",
+    "app.py",
+    "config.py",
+    "requirements.txt",
+    "README.md",
+    "ROADMAP.md",
+    "tests",
+    "static",
+]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "B",    # flake8-bugbear
+    "I",    # isort
+    "UP",   # pyupgrade
+]
+ignore = [
+    "E501",  # line length (handled by formatter)
+    "E402",  # module-level import not at top (needed for some runtime setups)
+]
+
+[tool.coverage.run]
+branch = true
+source = ["prax"]
+omit = [
+    "prax/blueprints/*",
+    "prax/chatbot.py",
+    "prax/filter_input.py",
+    "prax/helpers_functions.py",
+    "prax/readers/*",
+    "prax/state/*",
+    "prax/token_management.py",
+    "prax/twilio_voice_utils.py",
+    "prax/conversation_memory.py",
+    "prax/agent/orchestrator.py",
+]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.7",
+]

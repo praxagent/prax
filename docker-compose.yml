@@ -1,0 +1,57 @@
+services:
+  ngrok:
+    image: ngrok/ngrok:latest
+    command: http app:5001
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+    ports:
+      - "4040:4040"
+
+  app:
+    build: .
+    entrypoint: ["bash", "scripts/entrypoint.sh"]
+    ports:
+      - "5001:5001"
+    env_file: .env
+    environment:
+      - NGROK_API_URL=http://ngrok:4040
+      - RUNNING_IN_DOCKER=true
+      - SANDBOX_HOST=sandbox
+      # Override WORKSPACE_DIR from .env — inside the container the mount
+      # point is always /app/workspaces regardless of the host path.
+      - WORKSPACE_DIR=./workspaces
+    volumes:
+      - ./conversations.db:/app/conversations.db
+      - ./static:/app/static
+      - ./logs:/app/logs
+      - ${WORKSPACE_DIR:-./workspaces}:/app/workspaces
+      # Required for sandbox package installation (docker exec).
+      # SECURITY: grants host Docker access — use only in trusted environments.
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      ngrok:
+        condition: service_started
+      sandbox:
+        condition: service_healthy
+
+  sandbox:
+    build:
+      context: ./sandbox
+      dockerfile: Dockerfile
+    image: prax-sandbox:latest
+    restart: unless-stopped
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_KEY}
+      - OPENAI_API_KEY=${OPENAI_KEY}
+    volumes:
+      - ${WORKSPACE_DIR:-./workspaces}:/workspaces
+      - ./prax:/source/prax:ro
+      - ./app.py:/source/app.py:ro
+      - ./config.py:/source/config.py:ro
+      - ./tests:/source/tests:ro
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4096/global/health"]
+      interval: 5s
+      timeout: 3s
+      start_period: 15s
+      retries: 5
