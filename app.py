@@ -76,4 +76,17 @@ app = create_app()
 
 if __name__ == '__main__':
     debug_bool = settings.debug
-    app.run(debug=debug_bool, host='0.0.0.0', port=settings.port)
+    app.run(
+        debug=debug_bool,
+        host='0.0.0.0',
+        port=settings.port,
+        exclude_patterns=[
+            "**/.git/*",
+            "**/.github/*",
+            "**/workspaces/*",
+            "**/__pycache__/*",
+            "**/*.pyc",
+            "**/*.log",
+            "**/*.db",
+        ],
+    )
