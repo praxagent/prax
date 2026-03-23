@@ -1479,7 +1479,30 @@ uv run coverage run -m pytest
 uv run coverage report
 ```
 
+Before opening a pull request, run `make ci` to validate everything locally:
+
+```bash
+make ci   # verify action tags + lint + tests
+```
+
+This mirrors the GitHub Actions CI pipeline and catches issues before they hit remote.
+
 Coverage configuration (see `pyproject.toml`) focuses on business logic; Twilio blueprints and heavy IO helpers are excluded until integration tests are added.
+
+### Releases and Semantic Versioning
+
+This project uses [release-please](https://github.com/googleapis/release-please) to automate releases. When commits land on `main`, release-please parses their messages and opens (or updates) a release PR with a version bump and changelog entry.
+
+Commit messages must follow [Conventional Commits](https://www.conventionalcommits.org/):
+
+| Prefix | Version bump | Example |
+|--------|-------------|---------|
+| `fix:` | Patch (0.0.x) | `fix: handle empty transcript` |
+| `feat:` | Minor (0.x.0) | `feat: add arXiv reader plugin` |
+| `feat!:` or `BREAKING CHANGE:` | Major (x.0.0) | `feat!: redesign plugin API` |
+| `chore:`, `docs:`, `refactor:`, `test:` | No bump | `chore: update dependencies` |
+
+Prax's self-improve pipeline uses the `(self-improve)` scope (e.g. `fix(self-improve): correct prompt escaping`) so automated commits are clearly attributed and still trigger the appropriate version bump.
 
 ## Docker
 
@@ -1749,4 +1772,3 @@ Registered tools automatically become available to both SMS and voice flows with
 - [ ] Multi-step browser workflows (e.g., "check my Twitter DMs every morning")
 - [ ] Adapter A/B testing (serve two adapters, compare quality metrics)
 
-Contributions are welcome — please open issues or PRs with reproducible steps and include pytest/coverage output.
