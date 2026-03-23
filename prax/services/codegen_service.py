@@ -238,8 +238,8 @@ def _ensure_staging() -> str:
         raise RuntimeError(f"Failed to clone staging repo: {result.stderr.strip()}")
 
     # Ensure git identity is configured in the staging clone.
-    _run(["git", "config", "user.email", "prax@localhost"], cwd=staging)
-    _run(["git", "config", "user.name", "Prax"], cwd=staging)
+    _run(["git", "config", "user.email", settings.git_author_email], cwd=staging)
+    _run(["git", "config", "user.name", settings.git_author_name], cwd=staging)
 
     # Add a "github" remote pointing to the live repo's upstream.
     gh_url = _run(["git", "remote", "get-url", "origin"], cwd=live)
@@ -537,10 +537,6 @@ def verify_and_deploy(branch_name: str, commit_message: str = "") -> dict[str, A
         if os.path.exists(dst):
             os.remove(dst)
 
-    # Ensure git identity is configured in the live repo before committing.
-    _run(["git", "config", "user.email", "prax@localhost"], cwd=live)
-    _run(["git", "config", "user.name", "Prax"], cwd=live)
-
     # Commit in live repo — only stage the specific files we touched.
     if changed_files:
         _run(["git", "add", "--"] + changed_files, cwd=live)
@@ -557,7 +553,9 @@ def verify_and_deploy(branch_name: str, commit_message: str = "") -> dict[str, A
         deploy_msg = f"{prefix}(self-improve): {rest}"
     else:
         deploy_msg = f"chore(self-improve): {msg}"
-    _run(["git", "commit", "-m", deploy_msg], cwd=live)
+    # Use --author so we don't overwrite the repo's git config.
+    author = f"{settings.git_author_name} <{settings.git_author_email}>"
+    _run(["git", "commit", "-m", deploy_msg, "--author", author], cwd=live)
 
     deployed_count = len(changed_files) + len(deleted_files)
     logger.info(

@@ -77,6 +77,8 @@ class AppSettings(BaseSettings):
     # Self-improvement (code modification via PRs)
     self_improve_enabled: bool = Field(default=False, alias="SELF_IMPROVE_ENABLED")
     self_improve_repo_path: str | None = Field(default=None, alias="SELF_IMPROVE_REPO_PATH")
+    git_author_email: str = Field(default="prax@localhost", alias="GIT_AUTHOR_EMAIL")
+    git_author_name: str = Field(default="Prax", alias="GIT_AUTHOR_NAME")
 
     # Prax SSH key — base64-encoded private key for pushing workspaces
     prax_ssh_key_b64: str | None = Field(default=None, alias="PRAX_SSH_KEY_B64")
