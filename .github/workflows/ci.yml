@@ -7,6 +7,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      FLASK_SECRET_KEY: "ci-test-key"
     steps:
       - uses: actions/checkout@v4
 
