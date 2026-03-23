@@ -99,6 +99,7 @@ Prax is a multi-channel AI assistant powered by a LangGraph ReAct agent. It conn
 | **Channels** | Discord bot (free, WebSocket), Twilio voice + SMS (webhooks), configurable agent name |
 | **Agent** | LangGraph ReAct loop, 106+ tools, dedicated sub-agents (self-improvement, plugin engineering, content authoring, research, coding), watchdog supervisor, automatic checkpoint & retry on failures |
 | **Memory** | SQLite conversations with auto-summarization, git-backed per-user workspaces, dynamic user notes, link history, to-do lists, task plans |
+| **Notes** | Conversation-to-note publishing (Hugo pages with KaTeX, mermaid, syntax highlighting), iterative updates, searchable index, shareable URLs |
 | **Documents** | PDF extraction (arXiv, URLs, attachments), web page summaries, YouTube transcripts, LaTeX compilation |
 | **Code** | Always-on Docker sandbox with [OpenCode](https://opencode.ai/), auto-installs packages, multi-model support, round-based budget control |
 | **Scheduling** | Cron jobs (YAML), one-time reminders, timezone-aware delivery |
@@ -618,6 +619,7 @@ graph LR
 | `prax/agent/scheduler_tools.py` | 9 scheduler tools: recurring cron + one-time reminders |
 | `prax/agent/finetune_tools.py` | 8 fine-tuning tools (harvest, train, verify, promote, rollback) |
 | `prax/agent/codegen_tools.py` | 10 self-improvement tools (worktree, edit, test, lint, verify, deploy, PR) |
+| `prax/agent/note_tools.py` | 4 note tools (create, update, list, search) |
 | `prax/agent/browser_tools.py` | 14 browser tools (navigate, click, fill, screenshot, login, VNC) |
 | `prax/agent/tool_registry.py` | Tool aggregation: built-in + plugin-provided + manually registered |
 | `prax/agent/llm_factory.py` | Multi-provider LLM factory (OpenAI, Anthropic, Google, Ollama, vLLM) |
@@ -636,6 +638,7 @@ graph LR
 | `prax/services/sandbox_service.py` | Docker + OpenCode sandbox lifecycle, archiving, budget control |
 | `prax/services/scheduler_service.py` | APScheduler-backed cron service reading YAML definitions |
 | `prax/services/finetune_service.py` | LoRA fine-tuning pipeline: harvest → train → verify → hot-swap |
+| `prax/services/note_service.py` | Note CRUD, search, Hugo page generation for notes |
 | `prax/services/codegen_service.py` | Self-modification via staging clone + verify + hot-swap / PR workflow |
 | `prax/services/discord_service.py` | Discord bot: message handling, authorization, response delivery |
 | `prax/services/browser_service.py` | Playwright browser automation with per-user sessions |

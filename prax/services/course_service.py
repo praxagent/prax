@@ -258,6 +258,46 @@ _KATEX_HEAD = """\
 </script>
 """
 
+_THEME_CSS = """\
+  :root {
+    --bg: #ffffff; --text: #1a1a1a; --text-muted: #666; --link: #0056b3;
+    --code-bg: #f4f4f4; --border: #ddd; --border-light: #eee;
+    --blockquote-bg: #f0f7ff; --blockquote-border: #0056b3;
+    --table-header: #f4f4f4; --table-stripe: #fafafa;
+    --tag-bg: #e9ecef; --progress-bg: #e9ecef;
+    --h1-border: #333;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1a1a2e; --text: #e0e0e0; --text-muted: #999; --link: #6db3f2;
+      --code-bg: #2a2a3e; --border: #444; --border-light: #333;
+      --blockquote-bg: #1e2a3a; --blockquote-border: #6db3f2;
+      --table-header: #2a2a3e; --table-stripe: #222238;
+      --tag-bg: #333348; --progress-bg: #333348;
+      --h1-border: #888;
+    }
+    img { opacity: 0.9; }
+  }
+  body { max-width: 48rem; margin: 2rem auto; padding: 0 1rem; font-family: system-ui, sans-serif; line-height: 1.6; color: var(--text); background: var(--bg); }
+  h1 { border-bottom: 2px solid var(--h1-border); padding-bottom: .3rem; }
+  h2 { margin-top: 2rem; }
+  pre { background: var(--code-bg); padding: 1rem; overflow-x: auto; border-radius: 4px; }
+  code { background: var(--code-bg); padding: 0.15rem 0.3rem; border-radius: 3px; font-size: 0.9em; }
+  pre code { background: none; padding: 0; }
+  a { color: var(--link); }
+  blockquote { border-left: 4px solid var(--blockquote-border); margin: 1.5rem 0; padding: 1rem 1.2rem; background: var(--blockquote-bg); border-radius: 0 4px 4px 0; }
+  blockquote strong { color: var(--blockquote-border); }
+  .mermaid { margin: 1.5rem 0; text-align: center; }
+  table { border-collapse: collapse; width: 100%; margin: 1.5rem 0; }
+  th, td { border: 1px solid var(--border); padding: 0.6rem 0.8rem; text-align: left; }
+  th { background: var(--table-header); font-weight: 600; }
+  tr:nth-child(even) { background: var(--table-stripe); }
+  .meta { color: var(--text-muted); font-size: 0.9em; margin-bottom: 2rem; }
+  .progress { background: var(--progress-bg); border-radius: 4px; overflow: hidden; height: 8px; margin: 1rem 0; }
+  .progress-bar { background: #28a745; height: 100%; }
+  img { max-width: 100%; height: auto; }
+"""
+
 _HUGO_SINGLE = """\
 <!DOCTYPE html>
 <html lang="en">
@@ -267,24 +307,8 @@ _HUGO_SINGLE = """\
 <title>{{ .Title }}</title>
 """ + _KATEX_HEAD + """\
 <style>
-  body { max-width: 48rem; margin: 2rem auto; padding: 0 1rem; font-family: system-ui, sans-serif; line-height: 1.6; color: #1a1a1a; }
-  h1 { border-bottom: 2px solid #333; padding-bottom: .3rem; }
-  h2 { margin-top: 2rem; }
-  pre { background: #f4f4f4; padding: 1rem; overflow-x: auto; border-radius: 4px; }
-  code { background: #f4f4f4; padding: 0.15rem 0.3rem; border-radius: 3px; font-size: 0.9em; }
-  pre code { background: none; padding: 0; }
-  a { color: #0056b3; }
-  blockquote { border-left: 4px solid #0056b3; margin: 1.5rem 0; padding: 1rem 1.2rem; background: #f0f7ff; border-radius: 0 4px 4px 0; }
-  blockquote strong { color: #0056b3; }
-  .mermaid { margin: 1.5rem 0; text-align: center; }
-  table { border-collapse: collapse; width: 100%; margin: 1.5rem 0; }
-  th, td { border: 1px solid #ddd; padding: 0.6rem 0.8rem; text-align: left; }
-  th { background: #f4f4f4; font-weight: 600; }
-  tr:nth-child(even) { background: #fafafa; }
-  .meta { color: #666; font-size: 0.9em; margin-bottom: 2rem; }
-  .nav { margin: 2rem 0; padding: 1rem 0; border-top: 1px solid #ddd; display: flex; justify-content: space-between; }
-  .progress { background: #e9ecef; border-radius: 4px; overflow: hidden; height: 8px; margin: 1rem 0; }
-  .progress-bar { background: #28a745; height: 100%; }
+""" + _THEME_CSS + """\
+  .nav { margin: 2rem 0; padding: 1rem 0; border-top: 1px solid var(--border); display: flex; justify-content: space-between; }
 </style>
 </head>
 <body>
@@ -309,13 +333,10 @@ _HUGO_LIST = """\
 <title>{{ .Title }}</title>
 """ + _KATEX_HEAD + """\
 <style>
-  body { max-width: 48rem; margin: 2rem auto; padding: 0 1rem; font-family: system-ui, sans-serif; line-height: 1.6; color: #1a1a1a; }
-  h1 { border-bottom: 2px solid #333; padding-bottom: .3rem; }
-  .module { padding: 0.8rem 0; border-bottom: 1px solid #eee; }
+""" + _THEME_CSS + """\
+  .module { padding: 0.8rem 0; border-bottom: 1px solid var(--border-light); }
   .module a { text-decoration: none; font-weight: 600; }
-  .module .status { font-size: 0.85em; color: #666; }
-  .progress { background: #e9ecef; border-radius: 4px; overflow: hidden; height: 8px; margin: 1rem 0; }
-  .progress-bar { background: #28a745; height: 100%; }
+  .module .status { font-size: 0.85em; color: var(--text-muted); }
 </style>
 </head>
 <body>
@@ -490,54 +511,6 @@ def build_course_site(user_id: str, course_id: str, base_url: str) -> dict:
         return err
 
     url = f"{base_url.rstrip('/')}/courses/{course_id}/"
-    return {"url": url, "public_dir": os.path.join(site, "public")}
-
-
-def publish_page(user_id: str, slug: str, title: str, content: str, base_url: str) -> dict:
-    """Publish an ad-hoc rich content page (math, diagrams, etc.) via Hugo.
-
-    Creates a standalone page at /courses/pages/<slug>/ and rebuilds the site.
-    Use this when a text response would be too long, too complex (heavy LaTeX),
-    or would benefit from proper HTML rendering.
-
-    Returns dict with 'url' or 'error'.
-    """
-    with _get_lock(user_id):
-        root = _ensure_workspace(user_id)
-        site = _ensure_hugo_site(root, base_url)
-
-        pages_dir = os.path.join(site, "content", "pages")
-        os.makedirs(pages_dir, exist_ok=True)
-
-        # Write the page index if it doesn't exist.
-        index_path = os.path.join(pages_dir, "_index.md")
-        if not os.path.isfile(index_path):
-            with open(index_path, "w", encoding="utf-8") as f:
-                f.write('---\ntitle: "Pages"\n---\n\nShared pages and explanations.\n')
-
-        safe_slug = re.sub(r"[^a-z0-9]+", "-", slug.lower()).strip("-")[:60] or "page"
-        page_content = f'---\ntitle: "{title}"\ndate: {datetime.now(UTC).isoformat()}\n---\n\n{content}\n'
-
-        page_path = os.path.join(pages_dir, f"{safe_slug}.md")
-        with open(page_path, "w", encoding="utf-8") as f:
-            f.write(page_content)
-
-        # Also regenerate all course content so the site stays complete.
-        courses_root = _courses_dir(root)
-        for entry in sorted(os.listdir(courses_root)):
-            if entry.startswith("_"):
-                continue
-            cp = os.path.join(courses_root, entry)
-            if os.path.isdir(cp) and os.path.isfile(os.path.join(cp, _COURSE_FILE)):
-                _generate_hugo_content(root, entry)
-
-        _git_commit(root, f"Publish page: {safe_slug}")
-
-    err = _run_hugo(site)
-    if err:
-        return err
-
-    url = f"{base_url.rstrip('/')}/courses/pages/{safe_slug}/"
     return {"url": url, "public_dir": os.path.join(site, "public")}
 
 

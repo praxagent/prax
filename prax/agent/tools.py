@@ -18,6 +18,7 @@ from prax.agent.codegen_tools import build_codegen_tools
 from prax.agent.course_author_agent import build_course_author_tools
 from prax.agent.course_tools import build_course_tools
 from prax.agent.finetune_tools import build_finetune_tools
+from prax.agent.note_tools import build_note_tools
 from prax.agent.plugin_fix_agent import build_plugin_fix_tools
 from prax.agent.plugin_tools import build_plugin_tools
 from prax.agent.sandbox_tools import build_sandbox_tools
@@ -178,4 +179,5 @@ def build_default_tools():
         + build_self_improve_tools()
         + build_plugin_fix_tools()
         + build_course_author_tools()
+        + build_note_tools()
     )
