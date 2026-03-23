@@ -1482,7 +1482,7 @@ uv run coverage report
 Before opening a pull request, run `make ci` to validate everything locally:
 
 ```bash
-make ci   # verify action tags + lint + tests
+make ci   # actionlint + ruff + pytest
 ```
 
 This mirrors the GitHub Actions CI pipeline and catches issues before they hit remote.
