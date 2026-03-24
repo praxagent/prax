@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from langchain_core.tools import tool
 
+from prax.agent.action_policy import RiskLevel, risk_tool
 from prax.services import codegen_service
 
 
@@ -102,7 +103,7 @@ def self_improve_verify(branch_name: str) -> str:
     return "\n".join(lines)
 
 
-@tool
+@risk_tool(risk=RiskLevel.HIGH)
 def self_improve_deploy(branch_name: str, commit_message: str = "") -> str:
     """Verify and hot-swap changes into the live app.
 
@@ -246,13 +247,24 @@ def self_improve_cleanup(branch_name: str) -> str:
 
 
 def build_codegen_tools() -> list:
-    """Return codegen tools only if SELF_IMPROVE_ENABLED is true."""
-    from prax.settings import settings
-    if not settings.self_improve_enabled:
-        return []
+    """Return all codegen tools (for use by sub-agents that do the work)."""
     return [
         self_improve_start, self_improve_read, self_improve_write,
         self_improve_test, self_improve_lint, self_improve_verify,
         self_improve_deploy, self_improve_rollback, self_improve_submit,
         self_improve_pending, self_improve_list, self_improve_cleanup,
     ]
+
+
+def build_codegen_tools_for_main_agent() -> list:
+    """Return only the user-facing codegen tools for the main agent.
+
+    Internal tools (start, read, write, test, lint, verify, deploy, submit,
+    list, cleanup) are only used by the self-improvement sub-agent which
+    builds its own tool list.  This keeps the main agent under the
+    OpenAI 128-tool limit.
+    """
+    from prax.settings import settings
+    if not settings.self_improve_enabled:
+        return []
+    return [self_improve_pending, self_improve_rollback]

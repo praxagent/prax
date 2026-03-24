@@ -14,6 +14,21 @@ def _get_user_id() -> str:
     return uid
 
 
+def _parse_tags(tags: str, default: list[str] | None = None) -> list[str]:
+    if tags:
+        return [t.strip() for t in tags.split(",") if t.strip()]
+    return default or []
+
+
+def _format_ingest_result(result: dict, verb: str = "Saved as note") -> str:
+    if "error" in result:
+        return result["error"]
+    return (
+        f"{verb}: **{result['title']}** (`{result['slug']}`)\n"
+        f"URL: {result['url']}"
+    )
+
+
 @tool
 def note_create(title: str, content: str, tags: str = "") -> str:
     """Create a note from the current conversation and publish it as a web page.
@@ -31,28 +46,11 @@ def note_create(title: str, content: str, tags: str = "") -> str:
         content: Full markdown content for the note.
         tags: Comma-separated tags for search (e.g. "math, linear-algebra").
     """
-    from prax.utils.ngrok import get_ngrok_url
-
-    uid = _get_user_id()
-    base_url = get_ngrok_url()
-    if not base_url:
-        return (
-            "Cannot publish note — NGROK_URL is not configured.\n"
-            "Set NGROK_URL in your .env to enable note links."
-        )
-
-    tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
-
     try:
-        meta = note_service.create_note(uid, title, content, tag_list)
-        result = note_service.publish_notes(uid, base_url, slug=meta["slug"])
-        if "error" in result:
-            return f"Note saved but Hugo build failed: {result['error']}"
-        return (
-            f"Note created: **{meta['title']}** (`{meta['slug']}`)\n"
-            f"URL: {result['url']}\n"
-            f"Update anytime with note_update."
+        result = note_service.save_and_publish(
+            _get_user_id(), title, content, tags=_parse_tags(tags),
         )
+        return _format_ingest_result(result, verb="Note created")
     except Exception as e:
         return f"Error creating note: {e}"
 
@@ -152,6 +150,138 @@ def note_search(query: str) -> str:
         return f"Error searching notes: {e}"
 
 
+@tool
+def url_to_note(url: str, title: str = "", tags: str = "") -> str:
+    """Fetch a web page and save its content as a note.
+
+    Downloads the URL, extracts readable content, and publishes it as a
+    rendered note the user can read in their browser.
+
+    Args:
+        url: The web page URL to fetch.
+        title: Optional title (auto-detected from page if empty).
+        tags: Comma-separated tags.
+    """
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+
+        resp = requests.get(url, timeout=30, headers={"User-Agent": "Prax/1.0"})
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Extract title from page if not provided.
+        if not title:
+            title_el = soup.find("title")
+            title = title_el.get_text(strip=True) if title_el else url
+
+        # Extract main content — try article/main first, fall back to body.
+        content_el = None
+        for selector in ("article", "main", "[role=main]", ".post-content", ".entry-content"):
+            content_el = soup.select_one(selector)
+            if content_el:
+                break
+        if not content_el:
+            content_el = soup.find("body")
+
+        # Strip scripts, styles, navs.
+        if content_el:
+            for tag in content_el.find_all(["script", "style", "nav", "header", "footer", "aside"]):
+                tag.decompose()
+            text = content_el.get_text("\n\n", strip=True)
+        else:
+            text = soup.get_text("\n\n", strip=True)
+
+        # Truncate if extremely long.
+        if len(text) > 50000:
+            text = text[:50000] + "\n\n*[Content truncated]*"
+
+        result = note_service.save_and_publish(
+            _get_user_id(), title, text,
+            tags=_parse_tags(tags, default=["web"]),
+            source_url=url,
+        )
+        return _format_ingest_result(result)
+    except Exception as e:
+        return f"Error creating note from URL: {e}"
+
+
+@tool
+def pdf_to_note(filename: str, title: str = "", tags: str = "") -> str:
+    """Extract text from a PDF in the workspace and save it as a note.
+
+    The PDF must already be saved in the active workspace (e.g. via
+    workspace_save or as a received attachment).
+
+    Args:
+        filename: PDF filename in the active workspace.
+        title: Optional title (defaults to filename).
+        tags: Comma-separated tags.
+    """
+    uid = _get_user_id()
+    try:
+        from prax.services import workspace_service
+        content_raw = workspace_service.read_file(uid, filename)
+
+        # If it's binary PDF data, try extraction.
+        if content_raw.startswith("%PDF") or not content_raw.strip():
+            return (
+                f"Cannot read {filename} as text. "
+                "Use the sandbox to extract PDF content with a tool like pymupdf or pdfplumber, "
+                "then pass the extracted text to note_create."
+            )
+
+        note_title = title or filename.replace(".pdf", "").replace("_", " ").title()
+        result = note_service.save_and_publish(
+            uid, note_title, content_raw,
+            tags=_parse_tags(tags, default=["pdf"]),
+        )
+        return _format_ingest_result(result)
+    except FileNotFoundError:
+        return f"File {filename} not found in workspace."
+    except Exception as e:
+        return f"Error creating note from PDF: {e}"
+
+
+@tool
+def note_link(from_slug: str, to_slug: str) -> str:
+    """Create a bidirectional link between two notes.
+
+    Links are stored in each note's metadata and displayed on the rendered
+    page as "Related Notes".  Use this to build connections between topics.
+
+    Args:
+        from_slug: The note to link from.
+        to_slug: The note to link to.
+    """
+    uid = _get_user_id()
+    try:
+        # Read both notes to verify they exist.
+        from_note = note_service.get_note(uid, from_slug)
+        to_note = note_service.get_note(uid, to_slug)
+
+        # Add links (stored as 'related' field in frontmatter).
+        from_related = from_note.get("related", [])
+        to_related = to_note.get("related", [])
+
+        if to_slug not in from_related:
+            from_related.append(to_slug)
+        if from_slug not in to_related:
+            to_related.append(from_slug)
+
+        note_service.update_note(uid, from_slug, related=from_related)
+        note_service.update_note(uid, to_slug, related=to_related)
+
+        return f"Linked `{from_slug}` ↔ `{to_slug}`"
+    except FileNotFoundError as e:
+        return f"Note not found: {e}"
+    except Exception as e:
+        return f"Error linking notes: {e}"
+
+
 def build_note_tools() -> list:
     """Return the list of note tools to register with the main agent."""
-    return [note_create, note_update, note_list, note_search]
+    return [
+        note_create, note_update, note_list, note_search,
+        url_to_note, pdf_to_note, note_link,
+    ]

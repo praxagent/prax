@@ -8,17 +8,17 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 from datetime import UTC, datetime
 
 import yaml
 
 from prax.services.workspace_service import (
-    _ensure_workspace,
-    _get_lock,
-    _git_commit,
-    _safe_join,
+    ensure_workspace,
+    get_lock,
+    git_commit,
+    safe_join,
 )
+from prax.utils.text import slugify
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +28,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _slugify(text: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
-    return slug[:60] or "note"
+    return slugify(text, fallback="note")
 
 
 def _notes_dir(root: str) -> str:
@@ -39,7 +38,7 @@ def _notes_dir(root: str) -> str:
 
 
 def _note_path(root: str, slug: str) -> str:
-    return _safe_join(_notes_dir(root), f"{slug}.md")
+    return safe_join(_notes_dir(root), f"{slug}.md")
 
 
 def _parse_note(path: str) -> dict:
@@ -59,6 +58,7 @@ def _parse_note(path: str) -> dict:
     meta.setdefault("slug", os.path.splitext(os.path.basename(path))[0])
     meta.setdefault("title", meta["slug"])
     meta.setdefault("tags", [])
+    meta.setdefault("related", [])
     meta.setdefault("created_at", "")
     meta.setdefault("updated_at", "")
     meta["content"] = content
@@ -66,19 +66,23 @@ def _parse_note(path: str) -> dict:
 
 
 def _write_note(path: str, title: str, content: str, tags: list[str],
-                created_at: str | None = None) -> dict:
+                created_at: str | None = None,
+                related: list[str] | None = None) -> dict:
     now = datetime.now(UTC).isoformat()
-    meta = {
+    meta: dict = {
         "title": title,
         "tags": tags,
         "created_at": created_at or now,
         "updated_at": now,
     }
+    if related:
+        meta["related"] = related
     front = yaml.dump(meta, default_flow_style=False, sort_keys=False, allow_unicode=True)
     with open(path, "w", encoding="utf-8") as f:
         f.write(f"---\n{front}---\n\n{content}\n")
     meta["slug"] = os.path.splitext(os.path.basename(path))[0]
     meta["content"] = content
+    meta.setdefault("related", [])
     return meta
 
 
@@ -89,8 +93,8 @@ def _write_note(path: str, title: str, content: str, tags: list[str],
 def create_note(user_id: str, title: str, content: str,
                 tags: list[str] | None = None) -> dict:
     """Create a new note. Returns note metadata including slug."""
-    with _get_lock(user_id):
-        root = _ensure_workspace(user_id)
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
         slug = _slugify(title)
 
         # Deduplicate slug.
@@ -102,15 +106,16 @@ def create_note(user_id: str, title: str, content: str,
 
         path = _note_path(root, slug)
         meta = _write_note(path, title, content, tags or [])
-        _git_commit(root, f"Create note: {title}")
+        git_commit(root, f"Create note: {title}")
         return meta
 
 
 def update_note(user_id: str, slug: str, content: str | None = None,
-                title: str | None = None, tags: list[str] | None = None) -> dict:
+                title: str | None = None, tags: list[str] | None = None,
+                related: list[str] | None = None) -> dict:
     """Update an existing note. Only provided fields are changed."""
-    with _get_lock(user_id):
-        root = _ensure_workspace(user_id)
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
         path = _note_path(root, slug)
         if not os.path.isfile(path):
             raise FileNotFoundError(f"Note not found: {slug}")
@@ -121,15 +126,16 @@ def update_note(user_id: str, slug: str, content: str | None = None,
             content=content if content is not None else existing["content"],
             tags=tags if tags is not None else existing["tags"],
             created_at=existing["created_at"],
+            related=related if related is not None else existing.get("related", []),
         )
-        _git_commit(root, f"Update note: {meta['title']}")
+        git_commit(root, f"Update note: {meta['title']}")
         return meta
 
 
 def get_note(user_id: str, slug: str) -> dict:
     """Read a single note."""
-    with _get_lock(user_id):
-        root = _ensure_workspace(user_id)
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
         path = _note_path(root, slug)
         if not os.path.isfile(path):
             raise FileNotFoundError(f"Note not found: {slug}")
@@ -138,8 +144,8 @@ def get_note(user_id: str, slug: str) -> dict:
 
 def list_notes(user_id: str) -> list[dict]:
     """List all notes with metadata (no content)."""
-    with _get_lock(user_id):
-        root = _ensure_workspace(user_id)
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
         notes_root = _notes_dir(root)
         results = []
         for fname in sorted(os.listdir(notes_root)):
@@ -161,8 +167,8 @@ def list_notes(user_id: str) -> list[dict]:
 
 def search_notes(user_id: str, query: str) -> list[dict]:
     """Search notes by title, tags, and content. Returns matching notes."""
-    with _get_lock(user_id):
-        root = _ensure_workspace(user_id)
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
         notes_root = _notes_dir(root)
         query_lower = query.lower()
         results = []
@@ -195,11 +201,46 @@ def search_notes(user_id: str, query: str) -> list[dict]:
         return results
 
 
+def save_and_publish(
+    user_id: str,
+    title: str,
+    content: str,
+    tags: list[str] | None = None,
+    source_url: str | None = None,
+) -> dict:
+    """Create a note and publish it in one step.
+
+    This is the unified ingest endpoint — all document pipelines
+    (URL, PDF, arXiv, manual) should use this instead of calling
+    create_note + publish_notes separately.
+
+    Returns ``{"slug", "title", "url"}`` on success or ``{"error": ...}``.
+    """
+    from prax.utils.ngrok import get_ngrok_url
+
+    base_url = get_ngrok_url()
+    if not base_url:
+        return {"error": "Cannot publish — NGROK_URL is not configured."}
+
+    if source_url:
+        content = f"**Source:** [{source_url}]({source_url})\n\n---\n\n{content}"
+
+    meta = create_note(user_id, title, content, tags or [])
+    result = publish_notes(user_id, base_url, slug=meta["slug"])
+    if "error" in result:
+        return {"error": f"Note saved but Hugo build failed: {result['error']}"}
+    return {
+        "slug": meta["slug"],
+        "title": meta["title"],
+        "url": result["url"],
+    }
+
+
 # ---------------------------------------------------------------------------
 # Hugo integration
 # ---------------------------------------------------------------------------
 
-from prax.services.course_service import _KATEX_HEAD, _THEME_CSS  # noqa: E402
+from prax.services.course_service import KATEX_HEAD, THEME_CSS  # noqa: E402
 
 _HUGO_NOTES_LIST = """\
 <!DOCTYPE html>
@@ -209,7 +250,7 @@ _HUGO_NOTES_LIST = """\
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ .Title }}</title>
 <style>
-""" + _THEME_CSS + """\
+""" + THEME_CSS + """\
   .search { width: 100%; padding: 0.6rem; font-size: 1rem; border: 1px solid var(--border); border-radius: 4px; margin-bottom: 1.5rem; box-sizing: border-box; background: var(--bg); color: var(--text); }
   .note { padding: 0.8rem 0; border-bottom: 1px solid var(--border-light); }
   .note a { text-decoration: none; font-weight: 600; }
@@ -256,10 +297,16 @@ _HUGO_NOTES_SINGLE = """\
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ .Title }}</title>
-""" + _KATEX_HEAD + """\
+""" + KATEX_HEAD + """\
 <style>
-""" + _THEME_CSS + """\
+""" + THEME_CSS + """\
   .meta .tags span { background: var(--tag-bg); padding: 0.1rem 0.5rem; border-radius: 3px; margin-right: 0.3rem; font-size: 0.85em; }
+  .related { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+  .related h2 { font-size: 1.1em; margin-bottom: 0.5rem; }
+  .related ul { list-style: none; padding: 0; }
+  .related li { padding: 0.3rem 0; }
+  .related a { text-decoration: none; }
+  .related a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -270,6 +317,14 @@ _HUGO_NOTES_SINGLE = """\
   {{ with .Params.updated_at }}Last updated: {{ . }}{{ end }}
 </div>
 {{ .Content }}
+{{ with .Params.related }}
+<div class="related">
+  <h2>Related Notes</h2>
+  <ul>
+  {{ range . }}<li><a href="../{{ . }}/">{{ . }}</a></li>{{ end }}
+  </ul>
+</div>
+{{ end }}
 </body>
 </html>
 """
@@ -277,9 +332,9 @@ _HUGO_NOTES_SINGLE = """\
 
 def _generate_hugo_notes(root: str) -> None:
     """Generate Hugo content files for all notes in the workspace."""
-    from prax.services.course_service import _hugo_site_dir
+    from prax.services.course_service import hugo_site_dir
 
-    site = _hugo_site_dir(root)
+    site = hugo_site_dir(root)
     notes_content_dir = os.path.join(site, "content", "notes")
     os.makedirs(notes_content_dir, exist_ok=True)
 
@@ -307,10 +362,12 @@ def _generate_hugo_notes(root: str) -> None:
             continue
 
         tags_yaml = yaml.dump(meta["tags"], default_flow_style=True).strip()
+        related_yaml = yaml.dump(meta.get("related", []), default_flow_style=True).strip()
         page = (
             f'---\n'
             f'title: "{meta["title"]}"\n'
             f'tags: {tags_yaml}\n'
+            f'related: {related_yaml}\n'
             f'updated_at: "{meta["updated_at"]}"\n'
             f'date: "{meta["created_at"]}"\n'
             f'---\n\n'
@@ -327,33 +384,33 @@ def publish_notes(user_id: str, base_url: str, slug: str | None = None) -> dict:
     Returns dict with 'url' or 'error'.
     """
     from prax.services.course_service import (
-        _courses_dir,
-        _ensure_hugo_site,
-        _generate_hugo_content,
-        _hugo_site_dir,
-        _run_hugo,
+        courses_dir,
+        ensure_hugo_site,
+        generate_hugo_content,
+        hugo_site_dir,
+        run_hugo,
     )
 
-    with _get_lock(user_id):
-        root = _ensure_workspace(user_id)
-        site = _ensure_hugo_site(root, base_url)
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
+        site = ensure_hugo_site(root, base_url)
 
         # Generate notes content.
         _generate_hugo_notes(root)
 
         # Also regenerate all course content so the site stays complete.
-        courses_root = _courses_dir(root)
+        courses_root = courses_dir(root)
         for entry in sorted(os.listdir(courses_root)):
             if entry.startswith("_"):
                 continue
             cp = os.path.join(courses_root, entry)
             yaml_path = os.path.join(cp, "course.yaml")
             if os.path.isdir(cp) and os.path.isfile(yaml_path):
-                _generate_hugo_content(root, entry)
+                generate_hugo_content(root, entry)
 
-        _git_commit(root, f"Publish notes{': ' + slug if slug else ''}")
+        git_commit(root, f"Publish notes{': ' + slug if slug else ''}")
 
-    err = _run_hugo(site if 'site' in dir() else _hugo_site_dir(root))
+    err = run_hugo(site if 'site' in dir() else hugo_site_dir(root))
     if err:
         return err
 

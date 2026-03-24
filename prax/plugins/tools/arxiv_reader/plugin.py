@@ -298,12 +298,8 @@ def arxiv_to_note(arxiv_id: str, include_source: bool = True) -> str:
     """
     from prax.agent.user_context import current_user_id
     from prax.services import note_service
-    from prax.utils.ngrok import get_ngrok_url
 
     uid = current_user_id.get() or "unknown"
-    base_url = get_ngrok_url()
-    if not base_url:
-        return "Cannot create note — NGROK_URL is not configured."
 
     # Fetch paper metadata.
     paper = _fetch_paper_detail(arxiv_id.strip())
@@ -339,13 +335,14 @@ def arxiv_to_note(arxiv_id: str, include_source: bool = True) -> str:
     tags = ["arxiv"] + paper["categories"][:3]
 
     try:
-        meta = note_service.create_note(uid, paper["title"], content, tags)
-        result = note_service.publish_notes(uid, base_url, slug=meta["slug"])
+        result = note_service.save_and_publish(
+            uid, paper["title"], content, tags=tags,
+            source_url=paper["abs_url"],
+        )
         if "error" in result:
-            return f"Note saved but Hugo build failed: {result['error']}"
+            return result["error"]
         return (
-            f"Paper saved as note: **{paper['title']}**\n"
-            f"Note: `{meta['slug']}`\n"
+            f"Paper saved as note: **{result['title']}** (`{result['slug']}`)\n"
             f"URL: {result['url']}\n\n"
             f"Use note_update to add annotations or summaries."
         )

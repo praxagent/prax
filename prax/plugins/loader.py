@@ -23,6 +23,25 @@ from prax.plugins.monitored_tool import wrap_with_monitoring
 from prax.plugins.registry import PluginRegistry
 from prax.plugins.sandbox import sandbox_test_plugin
 
+# Late import helper to avoid circular dependency with tools module.
+_builtin_tool_names: set[str] | None = None
+_builtin_lock = threading.Lock()
+
+
+def _get_builtin_tool_names() -> set[str]:
+    """Return the set of built-in (non-plugin) tool names, cached after first call."""
+    global _builtin_tool_names
+    if _builtin_tool_names is None:
+        with _builtin_lock:
+            if _builtin_tool_names is None:
+                try:
+                    from prax.agent.tools import build_default_tools
+                    _builtin_tool_names = {t.name for t in build_default_tools()}
+                except Exception:
+                    logger.warning("Could not load built-in tool names for protection check")
+                    _builtin_tool_names = set()
+    return _builtin_tool_names
+
 logger = logging.getLogger(__name__)
 
 _PLUGINS_ROOT = Path(__file__).parent / "tools"
@@ -170,6 +189,7 @@ class PluginLoader:
         tools: list[BaseTool] = []
         tool_map: dict[str, str] = {}
         seen_tool_names: set[str] = set()
+        builtin_names = _get_builtin_tool_names()
 
         for plugin_file, rel_key in ordered_plugins:
             try:
@@ -179,6 +199,12 @@ class PluginLoader:
                     if isinstance(plugin_tools, list):
                         new_tools = []
                         for t in plugin_tools:
+                            if t.name in builtin_names:
+                                logger.warning(
+                                    "Rejecting plugin tool %s from %s — cannot override built-in tool",
+                                    t.name, rel_key,
+                                )
+                                continue
                             if t.name in seen_tool_names:
                                 logger.info(
                                     "Skipping duplicate tool %s from %s (already loaded from higher-priority source)",

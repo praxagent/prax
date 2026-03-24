@@ -1,0 +1,42 @@
+"""Canonical trace event type vocabulary.
+
+All trace emitters and consumers share this definition so that filtering,
+logging, and documentation stay in sync.  Standalone — no prax imports.
+
+Usage::
+
+    from prax.trace_events import TraceEvent
+
+    entry = {"type": TraceEvent.TOOL_CALL, "content": "..."}
+    # or filter:
+    search_trace(uid, "sandbox", type_filter=TraceEvent.AUDIT)
+"""
+from __future__ import annotations
+
+from enum import StrEnum
+
+
+class TraceEvent(StrEnum):
+    """Known trace entry types.
+
+    Inherits from ``str`` so values can be used directly as dict values
+    and compared with plain strings (e.g. ``entry["type"] == TraceEvent.AUDIT``).
+    """
+
+    USER = "user"
+    ASSISTANT = "assistant"
+    SYSTEM = "system"
+    TOOL_CALL = "tool_call"
+    TOOL_RESULT = "tool_result"
+    AUDIT = "audit"
+    ERROR = "error"
+
+    @classmethod
+    def values(cls) -> set[str]:
+        """Return all known event type strings."""
+        return {e.value for e in cls}
+
+    @classmethod
+    def is_valid(cls, value: str) -> bool:
+        """Check whether *value* is a known event type."""
+        return value in cls.values()

@@ -197,7 +197,7 @@ class TestHugoSiteGeneration:
         """_ensure_hugo_site creates config, layouts, and content dirs."""
         from prax.services.workspace_service import _ensure_workspace
         root = _ensure_workspace(USER)
-        site = course_service._ensure_hugo_site(root, "https://example.ngrok.io")
+        site = course_service.ensure_hugo_site(root, "https://example.ngrok.io")
 
         assert os.path.isfile(os.path.join(site, "hugo.toml"))
         assert os.path.isfile(os.path.join(site, "layouts", "_default", "single.html"))
@@ -214,10 +214,10 @@ class TestHugoSiteGeneration:
         course_id = self._setup_course_with_modules()
         from prax.services.workspace_service import _ensure_workspace
         root = _ensure_workspace(USER)
-        course_service._ensure_hugo_site(root, "https://example.ngrok.io")
-        course_service._generate_hugo_content(root, course_id)
+        course_service.ensure_hugo_site(root, "https://example.ngrok.io")
+        course_service.generate_hugo_content(root, course_id)
 
-        site = course_service._hugo_site_dir(root)
+        site = course_service.hugo_site_dir(root)
         index_path = os.path.join(site, "content", course_id, "_index.md")
         assert os.path.isfile(index_path)
         with open(index_path) as f:
@@ -232,10 +232,10 @@ class TestHugoSiteGeneration:
         course_id = self._setup_course_with_modules()
         from prax.services.workspace_service import _ensure_workspace
         root = _ensure_workspace(USER)
-        course_service._ensure_hugo_site(root, "https://example.ngrok.io")
-        course_service._generate_hugo_content(root, course_id)
+        course_service.ensure_hugo_site(root, "https://example.ngrok.io")
+        course_service.generate_hugo_content(root, course_id)
 
-        site = course_service._hugo_site_dir(root)
+        site = course_service.hugo_site_dir(root)
         content_dir = os.path.join(site, "content", course_id)
         md_files = [f for f in os.listdir(content_dir) if f != "_index.md"]
         assert len(md_files) == 3
@@ -261,10 +261,10 @@ class TestHugoSiteGeneration:
         course_id = self._setup_course_with_modules()
         from prax.services.workspace_service import _ensure_workspace
         root = _ensure_workspace(USER)
-        course_service._ensure_hugo_site(root, "https://example.ngrok.io")
-        course_service._generate_hugo_content(root, course_id)
+        course_service.ensure_hugo_site(root, "https://example.ngrok.io")
+        course_service.generate_hugo_content(root, course_id)
 
-        site = course_service._hugo_site_dir(root)
+        site = course_service.hugo_site_dir(root)
         with open(os.path.join(site, "content", course_id, "_index.md")) as f:
             content = f.read()
         # 1/3 = 33%
@@ -280,7 +280,7 @@ class TestHugoSiteGeneration:
         from prax.services.workspace_service import _ensure_workspace
         root = _ensure_workspace(USER)
         # Manually create the public dir (simulating a Hugo build).
-        public = os.path.join(course_service._hugo_site_dir(root), "public")
+        public = os.path.join(course_service.hugo_site_dir(root), "public")
         os.makedirs(public, exist_ok=True)
         result = course_service.get_course_site_public_dir(USER)
         assert result is not None
@@ -299,16 +299,16 @@ class TestHugoSiteGeneration:
 
         from prax.services.workspace_service import _ensure_workspace
         root = _ensure_workspace(USER)
-        site = course_service._ensure_hugo_site(root, "https://example.ngrok.io")
+        site = course_service.ensure_hugo_site(root, "https://example.ngrok.io")
 
         # Monkeypatch _run_hugo to avoid needing the binary.
-        original_run = course_service._run_hugo
-        course_service._run_hugo = lambda s: None  # no-op
+        original_run = course_service.run_hugo
+        course_service.run_hugo = lambda s: None  # no-op
 
         try:
             course_service.build_course_site(USER, "learn_python", "https://example.ngrok.io")
         finally:
-            course_service._run_hugo = original_run
+            course_service.run_hugo = original_run
 
         # Both courses should have content generated.
         content_dir = os.path.join(site, "content")

@@ -20,6 +20,7 @@ from pathlib import Path
 
 from langchain_core.tools import tool
 
+from prax.agent.action_policy import RiskLevel, risk_tool
 from prax.agent.user_context import current_user_id
 from prax.plugins.loader import get_plugin_loader
 
@@ -105,7 +106,7 @@ def plugin_read(name: str) -> str:
     return abs_path.read_text()
 
 
-@tool
+@risk_tool(risk=RiskLevel.HIGH)
 def plugin_write(name: str, code: str, description: str = "") -> str:
     """Write or update a plugin and run sandbox tests.
 
@@ -200,7 +201,7 @@ def plugin_test(name: str) -> str:
     return f"FAILED.\nErrors: {result['errors']}"
 
 
-@tool
+@risk_tool(risk=RiskLevel.HIGH)
 def plugin_activate(name: str) -> str:
     """Activate a plugin, making its tools available to the agent.
 

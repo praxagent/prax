@@ -14,6 +14,7 @@ from prax.agent.user_context import current_user_id
 from prax.plugins.prompt_manager import get_prompt_manager
 from prax.services.workspace_service import append_trace, save_instructions
 from prax.settings import settings
+from prax.trace_events import TraceEvent
 
 logger = logging.getLogger(__name__)
 
@@ -247,7 +248,19 @@ class ConversationAgent:
         """Append the full agent invocation trace to the workspace log."""
         if not user_id:
             return
-        entries: list[dict] = [{"type": "user", "content": user_input}]
+
+        # Flush the governance audit log into the trace.
+        from prax.agent.governed_tool import drain_audit_log
+        audit_entries = drain_audit_log()
+        for entry in audit_entries:
+            risk_tag = f"[{entry['risk'].upper()}]" if entry.get("risk") else ""
+            logger.debug(
+                "Audit: %s %s args=%s result=%s",
+                entry.get("tool_name"), risk_tag,
+                entry.get("args", ""), entry.get("result", ""),
+            )
+
+        entries: list[dict] = [{"type": TraceEvent.USER, "content": user_input}]
         for msg in messages:
             if isinstance(msg, SystemMessage):
                 continue  # skip — already persisted as instructions.md
@@ -259,16 +272,27 @@ class ConversationAgent:
                     name = tc.get("name", "unknown")
                     args = tc.get("args", {})
                     entries.append({
-                        "type": "tool_call",
+                        "type": TraceEvent.TOOL_CALL,
                         "content": f"{name}({args})",
                     })
                 if msg.content:
-                    entries.append({"type": "assistant", "content": msg.content})
+                    entries.append({"type": TraceEvent.ASSISTANT, "content": msg.content})
             elif isinstance(msg, ToolMessage):
                 entries.append({
-                    "type": "tool_result",
+                    "type": TraceEvent.TOOL_RESULT,
                     "content": f"[{msg.name}] {msg.content}",
                 })
+
+        # Append governance audit entries to the trace.
+        for audit in audit_entries:
+            entries.append({
+                "type": TraceEvent.AUDIT,
+                "content": (
+                    f"[{audit.get('risk', '?').upper()}] {audit.get('tool_name', '?')} "
+                    f"args={audit.get('args', '')} result={audit.get('result', '')}"
+                ),
+            })
+
         try:
             append_trace(user_id, entries)
         except Exception:

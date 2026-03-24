@@ -79,8 +79,8 @@ Thumbs.db
 # === Browser profile (binary blobs — not for git) ===
 .browser_profile/
 
-# === Agent trace log (append-only, stays local) ===
-trace.log
+# === Rotated logs (kept as plain text for grep) ===
+# archive/trace_logs/ — tracked by git for searchability
 
 # === Shared temp dir (sandbox ↔ app scratch space) ===
 .tmp/
@@ -92,7 +92,7 @@ trace.log
 """
 
 
-def _safe_join(base: str, *parts: str) -> str:
+def safe_join(base: str, *parts: str) -> str:
     """Join paths and verify the result stays within *base*.
 
     Raises ``ValueError`` if the resolved path escapes the base directory
@@ -112,21 +112,22 @@ _workspace_locks: dict[str, threading.Lock] = {}
 _lock_guard = threading.Lock()
 
 
-def _get_lock(user_id: str) -> threading.Lock:
+def get_lock(user_id: str) -> threading.Lock:
     with _lock_guard:
         if user_id not in _workspace_locks:
             _workspace_locks[user_id] = threading.Lock()
         return _workspace_locks[user_id]
 
 
-def _workspace_root(user_id: str) -> str:
+def workspace_root(user_id: str) -> str:
+    """Return the workspace root path for *user_id* (without creating it)."""
     safe_id = user_id.lstrip("+")
     return os.path.join(settings.workspace_dir, safe_id)
 
 
-def _ensure_workspace(user_id: str) -> str:
+def ensure_workspace(user_id: str) -> str:
     """Create workspace dirs + git init if they don't exist. Returns workspace root."""
-    root = _workspace_root(user_id)
+    root = workspace_root(user_id)
     active = os.path.join(root, "active")
     archive = os.path.join(root, "archive")
     plugins_custom = os.path.join(root, "plugins", "custom")
@@ -138,27 +139,27 @@ def _ensure_workspace(user_id: str) -> str:
     if not os.path.isdir(os.path.join(root, ".git")):
         subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True)
         subprocess.run(
-            ["git", "config", "user.email", "workspace@localhost"],
+            ["git", "config", "user.email", settings.git_author_email],
             cwd=root, check=True, capture_output=True,
         )
         subprocess.run(
-            ["git", "config", "user.name", f"{settings.agent_name} Workspace"],
+            ["git", "config", "user.name", settings.git_author_name],
             cwd=root, check=True, capture_output=True,
         )
         # Write mandatory .gitignore.
         with open(os.path.join(root, ".gitignore"), "w", encoding="utf-8") as f:
             f.write(_WORKSPACE_GITIGNORE)
-        _git_commit(root, "Initialize workspace")
+        git_commit(root, "Initialize workspace")
     # Ensure .gitignore exists even for workspaces created before this change.
     gitignore_path = os.path.join(root, ".gitignore")
     if not os.path.isfile(gitignore_path):
         with open(gitignore_path, "w", encoding="utf-8") as f:
             f.write(_WORKSPACE_GITIGNORE)
-        _git_commit(root, "Add workspace .gitignore")
+        git_commit(root, "Add workspace .gitignore")
     return root
 
 
-def _git_commit(root: str, message: str) -> None:
+def git_commit(root: str, message: str) -> None:
     """Stage all changes and commit if there's anything to commit."""
     r = subprocess.run(["git", "add", "-A"], cwd=root, capture_output=True, text=True)
     if r.returncode != 0:
@@ -176,19 +177,19 @@ def _git_commit(root: str, message: str) -> None:
 
 def save_user_notes(user_id: str, content: str) -> str:
     """Save user_notes.md to the workspace root (not active/). Git commit."""
-    with _get_lock(user_id):
-        root = _ensure_workspace(user_id)
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
         filepath = os.path.join(root, "user_notes.md")
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(content)
-        _git_commit(root, "Update user notes")
+        git_commit(root, "Update user notes")
         logger.info("Updated user_notes.md for %s", user_id)
         return filepath
 
 
 def read_user_notes(user_id: str) -> str:
     """Read user_notes.md from the workspace root. Returns empty string if missing."""
-    root = _workspace_root(user_id)
+    root = workspace_root(user_id)
     filepath = os.path.join(root, "user_notes.md")
     if not os.path.isfile(filepath):
         return ""
@@ -198,8 +199,8 @@ def read_user_notes(user_id: str) -> str:
 
 def append_link(user_id: str, url: str, description: str = "") -> str:
     """Append a link entry to links.md in the workspace root. Git commit."""
-    with _get_lock(user_id):
-        root = _ensure_workspace(user_id)
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
         filepath = os.path.join(root, "links.md")
 
         existing = ""
@@ -219,14 +220,14 @@ def append_link(user_id: str, url: str, description: str = "") -> str:
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(existing + entry)
 
-        _git_commit(root, f"Log link: {url[:50]}")
+        git_commit(root, f"Log link: {url[:50]}")
         logger.info("Logged link for %s: %s", user_id, url[:80])
         return filepath
 
 
 def read_links(user_id: str) -> str:
     """Read links.md from the workspace root. Returns empty string if missing."""
-    root = _workspace_root(user_id)
+    root = workspace_root(user_id)
     filepath = os.path.join(root, "links.md")
     if not os.path.isfile(filepath):
         return ""
@@ -236,31 +237,31 @@ def read_links(user_id: str) -> str:
 
 def save_file(user_id: str, filename: str, content: str) -> str:
     """Save text content to active/{filename}, git commit. Returns the file path."""
-    with _get_lock(user_id):
-        root = _ensure_workspace(user_id)
-        filepath = _safe_join(root, "active", filename)
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
+        filepath = safe_join(root, "active", filename)
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(content)
-        _git_commit(root, f"Save {filename} to active workspace")
+        git_commit(root, f"Save {filename} to active workspace")
         logger.info("Saved %s to workspace for %s", filename, user_id)
         return filepath
 
 
 def save_binary(user_id: str, filename: str, src_path: str) -> str:
     """Copy a binary file to archive/{filename}, git commit. Returns dest path."""
-    with _get_lock(user_id):
-        root = _ensure_workspace(user_id)
-        dest = _safe_join(root, "archive", filename)
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
+        dest = safe_join(root, "archive", filename)
         shutil.copy2(src_path, dest)
-        _git_commit(root, f"Archive original: {filename}")
+        git_commit(root, f"Archive original: {filename}")
         logger.info("Archived binary %s for %s", filename, user_id)
         return dest
 
 
 def read_file(user_id: str, filename: str) -> str:
     """Read a file from active/. Raises FileNotFoundError if missing."""
-    root = _workspace_root(user_id)
-    filepath = _safe_join(root, "active", filename)
+    root = workspace_root(user_id)
+    filepath = safe_join(root, "active", filename)
     with open(filepath, encoding="utf-8") as f:
         return f.read()
 
@@ -273,7 +274,7 @@ _BUILD_ARTIFACT_EXTS = frozenset({
 
 def list_active(user_id: str) -> list[str]:
     """List filenames in active/. Filters out hidden files, dirs, and build artifacts."""
-    root = _workspace_root(user_id)
+    root = workspace_root(user_id)
     active_dir = os.path.join(root, "active")
     if not os.path.isdir(active_dir):
         return []
@@ -291,21 +292,21 @@ def list_active(user_id: str) -> list[str]:
 
 def archive_file(user_id: str, filename: str) -> str:
     """Move file from active/ to archive/. Git commit. Returns new path."""
-    with _get_lock(user_id):
-        root = _ensure_workspace(user_id)
-        src = _safe_join(root, "active", filename)
-        dst = _safe_join(root, "archive", filename)
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
+        src = safe_join(root, "active", filename)
+        dst = safe_join(root, "archive", filename)
         if not os.path.exists(src):
             raise FileNotFoundError(f"{filename} not found in active workspace")
         shutil.move(src, dst)
-        _git_commit(root, f"Archive {filename}: moved from active to archive")
+        git_commit(root, f"Archive {filename}: moved from active to archive")
         logger.info("Archived %s for %s", filename, user_id)
         return dst
 
 
 def search_archive(user_id: str, query: str) -> list[dict]:
     """Grep archive/ for query. Returns list of {filename, snippet} dicts."""
-    root = _workspace_root(user_id)
+    root = workspace_root(user_id)
     archive_dir = os.path.join(root, "archive")
     if not os.path.isdir(archive_dir):
         return []
@@ -331,14 +332,14 @@ def search_archive(user_id: str, query: str) -> list[dict]:
 
 def restore_file(user_id: str, filename: str) -> str:
     """Move file from archive/ to active/. Git commit. Returns new path."""
-    with _get_lock(user_id):
-        root = _ensure_workspace(user_id)
-        src = _safe_join(root, "archive", filename)
-        dst = _safe_join(root, "active", filename)
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
+        src = safe_join(root, "archive", filename)
+        dst = safe_join(root, "active", filename)
         if not os.path.exists(src):
             raise FileNotFoundError(f"{filename} not found in archive")
         shutil.move(src, dst)
-        _git_commit(root, f"Restore {filename}: moved from archive to active")
+        git_commit(root, f"Restore {filename}: moved from archive to active")
         logger.info("Restored %s for %s", filename, user_id)
         return dst
 
@@ -348,14 +349,14 @@ def restore_file(user_id: str, filename: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _todos_path(user_id: str) -> str:
-    return os.path.join(_workspace_root(user_id), "todos.yaml")
+    return os.path.join(workspace_root(user_id), "todos.yaml")
 
 
 def _read_todos(user_id: str) -> list[dict]:
     path = _todos_path(user_id)
     # Migrate: read legacy .json if .yaml doesn't exist yet.
     if not os.path.isfile(path):
-        legacy = os.path.join(_workspace_root(user_id), "todos.json")
+        legacy = os.path.join(workspace_root(user_id), "todos.json")
         if os.path.isfile(legacy):
             with open(legacy, encoding="utf-8") as f:
                 return json.load(f)
@@ -365,20 +366,20 @@ def _read_todos(user_id: str) -> list[dict]:
 
 
 def _write_todos(user_id: str, todos: list[dict]) -> None:
-    root = _ensure_workspace(user_id)
+    root = ensure_workspace(user_id)
     with open(os.path.join(root, "todos.yaml"), "w", encoding="utf-8") as f:
         yaml.dump(todos, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
     # Remove legacy .json if it exists.
     legacy = os.path.join(root, "todos.json")
     if os.path.isfile(legacy):
         os.remove(legacy)
-    _git_commit(root, "Update todos")
+    git_commit(root, "Update todos")
 
 
 def add_todo(user_id: str, task: str) -> dict:
     """Add a task to the user's todo list."""
-    with _get_lock(user_id):
-        _ensure_workspace(user_id)
+    with get_lock(user_id):
+        ensure_workspace(user_id)
         todos = _read_todos(user_id)
         entry = {
             "id": len(todos) + 1,
@@ -404,7 +405,7 @@ def list_todos(user_id: str, show_completed: bool = False) -> list[dict]:
 
 def complete_todo(user_id: str, item_ids: list[int]) -> dict:
     """Mark one or more todo items as completed."""
-    with _get_lock(user_id):
+    with get_lock(user_id):
         todos = _read_todos(user_id)
         completed = []
         for t in todos:
@@ -420,7 +421,7 @@ def complete_todo(user_id: str, item_ids: list[int]) -> dict:
 
 def remove_todos(user_id: str, item_ids: list[int]) -> dict:
     """Remove items from the todo list entirely and re-number."""
-    with _get_lock(user_id):
+    with get_lock(user_id):
         todos = _read_todos(user_id)
         original_len = len(todos)
         todos = [t for t in todos if t["id"] not in item_ids]
@@ -438,7 +439,7 @@ def remove_todos(user_id: str, item_ids: list[int]) -> dict:
 # ---------------------------------------------------------------------------
 
 def _plan_path(user_id: str) -> str:
-    return os.path.join(_workspace_root(user_id), "agent_plan.yaml")
+    return os.path.join(workspace_root(user_id), "agent_plan.yaml")
 
 
 def _write_plan(root: str, plan: dict) -> None:
@@ -452,8 +453,8 @@ def _write_plan(root: str, plan: dict) -> None:
 
 def create_plan(user_id: str, goal: str, steps: list[str]) -> dict:
     """Create a multi-step plan for a complex request."""
-    with _get_lock(user_id):
-        root = _ensure_workspace(user_id)
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
         plan = {
             "id": f"plan-{uuid.uuid4().hex[:6]}",
             "goal": goal,
@@ -464,7 +465,7 @@ def create_plan(user_id: str, goal: str, steps: list[str]) -> dict:
             "created_at": datetime.now(UTC).isoformat(),
         }
         _write_plan(root, plan)
-        _git_commit(root, f"Plan: {goal[:40]}")
+        git_commit(root, f"Plan: {goal[:40]}")
     return plan
 
 
@@ -473,7 +474,7 @@ def read_plan(user_id: str) -> dict | None:
     path = _plan_path(user_id)
     # Migrate: read legacy .json if .yaml doesn't exist yet.
     if not os.path.isfile(path):
-        legacy = os.path.join(_workspace_root(user_id), "agent_plan.json")
+        legacy = os.path.join(workspace_root(user_id), "agent_plan.json")
         if os.path.isfile(legacy):
             with open(legacy, encoding="utf-8") as f:
                 return json.load(f)
@@ -484,16 +485,16 @@ def read_plan(user_id: str) -> dict | None:
 
 def complete_plan_step(user_id: str, step: int) -> dict:
     """Mark a plan step as done."""
-    with _get_lock(user_id):
+    with get_lock(user_id):
         plan = read_plan(user_id)
         if not plan:
             return {"error": "No active plan"}
         for s in plan["steps"]:
             if s["step"] == step:
                 s["done"] = True
-                root = _ensure_workspace(user_id)
+                root = ensure_workspace(user_id)
                 _write_plan(root, plan)
-                _git_commit(root, f"Step {step} done: {s['description'][:30]}")
+                git_commit(root, f"Step {step} done: {s['description'][:30]}")
                 return {"status": "completed", "step": s}
         return {"error": f"Step {step} not found"}
 
@@ -503,14 +504,14 @@ def clear_plan(user_id: str) -> dict:
     path = _plan_path(user_id)
     if os.path.isfile(path):
         os.remove(path)
-        root = _workspace_root(user_id)
-        _git_commit(root, "Plan completed")
+        root = workspace_root(user_id)
+        git_commit(root, "Plan completed")
     # Also clean up legacy .json.
-    legacy = os.path.join(_workspace_root(user_id), "agent_plan.json")
+    legacy = os.path.join(workspace_root(user_id), "agent_plan.json")
     if os.path.isfile(legacy):
         os.remove(legacy)
-        root = _workspace_root(user_id)
-        _git_commit(root, "Plan completed")
+        root = workspace_root(user_id)
+        git_commit(root, "Plan completed")
     return {"status": "cleared"}
 
 
@@ -523,8 +524,8 @@ def save_instructions(user_id: str, content: str) -> None:
 
     Only writes if the content has actually changed (avoids noisy git history).
     """
-    with _get_lock(user_id):
-        root = _ensure_workspace(user_id)
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
         filepath = os.path.join(root, "instructions.md")
         if os.path.isfile(filepath):
             with open(filepath, encoding="utf-8") as f:
@@ -532,12 +533,12 @@ def save_instructions(user_id: str, content: str) -> None:
                     return
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(content)
-        _git_commit(root, "Update instructions reference")
+        git_commit(root, "Update instructions reference")
 
 
 def read_instructions(user_id: str) -> str:
     """Read the instructions reference file. Returns empty string if missing."""
-    root = _workspace_root(user_id)
+    root = workspace_root(user_id)
     filepath = os.path.join(root, "instructions.md")
     if not os.path.isfile(filepath):
         return ""
@@ -554,7 +555,7 @@ def get_workspace_context(user_id: str) -> str:
     parts: list[str] = []
 
     # Load user notes if they exist.
-    root = _workspace_root(user_id)
+    root = workspace_root(user_id)
     notes_path = os.path.join(root, "user_notes.md")
     if os.path.isfile(notes_path):
         try:
@@ -700,8 +701,8 @@ def set_remote(user_id: str, remote_url: str) -> dict:
         return {"error": "Remote repo is public (or visibility could not be verified). "
                 "Only private repos are allowed for workspace push."}
 
-    with _get_lock(user_id):
-        root = _ensure_workspace(user_id)
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
         # Check if origin already exists.
         result = subprocess.run(
             ["git", "remote", "get-url", "origin"],
@@ -730,8 +731,8 @@ def push(user_id: str) -> dict:
     if not env:
         return {"error": "No SSH key configured. Set PRAX_SSH_KEY_B64 in .env."}
 
-    with _get_lock(user_id):
-        root = _ensure_workspace(user_id)
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
 
         # Check remote is configured.
         result = subprocess.run(
@@ -746,7 +747,7 @@ def push(user_id: str) -> dict:
             return {"error": "Remote repo is public — refusing to push."}
 
         # Commit any pending changes.
-        _git_commit(root, "Workspace sync")
+        git_commit(root, "Workspace sync")
 
         # Get current branch name.
         branch_result = subprocess.run(
@@ -787,11 +788,138 @@ _SECURITY_PATTERNS: list[tuple[str, str]] = [
 ]
 
 
+def _ast_scan(source: str, rel_path: str = "<unknown>") -> list[dict]:
+    """Parse *source* with the ``ast`` module and look for dangerous patterns.
+
+    Returns findings in the same format as :func:`scan_plugin_security`:
+    ``[{"file", "line", "pattern", "code"}, ...]``
+    """
+    import ast as _ast
+
+    findings: list[dict] = []
+    try:
+        tree = _ast.parse(source)
+    except SyntaxError:
+        return findings
+
+    source_lines = source.splitlines()
+
+    def _code_at(lineno: int) -> str:
+        if 1 <= lineno <= len(source_lines):
+            return source_lines[lineno - 1].strip()[:120]
+        return ""
+
+    # Dangerous built-in function names.
+    _DANGEROUS_CALLS = {"eval", "exec", "compile", "__import__"}
+
+    for node in _ast.walk(tree):
+        # 1. import subprocess / from subprocess import ...
+        if isinstance(node, _ast.Import):
+            for alias in node.names:
+                if alias.name == "subprocess" or alias.name.startswith("subprocess."):
+                    findings.append({
+                        "file": rel_path,
+                        "line": node.lineno,
+                        "pattern": "AST: import subprocess — may execute arbitrary shell commands",
+                        "code": _code_at(node.lineno),
+                    })
+        elif isinstance(node, _ast.ImportFrom):
+            if node.module and (node.module == "subprocess" or node.module.startswith("subprocess.")):
+                findings.append({
+                    "file": rel_path,
+                    "line": node.lineno,
+                    "pattern": "AST: from subprocess import — may execute arbitrary shell commands",
+                    "code": _code_at(node.lineno),
+                })
+
+        # 2–4. Calls to eval/exec/compile/__import__, os.system, os.popen
+        elif isinstance(node, _ast.Call):
+            func = node.func
+            # Plain name calls: eval(...), exec(...), etc.
+            if isinstance(func, _ast.Name) and func.id in _DANGEROUS_CALLS:
+                findings.append({
+                    "file": rel_path,
+                    "line": node.lineno,
+                    "pattern": f"AST: {func.id}() — executes arbitrary code",
+                    "code": _code_at(node.lineno),
+                })
+            # Attribute calls: os.system(...), os.popen(...)
+            elif isinstance(func, _ast.Attribute):
+                if (
+                    isinstance(func.value, _ast.Name)
+                    and func.value.id == "os"
+                    and func.attr in ("system", "popen")
+                ):
+                    findings.append({
+                        "file": rel_path,
+                        "line": node.lineno,
+                        "pattern": f"AST: os.{func.attr}() — executes shell commands",
+                        "code": _code_at(node.lineno),
+                    })
+                # 6. getattr on __builtins__
+                if (
+                    isinstance(func.value, _ast.Name)
+                    and func.value.id == "getattr"
+                ):
+                    # getattr(__builtins__, ...) is caught when getattr is the call name;
+                    # but getattr is a Name call, handled below.
+                    pass
+
+            # getattr(__builtins__, ...)
+            if isinstance(func, _ast.Name) and func.id == "getattr":
+                if node.args and isinstance(node.args[0], _ast.Name) and node.args[0].id == "__builtins__":
+                    findings.append({
+                        "file": rel_path,
+                        "line": node.lineno,
+                        "pattern": "AST: getattr(__builtins__) — may bypass restrictions",
+                        "code": _code_at(node.lineno),
+                    })
+
+        # 3. Access to os.environ (attribute access, not necessarily a call)
+        elif isinstance(node, _ast.Attribute):
+            if (
+                isinstance(node.value, _ast.Name)
+                and node.value.id == "os"
+                and node.attr == "environ"
+            ):
+                findings.append({
+                    "file": rel_path,
+                    "line": node.lineno,
+                    "pattern": "AST: os.environ — reads environment variables / secrets",
+                    "code": _code_at(node.lineno),
+                })
+
+        # 5. import socket / from socket import ...
+        if isinstance(node, _ast.Import):
+            for alias in node.names:
+                if alias.name == "socket" or alias.name.startswith("socket."):
+                    findings.append({
+                        "file": rel_path,
+                        "line": node.lineno,
+                        "pattern": "AST: import socket — raw network access",
+                        "code": _code_at(node.lineno),
+                    })
+        elif isinstance(node, _ast.ImportFrom):
+            if node.module and (node.module == "socket" or node.module.startswith("socket.")):
+                findings.append({
+                    "file": rel_path,
+                    "line": node.lineno,
+                    "pattern": "AST: from socket import — raw network access",
+                    "code": _code_at(node.lineno),
+                })
+
+    return findings
+
+
 def scan_plugin_security(plugin_dir: str, subfolder: str | None = None) -> list[dict]:
     """Scan plugin Python files for potentially risky patterns.
 
     Returns a list of findings, each with 'file', 'line', 'pattern', and 'code'.
     An empty list means no concerns were found.
+
+    Performs two passes:
+      1. Regex-based line scanning (original patterns).
+      2. AST-based tree walking (catches patterns regex may miss).
     """
     scan_root = plugin_dir
     if subfolder:
@@ -809,9 +937,12 @@ def scan_plugin_security(plugin_dir: str, subfolder: str | None = None) -> list[
             rel_path = os.path.relpath(fpath, plugin_dir)
             try:
                 with open(fpath) as f:
-                    lines = f.readlines()
+                    source = f.read()
             except Exception:
                 continue
+
+            # Pass 1: regex scan.
+            lines = source.splitlines(keepends=True)
             for i, line in enumerate(lines, 1):
                 stripped = line.strip()
                 # Skip comments.
@@ -825,6 +956,10 @@ def scan_plugin_security(plugin_dir: str, subfolder: str | None = None) -> list[
                             "pattern": description,
                             "code": stripped[:120],
                         })
+
+            # Pass 2: AST scan.
+            findings.extend(_ast_scan(source, rel_path))
+
     return findings
 
 
@@ -911,8 +1046,8 @@ def import_plugin_repo(
     if not safe_name:
         return {"error": f"Invalid plugin name: {name}"}
 
-    with _get_lock(user_id):
-        root = _ensure_workspace(user_id)
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
         submodule_path = os.path.join("plugins", "shared", safe_name)
         abs_submodule_path = os.path.join(root, submodule_path)
 
@@ -950,7 +1085,7 @@ def import_plugin_repo(
         msg = f"Import shared plugin: {safe_name}"
         if subfolder:
             msg += f" (subfolder: {subfolder})"
-        _git_commit(root, msg)
+        git_commit(root, msg)
 
     return {
         "status": "imported",
@@ -965,8 +1100,8 @@ def import_plugin_repo(
 def remove_plugin_repo(user_id: str, name: str) -> dict:
     """Remove a shared plugin submodule from the workspace."""
     safe_name = re.sub(r"[^a-zA-Z0-9_-]", "_", name)
-    with _get_lock(user_id):
-        root = _ensure_workspace(user_id)
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
         submodule_path = os.path.join("plugins", "shared", safe_name)
         abs_submodule_path = os.path.join(root, submodule_path)
 
@@ -987,7 +1122,7 @@ def remove_plugin_repo(user_id: str, name: str) -> dict:
         if os.path.isdir(git_modules):
             shutil.rmtree(git_modules)
 
-        _git_commit(root, f"Remove shared plugin: {safe_name}")
+        git_commit(root, f"Remove shared plugin: {safe_name}")
 
     return {"status": "removed", "name": safe_name}
 
@@ -1001,8 +1136,8 @@ def update_plugin_repo(user_id: str, name: str) -> dict:
     Returns a dict with status, changed files, and any security warnings.
     """
     safe_name = re.sub(r"[^a-zA-Z0-9_-]", "_", name)
-    with _get_lock(user_id):
-        root = _ensure_workspace(user_id)
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
         submodule_path = os.path.join("plugins", "shared", safe_name)
         abs_submodule_path = os.path.join(root, submodule_path)
 
@@ -1042,7 +1177,7 @@ def update_plugin_repo(user_id: str, name: str) -> dict:
 
         security_warnings = scan_plugin_security(abs_submodule_path, subfolder)
 
-        _git_commit(root, f"Update shared plugin: {safe_name} ({old_hash[:8]}→{new_hash[:8]})")
+        git_commit(root, f"Update shared plugin: {safe_name} ({old_hash[:8]}→{new_hash[:8]})")
 
     return {
         "status": "updated",
@@ -1055,7 +1190,7 @@ def update_plugin_repo(user_id: str, name: str) -> dict:
 
 def list_shared_plugins(user_id: str) -> list[dict]:
     """List imported shared plugin repos."""
-    root = _workspace_root(user_id)
+    root = workspace_root(user_id)
     shared_dir = os.path.join(root, "plugins", "shared")
     if not os.path.isdir(shared_dir):
         return []
@@ -1101,7 +1236,7 @@ def get_workspace_plugins_dir(user_id: str) -> str | None:
     are re-initialized on first access so that plugin files survive container
     restarts.
     """
-    root = _workspace_root(user_id)
+    root = workspace_root(user_id)
     plugins_dir = os.path.join(root, "plugins")
     if not os.path.isdir(plugins_dir):
         return None
@@ -1139,7 +1274,7 @@ def publish_file(user_id: str, relative_path: str) -> dict:
 
     Returns dict with 'url' and 'token', or 'error'.
     """
-    root = _workspace_root(user_id)
+    root = workspace_root(user_id)
     abs_path = os.path.abspath(os.path.join(root, relative_path))
     # Safety: ensure path stays within workspace.
     if not abs_path.startswith(os.path.abspath(root) + os.sep):
@@ -1199,25 +1334,65 @@ def get_published_file(token: str, filename: str | None = None) -> str | None:
 # ---------------------------------------------------------------------------
 
 _TRACE_FILENAME = "trace.log"
+_TRACE_MAX_BYTES = 512 * 1024  # 0.5 MB — rotate when exceeded
+_TRACE_KEEP_ROTATED = 3  # keep last 3 rotated files
+
+
+def _rotate_trace(trace_path: str) -> None:
+    """Rotate trace.log when it exceeds the size limit.
+
+    Moves trace.log → archive/trace_logs/trace.<timestamp>.log (plain text
+    for grep-ability) and prunes old rotated files beyond _TRACE_KEEP_ROTATED.
+    """
+    try:
+        if not os.path.isfile(trace_path):
+            return
+        if os.path.getsize(trace_path) < _TRACE_MAX_BYTES:
+            return
+
+        root = os.path.dirname(trace_path)
+        archive_dir = os.path.join(root, "archive", "trace_logs")
+        os.makedirs(archive_dir, exist_ok=True)
+
+        ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+        rotated = os.path.join(archive_dir, f"trace.{ts}.log")
+        shutil.move(trace_path, rotated)
+        # Create a fresh trace file with a pointer to archives.
+        with open(trace_path, "w", encoding="utf-8") as f:
+            f.write(f"=== Log rotated at {ts} — previous entries in archive/trace_logs/ ===\n")
+        git_commit(root, f"Rotate trace log ({ts})")
+
+        # Prune old rotated files.
+        rotated_files = sorted(
+            [f for f in os.listdir(archive_dir) if f.endswith(".log")],
+            reverse=True,
+        )
+        for old in rotated_files[_TRACE_KEEP_ROTATED:]:
+            os.remove(os.path.join(archive_dir, old))
+    except OSError:
+        logger.debug("Trace rotation failed for %s", trace_path, exc_info=True)
 
 
 def append_trace(user_id: str, entries: list[dict]) -> None:
     """Append structured trace entries to the user's workspace trace log.
 
     Each entry is a dict with at least ``type`` and ``content`` keys.
-    Supported types: ``user``, ``assistant``, ``system``, ``tool_call``,
-    ``tool_result``, ``error``.
+    See :class:`prax.trace_events.TraceEvent` for the canonical list of
+    supported types.
 
-    The trace file is a flat, append-only log — one timestamped block per
-    agent invocation.  It is *not* committed to git (added to .gitignore)
-    so it doesn't bloat the repo, but it persists on disk for debugging.
+    The trace file is append-only, committed to git, and searchable via
+    conversation_search / conversation_history tools.  Rotated to plain-text
+    archive when it exceeds 0.5 MB.
     """
     if not entries:
         return
-    root = _workspace_root(user_id)
+    root = workspace_root(user_id)
     if not os.path.isdir(root):
         return  # workspace not initialised yet
     trace_path = os.path.join(root, _TRACE_FILENAME)
+
+    _rotate_trace(trace_path)
+
     ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     lines: list[str] = [f"\n=== {ts} ===\n"]
     for entry in entries:
@@ -1232,3 +1407,109 @@ def append_trace(user_id: str, entries: list[dict]) -> None:
             f.writelines(lines)
     except OSError:
         logger.debug("Failed to write trace log for %s", user_id, exc_info=True)
+
+
+def read_trace_tail(user_id: str, lines: int = 200) -> str:
+    """Return the last *lines* lines of the user's trace log."""
+    root = workspace_root(user_id)
+    trace_path = os.path.join(root, _TRACE_FILENAME)
+    if not os.path.isfile(trace_path):
+        return ""
+    with open(trace_path, encoding="utf-8", errors="replace") as f:
+        all_lines = f.readlines()
+    return "".join(all_lines[-lines:])
+
+
+def _search_trace_file(path: str, query_lower: str, results: list[dict],
+                       max_results: int,
+                       type_filter: str | None = None) -> None:
+    """Search a single trace file for blocks matching *query_lower*.
+
+    If *type_filter* is given (e.g. ``"audit"``, ``"tool_call"``), only blocks
+    that contain at least one line with the corresponding ``[TAG]`` prefix are
+    returned, and the excerpt only includes lines matching that tag.
+    """
+    if not os.path.isfile(path):
+        return
+    with open(path, encoding="utf-8", errors="replace") as f:
+        content = f.read()
+
+    tag_prefix: str | None = None
+    if type_filter is not None:
+        tag_prefix = f"[{type_filter.upper()}]"
+
+    import re as _re
+    blocks = _re.split(r"\n(?==== \d{4}-)", content)
+    for block in reversed(blocks):
+        if len(results) >= max_results:
+            return
+        if query_lower not in block.lower():
+            continue
+        ts_match = _re.match(r"=== (\S+) ===", block.strip())
+        ts = ts_match.group(1) if ts_match else "unknown"
+        excerpt_lines = []
+        if tag_prefix is not None:
+            # Only include lines that match both the type tag and the query.
+            for line in block.splitlines():
+                stripped = line.strip()
+                if stripped.startswith(tag_prefix) and query_lower in line.lower():
+                    excerpt_lines.append(stripped)
+            # Skip block entirely if no lines match the type filter.
+            if not excerpt_lines:
+                continue
+        else:
+            for line in block.splitlines():
+                if query_lower in line.lower():
+                    excerpt_lines.append(line.strip())
+        excerpt = "\n".join(excerpt_lines[:5])
+        if len(excerpt) > 500:
+            excerpt = excerpt[:500] + "..."
+        results.append({"timestamp": ts, "excerpt": excerpt})
+
+
+def search_trace(user_id: str, query: str, max_results: int = 20,
+                 type_filter: str | None = None) -> list[dict]:
+    """Search the trace log for blocks containing *query*.
+
+    Searches both the current trace.log and any rotated plain-text
+    archives.  Returns a list of dicts with ``timestamp`` and ``excerpt``
+    keys, most recent first.
+
+    If *type_filter* is given (e.g. ``"audit"``, ``"tool_call"``), only
+    blocks containing at least one line with the corresponding ``[TAG]``
+    prefix are returned, and excerpts only include matching-type lines.
+    """
+    root = workspace_root(user_id)
+    query_lower = query.lower()
+    results: list[dict] = []
+
+    # Search current trace first (most recent).
+    trace_path = os.path.join(root, _TRACE_FILENAME)
+    _search_trace_file(trace_path, query_lower, results, max_results,
+                       type_filter=type_filter)
+
+    # Then search archived files newest-first.
+    archive_dir = os.path.join(root, "archive", "trace_logs")
+    if os.path.isdir(archive_dir):
+        for fname in sorted(os.listdir(archive_dir), reverse=True):
+            if len(results) >= max_results:
+                break
+            if fname.endswith(".log"):
+                _search_trace_file(
+                    os.path.join(archive_dir, fname),
+                    query_lower, results, max_results,
+                    type_filter=type_filter,
+                )
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Deprecated aliases — old underscore-prefixed names kept for backward compat.
+# New code should import the public names above.
+# ---------------------------------------------------------------------------
+_workspace_root = workspace_root
+_safe_join = safe_join
+_ensure_workspace = ensure_workspace
+_get_lock = get_lock
+_git_commit = git_commit

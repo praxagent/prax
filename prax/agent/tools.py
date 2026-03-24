@@ -14,13 +14,14 @@ from datetime import UTC, datetime
 from langchain_core.tools import tool
 
 from prax.agent.browser_tools import build_browser_tools
-from prax.agent.codegen_tools import build_codegen_tools
+from prax.agent.codegen_tools import build_codegen_tools_for_main_agent
 from prax.agent.course_author_agent import build_course_author_tools
 from prax.agent.course_tools import build_course_tools
 from prax.agent.finetune_tools import build_finetune_tools
 from prax.agent.note_tools import build_note_tools
 from prax.agent.plugin_fix_agent import build_plugin_fix_tools
 from prax.agent.plugin_tools import build_plugin_tools
+from prax.agent.project_tools import build_project_tools
 from prax.agent.sandbox_tools import build_sandbox_tools
 from prax.agent.scheduler_tools import build_scheduler_tools
 from prax.agent.self_improve_agent import build_self_improve_tools
@@ -171,7 +172,7 @@ def build_default_tools():
         + build_sandbox_tools()
         + build_scheduler_tools()
         + build_finetune_tools()
-        + build_codegen_tools()
+        + build_codegen_tools_for_main_agent()
         + build_browser_tools()
         + build_subagent_tools()
         + build_plugin_tools()
@@ -180,4 +181,5 @@ def build_default_tools():
         + build_plugin_fix_tools()
         + build_course_author_tools()
         + build_note_tools()
+        + build_project_tools()
     )

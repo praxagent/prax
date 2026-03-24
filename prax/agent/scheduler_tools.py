@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from langchain_core.tools import tool
 
+from prax.agent.action_policy import RiskLevel, risk_tool
 from prax.agent.user_context import current_user_id
 from prax.services import scheduler_service
 
@@ -14,7 +15,7 @@ def _get_user_id() -> str:
     return uid
 
 
-@tool
+@risk_tool(risk=RiskLevel.HIGH)
 def schedule_create(
     description: str,
     prompt: str,
@@ -78,7 +79,7 @@ def schedule_list() -> str:
     return "\n\n".join(lines)
 
 
-@tool
+@risk_tool(risk=RiskLevel.HIGH)
 def schedule_update(
     schedule_id: str,
     description: str | None = None,
@@ -138,7 +139,7 @@ def schedule_reload() -> str:
     return f"Reloaded {result['count']} schedule(s) (timezone: {result['timezone']})"
 
 
-@tool
+@risk_tool(risk=RiskLevel.HIGH)
 def schedule_reminder(
     description: str,
     prompt: str,

@@ -263,6 +263,170 @@ class TestPush:
         assert "remote" in result["error"].lower()
 
 
+class TestTraceLog:
+    def test_append_and_read_trace(self, ws_dir):
+        workspace_service._ensure_workspace(USER)
+        workspace_service.append_trace(USER, [
+            {"type": "user", "content": "hello world"},
+            {"type": "assistant", "content": "hi there"},
+        ])
+        tail = workspace_service.read_trace_tail(USER, 10)
+        assert "hello world" in tail
+        assert "hi there" in tail
+
+    def test_search_trace_finds_match(self, ws_dir):
+        workspace_service._ensure_workspace(USER)
+        workspace_service.append_trace(USER, [
+            {"type": "user", "content": "tell me about quantum computing"},
+        ])
+        results = workspace_service.search_trace(USER, "quantum")
+        assert len(results) == 1
+        assert "quantum" in results[0]["excerpt"]
+
+    def test_search_trace_no_match(self, ws_dir):
+        workspace_service._ensure_workspace(USER)
+        workspace_service.append_trace(USER, [
+            {"type": "user", "content": "hello"},
+        ])
+        results = workspace_service.search_trace(USER, "nonexistent")
+        assert results == []
+
+    def test_rotation_threshold_is_half_mb(self):
+        assert workspace_service._TRACE_MAX_BYTES == 512 * 1024
+
+    def test_rotation_creates_plain_text_archive(self, ws_dir):
+        workspace_service._ensure_workspace(USER)
+        root = workspace_service._workspace_root(USER)
+        trace_path = os.path.join(root, "trace.log")
+
+        # Write more than 0.5 MB to trigger rotation.
+        with open(trace_path, "w") as f:
+            f.write("x" * (600 * 1024))
+
+        workspace_service._rotate_trace(trace_path)
+
+        archive_dir = os.path.join(root, "archive", "trace_logs")
+        assert os.path.isdir(archive_dir)
+        archives = [f for f in os.listdir(archive_dir) if f.endswith(".log")]
+        assert len(archives) == 1
+        # Should be plain text, not gzip.
+        with open(os.path.join(archive_dir, archives[0])) as f:
+            content = f.read()
+        assert "x" * 100 in content
+
+    def test_rotation_truncates_current(self, ws_dir):
+        workspace_service._ensure_workspace(USER)
+        root = workspace_service._workspace_root(USER)
+        trace_path = os.path.join(root, "trace.log")
+
+        with open(trace_path, "w") as f:
+            f.write("x" * (600 * 1024))
+
+        workspace_service._rotate_trace(trace_path)
+
+        with open(trace_path) as f:
+            content = f.read()
+        assert "rotated" in content.lower()
+        assert len(content) < 1000
+
+    def test_search_trace_type_filter_audit(self, ws_dir):
+        workspace_service._ensure_workspace(USER)
+        workspace_service.append_trace(USER, [
+            {"type": "user", "content": "please audit my quantum code"},
+            {"type": "tool_call", "content": "run_audit(quantum)"},
+            {"type": "audit", "content": "quantum audit passed"},
+        ])
+        results = workspace_service.search_trace(USER, "quantum", type_filter="audit")
+        assert len(results) == 1
+        excerpt = results[0]["excerpt"]
+        assert "[AUDIT]" in excerpt
+        assert "[USER]" not in excerpt
+        assert "[TOOL_CALL]" not in excerpt
+
+    def test_search_trace_type_filter_tool_call(self, ws_dir):
+        workspace_service._ensure_workspace(USER)
+        workspace_service.append_trace(USER, [
+            {"type": "user", "content": "call the quantum tool"},
+            {"type": "tool_call", "content": "run_quantum_tool()"},
+            {"type": "audit", "content": "quantum audit note"},
+        ])
+        results = workspace_service.search_trace(USER, "quantum", type_filter="tool_call")
+        assert len(results) == 1
+        excerpt = results[0]["excerpt"]
+        assert "[TOOL_CALL]" in excerpt
+        assert "[USER]" not in excerpt
+        assert "[AUDIT]" not in excerpt
+
+    def test_search_trace_no_filter_returns_all(self, ws_dir):
+        workspace_service._ensure_workspace(USER)
+        workspace_service.append_trace(USER, [
+            {"type": "user", "content": "quantum question"},
+            {"type": "assistant", "content": "quantum answer"},
+            {"type": "audit", "content": "quantum audit log"},
+        ])
+        results = workspace_service.search_trace(USER, "quantum")
+        assert len(results) == 1
+        excerpt = results[0]["excerpt"]
+        # All three types should appear in the excerpt since no filter.
+        assert "[USER]" in excerpt
+        assert "[ASSISTANT]" in excerpt
+        assert "[AUDIT]" in excerpt
+
+    def test_search_trace_type_filter_case_insensitive(self, ws_dir):
+        workspace_service._ensure_workspace(USER)
+        workspace_service.append_trace(USER, [
+            {"type": "user", "content": "quantum question"},
+            {"type": "audit", "content": "quantum audit entry"},
+        ])
+        results_lower = workspace_service.search_trace(USER, "quantum", type_filter="audit")
+        results_upper = workspace_service.search_trace(USER, "quantum", type_filter="AUDIT")
+        assert len(results_lower) == 1
+        assert len(results_upper) == 1
+        assert results_lower[0]["excerpt"] == results_upper[0]["excerpt"]
+
+    def test_search_includes_archived_files(self, ws_dir):
+        workspace_service._ensure_workspace(USER)
+        root = workspace_service._workspace_root(USER)
+
+        # Write an archived file directly.
+        archive_dir = os.path.join(root, "archive", "trace_logs")
+        os.makedirs(archive_dir, exist_ok=True)
+        with open(os.path.join(archive_dir, "trace.20250101-000000.log"), "w") as f:
+            f.write("\n=== 2025-01-01T00:00:00Z ===\n[USER] old quantum discussion\n")
+
+        # Write something different in current trace.
+        trace_path = os.path.join(root, "trace.log")
+        with open(trace_path, "w") as f:
+            f.write("\n=== 2025-03-01T00:00:00Z ===\n[USER] recent topic\n")
+
+        # Search for "quantum" should find the archived entry.
+        results = workspace_service.search_trace(USER, "quantum")
+        assert len(results) == 1
+        assert "quantum" in results[0]["excerpt"]
+
+    def test_rotation_prunes_old_archives(self, ws_dir):
+        workspace_service._ensure_workspace(USER)
+        root = workspace_service._workspace_root(USER)
+        archive_dir = os.path.join(root, "archive", "trace_logs")
+        os.makedirs(archive_dir, exist_ok=True)
+
+        # Create 5 old archive files (beyond _TRACE_KEEP_ROTATED=3).
+        for i in range(5):
+            with open(os.path.join(archive_dir, f"trace.2025010{i}-000000.log"), "w") as f:
+                f.write(f"old log {i}")
+
+        # Trigger rotation.
+        trace_path = os.path.join(root, "trace.log")
+        with open(trace_path, "w") as f:
+            f.write("x" * (600 * 1024))
+
+        workspace_service._rotate_trace(trace_path)
+
+        archives = [f for f in os.listdir(archive_dir) if f.endswith(".log")]
+        # Should keep only _TRACE_KEEP_ROTATED (3) archives.
+        assert len(archives) <= workspace_service._TRACE_KEEP_ROTATED
+
+
 class TestPluginImport:
     def test_derive_name_from_url(self, ws_dir):
         import re

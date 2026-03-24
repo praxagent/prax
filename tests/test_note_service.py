@@ -9,10 +9,10 @@ def _patch_workspace(monkeypatch, tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     monkeypatch.setattr(
-        note_service, "_ensure_workspace", lambda uid: str(workspace)
+        note_service, "ensure_workspace", lambda uid: str(workspace)
     )
-    monkeypatch.setattr(note_service, "_get_lock", _FakeLock)
-    monkeypatch.setattr(note_service, "_git_commit", lambda *a, **kw: None)
+    monkeypatch.setattr(note_service, "get_lock", _FakeLock)
+    monkeypatch.setattr(note_service, "git_commit", lambda *a, **kw: None)
     return workspace
 
 
@@ -127,6 +127,32 @@ class TestSearchNotes:
         assert results == []
 
 
+class TestRelatedNotes:
+    def test_update_with_related(self):
+        meta = note_service.create_note("u1", "Note A", "content A")
+        updated = note_service.update_note(
+            "u1", meta["slug"], related=["note-b", "note-c"],
+        )
+        assert updated["related"] == ["note-b", "note-c"]
+
+    def test_related_persists_through_read(self):
+        note_service.create_note("u1", "Note R", "content")
+        note_service.update_note("u1", "note-r", related=["other-note"])
+        note = note_service.get_note("u1", "note-r")
+        assert note["related"] == ["other-note"]
+
+    def test_related_defaults_to_empty(self):
+        meta = note_service.create_note("u1", "Plain", "content")
+        assert meta["related"] == []
+
+    def test_related_preserved_on_content_update(self):
+        note_service.create_note("u1", "Linked", "v1")
+        note_service.update_note("u1", "linked", related=["peer"])
+        updated = note_service.update_note("u1", "linked", content="v2")
+        assert updated["related"] == ["peer"]
+        assert updated["content"] == "v2"
+
+
 class TestHugoGeneration:
     def test_generates_content_files(self, _patch_workspace):
         workspace = _patch_workspace
@@ -160,3 +186,27 @@ class TestHugoGeneration:
         assert (layouts / "single.html").exists()
         assert "search" in (layouts / "list.html").read_text().lower()
         assert "katex" in (layouts / "single.html").read_text().lower()
+
+    def test_related_notes_in_template(self, _patch_workspace):
+        workspace = _patch_workspace
+        site_dir = workspace / "courses" / "_site"
+        site_dir.mkdir(parents=True, exist_ok=True)
+
+        note_service.create_note("u1", "X", "Y")
+        note_service._generate_hugo_notes(str(workspace))
+
+        single = (site_dir / "layouts" / "notes" / "single.html").read_text()
+        assert "Related Notes" in single
+
+    def test_hugo_content_includes_related(self, _patch_workspace):
+        workspace = _patch_workspace
+        site_dir = workspace / "courses" / "_site"
+        site_dir.mkdir(parents=True, exist_ok=True)
+
+        note_service.create_note("u1", "Linked Note", "content")
+        note_service.update_note("u1", "linked-note", related=["other-note"])
+        note_service._generate_hugo_notes(str(workspace))
+
+        content = (site_dir / "content" / "notes" / "linked-note.md").read_text()
+        assert "related:" in content
+        assert "other-note" in content

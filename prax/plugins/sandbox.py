@@ -7,9 +7,17 @@ cannot crash the running agent.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import textwrap
+
+_SAFE_ENV = {
+    "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+    "HOME": os.environ.get("HOME", "/tmp"),
+    "LANG": os.environ.get("LANG", "en_US.UTF-8"),
+    "PYTHONPATH": os.environ.get("PYTHONPATH", ""),
+}
 
 
 def sandbox_test_plugin(plugin_path: str, *, timeout: int = 30) -> dict:
@@ -63,6 +71,7 @@ def sandbox_test_plugin(plugin_path: str, *, timeout: int = 30) -> dict:
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=_SAFE_ENV,
         )
     except subprocess.TimeoutExpired:
         return {"passed": False, "errors": ["Plugin test timed out"], "tools": []}

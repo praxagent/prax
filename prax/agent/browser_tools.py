@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from langchain_core.tools import tool
 
+from prax.agent.action_policy import RiskLevel, risk_tool
 from prax.agent.user_context import current_user_id
 from prax.services import browser_service
 
@@ -54,7 +55,7 @@ def browser_screenshot() -> str:
     return f"Screenshot saved: {result['path']} (page: {result['url']})"
 
 
-@tool
+@risk_tool(risk=RiskLevel.HIGH)
 def browser_click(selector: str) -> str:
     """Click an element on the current page.
 
@@ -67,7 +68,7 @@ def browser_click(selector: str) -> str:
     return f"Clicked '{selector}'. Current URL: {result['url']}"
 
 
-@tool
+@risk_tool(risk=RiskLevel.HIGH)
 def browser_fill(selector: str, text: str) -> str:
     """Type text into a form field on the current page.
 
@@ -148,7 +149,7 @@ def browser_close() -> str:
 # VNC / persistent profile tools
 # ---------------------------------------------------------------------------
 
-@tool
+@risk_tool(risk=RiskLevel.HIGH)
 def browser_request_login(url: str = "") -> str:
     """Start a VNC-based interactive login session for manual browser login.
 
@@ -169,7 +170,7 @@ def browser_request_login(url: str = "") -> str:
     return result.get("instructions", f"VNC session started on port {result.get('vnc_port')}")
 
 
-@tool
+@risk_tool(risk=RiskLevel.HIGH)
 def browser_finish_login() -> str:
     """Finish the VNC interactive login session and save the browser profile.
 
