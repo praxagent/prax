@@ -30,6 +30,12 @@ class TraceEvent(StrEnum):
     TOOL_RESULT = "tool_result"
     AUDIT = "audit"
     ERROR = "error"
+    PLUGIN_IMPORT = "plugin_import"
+    PLUGIN_ACTIVATE = "plugin_activate"
+    PLUGIN_BLOCK = "plugin_block"
+    PLUGIN_ROLLBACK = "plugin_rollback"
+    PLUGIN_REMOVE = "plugin_remove"
+    PLUGIN_SECURITY_WARN = "plugin_security_warn"
 
     @classmethod
     def values(cls) -> set[str]:

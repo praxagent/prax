@@ -20,7 +20,7 @@ from pathlib import Path
 from langchain_core.tools import BaseTool
 
 from prax.plugins.monitored_tool import wrap_with_monitoring
-from prax.plugins.registry import PluginRegistry
+from prax.plugins.registry import PluginRegistry, PluginTrust
 from prax.plugins.sandbox import sandbox_test_plugin
 
 # Late import helper to avoid circular dependency with tools module.
@@ -165,33 +165,37 @@ class PluginLoader:
         This lets Prax override built-in plugins by writing improved versions.
         """
         # Collect plugins from all sources, highest-priority first.
-        ordered_plugins: list[tuple[Path, str]] = []
+        # Each entry is (abs_path, rel_key, trust_tier).
+        ordered_plugins: list[tuple[Path, str, str]] = []
 
         # Priority 1 (highest): workspace plugins (custom + shared submodules)
         with self._lock:
             ws_dirs = list(self._workspace_dirs)
         for ws_dir in ws_dirs:
             if ws_dir.is_dir():
-                ordered_plugins.extend(self._discover_plugins(ws_dir))
+                for item in self._discover_plugins(ws_dir):
+                    ordered_plugins.append((*item, PluginTrust.WORKSPACE))
 
         # Priority 2: legacy plugin repo (deprecated — kept for backward compat)
         try:
             from prax.plugins.repo import get_plugin_repo
             repo = get_plugin_repo()
             if repo:
-                ordered_plugins.extend(self._discover_plugins(repo.plugins_dir))
+                for item in self._discover_plugins(repo.plugins_dir):
+                    ordered_plugins.append((*item, PluginTrust.IMPORTED))
         except Exception:
             logger.debug("Plugin repo not available", exc_info=True)
 
         # Priority 3: built-in plugins (which includes custom/ via recursion)
-        ordered_plugins.extend(self._discover_plugins(_PLUGINS_ROOT))
+        for item in self._discover_plugins(_PLUGINS_ROOT):
+            ordered_plugins.append((*item, PluginTrust.BUILTIN))
 
         tools: list[BaseTool] = []
         tool_map: dict[str, str] = {}
         seen_tool_names: set[str] = set()
         builtin_names = _get_builtin_tool_names()
 
-        for plugin_file, rel_key in ordered_plugins:
+        for plugin_file, rel_key, trust_tier in ordered_plugins:
             try:
                 mod = self._import_plugin(plugin_file)
                 if hasattr(mod, "register"):
@@ -217,6 +221,8 @@ class PluginLoader:
                             seen_tool_names.add(t.name)
                             new_tools.append(t)
                         if new_tools:
+                            version = getattr(mod, "PLUGIN_VERSION", "1")
+                            self.registry.activate_plugin(rel_key, version, trust_tier=trust_tier)
                             logger.info(
                                 "Loaded plugin %s: %s",
                                 rel_key,
@@ -322,8 +328,33 @@ class PluginLoader:
         if self.registry.needs_rollback(rel):
             logger.warning("Auto-rolling back plugin %s after repeated failures", rel)
             self.rollback(rel)
+            self._emit_audit_event(
+                "plugin_rollback", rel,
+                "reason=auto_rollback_repeated_failures",
+            )
             return True
         return False
+
+    @staticmethod
+    def _emit_audit_event(event_type: str, plugin_name: str, details: str = "") -> None:
+        """Best-effort audit event emission from the loader.
+
+        Guarded because the loader may run at startup before any user context
+        is available.
+        """
+        try:
+            from prax.agent.user_context import current_user_id
+            from prax.services.workspace_service import append_trace
+            uid = current_user_id.get()
+            if not uid:
+                return
+            entry = {
+                "type": event_type,
+                "content": f"plugin={plugin_name} {details}".strip(),
+            }
+            append_trace(uid, [entry])
+        except Exception:
+            pass  # Best-effort — don't block plugin operations
 
     # ------------------------------------------------------------------
     # Catalog

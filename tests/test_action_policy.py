@@ -1,24 +1,18 @@
 """Tests for prax.agent.action_policy."""
 from __future__ import annotations
 
-import importlib.util
-import pathlib
-import sys
-
-# Load the module directly from its file path to avoid triggering the
-# heavy prax.agent.__init__.py import chain.
-_path = pathlib.Path(__file__).resolve().parent.parent / "prax" / "agent" / "action_policy.py"
-_spec = importlib.util.spec_from_file_location("prax.agent.action_policy", _path)
-_mod = importlib.util.module_from_spec(_spec)
-sys.modules[_spec.name] = _mod
-_spec.loader.exec_module(_mod)
-
-RiskLevel = _mod.RiskLevel
-get_risk_level = _mod.get_risk_level
-requires_confirmation = _mod.requires_confirmation
-log_action = _mod.log_action
-risk_tool = _mod.risk_tool
-
+# Reference to the module for the coverage enforcement test.
+import prax.agent.action_policy as _mod
+from prax.agent.action_policy import (
+    TOOL_CAPABILITIES,
+    RiskLevel,
+    SourceReliability,
+    get_risk_level,
+    get_tool_capability,
+    log_action,
+    requires_confirmation,
+    risk_tool,
+)
 
 # ── classification ───────────────────────────────────────────────────
 
@@ -109,6 +103,39 @@ def test_risk_tool_attaches_risk_level():
         return x
 
     assert med_tool._risk_level is RiskLevel.MEDIUM
+
+
+# ── tool capability metadata ──────────────────────────────────────────
+
+
+def test_source_reliability_enum_values():
+    assert SourceReliability.VERIFIED.value == "verified"
+    assert SourceReliability.INDICATIVE.value == "indicative"
+    assert SourceReliability.INFORMATIONAL.value == "informational"
+
+
+def test_background_search_is_informational():
+    cap = get_tool_capability("background_search_tool")
+    assert cap is not None
+    assert cap["reliability"] is SourceReliability.INFORMATIONAL
+    assert "live prices" in cap["not_good_for"]
+
+
+def test_flight_search_is_verified():
+    cap = get_tool_capability("flight_search")
+    assert cap is not None
+    assert cap["reliability"] is SourceReliability.VERIFIED
+
+
+def test_unknown_tool_returns_none():
+    assert get_tool_capability("totally_made_up_tool") is None
+
+
+def test_all_capabilities_have_required_keys():
+    required_keys = {"reliability", "good_for", "not_good_for", "epistemic_note"}
+    for name, cap in TOOL_CAPABILITIES.items():
+        missing = required_keys - set(cap.keys())
+        assert missing == set(), f"{name} missing keys: {missing}"
 
 
 def test_governed_wrapper_uses_tool_metadata():

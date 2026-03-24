@@ -150,11 +150,17 @@ class ConversationAgent:
         self._write_trace(uid, user_input, result.get("messages", []))
 
         # Extract the last AI message from the graph output.
+        response = ""
         for msg in reversed(result.get("messages", [])):
             if isinstance(msg, AIMessage) and msg.content:
-                return msg.content
+                response = msg.content
+                break
 
-        return ""
+        # Deterministic claim audit: check for ungrounded numeric claims.
+        if response:
+            response = self._audit_claims(response, result.get("messages", []), uid)
+
+        return response
 
     @staticmethod
     def _is_invalid_checkpoint_error(exc: Exception) -> bool:
@@ -242,6 +248,44 @@ class ConversationAgent:
                 # Resume from the rollback checkpoint — LangGraph will continue
                 # from the saved state, so we pass None for messages.
                 config = rollback_cfg
+
+    @staticmethod
+    def _audit_claims(response: str, messages: list, user_id: str | None) -> str:
+        """Run deterministic claim audit and log findings.
+
+        If ungrounded claims are found, appends a trace audit entry.
+        Does NOT block the response — the epistemic tags and system prompt
+        are the primary defense.  This is a post-hoc detection layer for
+        monitoring and debugging.
+        """
+        try:
+            from prax.agent.claim_audit import audit_claims, format_audit_warning
+
+            # Collect all tool results from this turn.
+            tool_results: list[str] = []
+            for msg in messages:
+                if isinstance(msg, ToolMessage) and msg.content:
+                    tool_results.append(msg.content)
+
+            findings = audit_claims(response, tool_results)
+
+            if findings:
+                warning = format_audit_warning(findings)
+                logger.warning("Claim audit flagged response (user=%s): %s", user_id, warning)
+
+                # Persist to trace as an audit event.
+                if user_id:
+                    try:
+                        append_trace(user_id, [{
+                            "type": TraceEvent.AUDIT,
+                            "content": f"[CLAIM-AUDIT] {warning}",
+                        }])
+                    except Exception:
+                        pass
+        except Exception:
+            logger.debug("Claim audit failed", exc_info=True)
+
+        return response
 
     @staticmethod
     def _write_trace(user_id: str | None, user_input: str, messages: list) -> None:

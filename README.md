@@ -1315,6 +1315,37 @@ Every tool is classified by risk level at the governance layer:
 
 Risk levels are declared at the tool definition site via `@risk_tool(risk=RiskLevel.HIGH)` and enforced centrally in `tool_registry.get_registered_tools()`.
 
+### Plugin trust tiers
+
+Every plugin is tagged with a trust tier based on its origin:
+
+| Tier | Meaning | Source directory |
+|------|---------|-----------------|
+| **`builtin`** | Ships with Prax | `prax/plugins/tools/` |
+| **`workspace`** | User-created in their workspace | `<workspace>/plugins/custom/` |
+| **`imported`** | Cloned from an external git repo | `<workspace>/plugins/shared/` |
+
+Trust tiers are stored in `registry.json` and surfaced in `plugin_list` and `plugin_status`. Unknown plugins default to `imported` (least trust). Defined as `PluginTrust` enum in `prax/plugins/registry.py`.
+
+### Plugin lifecycle audit trail
+
+All plugin lifecycle events are recorded as typed trace entries, searchable via `search_trace`:
+
+| Event | Emitted when |
+|-------|-------------|
+| `plugin_import` | Plugin repo cloned successfully |
+| `plugin_activate` | Plugin activated (manual or after write + sandbox test) |
+| `plugin_block` | Activation blocked by security scan or failure |
+| `plugin_rollback` | Plugin rolled back (manual or auto after repeated failures) |
+| `plugin_remove` | Plugin deleted |
+| `plugin_security_warn` | Security scan found warnings during import |
+
+Example queries:
+```python
+search_trace(uid, "pdf2presentation", type_filter="plugin_activate")
+search_trace(uid, "security", type_filter="plugin_security_warn")
+```
+
 ## Configuration
 
 All runtime config is centralized in `.env` and validated via Pydantic (`prax/settings.py`). Copy `.env-example` and fill in your values:

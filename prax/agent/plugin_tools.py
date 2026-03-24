@@ -23,9 +23,27 @@ from langchain_core.tools import tool
 from prax.agent.action_policy import RiskLevel, risk_tool
 from prax.agent.user_context import current_user_id
 from prax.plugins.loader import get_plugin_loader
+from prax.trace_events import TraceEvent
 
 _PLUGINS_TOOLS_ROOT = Path(__file__).resolve().parent.parent / "plugins" / "tools"
 _CUSTOM_DIR = _PLUGINS_TOOLS_ROOT / "custom"
+
+
+def _audit_plugin_event(event_type: str, plugin_name: str, details: str = "") -> None:
+    """Emit a plugin lifecycle audit event to the workspace trace."""
+    from prax.agent.user_context import current_user_id
+    from prax.services.workspace_service import append_trace
+    uid = current_user_id.get()
+    if not uid:
+        return
+    entry = {
+        "type": event_type,
+        "content": f"plugin={plugin_name} {details}".strip(),
+    }
+    try:
+        append_trace(uid, [entry])
+    except Exception:
+        pass  # Best-effort — don't block plugin operations
 
 
 def _get_plugin_base_dir() -> Path:
@@ -78,8 +96,9 @@ def plugin_list() -> str:
         status = info.get("status", "unknown")
         version = info.get("active_version", "?")
         failures = info.get("failure_count", 0)
+        trust = info.get("trust_tier", "imported")
         lines.append(
-            f"- `{rel_key}` — v{version} ({status}), failures: {failures}"
+            f"- `{rel_key}` — v{version} ({status}), trust: {trust}, failures: {failures}"
         )
 
     if plugin_tools:
@@ -170,6 +189,10 @@ def plugin_write(name: str, code: str, description: str = "") -> str:
             abs_path.unlink(missing_ok=True)
             return f"Sandbox test FAILED — file removed.\nErrors: {result['errors']}"
 
+    _audit_plugin_event(
+        TraceEvent.PLUGIN_ACTIVATE, name,
+        f"action=write tools={result['tools']}",
+    )
     return (
         f"Plugin written and sandbox test PASSED.\n"
         f"Tools defined: {result['tools']}\n"
@@ -222,8 +245,16 @@ def plugin_activate(name: str) -> str:
     result = loader.hot_swap(str(abs_path))
 
     if "error" in result:
+        _audit_plugin_event(
+            TraceEvent.PLUGIN_BLOCK, name,
+            f"reason={result['error']}",
+        )
         return f"Activation FAILED: {result['error']}\nDetails: {result.get('details', '')}"
 
+    _audit_plugin_event(
+        TraceEvent.PLUGIN_ACTIVATE, name,
+        f"version={result['version']} tools={result.get('tools', [])}",
+    )
     return (
         f"Plugin activated! Tools: {result.get('tools', [])}\n"
         f"Plugin system version: {result['version']}\n"
@@ -246,6 +277,7 @@ def plugin_rollback(name: str) -> str:
     if "error" in result:
         return f"Rollback failed: {result['error']}"
 
+    _audit_plugin_event(TraceEvent.PLUGIN_ROLLBACK, name)
     return f"Rolled back `{name}` to previous version. Tools reloaded."
 
 
@@ -267,6 +299,7 @@ def plugin_status(name: str) -> str:
     lines = [
         f"**Plugin: {name}**",
         f"- Status: {info.get('status', 'unknown')}",
+        f"- Trust tier: {info.get('trust_tier', 'imported')}",
         f"- Active version: {info.get('active_version', '?')}",
         f"- Previous version: {info.get('previous_version', 'none')}",
         f"- Activated at: {info.get('activated_at', '?')}",
@@ -293,6 +326,7 @@ def plugin_remove(name: str) -> str:
     if "error" in result:
         return f"Remove failed: {result['error']}"
 
+    _audit_plugin_event(TraceEvent.PLUGIN_REMOVE, name)
     return f"Plugin `{name}` removed. Backup saved — use plugin_rollback to restore."
 
 
@@ -634,6 +668,14 @@ def plugin_import(repo_url: str, name: str | None = None, plugin_subfolder: str 
     # plugins yet.  The user must explicitly confirm before activation.
     warnings = result.get("security_warnings", [])
     if warnings:
+        _audit_plugin_event(
+            TraceEvent.PLUGIN_SECURITY_WARN, result.get("name", repo_url),
+            f"warnings={len(warnings)}",
+        )
+        _audit_plugin_event(
+            TraceEvent.PLUGIN_BLOCK, result.get("name", repo_url),
+            "reason=security_warnings",
+        )
         lines = [
             f"**Security review for '{result['name']}':**\n",
             f"Found {len(warnings)} potential concern(s) in the plugin code:\n",
@@ -665,6 +707,10 @@ def plugin_import(repo_url: str, name: str | None = None, plugin_subfolder: str 
     if result.get("subfolder"):
         subfolder_note = f"Active subfolder: {result['subfolder']}\n"
 
+    _audit_plugin_event(
+        TraceEvent.PLUGIN_IMPORT, result.get("name", repo_url),
+        f"url={result.get('url', repo_url)}",
+    )
     return (
         f"Imported plugin repo '{result['name']}' from {result['url']}.\n"
         f"Path: {result['path']}\n"

@@ -19,7 +19,9 @@ from langchain_core.tools import BaseTool, StructuredTool
 
 from prax.agent.action_policy import (
     RiskLevel,
+    SourceReliability,
     get_risk_level,
+    get_tool_capability,
     log_action,
 )
 
@@ -53,6 +55,15 @@ def wrap_with_governance(tool: BaseTool) -> BaseTool:
     tool_name = tool.name
     risk = getattr(tool, "_risk_level", None) or get_risk_level(tool_name)
 
+    # Resolve capability metadata for epistemic tagging.
+    capability = get_tool_capability(tool_name)
+    reliability = (
+        capability.get("reliability", SourceReliability.INFORMATIONAL)
+        if capability
+        else None
+    )
+    epistemic_note = capability.get("epistemic_note", "") if capability else ""
+
     def _governed_run(**kwargs: Any) -> Any:
         # HIGH-risk gate: first invocation returns a warning, second executes.
         if risk is RiskLevel.HIGH and tool_name not in _high_risk_seen:
@@ -80,6 +91,12 @@ def wrap_with_governance(tool: BaseTool) -> BaseTool:
                     "Tool %s executed [%s] (args=%s)",
                     tool_name, risk.value, _summarize_args(kwargs),
                 )
+
+            # Epistemic tagging: prepend source-reliability metadata so the
+            # LLM knows how much to trust this result for factual claims.
+            if reliability is not None and result is not None:
+                result = _tag_result(result, reliability, epistemic_note)
+
             return result
         except Exception as exc:
             _audit_buffer.append(log_action(
@@ -93,6 +110,43 @@ def wrap_with_governance(tool: BaseTool) -> BaseTool:
         description=tool.description,
         args_schema=tool.args_schema,
     )
+
+
+_RELIABILITY_TAGS: dict[SourceReliability, str] = {
+    SourceReliability.INFORMATIONAL: (
+        "[INFORMATIONAL SOURCE — general web content, not structured data. "
+        "Do NOT state specific numbers, prices, statistics, rankings, or "
+        "quantities from this result as verified facts. "
+        "Use only for background context and general understanding.]"
+    ),
+    SourceReliability.INDICATIVE: (
+        "[INDICATIVE SOURCE — data may be approximate or stale. "
+        "If citing specific values, label them as approximate and name the source URL.]"
+    ),
+    SourceReliability.VERIFIED: (
+        "[VERIFIED SOURCE — structured data from a purpose-built API. "
+        "Values can be cited directly with source attribution.]"
+    ),
+}
+
+
+def _tag_result(
+    result: Any,
+    reliability: SourceReliability,
+    epistemic_note: str = "",
+) -> Any:
+    """Prepend epistemic metadata to a tool result string.
+
+    Only tags string results; non-string results pass through unchanged.
+    """
+    if not isinstance(result, str):
+        return result
+    tag = _RELIABILITY_TAGS.get(reliability, "")
+    if epistemic_note:
+        tag = f"{tag}\n{epistemic_note}" if tag else epistemic_note
+    if tag:
+        return f"{tag}\n\n{result}"
+    return result
 
 
 def _summarize_args(args: dict, max_len: int = 120) -> str:

@@ -1,7 +1,8 @@
 """Lightweight safety/governance layer for side-effectful agent actions.
 
-Classifies tools by risk level and provides helpers for confirmation
-gating and structured audit logging.  Standalone — no prax imports.
+Classifies tools by risk level, tracks epistemic capability metadata,
+and provides helpers for confirmation gating and structured audit logging.
+Standalone — no prax imports.
 """
 from __future__ import annotations
 
@@ -20,6 +21,86 @@ class RiskLevel(Enum):
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
+
+
+class SourceReliability(Enum):
+    """How much to trust a tool's output for specific factual claims.
+
+    VERIFIED   – direct, structured data from a purpose-built API (live fare
+                 engine, stock ticker, official database).  Safe to quote.
+    INDICATIVE – aggregated or scraped data that may be stale/approximate.
+                 Must be labeled approximate and source-cited.
+    INFORMATIONAL – general web content, search snippets, summaries.  NEVER
+                    use as the sole basis for specific numeric claims, dates,
+                    rankings, statistics, or quoted statements.
+    """
+
+    VERIFIED = "verified"
+    INDICATIVE = "indicative"
+    INFORMATIONAL = "informational"
+
+
+# ── tool capability metadata ────────────────────────────────────────
+
+TOOL_CAPABILITIES: dict[str, dict] = {
+    # Web search — good for general research, NOT for specific claims.
+    "background_search_tool": {
+        "reliability": SourceReliability.INFORMATIONAL,
+        "good_for": ["general research", "factual questions", "topic overviews"],
+        "not_good_for": [
+            "live prices", "current fares", "exchange rates", "stock prices",
+            "real-time data", "specific statistics", "current rankings",
+        ],
+        "epistemic_note": (
+            "Returns web search snippets, not structured data. "
+            "Do NOT state specific numbers, prices, statistics, rankings, "
+            "dates, or quantities from this result as if they are verified facts. "
+            "Use only for general background and context."
+        ),
+    },
+    "fetch_url_content": {
+        "reliability": SourceReliability.INFORMATIONAL,
+        "good_for": ["reading web pages", "article text", "documentation"],
+        "not_good_for": ["live prices", "real-time data", "dynamic content"],
+        "epistemic_note": (
+            "Returns static page text. Dynamic content (prices, availability, "
+            "live stats) may be missing, stale, or inaccurate. Do NOT treat "
+            "scraped numbers as verified data."
+        ),
+    },
+    # Browser — can see rendered pages but still scraping, not an API.
+    "browser_read_page": {
+        "reliability": SourceReliability.INDICATIVE,
+        "good_for": ["rendered page content", "JS-heavy sites"],
+        "not_good_for": ["verified pricing", "real-time quotes"],
+        "epistemic_note": (
+            "Reads rendered browser content. Any specific numbers, prices, "
+            "or data points are INDICATIVE only — label as approximate and "
+            "cite the source URL."
+        ),
+    },
+    # Flight search plugin — purpose-built API, structured fare data.
+    "flight_search": {
+        "reliability": SourceReliability.VERIFIED,
+        "good_for": ["live flight fares", "airline routes", "price comparison"],
+        "not_good_for": [],
+        "epistemic_note": (
+            "Returns structured fare data from Amadeus API. "
+            "Prices can be quoted directly with source attribution."
+        ),
+    },
+    "airport_lookup": {
+        "reliability": SourceReliability.VERIFIED,
+        "good_for": ["IATA codes", "airport identification"],
+        "not_good_for": [],
+        "epistemic_note": "",
+    },
+}
+
+
+def get_tool_capability(tool_name: str) -> dict | None:
+    """Return capability metadata for *tool_name*, or None if not catalogued."""
+    return TOOL_CAPABILITIES.get(tool_name)
 
 
 # ── tool classification ──────────────────────────────────────────────

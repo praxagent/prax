@@ -206,6 +206,71 @@ class TestToolMetadataPrecedence:
         assert "confirm" in result.lower()
 
 
+class TestEpistemicTagging:
+    """Verify that tool results are tagged with source-reliability metadata."""
+
+    def test_informational_tool_tagged(self):
+        """background_search_tool results should be tagged INFORMATIONAL."""
+        from prax.agent.governed_tool import wrap_with_governance
+        _reset()
+        inner = _make_tool("background_search_tool")
+        governed = wrap_with_governance(inner)
+        result = governed.invoke({"x": "test query"})
+        assert "[INFORMATIONAL SOURCE" in result
+        assert "Do NOT state specific numbers" in result
+        # Original result is still present after the tag.
+        assert "executed:test query" in result
+
+    def test_verified_tool_tagged(self):
+        """flight_search results should be tagged VERIFIED."""
+        from prax.agent.governed_tool import wrap_with_governance
+        _reset()
+        inner = _make_tool("flight_search")
+        governed = wrap_with_governance(inner)
+        result = governed.invoke({"x": "JFK CDG"})
+        assert "[VERIFIED SOURCE" in result
+        assert "executed:JFK CDG" in result
+
+    def test_indicative_tool_tagged(self):
+        """browser_read_page results should be tagged INDICATIVE."""
+        from prax.agent.governed_tool import wrap_with_governance
+        _reset()
+        inner = _make_tool("browser_read_page")
+        governed = wrap_with_governance(inner)
+        result = governed.invoke({"x": "page"})
+        assert "[INDICATIVE SOURCE" in result
+        assert "approximate" in result.lower()
+
+    def test_uncatalogued_tool_not_tagged(self):
+        """Tools not in TOOL_CAPABILITIES should pass results through unchanged."""
+        from prax.agent.governed_tool import wrap_with_governance
+        _reset()
+        inner = _make_tool("get_current_datetime")
+        governed = wrap_with_governance(inner)
+        result = governed.invoke({"x": "now"})
+        assert "[INFORMATIONAL" not in result
+        assert "[VERIFIED" not in result
+        assert "[INDICATIVE" not in result
+        assert result == "executed:now"
+
+    def test_epistemic_note_included(self):
+        """The epistemic_note from TOOL_CAPABILITIES should appear in tagged results."""
+        from prax.agent.governed_tool import wrap_with_governance
+        _reset()
+        inner = _make_tool("fetch_url_content")
+        governed = wrap_with_governance(inner)
+        result = governed.invoke({"x": "https://example.com"})
+        assert "Do NOT treat scraped numbers as verified data" in result
+
+    def test_non_string_results_not_tagged(self):
+        """Non-string tool results should pass through without tagging."""
+        from prax.agent.action_policy import SourceReliability
+        from prax.agent.governed_tool import _tag_result
+        assert _tag_result(42, SourceReliability.INFORMATIONAL) == 42
+        assert _tag_result(None, SourceReliability.INFORMATIONAL) is None
+        assert _tag_result(["a", "b"], SourceReliability.VERIFIED) == ["a", "b"]
+
+
 class TestToolRegistryIntegration:
     def test_get_registered_tools_returns_governed(self):
         """Verify that tool_registry wraps tools with governance."""

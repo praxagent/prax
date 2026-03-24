@@ -5,7 +5,11 @@ from __future__ import annotations
 class TestTraceEventVocabulary:
     def test_all_expected_types_exist(self):
         from prax.trace_events import TraceEvent
-        expected = {"user", "assistant", "system", "tool_call", "tool_result", "audit", "error"}
+        expected = {
+            "user", "assistant", "system", "tool_call", "tool_result", "audit", "error",
+            "plugin_import", "plugin_activate", "plugin_block",
+            "plugin_rollback", "plugin_remove", "plugin_security_warn",
+        }
         assert TraceEvent.values() == expected
 
     def test_is_valid_known_types(self):
