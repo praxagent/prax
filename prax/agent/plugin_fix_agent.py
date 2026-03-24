@@ -53,6 +53,17 @@ Plugins are Python modules at ``custom/<name>/plugin.py`` with:
 5. **Report**: Return what you changed, which tools are affected, and whether
    the fix is active.
 
+## API credentials & settings
+- **NEVER use os.environ** — the security scanner blocks it.  Use
+  ``from prax.settings import settings`` to access configuration.
+- Available settings: ``settings.openai_key``, ``settings.vllm_base_url``,
+  ``settings.local_model``, and others (read prax/settings.py for the full list).
+- For OpenAI API calls, use the standard ``openai.OpenAI(api_key=settings.openai_key)``
+  client.  It defaults to ``https://api.openai.com/v1`` — do NOT require a
+  separate base URL for standard OpenAI services.
+- For vision/image tasks, use OpenAI's vision models (e.g. ``gpt-4o``) via
+  the standard OpenAI client with ``settings.openai_key``.
+
 ## Rules
 - Never write stubs or placeholders that fake success.
 - Preserve the full original functionality — only change what's broken.

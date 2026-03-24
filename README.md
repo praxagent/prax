@@ -1346,6 +1346,32 @@ search_trace(uid, "pdf2presentation", type_filter="plugin_activate")
 search_trace(uid, "security", type_filter="plugin_security_warn")
 ```
 
+### Supply chain hardening
+
+In March 2026, the [TeamPCP supply chain campaign](https://ramimac.me/teampcp/) compromised Trivy, Checkmarx KICS, and [LiteLLM](https://github.com/BerriAI/litellm/issues/24512) across GitHub Actions, Docker Hub, PyPI, and npm — all by stealing CI/CD credentials and publishing poisoned versions under legitimate project names. The attack exploited mutable version tags (GitHub Action tags force-pushed to malicious commits, Docker Hub tags pointing to backdoored images) and compromised PyPI publishing tokens.
+
+Prax applies the following mitigations against this class of attack:
+
+| Layer | Mitigation | Status |
+|-------|-----------|--------|
+| **GitHub Actions** | All actions pinned to full commit SHAs, not mutable version tags. A tag like `@v4` can be force-pushed; a SHA cannot. | Done |
+| **Docker base images** | `Dockerfile` and `sandbox/Dockerfile` pin base images to `@sha256:` digests. Tag hijacking on Docker Hub or GHCR has no effect. | Done |
+| **Python dependencies** | `uv.lock` contains SHA-256 hashes for every wheel and sdist. `uv sync --frozen` in Docker builds rejects any package whose hash doesn't match. A poisoned PyPI upload (the LiteLLM vector) fails verification. | Done |
+| **CI/CD secrets** | CI jobs have no publishing credentials, API keys, or deploy tokens. There is nothing to steal from a compromised workflow. | Done |
+| **No `pull_request_target`** | CI uses `pull_request` (safe — runs on the PR's merge commit with read-only access), not `pull_request_target` (the Trivy entry point — runs in the base repo context with write access and secrets). | Done |
+
+**Updating pinned digests:** Each Dockerfile contains a comment with the `docker inspect` command to refresh the digest. For GitHub Actions, look up the SHA at `https://api.github.com/repos/{owner}/{repo}/git/ref/tags/{tag}`.
+
+#### Remaining risk: plugin code execution
+
+Imported plugins execute in the main Prax process after passing AST-based static analysis and sandbox testing (see [Plugin security](#plugin-security) above). This is a deliberate tradeoff: the plugin system is designed for self-modification, which requires code execution.
+
+The static analysis catches common patterns (`subprocess`, `eval`, `exec`, `os.environ`, socket access, obfuscated strings) but cannot guarantee detection of all malicious payloads. An attacker who controls a plugin repo could craft an obfuscated credential stealer that bypasses AST scanning.
+
+**Current controls:** static analysis + regex scanning + sandbox pre-test + user confirmation gate + runtime failure auto-rollback.
+
+**Future mitigation (TODO):** Run imported plugins in the sandboxed Docker container rather than the main process, communicating via the existing sandbox API. This would contain damage from a compromised plugin to an ephemeral container with no access to API keys or host resources. Built-in and user-created workspace plugins would remain in-process.
+
 ## Configuration
 
 All runtime config is centralized in `.env` and validated via Pydantic (`prax/settings.py`). Copy `.env-example` and fill in your values:

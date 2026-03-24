@@ -258,7 +258,10 @@ def plugin_activate(name: str) -> str:
     return (
         f"Plugin activated! Tools: {result.get('tools', [])}\n"
         f"Plugin system version: {result['version']}\n"
-        f"New tools will be available on the next conversation turn."
+        f"IMPORTANT: The new tools are NOT available in this turn. "
+        f"Tell the user the plugin is ready and ask them to send their "
+        f"request again. Do NOT attempt to call the new tools in this "
+        f"same turn — they will fail with stale bindings."
     )
 
 

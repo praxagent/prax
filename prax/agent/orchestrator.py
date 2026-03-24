@@ -143,6 +143,15 @@ class ConversationAgent:
 
         try:
             result = self._invoke_with_retry(messages, config, turn.user_id)
+
+            # If a plugin was activated mid-turn, the graph had stale tool
+            # bindings for any subsequent tool calls in the SAME turn.
+            # Rebuild now so the next turn starts clean.  This also covers
+            # the case where the agent activated a plugin and immediately
+            # tried to use it — it will fail this turn, but the retry path
+            # (line ~230) already rebuilds.  This ensures the NEXT turn
+            # is always up-to-date even if the current one succeeded.
+            self._rebuild_if_needed()
         finally:
             self.checkpoint_mgr.end_turn(turn.user_id)
 

@@ -26,6 +26,8 @@ class AppSettings(BaseSettings):
     google_vertex_project: str | None = Field(default=None, alias="GOOGLE_VERTEX_PROJECT")
     google_vertex_location: str | None = Field(default=None, alias="GOOGLE_VERTEX_LOCATION")
     elevenlabs_api_key: str | None = Field(default=None, alias="ELEVENLABS_API_KEY")
+    amadeus_api_key: str | None = Field(default=None, alias="AMADEUS_API_KEY")
+    amadeus_api_secret: str | None = Field(default=None, alias="AMADEUS_API_SECRET")
     twilio_account_sid: str | None = Field(default=None, alias="TWILIO_ACCOUNT_SID")
     twilio_auth_token: str | None = Field(default=None, alias="TWILIO_AUTH_TOKEN")
 
