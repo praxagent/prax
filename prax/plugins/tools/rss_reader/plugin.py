@@ -250,4 +250,5 @@ def rss_check(name: str = "") -> str:
 
 
 def register():
-    return [rss_subscribe, rss_unsubscribe, rss_list, rss_check]
+    # Consolidated into the unified 'news' plugin.
+    return []

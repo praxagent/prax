@@ -22,4 +22,5 @@ def deutschlandfunk_tool(subject: str | None = None) -> str:
 
 
 def register():
-    return [deutschlandfunk_tool]
+    # Consolidated into the unified 'news' plugin.
+    return []

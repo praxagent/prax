@@ -88,6 +88,13 @@ def serve_notes(path=''):
     return serve_course_site(f"notes/{path}" if path else "notes/")
 
 
+@main_routes.route('/news/')
+@main_routes.route('/news/<path:path>')
+def serve_news(path=''):
+    """Serve news briefings — redirects into the Hugo site's news section."""
+    return serve_course_site(f"news/{path}" if path else "news/")
+
+
 @main_routes.route('/transcribe', methods=['POST'])
 @validate_twilio_request
 def transcribe():

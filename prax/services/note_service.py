@@ -395,8 +395,9 @@ def publish_notes(user_id: str, base_url: str, slug: str | None = None) -> dict:
         root = ensure_workspace(user_id)
         site = ensure_hugo_site(root, base_url)
 
-        # Generate notes content.
+        # Generate notes and news content.
         _generate_hugo_notes(root)
+        _generate_hugo_news(root)
 
         # Also regenerate all course content so the site stays complete.
         courses_root = courses_dir(root)
@@ -417,3 +418,194 @@ def publish_notes(user_id: str, base_url: str, slug: str | None = None) -> dict:
     url_slug = f"notes/{slug}/" if slug else "notes/"
     url = f"{base_url.rstrip('/')}/{url_slug}"
     return {"url": url}
+
+
+# ---------------------------------------------------------------------------
+# News briefings — separate from notes, published at /news/
+# ---------------------------------------------------------------------------
+
+def _news_dir(root: str) -> str:
+    d = os.path.join(root, "news")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _news_path(root: str, slug: str) -> str:
+    return safe_join(_news_dir(root), f"{slug}.md")
+
+
+def create_news_briefing(user_id: str, title: str, content: str) -> dict:
+    """Create a news briefing. Returns metadata including slug."""
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
+        slug = _slugify(title)
+
+        # Overwrite existing briefing with same slug (daily briefings reuse slugs).
+        path = _news_path(root, slug)
+        now = datetime.now(UTC).isoformat()
+        meta = {
+            "title": title,
+            "slug": slug,
+            "created_at": now,
+            "updated_at": now,
+        }
+
+        # If file exists, preserve created_at.
+        if os.path.isfile(path):
+            try:
+                existing = _parse_note(path)
+                meta["created_at"] = existing.get("created_at", now)
+            except Exception:
+                pass
+
+        front = (
+            f"---\n"
+            f'title: "{title}"\n'
+            f'created_at: "{meta["created_at"]}"\n'
+            f'updated_at: "{now}"\n'
+            f"---\n\n"
+        )
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(front + content)
+
+        git_commit(root, f"News briefing: {title}")
+        return meta
+
+
+_HUGO_NEWS_LIST = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ .Title }}</title>
+<style>
+""" + THEME_CSS + """\
+  .briefing { padding: 0.8rem 0; border-bottom: 1px solid var(--border-light); }
+  .briefing a { text-decoration: none; font-weight: 600; }
+  .briefing .date { font-size: 0.8em; color: var(--text-muted); }
+</style>
+</head>
+<body>
+<h1>{{ .Title }}</h1>
+{{ range .Pages.ByLastmod.Reverse }}
+<div class="briefing">
+  <a href="{{ .RelPermalink }}">{{ .Title }}</a>
+  <div class="date">{{ .Params.updated_at }}</div>
+</div>
+{{ end }}
+{{ if not .Pages }}
+<p style="color: var(--text-muted); font-style: italic;">No briefings yet.</p>
+{{ end }}
+</body>
+</html>
+"""
+
+_HUGO_NEWS_SINGLE = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ .Title }}</title>
+<style>
+""" + THEME_CSS + """\
+  a { color: var(--link); }
+  a:hover { text-decoration: underline; }
+  .meta { font-size: 0.85em; color: var(--text-muted); margin-bottom: 1.5rem; }
+</style>
+</head>
+<body>
+<a href="{{ .CurrentSection.RelPermalink }}">&larr; All Briefings</a>
+<h1>{{ .Title }}</h1>
+<div class="meta">{{ with .Params.updated_at }}{{ . }}{{ end }}</div>
+{{ .Content }}
+</body>
+</html>
+"""
+
+
+def _generate_hugo_news(root: str) -> None:
+    """Generate Hugo content files for all news briefings."""
+    from prax.services.course_service import hugo_site_dir
+
+    site = hugo_site_dir(root)
+    news_content_dir = os.path.join(site, "content", "news")
+    os.makedirs(news_content_dir, exist_ok=True)
+
+    # Write section index.
+    with open(os.path.join(news_content_dir, "_index.md"), "w", encoding="utf-8") as f:
+        f.write('---\ntitle: "News Briefings"\n---\n')
+
+    # Write news layout templates.
+    news_layout_dir = os.path.join(site, "layouts", "news")
+    os.makedirs(news_layout_dir, exist_ok=True)
+    with open(os.path.join(news_layout_dir, "list.html"), "w", encoding="utf-8") as f:
+        f.write(_HUGO_NEWS_LIST)
+    with open(os.path.join(news_layout_dir, "single.html"), "w", encoding="utf-8") as f:
+        f.write(_HUGO_NEWS_SINGLE)
+
+    # Generate a page for each briefing.
+    news_root = _news_dir(root)
+    for fname in sorted(os.listdir(news_root)):
+        if not fname.endswith(".md"):
+            continue
+        try:
+            meta = _parse_note(os.path.join(news_root, fname))
+        except Exception:
+            continue
+
+        page = (
+            f'---\n'
+            f'title: "{meta["title"]}"\n'
+            f'updated_at: "{meta.get("updated_at", "")}"\n'
+            f'date: "{meta.get("created_at", "")}"\n'
+            f'---\n\n'
+            f'{meta["content"]}\n'
+        )
+        slug = meta["slug"]
+        with open(os.path.join(news_content_dir, f"{slug}.md"), "w", encoding="utf-8") as f:
+            f.write(page)
+
+
+def publish_news(user_id: str, title: str, content: str) -> dict:
+    """Create a news briefing and publish it. Returns {"slug", "title", "url"} or {"error"}."""
+    from prax.services.course_service import (
+        courses_dir,
+        ensure_hugo_site,
+        generate_hugo_content,
+        run_hugo,
+    )
+    from prax.utils.ngrok import get_ngrok_url
+
+    base_url = get_ngrok_url()
+    if not base_url:
+        return {"error": "Cannot publish — NGROK_URL is not configured."}
+
+    meta = create_news_briefing(user_id, title, content)
+
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
+        site = ensure_hugo_site(root, base_url)
+
+        _generate_hugo_news(root)
+
+        # Also regenerate notes + courses so the site stays complete.
+        _generate_hugo_notes(root)
+        courses_root = courses_dir(root)
+        for entry in sorted(os.listdir(courses_root)):
+            if entry.startswith("_"):
+                continue
+            cp = os.path.join(courses_root, entry)
+            yaml_path = os.path.join(cp, "course.yaml")
+            if os.path.isdir(cp) and os.path.isfile(yaml_path):
+                generate_hugo_content(root, entry)
+
+        git_commit(root, f"Publish news: {meta['title']}")
+
+    err = run_hugo(site)
+    if err:
+        return {"error": f"News saved but Hugo build failed: {err['error']}"}
+
+    url = f"{base_url.rstrip('/')}/news/{meta['slug']}/"
+    return {"slug": meta["slug"], "title": meta["title"], "url": url}
