@@ -336,18 +336,46 @@ def _build_briefing_content(sources: list[dict]) -> str:
     return "\n\n".join(sections)
 
 
+def _summarize_briefing(content: str) -> str:
+    """Extract a compact digest from the full briefing for the agent.
+
+    Returns source names + top ~3 headlines each so the agent can curate
+    a conversational summary without dumping the entire briefing.
+    """
+    lines = []
+    current_source = None
+    count = 0
+    for line in content.splitlines():
+        if line.startswith("### "):
+            current_source = line
+            count = 0
+            lines.append(current_source)
+        elif line and line[0].isdigit() and ". **" in line:
+            count += 1
+            if count <= 3:
+                # Strip link markdown to keep it compact
+                lines.append(line)
+            elif count == 4:
+                lines.append("  _(+ more — see full briefing)_")
+    return "\n".join(lines)
+
+
 def _do_briefing(user_id: str, sources: list[dict]) -> str:
     """Full executive summary — published to /news/ as a Hugo page."""
     content = _build_briefing_content(sources)
     today = datetime.now(UTC).strftime("%B %-d, %Y")
-    title = f"News Briefing — {today}"
+    title = f"Prax's Curated News Report — {today}"
+    digest = _summarize_briefing(content)
 
     try:
         from prax.services.note_service import publish_news
         result = publish_news(user_id, title, content)
         if "error" in result:
             return f"Briefing generated but publishing failed: {result['error']}\n\n{content}"
-        return f"Published: {result['url']}\n\n{content}"
+        return (
+            f"Published: {result['url']}\n\n"
+            f"Digest (share the URL, not this raw text):\n{digest}"
+        )
     except Exception as exc:
         logger.exception("Failed to publish news briefing")
         return f"Briefing generated but publishing failed: {exc}\n\n{content}"
@@ -451,31 +479,34 @@ def news(action: str = "briefing", source: str = "") -> str:
     if not uid:
         return "Error: no active user context."
 
+    # Hold the lock only for config I/O — action functions manage their
+    # own locking if needed (publish_news acquires the same per-user lock,
+    # and threading.Lock is NOT reentrant).
     with get_lock(uid):
         root = ensure_workspace(uid)
         _ensure_config(root)
         sources = _load_sources(root)
 
-        action = action.strip().lower()
+    action = action.strip().lower()
 
-        if action == "briefing":
-            if not sources:
-                return "No news sources configured. Edit `news_sources.md` to add some."
-            return _do_briefing(uid, sources)
+    if action == "briefing":
+        if not sources:
+            return "No news sources configured. Edit `news_sources.md` to add some."
+        return _do_briefing(uid, sources)
 
-        if action == "check":
-            return _do_check(root, sources, source)
+    if action == "check":
+        return _do_check(root, sources, source)
 
-        if action == "sources":
-            return _do_sources(sources)
+    if action == "sources":
+        return _do_sources(sources)
 
-        if action == "listen":
-            return _do_listen(sources, source)
+    if action == "listen":
+        return _do_listen(sources, source)
 
-        return (
-            f"Unknown action '{action}'. "
-            "Use: briefing, check, sources, or listen."
-        )
+    return (
+        f"Unknown action '{action}'. "
+        "Use: briefing, check, sources, or listen."
+    )
 
 
 def register():

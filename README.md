@@ -1844,6 +1844,53 @@ register_tool(city_guide)
 
 Registered tools automatically become available to both SMS and voice flows without editing the blueprints.
 
+### Per-User Workspace Locking
+
+Prax uses a per-user `threading.Lock` to prevent concurrent git operations on the same workspace. Every service or tool that writes to the workspace acquires it via `get_lock(user_id)`:
+
+```python
+from prax.services.workspace_service import get_lock, ensure_workspace
+
+with get_lock(user_id):
+    root = ensure_workspace(user_id)
+    # … read/write files, git commit …
+```
+
+**The lock is NOT reentrant.** `threading.Lock` will deadlock if the same thread tries to acquire it twice. This is the most common cause of silent hangs — no error, no log, just a tool that never returns.
+
+**How deadlocks happen:**
+
+```python
+# ❌ BAD — deadlock: tool holds the lock, then calls a service that also takes it
+@tool
+def my_tool():
+    with get_lock(uid):           # acquires lock
+        data = read_config(root)
+        publish_something(uid)    # internally calls get_lock(uid) → deadlock
+
+# ✅ GOOD — release the lock before calling functions that need it
+@tool
+def my_tool():
+    with get_lock(uid):           # acquires lock
+        data = read_config(root)  # quick I/O under lock
+    # lock released
+    publish_something(uid)        # free to acquire its own lock
+```
+
+**Rules for safe locking:**
+
+1. **Hold the lock for the shortest possible scope** — read config, write a file, commit — then release.
+2. **Never call a service function while holding the lock** unless you have verified the service does NOT acquire the same lock internally. Services like `publish_notes()`, `publish_news()`, `run_hugo()`, and `generate_hugo_content()` all take the lock.
+3. **Never nest `get_lock()` calls** for the same user ID, even indirectly.
+4. **If a tool hangs silently**, check for lock re-entry: trace the call chain from the tool through every function it calls, looking for `get_lock`.
+
+**Debugging a deadlock in production:**
+
+If you see a `Tool X starting` log with no matching `Tool X finished`, it's almost certainly a deadlock. To confirm:
+- Add logging around `get_lock()` calls (the lock itself doesn't log)
+- Check whether the tool's execution path calls any service that acquires the lock
+- The fix is always the same: release the lock before calling into the service
+
 ## Troubleshooting
 
 - **Docker build "not enough free space":** Run `docker system prune -a` to remove unused images, containers, and build cache. Add `--volumes` if you also want to reclaim volume space (this deletes data in unnamed volumes). On macOS, Docker Desktop's disk image can also be resized in Settings → Resources.

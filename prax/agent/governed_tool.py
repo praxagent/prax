@@ -82,15 +82,12 @@ def wrap_with_governance(tool: BaseTool) -> BaseTool:
             )
 
         # Execute the tool.
+        logger.info("Tool %s starting [%s] (args=%s)", tool_name, risk.value, _summarize_args(kwargs))
         try:
             result = tool.invoke(kwargs if kwargs else {})
             result_str = str(result) if result is not None else None
             _audit_buffer.append(log_action(tool_name, risk, kwargs, result=result_str))
-            if risk is not RiskLevel.LOW:
-                logger.info(
-                    "Tool %s executed [%s] (args=%s)",
-                    tool_name, risk.value, _summarize_args(kwargs),
-                )
+            logger.info("Tool %s finished [%s]", tool_name, risk.value)
 
             # Epistemic tagging: prepend source-reliability metadata so the
             # LLM knows how much to trust this result for factual claims.
