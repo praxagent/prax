@@ -18,4 +18,5 @@ def npr_podcast_tool(subject: str | None = None) -> str:
 
 
 def register():
-    return [npr_podcast_tool]
+    # Consolidated into the unified 'news' plugin.
+    return []

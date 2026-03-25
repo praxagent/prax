@@ -250,6 +250,39 @@ graph TB
     Worktree -->|PR| Workspace
 ```
 
+### Concepts — What Lives Where
+
+Prax is organized in five layers. Each has a clear job and a single direction of dependency: **blueprints → services → agent → plugins**.
+
+| Layer | Directory | What it is | Example |
+|-------|-----------|------------|---------|
+| **Blueprints** | `prax/blueprints/` | Flask route handlers — the HTTP surface. They receive webhooks from Twilio (voice, SMS) or serve static files. Blueprints know about *channels* but not about the agent. | `POST /sms` validates a Twilio signature, hands the message to `SmsService`, and returns a TwiML response. |
+| **Services** | `prax/services/` | Business logic that doesn't belong in the agent. A service encapsulates one capability: workspace git ops, Docker sandbox lifecycle, Playwright browser sessions, APScheduler cron, Hugo publishing, etc. Services are called *both* by blueprints (channel-facing) and by agent tools (capability-facing). They never call the agent directly. | `workspace_service.py` manages the per-user git repo — creating, reading, locking, committing. |
+| **Agent** | `prax/agent/` | The LangGraph ReAct loop and everything around it: the orchestrator, LLM factory, tool builders, governance, checkpointing. Tool builder files (`*_tools.py`) define groups of LangChain tools that thin-wrap a service. The agent layer decides *what* to do; services decide *how* to do it. | `sandbox_tools.py` exposes 7 tools (`sandbox_start`, `sandbox_message`, …) that all delegate to `sandbox_service.py`. |
+| **Plugins** | `prax/plugins/` | Hot-swappable extensions discovered at startup. Each plugin lives in `plugins/tools/<name>/plugin.py`, exports a `register()` function returning LangChain tools, and can be created/modified/rolled back at runtime — by the agent itself. The plugin system also manages the system prompt and LLM routing config. | `plugins/tools/news/plugin.py` provides the unified `news` tool with actions for briefings, RSS checking, and audio. |
+| **Readers** | `prax/readers/` | Legacy content-extraction helpers (ArXiv, NPR audio, web scraping). Being migrated into plugins. New code should use or create a plugin instead. | `readers/news/npr_top_hour.py` fetches the latest NPR podcast URL — now called by the `news` plugin. |
+
+**How they connect:**
+
+```
+User ──▸ Twilio/Discord
+            │
+        Blueprints          (HTTP layer — routes, auth)
+            │
+        Services             (business logic — workspace, sandbox, browser, scheduler, …)
+            │
+        Agent                (LangGraph ReAct loop — orchestrator, tools, governance)
+            │
+        Plugins              (hot-swappable tools — news, PDF, YouTube, custom, …)
+```
+
+**Rules of thumb:**
+
+- **Need a new channel?** Add a blueprint + a channel service.
+- **Need a new capability** (e.g., email sending)? Add a service, then wrap it with a tool builder in `agent/` or a plugin in `plugins/tools/`.
+- **Need a new tool the agent can call?** If it's a core, always-on tool, add it to an `agent/*_tools.py` builder. If it's optional, content-focused, or user-modifiable, make it a plugin.
+- **Need to change the system prompt?** Edit `plugins/prompts/system_prompt.md` (or let the agent do it at runtime via `prompt_write`).
+
 ### Request Flow — SMS Message
 
 ```mermaid
@@ -1810,6 +1843,53 @@ register_tool(city_guide)
 ```
 
 Registered tools automatically become available to both SMS and voice flows without editing the blueprints.
+
+### Per-User Workspace Locking
+
+Prax uses a per-user `threading.Lock` to prevent concurrent git operations on the same workspace. Every service or tool that writes to the workspace acquires it via `get_lock(user_id)`:
+
+```python
+from prax.services.workspace_service import get_lock, ensure_workspace
+
+with get_lock(user_id):
+    root = ensure_workspace(user_id)
+    # … read/write files, git commit …
+```
+
+**The lock is NOT reentrant.** `threading.Lock` will deadlock if the same thread tries to acquire it twice. This is the most common cause of silent hangs — no error, no log, just a tool that never returns.
+
+**How deadlocks happen:**
+
+```python
+# ❌ BAD — deadlock: tool holds the lock, then calls a service that also takes it
+@tool
+def my_tool():
+    with get_lock(uid):           # acquires lock
+        data = read_config(root)
+        publish_something(uid)    # internally calls get_lock(uid) → deadlock
+
+# ✅ GOOD — release the lock before calling functions that need it
+@tool
+def my_tool():
+    with get_lock(uid):           # acquires lock
+        data = read_config(root)  # quick I/O under lock
+    # lock released
+    publish_something(uid)        # free to acquire its own lock
+```
+
+**Rules for safe locking:**
+
+1. **Hold the lock for the shortest possible scope** — read config, write a file, commit — then release.
+2. **Never call a service function while holding the lock** unless you have verified the service does NOT acquire the same lock internally. Services like `publish_notes()`, `publish_news()`, `run_hugo()`, and `generate_hugo_content()` all take the lock.
+3. **Never nest `get_lock()` calls** for the same user ID, even indirectly.
+4. **If a tool hangs silently**, check for lock re-entry: trace the call chain from the tool through every function it calls, looking for `get_lock`.
+
+**Debugging a deadlock in production:**
+
+If you see a `Tool X starting` log with no matching `Tool X finished`, it's almost certainly a deadlock. To confirm:
+- Add logging around `get_lock()` calls (the lock itself doesn't log)
+- Check whether the tool's execution path calls any service that acquires the lock
+- The fix is always the same: release the lock before calling into the service
 
 ## Troubleshooting
 
