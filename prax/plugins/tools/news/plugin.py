@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 
 import feedparser
@@ -36,7 +37,8 @@ _CONFIG_FILENAME = "news_sources.md"
 _STATE_FILENAME = "news_state.yaml"
 _HN_TOP_URL = "https://hacker-news.firebaseio.com/v0/topstories.json"
 _HN_ITEM_URL = "https://hacker-news.firebaseio.com/v0/item/{}.json"
-_REQUEST_TIMEOUT = 12
+_REQUEST_TIMEOUT = 8
+_SOURCE_TIMEOUT = 30
 _MAX_SEEN_URLS = 200
 _SUMMARY_MAX_CHARS = 200
 
@@ -213,6 +215,16 @@ def _fetch_rss_incremental(
     return "\n".join(lines), new_seen
 
 
+def _fetch_hn_item(sid: int) -> dict | None:
+    """Fetch a single HN story. Returns None on failure."""
+    try:
+        return requests.get(
+            _HN_ITEM_URL.format(sid), timeout=_REQUEST_TIMEOUT,
+        ).json()
+    except Exception:
+        return None
+
+
 def _fetch_hackernews(name: str, limit: int = 15) -> str:
     try:
         resp = requests.get(_HN_TOP_URL, timeout=_REQUEST_TIMEOUT)
@@ -221,13 +233,20 @@ def _fetch_hackernews(name: str, limit: int = 15) -> str:
     except Exception as exc:
         return f"**{name}**: Failed to fetch — {exc}"
 
+    # Fetch all stories in parallel instead of sequentially
+    items: dict[int, dict] = {}
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {pool.submit(_fetch_hn_item, sid): sid for sid in story_ids}
+        for future in as_completed(futures, timeout=_SOURCE_TIMEOUT):
+            sid = futures[future]
+            result = future.result()
+            if result:
+                items[sid] = result
+
     lines = [f"### {name}"]
     for i, sid in enumerate(story_ids, 1):
-        try:
-            item = requests.get(
-                _HN_ITEM_URL.format(sid), timeout=_REQUEST_TIMEOUT,
-            ).json()
-        except Exception:
+        item = items.get(sid)
+        if not item:
             continue
 
         title = item.get("title", "(no title)")
@@ -285,16 +304,34 @@ def _fetch_source_briefing(source: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def _build_briefing_content(sources: list[dict]) -> str:
-    """Build the markdown content for a full briefing."""
+    """Build the markdown content for a full briefing.
+
+    Fetches all sources in parallel with a per-source timeout so one slow
+    source can't block the entire briefing.
+    """
     now = datetime.now(UTC).strftime("%A, %B %d, %Y at %H:%M UTC")
     sections = [f"*{now}*\n"]
 
+    results: dict[str, str] = {}
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {
+            pool.submit(_fetch_source_briefing, src): src["name"]
+            for src in sources
+        }
+        for future in as_completed(futures, timeout=_SOURCE_TIMEOUT * 2):
+            name = futures[future]
+            try:
+                results[name] = future.result()
+            except Exception as exc:
+                logger.exception("Failed to fetch source %s", name)
+                results[name] = f"**{name}**: Error — {exc}"
+
+    # Preserve original source order
     for source in sources:
-        try:
-            sections.append(_fetch_source_briefing(source))
-        except Exception as exc:
-            logger.exception("Failed to fetch source %s", source["name"])
-            sections.append(f"**{source['name']}**: Error — {exc}")
+        sections.append(results.get(
+            source["name"],
+            f"**{source['name']}**: Timed out.",
+        ))
 
     return "\n\n".join(sections)
 
