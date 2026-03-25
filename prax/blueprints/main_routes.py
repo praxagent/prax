@@ -81,6 +81,13 @@ def serve_course_site(path=''):
     return send_from_directory(directory, os.path.basename(file_path))
 
 
+@main_routes.route('/notes/')
+@main_routes.route('/notes/<path:path>')
+def serve_notes(path=''):
+    """Serve notes — redirects into the Hugo site's notes section."""
+    return serve_course_site(f"notes/{path}" if path else "notes/")
+
+
 @main_routes.route('/transcribe', methods=['POST'])
 @validate_twilio_request
 def transcribe():

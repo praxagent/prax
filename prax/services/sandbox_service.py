@@ -311,9 +311,9 @@ def _solutions_dir(user_id: str) -> str:
 
 def _archive_solution(session: SandboxSession, summary: str = "") -> str:
     """Archive sandbox artifacts to the user's workspace git repo."""
-    from prax.services.workspace_service import _ensure_workspace, _git_commit
+    from prax.services.workspace_service import ensure_workspace, git_commit
 
-    root = _ensure_workspace(session.user_id)
+    root = ensure_workspace(session.user_id)
     dest = os.path.join(root, "archive", "code", session.session_id[:12])
     os.makedirs(dest, exist_ok=True)
 
@@ -338,7 +338,7 @@ def _archive_solution(session: SandboxSession, summary: str = "") -> str:
         with open(os.path.join(dest, "session_log.json"), "w") as f:
             json.dump(session_log, f, indent=2)
 
-    _git_commit(root, f"Sandbox solution: {session.session_id[:12]}")
+    git_commit(root, f"Sandbox solution: {session.session_id[:12]}")
     logger.info("Archived sandbox solution %s for %s", session.session_id[:12], session.user_id)
     return dest
 

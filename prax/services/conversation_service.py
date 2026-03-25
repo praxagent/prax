@@ -1,4 +1,22 @@
-"""Service layer that encapsulates the new LangChain-based agent."""
+"""Conversation service — orchestrates the LangChain agent per-session.
+
+Architecture
+~~~~~~~~~~~~
+There are two memory layers in Prax:
+
+1. **SQLite history** (``conversation_memory.py``)  — the legacy store.
+   ``add_dict_to_list`` / ``retrieve_dict`` persist raw message dicts keyed
+   by ``(channel, user_id)``.  This is used to reload history when a session
+   resumes and is the *only* remaining consumer of ``conversation_memory``.
+
+2. **Workspace trace log** (``workspace_service.append_trace`` / ``search_trace``)
+   — the newer, git-backed log.  Every assistant turn is appended as a plain-
+   text line to ``<workspace>/trace.log`` (auto-rotated at 0.5 MB).  Use this
+   for debugging, audit trails, and cross-session search.
+
+New features should use workspace traces for persistence and avoid adding
+new call sites into ``conversation_memory``.
+"""
 from __future__ import annotations
 
 import logging

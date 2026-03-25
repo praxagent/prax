@@ -1,3 +1,13 @@
+"""Legacy conversation memory — SQLite-backed chat history and embeddings.
+
+.. deprecated::
+    This module predates the workspace-backed persistence layer
+    (``prax.services.workspace_service``) and the LangChain agent rewrite.
+    It is still imported by ``conversation_service.py`` for SQLite history
+    storage (``add_dict_to_list`` / ``retrieve_dict``), but no new code
+    should depend on it.  Prefer workspace trace logs for debug history
+    and LangChain ``RunnableWithMessageHistory`` for agent memory.
+"""
 import json
 import logging
 import sqlite3
