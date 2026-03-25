@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.0](https://github.com/praxagent/prax/compare/v0.1.0...v0.2.0) (2026-03-25)
+
+
+### Features
+
+* add notes feature, cleanup and improve hugo processing, security hardening, soul.md ([#4](https://github.com/praxagent/prax/issues/4)) ([a4d0d98](https://github.com/praxagent/prax/commit/a4d0d98cdb5c93aa6725907a4a6ca87b4f2d88f8))
+* new summary plugin ([#5](https://github.com/praxagent/prax/issues/5)) ([1baafd8](https://github.com/praxagent/prax/commit/1baafd81c5e3305d37a5f3e6581e8ab1cee7d6e8))
+
 ## 0.1.0 (2026-03-23)
 
 
