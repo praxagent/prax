@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from langchain_core.tools import tool
 
+from prax.agent.action_policy import RiskLevel, risk_tool
 from prax.agent.user_context import current_user_id
 from prax.services import sandbox_service
 
@@ -14,7 +15,7 @@ def _get_user_id() -> str:
     return uid
 
 
-@tool
+@risk_tool(risk=RiskLevel.HIGH)
 def sandbox_start(task_description: str, model: str | None = None) -> str:
     """Start a sandboxed coding session with an AI coding agent.
 
@@ -32,7 +33,7 @@ def sandbox_start(task_description: str, model: str | None = None) -> str:
     )
 
 
-@tool
+@risk_tool(risk=RiskLevel.HIGH)
 def sandbox_message(message: str, model: str | None = None) -> str:
     """Send a follow-up message or instruction to the active sandbox coding session.
 
@@ -125,7 +126,7 @@ def sandbox_search(query: str) -> str:
     return "Found solutions:\n\n" + "\n\n".join(lines)
 
 
-@tool
+@risk_tool(risk=RiskLevel.HIGH)
 def sandbox_execute(solution_id: str, command: str | None = None) -> str:
     """Re-execute a previously archived sandbox solution.
 

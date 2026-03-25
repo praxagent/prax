@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from langchain_core.tools import tool
 
+from prax.agent.action_policy import RiskLevel, risk_tool
 from prax.agent.user_context import current_user_id
 from prax.services import workspace_service
 
@@ -49,6 +50,34 @@ def workspace_save(filename: str, content: str) -> str:
         return f"Saved {filename} to active workspace."
     except Exception as e:
         return f"Failed to save {filename}: {e}"
+
+
+@tool
+def workspace_patch(filename: str, old_text: str, new_text: str) -> str:
+    """Apply a precise text replacement to a workspace file.
+
+    Instead of rewriting the entire file, find old_text and replace it with
+    new_text.  Fails if old_text is not found or appears more than once.
+
+    Args:
+        filename: The file to patch in the active workspace.
+        old_text: The exact text to find (must appear exactly once).
+        new_text: The replacement text.
+    """
+    try:
+        content = workspace_service.read_file(_get_user_id(), filename)
+        count = content.count(old_text)
+        if count == 0:
+            return f"old_text not found in {filename}. Read the file first to get the exact text."
+        if count > 1:
+            return f"old_text appears {count} times in {filename}. Provide more context to make it unique."
+        patched = content.replace(old_text, new_text, 1)
+        workspace_service.save_file(_get_user_id(), filename, patched)
+        return f"Patched {filename}: replaced {len(old_text)} chars with {len(new_text)} chars."
+    except FileNotFoundError:
+        return f"File {filename} not found in active workspace."
+    except Exception as e:
+        return f"Failed to patch {filename}: {e}"
 
 
 @tool
@@ -111,7 +140,7 @@ def latex_compile(filename: str) -> str:
         return "pdflatex is not installed on this system."
 
 
-@tool
+@risk_tool(risk=RiskLevel.HIGH)
 def workspace_send_file(filename: str, message: str = "") -> str:
     """Send a file from the active workspace to the user via their current channel.
 
@@ -411,21 +440,124 @@ def read_logs(lines: int = 150, level: str = "") -> str:
     return f"Last {len(recent)} log lines:\n" + "".join(recent)
 
 
+@tool
+def system_status() -> str:
+    """Show system health: loaded plugins, tool count, recent errors, and config.
+
+    Use this to diagnose issues, check what's available, or verify that
+    a plugin/tool is loaded after changes.
+    """
+    lines = []
+    try:
+        from prax.plugins.loader import get_plugin_loader
+        from prax.settings import settings as _settings
+
+        loader = get_plugin_loader()
+        plugin_tools = loader.get_tools()
+        plugin_names = sorted({t.name.split("_")[0] for t in plugin_tools}) if plugin_tools else []
+
+        from prax.agent.tool_registry import get_registered_tools
+        total_tools = len(get_registered_tools())
+
+        lines.append(f"**Tools:** {total_tools} total")
+        lines.append(f"**Plugins:** {len(plugin_names)} loaded ({', '.join(plugin_names)})")
+        lines.append(f"**Plugin tools:** {len(plugin_tools)}")
+
+        # Plugin health from monitored wrappers.
+        registry = loader._registry if hasattr(loader, "_registry") else None
+        if registry and hasattr(registry, "get_all_status"):
+            statuses = registry.get_all_status()
+            failing = {k: v for k, v in statuses.items() if v.get("failures", 0) > 0}
+            if failing:
+                lines.append("**Failing plugins:**")
+                for name, info in failing.items():
+                    lines.append(f"  - {name}: {info['failures']} failures")
+            else:
+                lines.append("**Plugin health:** all OK")
+
+        lines.append(f"**LLM:** {_settings.default_llm_provider} / {_settings.base_model}")
+        lines.append(f"**Self-improve:** {'enabled' if _settings.self_improve_enabled else 'disabled'}")
+        lines.append(f"**Sandbox:** {'persistent' if _settings.sandbox_persistent else 'ephemeral'}")
+
+        # Recent errors from app log.
+        log_path = _settings.log_path
+        import os
+        if os.path.isfile(log_path):
+            with open(log_path, encoding="utf-8", errors="replace") as f:
+                log_lines = f.readlines()
+            errors = [ln.strip() for ln in log_lines[-500:] if "[ERROR]" in ln]
+            if errors:
+                lines.append(f"**Recent errors:** {len(errors)} in last 500 log lines")
+                for e in errors[-3:]:
+                    lines.append(f"  {e[:200]}")
+            else:
+                lines.append("**Recent errors:** none")
+    except Exception as e:
+        lines.append(f"Error gathering status: {e}")
+    return "\n".join(lines)
+
+
+@tool
+def conversation_history(lines: int = 200) -> str:
+    """Read recent conversation history from the trace log.
+
+    Returns the most recent messages (user, assistant, tool calls) across
+    all past conversations with this user.  Use this to recall what was
+    discussed previously — topics, decisions, links shared, etc.
+
+    Args:
+        lines: Number of lines to return (default 200, max 1000).
+    """
+    try:
+        lines = min(max(lines, 10), 1000)
+        content = workspace_service.read_trace_tail(_get_user_id(), lines)
+        if not content:
+            return "No conversation history found."
+        return content
+    except Exception as e:
+        return f"Error reading history: {e}"
+
+
+@tool
+def conversation_search(query: str, max_results: int = 20) -> str:
+    """Search past conversations for a topic, keyword, or phrase.
+
+    Searches across all past conversations with this user — messages,
+    tool calls, and results.  Returns matching excerpts with timestamps.
+
+    Use this when the user asks "did we talk about X?", "when did I mention Y?",
+    or when you need to recall a prior discussion for context.
+
+    Args:
+        query: Search term or phrase to look for.
+        max_results: Maximum number of matches to return (default 20).
+    """
+    try:
+        results = workspace_service.search_trace(
+            _get_user_id(), query, min(max(max_results, 1), 50)
+        )
+        if not results:
+            return f"No matches for '{query}' in conversation history."
+        lines = []
+        for r in results:
+            lines.append(f"**{r['timestamp']}**\n{r['excerpt']}")
+        return f"Found {len(results)} match(es):\n\n" + "\n\n---\n\n".join(lines)
+    except Exception as e:
+        return f"Error searching history: {e}"
+
+
 def build_workspace_tools():
-    from prax.settings import settings as _settings
 
     tools = [
         user_notes_update, user_notes_read, reread_instructions,
-        workspace_save, workspace_read, workspace_list,
+        workspace_save, workspace_patch, workspace_read, workspace_list,
         workspace_send_file, latex_compile,
         workspace_archive, workspace_search, workspace_restore,
         log_link, links_history,
         todo_add, todo_list, todo_complete, todo_remove,
         agent_plan, agent_step_done, agent_plan_status, agent_plan_clear,
+        conversation_history, conversation_search,
+        read_logs, system_status,
     ]
-
-    # Dev-mode only: log access and self-diagnostics.
-    if _settings.self_improve_enabled:
-        tools.append(read_logs)
 
     return tools

@@ -12,17 +12,17 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 from datetime import UTC, datetime
 
 import yaml
 
 from prax.services.workspace_service import (
-    _ensure_workspace,
-    _get_lock,
-    _git_commit,
-    _safe_join,
+    ensure_workspace,
+    get_lock,
+    git_commit,
+    safe_join,
 )
+from prax.utils.text import slugify
 
 logger = logging.getLogger(__name__)
 
@@ -34,19 +34,17 @@ _COURSE_FILE = "course.yaml"
 # ---------------------------------------------------------------------------
 
 def _slugify(text: str) -> str:
-    """Convert a title to a filesystem-safe slug."""
-    slug = re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
-    return slug[:60] or "course"
+    return slugify(text, separator="_", fallback="course")
 
 
-def _courses_dir(root: str) -> str:
+def courses_dir(root: str) -> str:
     d = os.path.join(root, "courses")
     os.makedirs(d, exist_ok=True)
     return d
 
 
 def _course_dir(root: str, course_id: str) -> str:
-    return _safe_join(_courses_dir(root), course_id)
+    return safe_join(courses_dir(root), course_id)
 
 
 def _read_course(course_path: str) -> dict:
@@ -70,14 +68,14 @@ def _write_course(course_path: str, data: dict) -> None:
 
 def create_course(user_id: str, subject: str, title: str = "") -> dict:
     """Create a new course and return its initial metadata."""
-    with _get_lock(user_id):
-        root = _ensure_workspace(user_id)
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
         course_id = _slugify(title or subject)
 
         # Deduplicate if slug already exists.
         base_id = course_id
         counter = 2
-        while os.path.isdir(os.path.join(_courses_dir(root), course_id)):
+        while os.path.isdir(os.path.join(courses_dir(root), course_id)):
             course_id = f"{base_id}_{counter}"
             counter += 1
 
@@ -110,22 +108,22 @@ def create_course(user_id: str, subject: str, title: str = "") -> dict:
             },
         }
         _write_course(course_path, data)
-        _git_commit(root, f"Create course: {data['title']}")
+        git_commit(root, f"Create course: {data['title']}")
         return data
 
 
 def get_course(user_id: str, course_id: str) -> dict:
     """Read a course's full metadata."""
-    with _get_lock(user_id):
-        root = _ensure_workspace(user_id)
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
         return _read_course(_course_dir(root, course_id))
 
 
 def list_courses(user_id: str) -> list[dict]:
     """List all courses with summary info."""
-    with _get_lock(user_id):
-        root = _ensure_workspace(user_id)
-        courses_root = _courses_dir(root)
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
+        courses_root = courses_dir(root)
         results = []
         if not os.path.isdir(courses_root):
             return results
@@ -150,34 +148,34 @@ def list_courses(user_id: str) -> list[dict]:
 
 def update_course(user_id: str, course_id: str, updates: dict) -> dict:
     """Merge *updates* into course.yaml and return the full updated data."""
-    with _get_lock(user_id):
-        root = _ensure_workspace(user_id)
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
         course_path = _course_dir(root, course_id)
         data = _read_course(course_path)
         _deep_merge(data, updates)
         _write_course(course_path, data)
-        _git_commit(root, f"Update course: {data['title']}")
+        git_commit(root, f"Update course: {data['title']}")
         return data
 
 
 def save_tutor_notes(user_id: str, course_id: str, content: str) -> str:
     """Write Prax's private tutor notes for a course."""
-    with _get_lock(user_id):
-        root = _ensure_workspace(user_id)
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
         course_path = _course_dir(root, course_id)
         if not os.path.isdir(course_path):
             raise FileNotFoundError(f"Course not found: {course_id}")
         notes_path = os.path.join(course_path, "tutor_notes.md")
         with open(notes_path, "w", encoding="utf-8") as f:
             f.write(content)
-        _git_commit(root, f"Update tutor notes: {course_id}")
+        git_commit(root, f"Update tutor notes: {course_id}")
         return notes_path
 
 
 def read_tutor_notes(user_id: str, course_id: str) -> str:
     """Read Prax's private tutor notes for a course."""
-    with _get_lock(user_id):
-        root = _ensure_workspace(user_id)
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
         course_path = _course_dir(root, course_id)
         notes_path = os.path.join(course_path, "tutor_notes.md")
         if not os.path.isfile(notes_path):
@@ -190,26 +188,26 @@ def save_material(
     user_id: str, course_id: str, filename: str, content: str,
 ) -> str:
     """Save a course material file (quiz, lesson summary, etc.)."""
-    with _get_lock(user_id):
-        root = _ensure_workspace(user_id)
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
         course_path = _course_dir(root, course_id)
         if not os.path.isfile(os.path.join(course_path, _COURSE_FILE)):
             raise FileNotFoundError(f"Course not found: {course_id}")
         materials_dir = os.path.join(course_path, "materials")
         os.makedirs(materials_dir, exist_ok=True)
-        filepath = _safe_join(materials_dir, filename)
+        filepath = safe_join(materials_dir, filename)
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(content)
-        _git_commit(root, f"Save material: {course_id}/{filename}")
+        git_commit(root, f"Save material: {course_id}/{filename}")
         return filepath
 
 
 def read_material(user_id: str, course_id: str, filename: str) -> str:
     """Read a course material file."""
-    with _get_lock(user_id):
-        root = _ensure_workspace(user_id)
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
         course_path = _course_dir(root, course_id)
-        filepath = _safe_join(os.path.join(course_path, "materials"), filename)
+        filepath = safe_join(os.path.join(course_path, "materials"), filename)
         if not os.path.isfile(filepath):
             raise FileNotFoundError(f"Material not found: {course_id}/{filename}")
         with open(filepath, encoding="utf-8") as f:
@@ -234,7 +232,7 @@ title = "{site_title}"
   description = "Personal courses by Prax"
 """
 
-_KATEX_HEAD = """\
+KATEX_HEAD = """\
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"
@@ -258,6 +256,46 @@ _KATEX_HEAD = """\
 </script>
 """
 
+THEME_CSS = """\
+  :root {
+    --bg: #ffffff; --text: #1a1a1a; --text-muted: #666; --link: #0056b3;
+    --code-bg: #f4f4f4; --border: #ddd; --border-light: #eee;
+    --blockquote-bg: #f0f7ff; --blockquote-border: #0056b3;
+    --table-header: #f4f4f4; --table-stripe: #fafafa;
+    --tag-bg: #e9ecef; --progress-bg: #e9ecef;
+    --h1-border: #333;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1a1a2e; --text: #e0e0e0; --text-muted: #999; --link: #6db3f2;
+      --code-bg: #2a2a3e; --border: #444; --border-light: #333;
+      --blockquote-bg: #1e2a3a; --blockquote-border: #6db3f2;
+      --table-header: #2a2a3e; --table-stripe: #222238;
+      --tag-bg: #333348; --progress-bg: #333348;
+      --h1-border: #888;
+    }
+    img { opacity: 0.9; }
+  }
+  body { max-width: 48rem; margin: 2rem auto; padding: 0 1rem; font-family: system-ui, sans-serif; line-height: 1.6; color: var(--text); background: var(--bg); }
+  h1 { border-bottom: 2px solid var(--h1-border); padding-bottom: .3rem; }
+  h2 { margin-top: 2rem; }
+  pre { background: var(--code-bg); padding: 1rem; overflow-x: auto; border-radius: 4px; }
+  code { background: var(--code-bg); padding: 0.15rem 0.3rem; border-radius: 3px; font-size: 0.9em; }
+  pre code { background: none; padding: 0; }
+  a { color: var(--link); }
+  blockquote { border-left: 4px solid var(--blockquote-border); margin: 1.5rem 0; padding: 1rem 1.2rem; background: var(--blockquote-bg); border-radius: 0 4px 4px 0; }
+  blockquote strong { color: var(--blockquote-border); }
+  .mermaid { margin: 1.5rem 0; text-align: center; }
+  table { border-collapse: collapse; width: 100%; margin: 1.5rem 0; }
+  th, td { border: 1px solid var(--border); padding: 0.6rem 0.8rem; text-align: left; }
+  th { background: var(--table-header); font-weight: 600; }
+  tr:nth-child(even) { background: var(--table-stripe); }
+  .meta { color: var(--text-muted); font-size: 0.9em; margin-bottom: 2rem; }
+  .progress { background: var(--progress-bg); border-radius: 4px; overflow: hidden; height: 8px; margin: 1rem 0; }
+  .progress-bar { background: #28a745; height: 100%; }
+  img { max-width: 100%; height: auto; }
+"""
+
 _HUGO_SINGLE = """\
 <!DOCTYPE html>
 <html lang="en">
@@ -265,26 +303,10 @@ _HUGO_SINGLE = """\
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ .Title }}</title>
-""" + _KATEX_HEAD + """\
+""" + KATEX_HEAD + """\
 <style>
-  body { max-width: 48rem; margin: 2rem auto; padding: 0 1rem; font-family: system-ui, sans-serif; line-height: 1.6; color: #1a1a1a; }
-  h1 { border-bottom: 2px solid #333; padding-bottom: .3rem; }
-  h2 { margin-top: 2rem; }
-  pre { background: #f4f4f4; padding: 1rem; overflow-x: auto; border-radius: 4px; }
-  code { background: #f4f4f4; padding: 0.15rem 0.3rem; border-radius: 3px; font-size: 0.9em; }
-  pre code { background: none; padding: 0; }
-  a { color: #0056b3; }
-  blockquote { border-left: 4px solid #0056b3; margin: 1.5rem 0; padding: 1rem 1.2rem; background: #f0f7ff; border-radius: 0 4px 4px 0; }
-  blockquote strong { color: #0056b3; }
-  .mermaid { margin: 1.5rem 0; text-align: center; }
-  table { border-collapse: collapse; width: 100%; margin: 1.5rem 0; }
-  th, td { border: 1px solid #ddd; padding: 0.6rem 0.8rem; text-align: left; }
-  th { background: #f4f4f4; font-weight: 600; }
-  tr:nth-child(even) { background: #fafafa; }
-  .meta { color: #666; font-size: 0.9em; margin-bottom: 2rem; }
-  .nav { margin: 2rem 0; padding: 1rem 0; border-top: 1px solid #ddd; display: flex; justify-content: space-between; }
-  .progress { background: #e9ecef; border-radius: 4px; overflow: hidden; height: 8px; margin: 1rem 0; }
-  .progress-bar { background: #28a745; height: 100%; }
+""" + THEME_CSS + """\
+  .nav { margin: 2rem 0; padding: 1rem 0; border-top: 1px solid var(--border); display: flex; justify-content: space-between; }
 </style>
 </head>
 <body>
@@ -307,15 +329,12 @@ _HUGO_LIST = """\
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ .Title }}</title>
-""" + _KATEX_HEAD + """\
+""" + KATEX_HEAD + """\
 <style>
-  body { max-width: 48rem; margin: 2rem auto; padding: 0 1rem; font-family: system-ui, sans-serif; line-height: 1.6; color: #1a1a1a; }
-  h1 { border-bottom: 2px solid #333; padding-bottom: .3rem; }
-  .module { padding: 0.8rem 0; border-bottom: 1px solid #eee; }
+""" + THEME_CSS + """\
+  .module { padding: 0.8rem 0; border-bottom: 1px solid var(--border-light); }
   .module a { text-decoration: none; font-weight: 600; }
-  .module .status { font-size: 0.85em; color: #666; }
-  .progress { background: #e9ecef; border-radius: 4px; overflow: hidden; height: 8px; margin: 1rem 0; }
-  .progress-bar { background: #28a745; height: 100%; }
+  .module .status { font-size: 0.85em; color: var(--text-muted); }
 </style>
 </head>
 <body>
@@ -332,14 +351,14 @@ _HUGO_LIST = """\
 """
 
 
-def _hugo_site_dir(root: str) -> str:
+def hugo_site_dir(root: str) -> str:
     """Return the path to the shared Hugo site directory."""
     return os.path.join(root, "courses", "_site")
 
 
-def _ensure_hugo_site(root: str, base_url: str) -> str:
+def ensure_hugo_site(root: str, base_url: str) -> str:
     """Create the Hugo site skeleton if it doesn't exist. Returns site dir."""
-    site = _hugo_site_dir(root)
+    site = hugo_site_dir(root)
     content_dir = os.path.join(site, "content")
     layouts_dir = os.path.join(site, "layouts", "_default")
     os.makedirs(content_dir, exist_ok=True)
@@ -363,12 +382,12 @@ def _ensure_hugo_site(root: str, base_url: str) -> str:
     return site
 
 
-def _generate_hugo_content(root: str, course_id: str) -> None:
+def generate_hugo_content(root: str, course_id: str) -> None:
     """Generate Hugo markdown posts from a course's data and materials."""
     course_path = _course_dir(root, course_id)
     data = _read_course(course_path)
 
-    site = _hugo_site_dir(root)
+    site = hugo_site_dir(root)
     content_dir = os.path.join(site, "content", course_id)
     os.makedirs(content_dir, exist_ok=True)
 
@@ -434,12 +453,12 @@ weight: {num}
 
 {material_body}
 """
-        slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+        slug = slugify(title)
         with open(os.path.join(content_dir, f"{num:02d}-{slug}.md"), "w", encoding="utf-8") as f:
             f.write(page)
 
 
-def _run_hugo(site: str) -> dict | None:
+def run_hugo(site: str) -> dict | None:
     """Run Hugo to build the site. Returns error dict or None on success."""
     try:
         from prax.utils.shell import run_command
@@ -465,27 +484,27 @@ def build_course_site(user_id: str, course_id: str, base_url: str) -> dict:
     All courses are sections in a single Hugo site — one build serves them all.
     Returns dict with 'url' or 'error'.
     """
-    with _get_lock(user_id):
-        root = _ensure_workspace(user_id)
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
 
         # Validate course exists.
         course_path = _course_dir(root, course_id)
         _read_course(course_path)  # raises if not found
 
-        site = _ensure_hugo_site(root, base_url)
+        site = ensure_hugo_site(root, base_url)
 
         # Regenerate content for ALL courses so the site is always complete.
-        courses_root = _courses_dir(root)
+        courses_root = courses_dir(root)
         for entry in sorted(os.listdir(courses_root)):
             if entry.startswith("_"):
                 continue  # skip _site
             cp = os.path.join(courses_root, entry)
             if os.path.isdir(cp) and os.path.isfile(os.path.join(cp, _COURSE_FILE)):
-                _generate_hugo_content(root, entry)
+                generate_hugo_content(root, entry)
 
-        _git_commit(root, f"Generate Hugo content: {course_id}")
+        git_commit(root, f"Generate Hugo content: {course_id}")
 
-    err = _run_hugo(site)
+    err = run_hugo(site)
     if err:
         return err
 
@@ -493,59 +512,11 @@ def build_course_site(user_id: str, course_id: str, base_url: str) -> dict:
     return {"url": url, "public_dir": os.path.join(site, "public")}
 
 
-def publish_page(user_id: str, slug: str, title: str, content: str, base_url: str) -> dict:
-    """Publish an ad-hoc rich content page (math, diagrams, etc.) via Hugo.
-
-    Creates a standalone page at /courses/pages/<slug>/ and rebuilds the site.
-    Use this when a text response would be too long, too complex (heavy LaTeX),
-    or would benefit from proper HTML rendering.
-
-    Returns dict with 'url' or 'error'.
-    """
-    with _get_lock(user_id):
-        root = _ensure_workspace(user_id)
-        site = _ensure_hugo_site(root, base_url)
-
-        pages_dir = os.path.join(site, "content", "pages")
-        os.makedirs(pages_dir, exist_ok=True)
-
-        # Write the page index if it doesn't exist.
-        index_path = os.path.join(pages_dir, "_index.md")
-        if not os.path.isfile(index_path):
-            with open(index_path, "w", encoding="utf-8") as f:
-                f.write('---\ntitle: "Pages"\n---\n\nShared pages and explanations.\n')
-
-        safe_slug = re.sub(r"[^a-z0-9]+", "-", slug.lower()).strip("-")[:60] or "page"
-        page_content = f'---\ntitle: "{title}"\ndate: {datetime.now(UTC).isoformat()}\n---\n\n{content}\n'
-
-        page_path = os.path.join(pages_dir, f"{safe_slug}.md")
-        with open(page_path, "w", encoding="utf-8") as f:
-            f.write(page_content)
-
-        # Also regenerate all course content so the site stays complete.
-        courses_root = _courses_dir(root)
-        for entry in sorted(os.listdir(courses_root)):
-            if entry.startswith("_"):
-                continue
-            cp = os.path.join(courses_root, entry)
-            if os.path.isdir(cp) and os.path.isfile(os.path.join(cp, _COURSE_FILE)):
-                _generate_hugo_content(root, entry)
-
-        _git_commit(root, f"Publish page: {safe_slug}")
-
-    err = _run_hugo(site)
-    if err:
-        return err
-
-    url = f"{base_url.rstrip('/')}/courses/pages/{safe_slug}/"
-    return {"url": url, "public_dir": os.path.join(site, "public")}
-
-
 def get_course_site_public_dir(user_id: str) -> str | None:
     """Return the path to the Hugo public/ dir if it exists for a specific user."""
-    from prax.services.workspace_service import _workspace_root
-    root = _workspace_root(user_id)
-    public = os.path.join(_hugo_site_dir(root), "public")
+    from prax.services.workspace_service import workspace_root
+    root = workspace_root(user_id)
+    public = os.path.join(hugo_site_dir(root), "public")
     return public if os.path.isdir(public) else None
 
 
@@ -588,3 +559,16 @@ def _deep_merge(base: dict, updates: dict) -> None:
             _deep_merge(base[key], value)
         else:
             base[key] = value
+
+
+# ---------------------------------------------------------------------------
+# Deprecated aliases — old underscore-prefixed names kept for backward compat.
+# New code should import the public names above.
+# ---------------------------------------------------------------------------
+_KATEX_HEAD = KATEX_HEAD
+_THEME_CSS = THEME_CSS
+_hugo_site_dir = hugo_site_dir
+_courses_dir = courses_dir
+_ensure_hugo_site = ensure_hugo_site
+_generate_hugo_content = generate_hugo_content
+_run_hugo = run_hugo

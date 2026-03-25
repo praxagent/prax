@@ -99,7 +99,9 @@ Prax is a multi-channel AI assistant powered by a LangGraph ReAct agent. It conn
 | **Channels** | Discord bot (free, WebSocket), Twilio voice + SMS (webhooks), configurable agent name |
 | **Agent** | LangGraph ReAct loop, 106+ tools, dedicated sub-agents (self-improvement, plugin engineering, content authoring, research, coding), watchdog supervisor, automatic checkpoint & retry on failures |
 | **Memory** | SQLite conversations with auto-summarization, git-backed per-user workspaces, dynamic user notes, link history, to-do lists, task plans |
-| **Documents** | PDF extraction (arXiv, URLs, attachments), web page summaries, YouTube transcripts, LaTeX compilation |
+| **Notes** | Conversation-to-note publishing (Hugo pages with KaTeX, mermaid, syntax highlighting), iterative updates, searchable index, shareable URLs, bidirectional knowledge graph links |
+| **Documents** | PDF extraction (arXiv, URLs, attachments), web page summaries, YouTube transcripts, LaTeX compilation, URL-to-note / PDF-to-note / arXiv-to-note pipelines |
+| **Research** | Research projects (group notes, links, sources), RSS/Atom feed subscriptions, conversation history search across sessions |
 | **Code** | Always-on Docker sandbox with [OpenCode](https://opencode.ai/), auto-installs packages, multi-model support, round-based budget control |
 | **Scheduling** | Cron jobs (YAML), one-time reminders, timezone-aware delivery |
 | **Browser** | Playwright automation, persistent login profiles, VNC for manual login, credential management |
@@ -613,11 +615,13 @@ graph LR
 | `prax/agent/course_author_agent.py` | Content author sub-agent: produces rich course materials (mermaid, code, LaTeX) via iterative sandbox drafting |
 | `prax/agent/tools.py` | Kernel tool wrappers (search, datetime, fetch_url) — reader tools migrated to plugins |
 | `prax/agent/plugin_tools.py` | 17 plugin management tools: plugin CRUD, catalog, prompt CRUD, LLM config, source_read/list |
-| `prax/agent/workspace_tools.py` | 19 workspace tools: notes, files, links, todos, task planning, instructions |
+| `prax/agent/workspace_tools.py` | 24 workspace tools: notes, files, links, todos, task planning, instructions, conversation history/search, system status, diff-aware patch |
 | `prax/agent/sandbox_tools.py` | 7 sandbox tools for code execution sessions |
 | `prax/agent/scheduler_tools.py` | 9 scheduler tools: recurring cron + one-time reminders |
 | `prax/agent/finetune_tools.py` | 8 fine-tuning tools (harvest, train, verify, promote, rollback) |
 | `prax/agent/codegen_tools.py` | 10 self-improvement tools (worktree, edit, test, lint, verify, deploy, PR) |
+| `prax/agent/note_tools.py` | 7 note tools (create, update, list, search, url_to_note, pdf_to_note, note_link) |
+| `prax/agent/project_tools.py` | 6 research project tools (create, status, add note/link/source, brief) |
 | `prax/agent/browser_tools.py` | 14 browser tools (navigate, click, fill, screenshot, login, VNC) |
 | `prax/agent/tool_registry.py` | Tool aggregation: built-in + plugin-provided + manually registered |
 | `prax/agent/llm_factory.py` | Multi-provider LLM factory (OpenAI, Anthropic, Google, Ollama, vLLM) |
@@ -629,13 +633,15 @@ graph LR
 | `prax/plugins/prompt_manager.py` | Hot-swappable system prompt loading with variable expansion |
 | `prax/plugins/llm_config.py` | Per-component LLM routing (YAML-based, hot-reloaded) |
 | `prax/plugins/monitored_tool.py` | Runtime monitoring wrapper: failure counting + auto-rollback |
-| `prax/plugins/tools/*/plugin.py` | Built-in reader plugins (NPR, web summary, PDF, YouTube, arXiv, Deutschlandfunk) |
+| `prax/plugins/tools/*/plugin.py` | Built-in reader plugins (NPR, web summary, PDF, YouTube, arXiv, RSS, Deutschlandfunk) |
 | `prax/services/sms_service.py` | SMS workflow: media handling, PDF pipeline, agent routing |
 | `prax/services/voice_service.py` | Voice workflow: speech processing, TTS buffer management |
 | `prax/services/conversation_service.py` | Shared conversation layer with workspace context injection |
 | `prax/services/sandbox_service.py` | Docker + OpenCode sandbox lifecycle, archiving, budget control |
 | `prax/services/scheduler_service.py` | APScheduler-backed cron service reading YAML definitions |
 | `prax/services/finetune_service.py` | LoRA fine-tuning pipeline: harvest → train → verify → hot-swap |
+| `prax/services/note_service.py` | Note CRUD, search, knowledge graph (related notes), Hugo page generation |
+| `prax/services/project_service.py` | Research project CRUD, note/link/source aggregation, brief generation |
 | `prax/services/codegen_service.py` | Self-modification via staging clone + verify + hot-swap / PR workflow |
 | `prax/services/discord_service.py` | Discord bot: message handling, authorization, response delivery |
 | `prax/services/browser_service.py` | Playwright browser automation with per-user sessions |
@@ -661,11 +667,22 @@ workspaces/{user_id}/          ← phone number or Discord user ID
 ├── todos.json             ← user's personal to-do list
 ├── instructions.md        ← system prompt reference (agent can re-read)
 ├── agent_plan.json        ← current task decomposition (transient)
+├── trace.log              ← conversation trace (rotated at 0.5 MB)
+├── feeds.yaml             ← RSS/Atom feed subscriptions
+├── notes/                 ← markdown notes with YAML frontmatter
+│   ├── eigenvalues.md
+│   └── bayesian-prob.md
+├── projects/              ← research projects (notes + links + sources)
+│   └── {project-slug}/
+│       ├── project.yaml
+│       └── paper.md
 ├── active/                ← files the agent is currently aware of
 │   ├── 2301.12345.md      ← extracted PDF with frontmatter
 │   └── sessions/          ← live sandbox coding sessions
 │       └── {session_id}/
 └── archive/               ← agent moves files here when done
+    ├── trace_logs/        ← rotated trace logs (plain text, grep-able)
+    │   └── trace.20250301-120000.log
     ├── 2301.12345.pdf     ← original PDF preserved
     └── code/              ← completed coding solutions
         └── pdf_to_beamer/
@@ -1269,6 +1286,91 @@ Starting Prax — provider=openai model=gpt-4o temperature=0.7 encoding=o200k_ba
 - **Docker socket** — the app container needs `/var/run/docker.sock` mounted for sandbox management. This grants host Docker access; only run in trusted environments.
 - **VNC** — when enabled, VNC servers bind to `127.0.0.1` only. Access requires an SSH tunnel.
 - **Secret key validation** — the app warns on startup if `FLASK_SECRET_KEY` is set to a weak placeholder like `change-me`.
+
+### Plugin security
+
+Plugins imported from external repos are subject to multiple security layers:
+
+| Layer | What it does |
+|-------|-------------|
+| **AST-based static analysis** | Parses plugin source with Python's `ast` module to detect `subprocess`, `eval`, `exec`, `compile`, `__import__`, `os.environ`, `os.system`, `socket`, and `getattr(__builtins__, ...)`. Catches obfuscation that regex scanning misses. |
+| **Regex pattern scanning** | Supplements AST analysis with line-level pattern matching for HTTP calls, file deletion, hex-encoded strings, and base64 decoding. |
+| **Built-in tool name protection** | Plugins cannot register tools with the same name as built-in tools. A plugin trying to override `browser_read_page` or `get_current_datetime` is rejected at load time. |
+| **Sandbox environment isolation** | Plugin test runs execute in a subprocess with a stripped environment — only `PATH`, `HOME`, `LANG`, and `PYTHONPATH` are passed. API keys and secrets are not inherited. |
+| **Subprocess sandbox testing** | Before activation, plugins are imported in a separate subprocess with a 30-second timeout. Failures prevent activation. |
+| **Runtime monitoring + auto-rollback** | Active plugin tools are wrapped with failure tracking. After consecutive failures, the plugin is automatically rolled back to its previous version. |
+| **Governance layer** | All tools (built-in and plugin) pass through a single governance choke point with risk classification (LOW/MEDIUM/HIGH), confirmation gating for HIGH-risk actions, and audit logging to the workspace trace. |
+
+**Limitations:** Plugins still execute in the main process after passing security checks. The static analysis catches common attack patterns but cannot prevent all forms of obfuscation. Only import plugins from sources you trust. For maximum isolation, run Prax in a container.
+
+### Tool risk classification
+
+Every tool is classified by risk level at the governance layer:
+
+| Risk | Behavior | Examples |
+|------|----------|---------|
+| **HIGH** | Blocked on first call; requires user confirmation | `sandbox_execute`, `workspace_send_file`, `browser_click`, `plugin_write`, `schedule_create` |
+| **MEDIUM** | Executes immediately; logged to audit trail | `note_create`, `browser_open`, `arxiv_search`, `course_publish` |
+| **LOW** | Executes immediately; logged | `note_list`, `todo_add`, `workspace_read`, `get_current_datetime` |
+
+Risk levels are declared at the tool definition site via `@risk_tool(risk=RiskLevel.HIGH)` and enforced centrally in `tool_registry.get_registered_tools()`.
+
+### Plugin trust tiers
+
+Every plugin is tagged with a trust tier based on its origin:
+
+| Tier | Meaning | Source directory |
+|------|---------|-----------------|
+| **`builtin`** | Ships with Prax | `prax/plugins/tools/` |
+| **`workspace`** | User-created in their workspace | `<workspace>/plugins/custom/` |
+| **`imported`** | Cloned from an external git repo | `<workspace>/plugins/shared/` |
+
+Trust tiers are stored in `registry.json` and surfaced in `plugin_list` and `plugin_status`. Unknown plugins default to `imported` (least trust). Defined as `PluginTrust` enum in `prax/plugins/registry.py`.
+
+### Plugin lifecycle audit trail
+
+All plugin lifecycle events are recorded as typed trace entries, searchable via `search_trace`:
+
+| Event | Emitted when |
+|-------|-------------|
+| `plugin_import` | Plugin repo cloned successfully |
+| `plugin_activate` | Plugin activated (manual or after write + sandbox test) |
+| `plugin_block` | Activation blocked by security scan or failure |
+| `plugin_rollback` | Plugin rolled back (manual or auto after repeated failures) |
+| `plugin_remove` | Plugin deleted |
+| `plugin_security_warn` | Security scan found warnings during import |
+
+Example queries:
+```python
+search_trace(uid, "pdf2presentation", type_filter="plugin_activate")
+search_trace(uid, "security", type_filter="plugin_security_warn")
+```
+
+### Supply chain hardening
+
+In March 2026, the [TeamPCP supply chain campaign](https://ramimac.me/teampcp/) compromised Trivy, Checkmarx KICS, and [LiteLLM](https://github.com/BerriAI/litellm/issues/24512) across GitHub Actions, Docker Hub, PyPI, and npm — all by stealing CI/CD credentials and publishing poisoned versions under legitimate project names. The attack exploited mutable version tags (GitHub Action tags force-pushed to malicious commits, Docker Hub tags pointing to backdoored images) and compromised PyPI publishing tokens.
+
+Prax applies the following mitigations against this class of attack:
+
+| Layer | Mitigation | Status |
+|-------|-----------|--------|
+| **GitHub Actions** | All actions pinned to full commit SHAs, not mutable version tags. A tag like `@v4` can be force-pushed; a SHA cannot. | Done |
+| **Docker base images** | `Dockerfile` and `sandbox/Dockerfile` pin base images to `@sha256:` digests. Tag hijacking on Docker Hub or GHCR has no effect. | Done |
+| **Python dependencies** | `uv.lock` contains SHA-256 hashes for every wheel and sdist. `uv sync --frozen` in Docker builds rejects any package whose hash doesn't match. A poisoned PyPI upload (the LiteLLM vector) fails verification. | Done |
+| **CI/CD secrets** | CI jobs have no publishing credentials, API keys, or deploy tokens. There is nothing to steal from a compromised workflow. | Done |
+| **No `pull_request_target`** | CI uses `pull_request` (safe — runs on the PR's merge commit with read-only access), not `pull_request_target` (the Trivy entry point — runs in the base repo context with write access and secrets). | Done |
+
+**Updating pinned digests:** Each Dockerfile contains a comment with the `docker inspect` command to refresh the digest. For GitHub Actions, look up the SHA at `https://api.github.com/repos/{owner}/{repo}/git/ref/tags/{tag}`.
+
+#### Remaining risk: plugin code execution
+
+Imported plugins execute in the main Prax process after passing AST-based static analysis and sandbox testing (see [Plugin security](#plugin-security) above). This is a deliberate tradeoff: the plugin system is designed for self-modification, which requires code execution.
+
+The static analysis catches common patterns (`subprocess`, `eval`, `exec`, `os.environ`, socket access, obfuscated strings) but cannot guarantee detection of all malicious payloads. An attacker who controls a plugin repo could craft an obfuscated credential stealer that bypasses AST scanning.
+
+**Current controls:** static analysis + regex scanning + sandbox pre-test + user confirmation gate + runtime failure auto-rollback.
+
+**Future mitigation (TODO):** Run imported plugins in the sandboxed Docker container rather than the main process, communicating via the existing sandbox API. This would contain damage from a compromised plugin to an ephemeral container with no access to API keys or host resources. Built-in and user-created workspace plugins would remain in-process.
 
 ## Configuration
 

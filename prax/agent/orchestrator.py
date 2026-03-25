@@ -14,6 +14,7 @@ from prax.agent.user_context import current_user_id
 from prax.plugins.prompt_manager import get_prompt_manager
 from prax.services.workspace_service import append_trace, save_instructions
 from prax.settings import settings
+from prax.trace_events import TraceEvent
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +143,15 @@ class ConversationAgent:
 
         try:
             result = self._invoke_with_retry(messages, config, turn.user_id)
+
+            # If a plugin was activated mid-turn, the graph had stale tool
+            # bindings for any subsequent tool calls in the SAME turn.
+            # Rebuild now so the next turn starts clean.  This also covers
+            # the case where the agent activated a plugin and immediately
+            # tried to use it — it will fail this turn, but the retry path
+            # (line ~230) already rebuilds.  This ensures the NEXT turn
+            # is always up-to-date even if the current one succeeded.
+            self._rebuild_if_needed()
         finally:
             self.checkpoint_mgr.end_turn(turn.user_id)
 
@@ -149,11 +159,17 @@ class ConversationAgent:
         self._write_trace(uid, user_input, result.get("messages", []))
 
         # Extract the last AI message from the graph output.
+        response = ""
         for msg in reversed(result.get("messages", [])):
             if isinstance(msg, AIMessage) and msg.content:
-                return msg.content
+                response = msg.content
+                break
 
-        return ""
+        # Deterministic claim audit: check for ungrounded numeric claims.
+        if response:
+            response = self._audit_claims(response, result.get("messages", []), uid)
+
+        return response
 
     @staticmethod
     def _is_invalid_checkpoint_error(exc: Exception) -> bool:
@@ -243,11 +259,61 @@ class ConversationAgent:
                 config = rollback_cfg
 
     @staticmethod
+    def _audit_claims(response: str, messages: list, user_id: str | None) -> str:
+        """Run deterministic claim audit and log findings.
+
+        If ungrounded claims are found, appends a trace audit entry.
+        Does NOT block the response — the epistemic tags and system prompt
+        are the primary defense.  This is a post-hoc detection layer for
+        monitoring and debugging.
+        """
+        try:
+            from prax.agent.claim_audit import audit_claims, format_audit_warning
+
+            # Collect all tool results from this turn.
+            tool_results: list[str] = []
+            for msg in messages:
+                if isinstance(msg, ToolMessage) and msg.content:
+                    tool_results.append(msg.content)
+
+            findings = audit_claims(response, tool_results)
+
+            if findings:
+                warning = format_audit_warning(findings)
+                logger.warning("Claim audit flagged response (user=%s): %s", user_id, warning)
+
+                # Persist to trace as an audit event.
+                if user_id:
+                    try:
+                        append_trace(user_id, [{
+                            "type": TraceEvent.AUDIT,
+                            "content": f"[CLAIM-AUDIT] {warning}",
+                        }])
+                    except Exception:
+                        pass
+        except Exception:
+            logger.debug("Claim audit failed", exc_info=True)
+
+        return response
+
+    @staticmethod
     def _write_trace(user_id: str | None, user_input: str, messages: list) -> None:
         """Append the full agent invocation trace to the workspace log."""
         if not user_id:
             return
-        entries: list[dict] = [{"type": "user", "content": user_input}]
+
+        # Flush the governance audit log into the trace.
+        from prax.agent.governed_tool import drain_audit_log
+        audit_entries = drain_audit_log()
+        for entry in audit_entries:
+            risk_tag = f"[{entry['risk'].upper()}]" if entry.get("risk") else ""
+            logger.debug(
+                "Audit: %s %s args=%s result=%s",
+                entry.get("tool_name"), risk_tag,
+                entry.get("args", ""), entry.get("result", ""),
+            )
+
+        entries: list[dict] = [{"type": TraceEvent.USER, "content": user_input}]
         for msg in messages:
             if isinstance(msg, SystemMessage):
                 continue  # skip — already persisted as instructions.md
@@ -259,16 +325,27 @@ class ConversationAgent:
                     name = tc.get("name", "unknown")
                     args = tc.get("args", {})
                     entries.append({
-                        "type": "tool_call",
+                        "type": TraceEvent.TOOL_CALL,
                         "content": f"{name}({args})",
                     })
                 if msg.content:
-                    entries.append({"type": "assistant", "content": msg.content})
+                    entries.append({"type": TraceEvent.ASSISTANT, "content": msg.content})
             elif isinstance(msg, ToolMessage):
                 entries.append({
-                    "type": "tool_result",
+                    "type": TraceEvent.TOOL_RESULT,
                     "content": f"[{msg.name}] {msg.content}",
                 })
+
+        # Append governance audit entries to the trace.
+        for audit in audit_entries:
+            entries.append({
+                "type": TraceEvent.AUDIT,
+                "content": (
+                    f"[{audit.get('risk', '?').upper()}] {audit.get('tool_name', '?')} "
+                    f"args={audit.get('args', '')} result={audit.get('result', '')}"
+                ),
+            })
+
         try:
             append_trace(user_id, entries)
         except Exception:

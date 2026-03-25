@@ -45,6 +45,7 @@ dependencies = [
     "coverage[toml]==7.6.4",
     "langgraph>=1.1.3",
     "pillow>=12.1.1",
+    "feedparser>=6.0.12",
 ]
 
 [project.optional-dependencies]

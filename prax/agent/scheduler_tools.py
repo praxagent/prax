@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from langchain_core.tools import tool
 
+from prax.agent.action_policy import RiskLevel, risk_tool
 from prax.agent.user_context import current_user_id
 from prax.services import scheduler_service
 
@@ -14,7 +15,7 @@ def _get_user_id() -> str:
     return uid
 
 
-@tool
+@risk_tool(risk=RiskLevel.HIGH)
 def schedule_create(
     description: str,
     prompt: str,
@@ -78,7 +79,7 @@ def schedule_list() -> str:
     return "\n\n".join(lines)
 
 
-@tool
+@risk_tool(risk=RiskLevel.HIGH)
 def schedule_update(
     schedule_id: str,
     description: str | None = None,
@@ -138,12 +139,13 @@ def schedule_reload() -> str:
     return f"Reloaded {result['count']} schedule(s) (timezone: {result['timezone']})"
 
 
-@tool
+@risk_tool(risk=RiskLevel.HIGH)
 def schedule_reminder(
     description: str,
     prompt: str,
     fire_at: str,
     timezone: str | None = None,
+    channel: str | None = None,
 ) -> str:
     """Create a one-time reminder that fires at a specific date and time.
 
@@ -152,8 +154,10 @@ def schedule_reminder(
     Args:
         description: Short name for the reminder (e.g. "Take medicine").
         prompt: The message or instruction the agent will process and send
-            when the reminder fires.  For a simple reminder just repeat the
-            user's request (e.g. "Remind the user to take their medicine").
+            when the reminder fires.  Keep it SHORT — the agent will generate
+            a response from this prompt, and long prompts cause multi-message
+            delivery on SMS.  For a simple reminder, use a brief instruction
+            like "Remind the user to take their medicine."
         fire_at: ISO 8601 datetime string for when to fire, e.g.
             "2026-03-21T10:00:00".  If the user says "remind me tomorrow"
             without a specific time, pick a reasonable time (e.g. 10:00 AM
@@ -162,9 +166,13 @@ def schedule_reminder(
         timezone: IANA timezone like "America/New_York".  If omitted, uses the
             user's default.  Check user_notes for their timezone before creating
             a reminder — ask if unknown.
+        channel: Delivery channel — "sms", "discord", or "all".  If omitted,
+            defaults to the same channel the user is currently using.
+            Use "all" to deliver on every channel.
     """
     result = scheduler_service.create_reminder(
-        _get_user_id(), description, prompt, fire_at, timezone=timezone,
+        _get_user_id(), description, prompt, fire_at,
+        timezone=timezone, channel=channel,
     )
     if "error" in result:
         return f"Failed to create reminder: {result['error']}"
@@ -173,6 +181,7 @@ def schedule_reminder(
         f"Reminder set: '{r['description']}' (id: {r['id']})\n"
         f"  Fire at: {r['fire_at']}\n"
         f"  Timezone: {r['timezone']}\n"
+        f"  Channel: {r.get('channel', 'auto')}\n"
         f"  Prompt: {r['prompt'][:80]}{'...' if len(r['prompt']) > 80 else ''}"
     )
 

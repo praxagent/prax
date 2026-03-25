@@ -13,6 +13,14 @@ import os
 import shutil
 import threading
 from datetime import UTC, datetime
+from enum import StrEnum
+
+
+class PluginTrust(StrEnum):
+    BUILTIN = "builtin"        # Ships with Prax (prax/plugins/tools/)
+    WORKSPACE = "workspace"    # User-created in their workspace
+    IMPORTED = "imported"      # Cloned from external git repo
+
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +62,7 @@ class PluginRegistry:
     # Plugin tracking
     # ------------------------------------------------------------------
 
-    def activate_plugin(self, rel_path: str, version: str) -> None:
+    def activate_plugin(self, rel_path: str, version: str, trust_tier: str | None = None) -> None:
         """Mark a plugin as active with the given version string."""
         with self._lock:
             entry = self._data["plugins"].get(rel_path, {})
@@ -69,6 +77,8 @@ class PluginRegistry:
                     "max_failures_before_rollback", _DEFAULT_MAX_FAILURES
                 ),
             })
+            if trust_tier is not None:
+                entry["trust_tier"] = trust_tier
             self._data["plugins"][rel_path] = entry
             self._save()
         logger.info("Activated plugin %s version %s (previous: %s)", rel_path, version, prev_version)
@@ -87,6 +97,12 @@ class PluginRegistry:
     def list_plugins(self) -> dict:
         with self._lock:
             return dict(self._data["plugins"])
+
+    def get_trust_tier(self, rel_path: str) -> str:
+        """Return the trust tier for a plugin, defaulting to 'imported'."""
+        with self._lock:
+            entry = self._data["plugins"].get(rel_path, {})
+            return entry.get("trust_tier", PluginTrust.IMPORTED)
 
     def record_failure(self, rel_path: str) -> int:
         """Record a tool failure. Returns updated failure count."""

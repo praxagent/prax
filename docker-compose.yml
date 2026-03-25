@@ -1,3 +1,5 @@
+name: prax
+
 services:
   ngrok:
     image: ngrok/ngrok:latest

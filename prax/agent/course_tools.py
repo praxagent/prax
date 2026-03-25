@@ -226,43 +226,6 @@ def course_publish(course_id: str) -> str:
         return f"Error publishing course: {e}"
 
 
-@tool
-def render_page(slug: str, title: str, content: str) -> str:
-    """Render rich content as a standalone Hugo page and return its public URL.
-
-    Use this when your response would benefit from proper HTML rendering —
-    heavy math/LaTeX, diagrams, long explanations with code blocks, tables,
-    or anything that looks bad in plain text or Discord.  The content is
-    written as markdown and built into a styled HTML page served via ngrok.
-
-    The page lives at /courses/pages/<slug>/ and persists until overwritten.
-
-    Requires NGROK_URL to be configured.
-
-    Args:
-        slug: URL-safe identifier for the page (e.g. "eigenvalues-explained").
-        title: Page title displayed as an h1.
-        content: Full markdown content (supports LaTeX via $$ delimiters, code blocks, etc.).
-    """
-    from prax.utils.ngrok import get_ngrok_url
-
-    uid = _get_user_id()
-    base_url = get_ngrok_url()
-    if not base_url:
-        return (
-            "Cannot render page — NGROK_URL is not configured.\n"
-            "Set NGROK_URL in your .env to enable rendered pages."
-        )
-
-    try:
-        result = course_service.publish_page(uid, slug, title, content, base_url)
-        if "error" in result:
-            return f"Hugo build failed: {result['error']}"
-        return f"Page rendered: {result['url']}"
-    except Exception as e:
-        return f"Error rendering page: {e}"
-
-
 def build_course_tools() -> list:
     """Return the list of course/tutor tools to register with the main agent."""
     return [
@@ -272,5 +235,4 @@ def build_course_tools() -> list:
         course_tutor_notes,
         course_save_material,
         course_publish,
-        render_page,
     ]

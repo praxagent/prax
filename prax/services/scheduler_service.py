@@ -114,21 +114,77 @@ def _validate_timezone(tz_name: str) -> ZoneInfo:
 # Message delivery (SMS or Discord)
 # ---------------------------------------------------------------------------
 
-def _deliver_message(user_id: str, message: str) -> None:
-    """Route a message to SMS or Discord based on the user_id prefix."""
+def _infer_channel(user_id: str) -> str:
+    """Infer the delivery channel from the user_id format."""
     if user_id.startswith("D"):
+        return "discord"
+    return "sms"
+
+
+def _resolve_cross_channel(user_id: str) -> tuple[str | None, str | None]:
+    """Return (phone, discord_user_id) for a user, resolving across channels.
+
+    Uses the discord_to_phone mapping to find the other identity.
+    Returns None for any channel that can't be resolved.
+    """
+    phone: str | None = None
+    discord_id: str | None = None
+
+    if user_id.startswith("D"):
+        discord_id = user_id
+        # Look up phone from discord mapping
         try:
-            from prax.services.discord_service import send_message
-            send_message(user_id, message)
+            from prax.services.discord_service import _discord_to_phone
+            raw_id = user_id[1:]  # strip "D" prefix
+            phone = _discord_to_phone.get(raw_id)
         except Exception:
-            logger.exception("Failed to deliver via Discord to %s", user_id)
-    else:
+            pass
+    elif user_id.startswith("+") or user_id[0:1].isdigit():
+        phone = user_id if user_id.startswith("+") else f"+{user_id}"
+        # Reverse-lookup: find discord ID mapped to this phone
         try:
-            # Ensure E.164 format for Twilio (must start with +).
-            phone = user_id if user_id.startswith("+") else f"+{user_id}"
-            send_sms(message, phone)
+            from prax.services.discord_service import _discord_to_phone
+            for d_id, p in _discord_to_phone.items():
+                if p == phone or p == user_id:
+                    discord_id = f"D{d_id}"
+                    break
         except Exception:
-            logger.exception("Failed to deliver via SMS to %s", user_id)
+            pass
+
+    return phone, discord_id
+
+
+def _deliver_message(user_id: str, message: str, channel: str | None = None) -> None:
+    """Route a message to SMS, Discord, or both.
+
+    Args:
+        user_id: The user identifier (phone number or Discord ID).
+        message: The message to send.
+        channel: Delivery channel — "sms", "discord", or "all".
+            If None, infers from user_id prefix.
+    """
+    channel = channel or _infer_channel(user_id)
+
+    phone, discord_id = _resolve_cross_channel(user_id)
+
+    if channel in ("discord", "all"):
+        if discord_id:
+            try:
+                from prax.services.discord_service import send_message
+                send_message(discord_id, message)
+            except Exception:
+                logger.exception("Failed to deliver via Discord to %s", discord_id)
+        elif channel == "all":
+            logger.warning("Cannot deliver via Discord — no Discord ID for user %s", user_id)
+
+    if channel in ("sms", "all"):
+        if phone:
+            try:
+                send_sms(message, phone)
+            except Exception:
+                logger.exception("Failed to deliver via SMS to %s", phone)
+        elif channel == "all":
+            logger.warning("Cannot deliver via SMS — no phone number for user %s", user_id)
 
 
 # ---------------------------------------------------------------------------
@@ -157,14 +213,19 @@ def _on_fire(user_id: str, schedule_id: str, prompt: str) -> None:
         logger.exception("Schedule fire failed: user=%s id=%s", user_id, schedule_id)
 
 
-def _on_reminder_fire(user_id: str, reminder_id: str, prompt: str) -> None:
+def _on_reminder_fire(
+    user_id: str,
+    reminder_id: str,
+    prompt: str,
+    channel: str | None = None,
+) -> None:
     """Called when a one-time reminder fires.  Deliver and auto-delete."""
-    logger.info("Reminder fired: user=%s id=%s", user_id, reminder_id)
+    logger.info("Reminder fired: user=%s id=%s channel=%s", user_id, reminder_id, channel)
     try:
         from prax.services.conversation_service import conversation_service
 
         response = conversation_service.reply(user_id, f"[Reminder] {prompt}")
-        _deliver_message(user_id, response)
+        _deliver_message(user_id, response, channel=channel)
 
         # Auto-delete the reminder from YAML.
         with _lock:
@@ -226,10 +287,13 @@ def _register_reminder_job(user_id: str, reminder: dict, default_tz: str) -> str
         logger.warning("Invalid reminder %s for user %s", reminder_id, user_id)
         return None
 
+    channel = reminder.get("channel")  # None = infer from user_id
+
     job = _scheduler.add_job(
         _on_reminder_fire,
         trigger=trigger,
         args=[user_id, reminder_id, reminder["prompt"]],
+        kwargs={"channel": channel},
         id=f"{user_id}:reminder:{reminder_id}",
         replace_existing=True,
         name=f"{user_id}:reminder:{reminder.get('description', reminder_id)}",
@@ -463,8 +527,18 @@ def create_reminder(
     prompt: str,
     fire_at: str,
     timezone: str | None = None,
+    channel: str | None = None,
 ) -> dict[str, Any]:
-    """Create a one-time reminder that fires at a specific datetime."""
+    """Create a one-time reminder that fires at a specific datetime.
+
+    Args:
+        channel: Delivery channel — "sms", "discord", or "all".
+            If None, defaults to the channel inferred from the user_id.
+    """
+    # Validate channel if provided.
+    if channel and channel not in ("sms", "discord", "all"):
+        return {"error": f"Invalid channel: {channel}. Use 'sms', 'discord', or 'all'."}
+
     with _lock:
         data = _read_schedules(user_id)
         default_tz = data.get("timezone", "UTC")
@@ -492,12 +566,16 @@ def create_reminder(
         slug = description.lower().replace(" ", "-")[:20]
         reminder_id = f"rem-{slug}-{uuid.uuid4().hex[:6]}"
 
-        entry = {
+        # Default channel: infer from user_id (sms for phone, discord for D-prefix).
+        effective_channel = channel or _infer_channel(user_id)
+
+        entry: dict[str, Any] = {
             "id": reminder_id,
             "description": description,
             "prompt": prompt,
             "fire_at": fire_dt.isoformat(),
             "timezone": tz_name,
+            "channel": effective_channel,
             "created_at": datetime.now(tz).isoformat(),
         }
         data["reminders"].append(entry)
