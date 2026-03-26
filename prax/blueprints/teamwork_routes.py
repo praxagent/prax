@@ -44,9 +44,15 @@ def teamwork_webhook():
     return jsonify({"status": "accepted"}), 200
 
 
-# TeamWork user ID — formatted like a phone number so it works with
-# the phone-int-based conversation storage in conversation_service.
-_TEAMWORK_USER_ID = "+10000000001"
+def _get_teamwork_user_id() -> str:
+    """Return the user identity for TeamWork messages.
+
+    If TEAMWORK_USER_PHONE is configured, messages share history/workspace
+    with SMS and Discord (same phone number = same conversation).
+    Falls back to a synthetic phone number if not configured.
+    """
+    from prax.settings import settings
+    return settings.teamwork_user_phone or "+10000000001"
 
 
 def _handle_message(
@@ -64,14 +70,17 @@ def _handle_message(
 
             tw = get_teamwork_client()
 
-            # Show typing indicator
-            tw.send_typing(channel="general", agent_name="Prax")
+            user_id = _get_teamwork_user_id()
 
-            # Process through Prax's normal conversation pipeline
-            response = conversation_service.reply(_TEAMWORK_USER_ID, content)
+            # Inject channel context so Prax knows the communication channel.
+            prefixed_content = f"[via TeamWork web UI]\n{content}"
 
-            # Send response back to TeamWork
-            tw.send_message(content=response, channel="general", agent_name="Prax")
+            # Keep typing indicator alive for the entire duration of processing.
+            with tw.typing(channel_id=channel_id, agent_name="Prax"):
+                response = conversation_service.reply(user_id, prefixed_content)
+
+            # Send response back to the SAME channel (could be DM, #general, etc.)
+            tw.send_message(content=response, channel_id=channel_id, agent_name="Prax")
 
         except Exception:
             logger.exception("Failed to process TeamWork message")
@@ -80,7 +89,7 @@ def _handle_message(
                 tw = get_teamwork_client()
                 tw.send_message(
                     content="Sorry, I encountered an error processing your message.",
-                    channel="general",
+                    channel_id=channel_id,
                     agent_name="Prax",
                 )
             except Exception:

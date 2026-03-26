@@ -25,6 +25,7 @@ services:
       # TeamWork integration — Prax controls TeamWork as an external agent.
       - TEAMWORK_URL=http://teamwork-backend:8000
       - TEAMWORK_API_KEY=${TEAMWORK_API_KEY:-}
+      - TEAMWORK_USER_PHONE=${TEAMWORK_USER_PHONE:-}
     volumes:
       - ./conversations.db:/app/conversations.db
       - ./static:/app/static
@@ -82,6 +83,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_KEY}
       - DATABASE_URL=sqlite+aiosqlite:///data/vteam.db
       - WORKSPACE_PATH=/workspace
+      - HOST_WORKSPACE_PATH=${HOST_WORKSPACE_PATH:-}
       - EXTERNAL_API_KEY=${TEAMWORK_API_KEY:-}
       - CORS_ORIGINS=["http://localhost:3000","http://localhost:5173"]
     volumes:

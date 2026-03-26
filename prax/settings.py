@@ -99,6 +99,7 @@ class AppSettings(BaseSettings):
     # TeamWork integration (web UI)
     teamwork_url: str = Field(default="", alias="TEAMWORK_URL")  # e.g. "http://teamwork-backend:8000"
     teamwork_api_key: str = Field(default="", alias="TEAMWORK_API_KEY")
+    teamwork_user_phone: str = Field(default="", alias="TEAMWORK_USER_PHONE")
 
     # Discord
     discord_bot_token: str | None = Field(default=None, alias="DISCORD_BOT_TOKEN")

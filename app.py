@@ -78,10 +78,14 @@ def create_app():
             tw = get_teamwork_client()
             # Build the webhook URL from our own address
             webhook_url = "http://app:5001/teamwork/webhook"
+            # Use the real user's workspace if a phone number is configured,
+            # so the file browser and workspace tools see the same files as SMS/Discord.
+            workspace_dir = (settings.teamwork_user_phone or "").lstrip("+") or None
             tw.create_project(
                 name=f"{settings.agent_name}'s Workspace",
                 description=f"Controlled by {settings.agent_name}",
                 webhook_url=webhook_url,
+                workspace_dir=workspace_dir,
             )
             tw.create_agent(name=settings.agent_name, role="orchestrator", soul="Primary AI assistant")
             # Register internal role agents so their status is visible in the UI.

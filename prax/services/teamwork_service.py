@@ -7,6 +7,7 @@ messages, creating agents, updating tasks — while remaining the orchestrator.
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any
 
 import requests
@@ -64,7 +65,13 @@ class TeamWorkClient:
         resp.raise_for_status()
         return resp.json()
 
-    def create_project(self, name: str, description: str, webhook_url: str) -> dict:
+    def create_project(
+        self,
+        name: str,
+        description: str,
+        webhook_url: str,
+        workspace_dir: str | None = None,
+    ) -> dict:
         """Create or reconnect to an external-mode project in TeamWork."""
         # Check for existing external projects first (idempotent startup).
         try:
@@ -78,15 +85,27 @@ class TeamWorkClient:
                         "Reconnected to TeamWork project %s (id=%s)",
                         name, self._project_id,
                     )
+                    # Update workspace_dir if it changed (e.g. phone number configured after first run).
+                    if workspace_dir:
+                        try:
+                            self._patch(
+                                f"/projects/{self._project_id}",
+                                {"workspace_dir": workspace_dir},
+                            )
+                        except Exception:
+                            logger.debug("Could not update workspace_dir", exc_info=True)
                     return proj
         except Exception:
             logger.debug("Could not list existing projects, creating new one", exc_info=True)
 
-        result = self._post("/projects", {
+        payload: dict = {
             "name": name,
             "description": description,
             "webhook_url": webhook_url,
-        })
+        }
+        if workspace_dir:
+            payload["workspace_dir"] = workspace_dir
+        result = self._post("/projects", payload)
         self._project_id = result["project_id"]
         self._channels = result.get("channels", {})
         logger.info(
@@ -140,11 +159,20 @@ class TeamWorkClient:
         content: str,
         channel: str = "general",
         agent_name: str | None = None,
+        channel_id: str | None = None,
     ) -> str | None:
-        """Send a message to a TeamWork channel."""
+        """Send a message to a TeamWork channel.
+
+        Args:
+            channel_id: If provided, send directly to this channel ID
+                        (bypasses name lookup — use for DM channels or
+                        channels not in the registered set).
+            channel: Channel name to look up if channel_id is not given.
+        """
         if not self._project_id:
             return None
-        channel_id = self._channels.get(channel)
+        if not channel_id:
+            channel_id = self._channels.get(channel)
         if not channel_id:
             logger.warning("Unknown channel: %s (known: %s)", channel, list(self._channels.keys()))
             return None
@@ -160,21 +188,44 @@ class TeamWorkClient:
             logger.warning("Failed to send TeamWork message", exc_info=True)
             return None
 
-    def send_typing(self, channel: str = "general", agent_name: str | None = None) -> None:
-        """Send a typing indicator."""
+    def send_typing(
+        self,
+        channel: str = "general",
+        agent_name: str | None = None,
+        channel_id: str | None = None,
+        is_typing: bool = True,
+    ) -> None:
+        """Send a typing indicator (start or stop)."""
         if not self._project_id:
             return
-        channel_id = self._channels.get(channel)
+        if not channel_id:
+            channel_id = self._channels.get(channel)
         agent_id = self._agents.get(agent_name) if agent_name else None
         if not channel_id or not agent_id:
             return
         try:
             self._post(
                 f"/projects/{self._project_id}/typing",
-                {"channel_id": channel_id, "agent_id": agent_id},
+                {"channel_id": channel_id, "agent_id": agent_id, "is_typing": is_typing},
             )
         except Exception:
             pass
+
+    def typing(
+        self,
+        channel: str = "general",
+        agent_name: str | None = None,
+        channel_id: str | None = None,
+        interval: float = 3.0,
+    ) -> _TypingContext:
+        """Return a context manager that keeps the typing indicator alive.
+
+        Usage::
+
+            with tw.typing(channel_id=cid, agent_name="Prax"):
+                # ... long-running work ...
+        """
+        return _TypingContext(self, channel, agent_name, channel_id, interval)
 
     # ----- Tasks -----
 
@@ -220,6 +271,57 @@ class TeamWorkClient:
 
     def add_channel(self, name: str, channel_id: str) -> None:
         self._channels[name] = channel_id
+
+
+class _TypingContext:
+    """Keeps a TeamWork typing indicator alive by re-sending every *interval* seconds."""
+
+    def __init__(
+        self,
+        client: TeamWorkClient,
+        channel: str,
+        agent_name: str | None,
+        channel_id: str | None,
+        interval: float,
+    ) -> None:
+        self._client = client
+        self._channel = channel
+        self._agent_name = agent_name
+        self._channel_id = channel_id
+        self._interval = interval
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def __enter__(self) -> _TypingContext:
+        self._client.send_typing(
+            channel=self._channel,
+            agent_name=self._agent_name,
+            channel_id=self._channel_id,
+            is_typing=True,
+        )
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=1)
+        self._client.send_typing(
+            channel=self._channel,
+            agent_name=self._agent_name,
+            channel_id=self._channel_id,
+            is_typing=False,
+        )
+
+    def _loop(self) -> None:
+        while not self._stop.wait(self._interval):
+            self._client.send_typing(
+                channel=self._channel,
+                agent_name=self._agent_name,
+                channel_id=self._channel_id,
+                is_typing=True,
+            )
 
 
 # Singleton
