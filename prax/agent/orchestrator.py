@@ -363,7 +363,7 @@ class ConversationAgent:
         """
         try:
             from prax.agent.claim_audit import audit_claims, format_audit_warning
-            from prax.services.teamwork_hooks import set_role_status, post_to_channel
+            from prax.services.teamwork_hooks import post_to_channel, set_role_status
 
             set_role_status("Skeptic", "working")
 

@@ -40,11 +40,20 @@ def reset_all_idle() -> None:
 
 
 def post_to_channel(channel: str, content: str, agent_name: str | None = None) -> None:
-    """Post a message to a TeamWork channel."""
+    """Post a message to a TeamWork channel.
+
+    If the current request originated from a DM, ALL messages are redirected
+    to that DM channel so the user sees the full conversation in one place.
+    """
     try:
         tw = _tw()
         if tw:
-            tw.send_message(content=content, channel=channel, agent_name=agent_name)
+            channel_id = None
+            from prax.agent.user_context import current_channel_id
+            ctx_channel = current_channel_id.get(None)
+            if ctx_channel:
+                channel_id = ctx_channel
+            tw.send_message(content=content, channel=channel, agent_name=agent_name, channel_id=channel_id)
     except Exception:
         logger.debug("TeamWork hook: post_to_channel(%s) failed", channel, exc_info=True)
 

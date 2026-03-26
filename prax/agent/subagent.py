@@ -118,7 +118,7 @@ def _run_subagent(task: str, category: str) -> str:
             logger.info("Sub-agent [%s] completed: %s", category, msg.content[:80])
             # Route engineering work to the #engineering channel.
             if category in _engineering_categories:
-                from prax.services.teamwork_hooks import set_role_status, post_to_channel
+                from prax.services.teamwork_hooks import post_to_channel, set_role_status
                 set_role_status("Executor", "idle")
                 post_to_channel("engineering", msg.content[:3000], agent_name="Executor")
             return msg.content

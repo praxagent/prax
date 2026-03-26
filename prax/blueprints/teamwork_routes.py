@@ -65,6 +65,7 @@ def _handle_message(
     """Process a TeamWork user message through Prax's conversation service."""
     with app.app_context():
         try:
+            from prax.agent.user_context import current_channel_id
             from prax.services.conversation_service import conversation_service
             from prax.services.teamwork_service import get_teamwork_client
 
@@ -72,8 +73,28 @@ def _handle_message(
 
             user_id = _get_teamwork_user_id()
 
-            # Inject channel context so Prax knows the communication channel.
-            prefixed_content = f"[via TeamWork web UI]\n{content}"
+            # Determine if this is a DM or a public channel.
+            known_channels = set(tw._channels.values()) if tw._channels else set()
+            is_dm = channel_id not in known_channels
+
+            if is_dm:
+                channel_hint = (
+                    "[via TeamWork web UI — private DM with user. "
+                    "This is a private conversation. Only you and the user can see these messages. "
+                    "Do NOT relay this to public channels.]\n"
+                )
+            else:
+                channel_hint = (
+                    "[via TeamWork web UI — public channel. "
+                    "All agents can see messages in public channels.]\n"
+                )
+
+            prefixed_content = f"{channel_hint}{content}"
+
+            # Set channel context for DMs so agent hooks route responses there.
+            # Only set for DMs — public channel messages use normal name→ID routing.
+            if is_dm:
+                current_channel_id.set(channel_id)
 
             # Keep typing indicator alive for the entire duration of processing.
             with tw.typing(channel_id=channel_id, agent_name="Prax"):

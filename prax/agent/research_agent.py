@@ -83,7 +83,7 @@ def delegate_research(question: str) -> str:
                   context the agent needs — it cannot see your conversation.
     """
     logger.info("Research agent delegated: %s", question[:80])
-    from prax.services.teamwork_hooks import set_role_status, post_to_channel
+    from prax.services.teamwork_hooks import post_to_channel, set_role_status
     set_role_status("Researcher", "working")
 
     tools = _build_research_tools()
@@ -114,7 +114,6 @@ def delegate_research(question: str) -> str:
         return f"Research agent failed: {exc}"
 
     # Log tool calls for debugging.
-    from langchain_core.messages import ToolMessage
     tool_count = 0
     for msg in result.get("messages", []):
         if isinstance(msg, AIMessage):
