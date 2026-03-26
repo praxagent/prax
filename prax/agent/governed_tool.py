@@ -83,6 +83,10 @@ def wrap_with_governance(tool: BaseTool) -> BaseTool:
 
         # Execute the tool.
         logger.info("Tool %s starting [%s] (args=%s)", tool_name, risk.value, _summarize_args(kwargs))
+        from prax.services.teamwork_hooks import set_role_status
+        set_role_status("Executor", "working")
+        if risk is RiskLevel.HIGH:
+            set_role_status("Auditor", "working")
         try:
             result = tool.invoke(kwargs if kwargs else {})
             result_str = str(result) if result is not None else None

@@ -254,17 +254,30 @@ def _build_bot():
 
         logger.info("Discord message from %s (%s): %s", display_name, author_id, text_input[:80])
 
-        # Show typing indicator while processing.
-        async with message.channel.typing():
-            # Run the synchronous agent call in a thread pool.
-            from prax.services.conversation_service import conversation_service
-            try:
-                response = await asyncio.to_thread(
-                    conversation_service.reply, user_id, text_input
-                )
-            except Exception:
-                logger.exception("Agent reply failed for Discord user %s", author_id)
-                response = "Sorry, something went wrong processing your message. Please try again."
+        # Show typing indicator while processing.  The typing indicator is
+        # cosmetic — if Discord rate-limits it, we still process the message.
+        try:
+            typing_ctx = message.channel.typing()
+            await typing_ctx.__aenter__()
+        except Exception:
+            typing_ctx = None
+            logger.debug("Typing indicator failed (rate-limited?), continuing without it")
+
+        # Run the synchronous agent call in a thread pool.
+        from prax.services.conversation_service import conversation_service
+        try:
+            response = await asyncio.to_thread(
+                conversation_service.reply, user_id, text_input
+            )
+        except Exception:
+            logger.exception("Agent reply failed for Discord user %s", author_id)
+            response = "Sorry, something went wrong processing your message. Please try again."
+        finally:
+            if typing_ctx is not None:
+                try:
+                    await typing_ctx.__aexit__(None, None, None)
+                except Exception:
+                    pass
 
         # Render LaTeX math blocks as images, send interleaved with text.
         segments = await asyncio.to_thread(_render_latex_segments, response)

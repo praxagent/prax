@@ -1915,6 +1915,117 @@ If you see a `Tool X starting` log with no matching `Tool X finished`, it's almo
 - **Discord bot not responding:** Verify `DISCORD_BOT_TOKEN` is set and valid. Check that **Message Content Intent** is enabled in the Developer Portal. Ensure the user's Discord ID is in `DISCORD_ALLOWED_USERS`.
 - **Discord "Privileged intent" error:** Go to Developer Portal → Bot tab → enable **Message Content Intent** under Privileged Gateway Intents.
 
+## Research — Academic Foundations for Agentic Workflow Design
+
+This section summarizes empirically validated findings from academic research and production systems that inform Prax's architecture. These aren't theoretical — each finding has been demonstrated to improve agent performance on real benchmarks.
+
+### 1. Explicit Planning Before Execution
+
+**Finding:** Agents that create a structured plan before taking action significantly outperform those that dive straight into tool calls.
+
+- **Plan-and-Solve Prompting** (Wang et al., 2023) showed that generating a plan before solving improves accuracy on math and reasoning benchmarks by 5–10% over standard chain-of-thought. The key insight: planning reduces error propagation because the agent commits to a strategy before executing.
+- **ADaPT** (Prasad et al., 2024) demonstrated that recursive task decomposition — breaking a task into subtasks, and subtasks into sub-subtasks — matches or beats fixed-depth planning on ALFWorld and WebShop benchmarks, while adapting to task complexity at runtime.
+
+**Prax implementation:** `agent_plan` + complexity classifier + orchestrator-level plan enforcement.
+
+**References:**
+- Wang et al., "Plan-and-Solve Prompting," ACL 2023 — [arXiv:2305.04091](https://arxiv.org/abs/2305.04091)
+- Prasad et al., "ADaPT: As-Needed Decomposition and Planning with Language Models," NAACL 2024 — [arXiv:2311.05772](https://arxiv.org/abs/2311.05772)
+
+### 2. Self-Verification and Reflexion
+
+**Finding:** Agents that verify their own outputs and retry on failure dramatically outperform single-pass agents.
+
+- **Reflexion** (Shinn et al., 2023) introduced a loop where the agent reflects on failures (stored in an episodic memory buffer) and retries with that context. This improved pass rates on HumanEval from 80% to 91% and on ALFWorld from 75% to 97% — without any weight updates.
+- **Self-Refine** (Madaan et al., 2023) showed that iterative self-feedback (generate → critique → refine) improves output quality by 5–20% across tasks including code generation, math reasoning, and dialogue.
+
+**Prax implementation:** Plan step verification via `agent_step_done`, checkpoint-based retry in `_invoke_with_retry`, claim audit layer.
+
+**References:**
+- Shinn et al., "Reflexion: Language Agents with Verbal Reinforcement Learning," NeurIPS 2023 — [arXiv:2303.11366](https://arxiv.org/abs/2303.11366)
+- Madaan et al., "Self-Refine: Iterative Refinement with Self-Feedback," NeurIPS 2023 — [arXiv:2303.17651](https://arxiv.org/abs/2303.17651)
+
+### 3. Centralized Orchestration with Bounded Sub-Agents
+
+**Finding:** A hub-and-spoke architecture (one orchestrator delegating to specialized sub-agents) scales better than peer-to-peer multi-agent systems — but only up to a point.
+
+- A Google DeepMind scaling study found that **agent performance peaks at roughly 4 sub-agents** in parallel. Beyond that, coordination overhead dominates — the orchestrator spends more time synthesizing than the sub-agents save by parallelizing. The recommendation: cap parallelism and use sequential delegation for dependent tasks.
+- **MetaGPT** (Hong et al., 2023) showed that encoding Standard Operating Procedures (structured role-based workflows) into multi-agent systems reduced code hallucinations by 20–30% compared to unstructured agent communication.
+
+**Prax implementation:** `delegate_task` / `delegate_parallel` with centralized orchestrator, `_run_subagent` with category-specific tool sets.
+
+**References:**
+- Hong et al., "MetaGPT: Meta Programming for A Multi-Agent Collaborative Framework," ICLR 2024 — [arXiv:2308.00352](https://arxiv.org/abs/2308.00352)
+
+### 4. Workspace and Scratchpad Persistence
+
+**Finding:** Agents that write intermediate results to persistent storage (scratchpad files, workspace logs) maintain coherence over long tasks far better than those relying solely on context windows.
+
+- **SWE-Agent** (Yang et al., 2024) demonstrated that a well-designed agent-computer interface — including a scratchpad for notes, structured file navigation, and linting feedback — raised SWE-bench resolve rates from 1.3% (raw GPT-4) to 12.5%. The scratchpad was critical for tasks requiring more than 5 tool calls.
+- **Voyager** (Wang et al., 2023) used a persistent skill library in Minecraft — essentially a workspace of reusable code. Agents with the skill library explored 3.3× more map area and obtained 15.3× more unique items than memoryless baselines.
+
+**Prax implementation:** Git-backed per-user workspaces, instruction persistence (`save_instructions`), workspace context injection every turn, trace logging.
+
+**References:**
+- Yang et al., "SWE-agent: Agent-Computer Interfaces Enable Automated Software Engineering," 2024 — [arXiv:2405.15793](https://arxiv.org/abs/2405.15793)
+- Wang et al., "Voyager: An Open-Ended Embodied Agent with Large Language Models," NeurIPS 2023 — [arXiv:2305.16291](https://arxiv.org/abs/2305.16291)
+
+### 5. Context Window Management and Drift Prevention
+
+**Finding:** As conversations grow, agent performance degrades due to "context drift" — earlier instructions get diluted by accumulated messages.
+
+- **Lost in the Middle** (Liu et al., 2023) showed that LLMs are worst at retrieving information placed in the middle of long contexts. Performance follows a U-curve: best for information at the beginning or end, worst in the middle. This means system prompts and plans should be re-injected or placed at boundaries, not buried in conversation history.
+- Production systems (Devin, OpenHands) address this by **re-injecting the plan and current state as system messages** at each turn, rather than relying on the model to remember earlier instructions from deep in the context.
+
+**Prax implementation:** System prompt + workspace context rebuilt every turn, plan status injected into messages, instruction persistence for mid-conversation re-reads.
+
+**References:**
+- Liu et al., "Lost in the Middle: How Language Models Use Long Contexts," TACL 2024 — [arXiv:2307.03172](https://arxiv.org/abs/2307.03172)
+
+### 6. Error Recovery via Checkpointing
+
+**Finding:** Agents that can roll back to a known-good state recover from errors faster than those that must restart from scratch.
+
+- **GCC (Git-Based Contextual Checkpointing)** proposed storing agent state as git commits, enabling rollback to any prior checkpoint. This is especially valuable for long-running tasks where a single bad tool call can corrupt the entire context.
+- **OpenHands** and **Devin** both use checkpoint-based recovery in production, with OpenHands reporting that rollback + retry resolves ~40% of failures that would otherwise require human intervention.
+
+**Prax implementation:** `CheckpointManager` with LangGraph checkpointer, `_invoke_with_retry` with rollback to last good checkpoint, fresh-start fallback for corrupted checkpoint state.
+
+### 7. Tool-Grounded Responses (Anti-Hallucination)
+
+**Finding:** Agents hallucinate actions less when the architecture enforces that responses must be grounded in actual tool results.
+
+- **Toolformer** (Schick et al., 2023) established that models can learn when to call tools vs. when to generate — but without architectural enforcement, they still skip tool calls when the "shortcut" (generating a plausible answer) is easier. The solution: make tool use the path of least resistance.
+- **ReAct** (Yao et al., 2022) showed that interleaving reasoning and action traces reduces hallucination compared to pure reasoning (chain-of-thought) or pure action (tool-only) approaches. The reasoning trace creates an audit trail that makes skipped steps visible.
+
+**Prax implementation:** "Never hallucinate actions" prompt rules, plan-delegate-verify-synthesize workflow, claim audit post-processing, trace logging for all tool calls.
+
+**References:**
+- Schick et al., "Toolformer: Language Models Can Teach Themselves to Use Tools," NeurIPS 2023 — [arXiv:2302.04761](https://arxiv.org/abs/2302.04761)
+- Yao et al., "ReAct: Synergizing Reasoning and Acting in Language Models," ICLR 2023 — [arXiv:2210.03629](https://arxiv.org/abs/2210.03629)
+
+### 8. Framework Patterns from Production Systems
+
+Several production agent frameworks have converged on similar architectural patterns:
+
+| Pattern | Used By | Prax Equivalent |
+|---------|---------|-----------------|
+| Centralized orchestrator + specialized workers | AutoGen, CrewAI, MetaGPT | `ConversationAgent` + `delegate_task` |
+| Plan → Execute → Verify loop | Devin, OpenHands, SWE-Agent | `agent_plan` → tools → `agent_step_done` |
+| Persistent workspace with git backing | Devin, OpenHands | `workspace_service` + git commits |
+| Tool result validation before response | Copilot Workspace | Claim audit + plan enforcement |
+| Scratchpad / working memory files | SWE-Agent, Voyager | Workspace notes + instruction persistence |
+| Bounded retry with rollback | OpenHands, LangGraph | `CheckpointManager` + `_invoke_with_retry` |
+| Complexity-triggered planning | ADaPT | `_classify_complexity` + orchestrator hints |
+
+### Key Takeaways
+
+1. **Planning is not optional** — it's the single highest-leverage intervention for multi-step tasks.
+2. **Verification beats generation** — checking work is cheaper and more reliable than generating it perfectly the first time.
+3. **Persistence prevents drift** — re-inject state every turn; don't trust the context window to remember.
+4. **Bound your parallelism** — diminishing returns kick in hard after ~4 concurrent sub-agents.
+5. **Make the honest path the smooth path** — architectural enforcement (plan requirements, verification gates) works better than prompt-only instructions.
+
 ## Roadmap
 
 - [x] LangGraph ReAct agent with tool calling

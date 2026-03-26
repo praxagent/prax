@@ -558,6 +558,46 @@ def source_list(path: str = "prax") -> str:
     return f"{path}/:\n" + "\n".join(items)
 
 
+@tool
+def source_grep(pattern: str, file_glob: str = "*.py") -> str:
+    """Search the live Prax codebase for a regex pattern.
+
+    Returns matching lines with file paths and line numbers.  Use this to
+    find function definitions, imports, class names, or any text pattern
+    across the codebase before making changes.
+
+    Args:
+        pattern: Regex pattern (e.g. "def build_.*tools", "from prax.agent",
+                 "class.*Service").
+        file_glob: File glob to limit search (default: "*.py").
+                   Use "*.md" for markdown, "*" for all files.
+    """
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["grep", "-rnI", "--include", file_glob, "-E", pattern, "."],
+            cwd=str(_PROJECT_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except Exception as exc:
+        return f"Search failed: {exc}"
+
+    if result.returncode > 1:
+        return f"Search failed: {result.stderr.strip()}"
+
+    matches = result.stdout.strip()
+    if not matches:
+        return f"No matches for pattern '{pattern}' in {file_glob} files."
+
+    if len(matches) > 5000:
+        matches = matches[:5000] + "\n\n[Truncated — narrow your pattern or file_glob]"
+
+    return matches
+
+
 # ------------------------------------------------------------------
 # Workspace push + shared plugin import tools
 # ------------------------------------------------------------------
