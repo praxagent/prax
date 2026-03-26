@@ -7,6 +7,7 @@ from flask import Flask
 from prax.blueprints.conference_routes import conference_routes
 from prax.blueprints.main_routes import main_routes
 from prax.blueprints.reader_routes import reader_routes
+from prax.blueprints.teamwork_routes import teamwork_routes
 from prax.blueprints.textchat_routes import textchat_routes
 from prax.conversation_memory import init_database
 from prax.services.discord_service import start_bot as start_discord_bot
@@ -24,6 +25,7 @@ def create_app():
     app.register_blueprint(main_routes)
     app.register_blueprint(conference_routes)
     app.register_blueprint(reader_routes)
+    app.register_blueprint(teamwork_routes)
     app.register_blueprint(textchat_routes)
 
 
@@ -68,6 +70,35 @@ def create_app():
     # or when not in debug mode at all.
     if not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
         start_discord_bot()
+
+    # Initialize TeamWork integration if configured
+    if settings.teamwork_url:
+        try:
+            from prax.services.teamwork_service import get_teamwork_client
+            tw = get_teamwork_client()
+            # Build the webhook URL from our own address
+            webhook_url = "http://app:5001/teamwork/webhook"
+            # Use the real user's workspace if a phone number is configured,
+            # so the file browser and workspace tools see the same files as SMS/Discord.
+            workspace_dir = (settings.teamwork_user_phone or "").lstrip("+") or None
+            tw.create_project(
+                name=f"{settings.agent_name}'s Workspace",
+                description=f"Controlled by {settings.agent_name}",
+                webhook_url=webhook_url,
+                workspace_dir=workspace_dir,
+            )
+            tw.create_agent(name=settings.agent_name, role="orchestrator", soul="Primary AI assistant")
+            # Register internal role agents so their status is visible in the UI.
+            for role_name, role_type, soul in [
+                ("Planner", "planner", "Breaks complex requests into structured plans"),
+                ("Researcher", "researcher", "Investigates questions via web search and document analysis"),
+                ("Executor", "executor", "Executes tool calls and workspace operations"),
+                ("Skeptic", "skeptic", "Challenges assumptions and audits claims for accuracy"),
+                ("Auditor", "auditor", "Reviews governance logs and tool risk classifications"),
+            ]:
+                tw.create_agent(name=role_name, role=role_type, soul=soul)
+        except Exception:
+            logger.warning("TeamWork integration failed to initialize", exc_info=True)
 
     return app
 

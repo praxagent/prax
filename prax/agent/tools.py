@@ -22,6 +22,7 @@ from prax.agent.note_tools import build_note_tools
 from prax.agent.plugin_fix_agent import build_plugin_fix_tools
 from prax.agent.plugin_tools import build_plugin_tools
 from prax.agent.project_tools import build_project_tools
+from prax.agent.research_agent import build_research_tools
 from prax.agent.sandbox_tools import build_sandbox_tools
 from prax.agent.scheduler_tools import build_scheduler_tools
 from prax.agent.self_improve_agent import build_self_improve_tools
@@ -187,6 +188,7 @@ def build_default_tools():
         + build_self_improve_tools()
         + build_plugin_fix_tools()
         + build_course_author_tools()
+        + build_research_tools()
         + build_note_tools()
         + build_project_tools()
     )

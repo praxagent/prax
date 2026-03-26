@@ -96,6 +96,11 @@ class AppSettings(BaseSettings):
         """Return the SSH key, preferring PRAX_SSH_KEY_B64 over the legacy setting."""
         return self.prax_ssh_key_b64 or self.plugin_repo_ssh_key_b64
 
+    # TeamWork integration (web UI)
+    teamwork_url: str = Field(default="", alias="TEAMWORK_URL")  # e.g. "http://teamwork-backend:8000"
+    teamwork_api_key: str = Field(default="", alias="TEAMWORK_API_KEY")
+    teamwork_user_phone: str = Field(default="", alias="TEAMWORK_USER_PHONE")
+
     # Discord
     discord_bot_token: str | None = Field(default=None, alias="DISCORD_BOT_TOKEN")
     discord_allowed_users: str | None = Field(default=None, alias="DISCORD_ALLOWED_USERS")

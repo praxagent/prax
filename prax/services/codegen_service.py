@@ -362,6 +362,135 @@ def write_file(branch_name: str, filepath: str, content: str) -> dict[str, Any]:
     return {"status": "written", "filepath": filepath, "size": len(content)}
 
 
+def patch_file(
+    branch_name: str, filepath: str, old_text: str, new_text: str,
+) -> dict[str, Any]:
+    """Apply a targeted text replacement in a worktree file.
+
+    Unlike :func:`write_file`, this only changes the specific text that
+    matches *old_text*, leaving the rest of the file untouched.  This is
+    dramatically safer for large files where full-file rewrites risk
+    mangling untouched code.
+
+    Returns an error if *old_text* is not found or appears more than once
+    (ambiguous match).
+    """
+    if not _enabled():
+        return {"error": "Self-improvement is disabled"}
+
+    wt = _get_worktree(branch_name)
+    if not wt:
+        return {"error": f"No active worktree for branch '{branch_name}'"}
+
+    try:
+        full_path = _safe_join(wt, filepath)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    if not os.path.isfile(full_path):
+        return {"error": f"File not found: {filepath}"}
+
+    with open(full_path, encoding="utf-8") as f:
+        content = f.read()
+
+    count = content.count(old_text)
+    if count == 0:
+        return {"error": f"old_text not found in {filepath}. Read the file first to get the exact text."}
+    if count > 1:
+        return {
+            "error": (
+                f"old_text appears {count} times in {filepath} — ambiguous. "
+                "Include more surrounding context to make the match unique."
+            ),
+        }
+
+    new_content = content.replace(old_text, new_text, 1)
+    with open(full_path, "w", encoding="utf-8") as f:
+        f.write(new_content)
+
+    return {
+        "status": "patched",
+        "filepath": filepath,
+        "old_size": len(content),
+        "new_size": len(new_content),
+    }
+
+
+def search_worktree(
+    branch_name: str, pattern: str, file_glob: str = "*.py",
+) -> dict[str, Any]:
+    """Search the worktree for a regex pattern using grep.
+
+    Returns matching lines with file paths and line numbers.
+    """
+    if not _enabled():
+        return {"error": "Self-improvement is disabled"}
+
+    wt = _get_worktree(branch_name)
+    if not wt:
+        return {"error": f"No active worktree for branch '{branch_name}'"}
+
+    result = _run(
+        ["grep", "-rnI", "--include", file_glob, "-E", pattern, "."],
+        cwd=wt,
+    )
+    # grep returns 1 when no matches are found — not an error.
+    if result.returncode > 1:
+        return {"error": f"Search failed: {result.stderr.strip()}"}
+
+    matches = result.stdout.strip()
+    if not matches:
+        return {"status": "no_matches", "pattern": pattern, "matches": ""}
+
+    # Truncate if too long.
+    if len(matches) > 5000:
+        matches = matches[:5000] + "\n\n[Truncated — narrow your pattern or file_glob]"
+
+    return {"status": "found", "pattern": pattern, "matches": matches}
+
+
+def diff_worktree(branch_name: str) -> dict[str, Any]:
+    """Return the git diff of uncommitted changes in the worktree.
+
+    If there are committed-but-not-yet-deployed changes, also shows
+    the diff from the base (main).
+    """
+    if not _enabled():
+        return {"error": "Self-improvement is disabled"}
+
+    wt = _get_worktree(branch_name)
+    if not wt:
+        return {"error": f"No active worktree for branch '{branch_name}'"}
+
+    # Uncommitted changes.
+    unstaged = _run(["git", "diff"], cwd=wt)
+    staged = _run(["git", "diff", "--cached"], cwd=wt)
+
+    # Committed changes since branching from main.
+    committed = _run(["git", "log", "--oneline", "main..HEAD"], cwd=wt)
+    committed_diff = ""
+    if committed.stdout.strip():
+        full = _run(["git", "diff", "main..HEAD"], cwd=wt)
+        committed_diff = full.stdout.strip()
+
+    parts: list[str] = []
+    if staged.stdout.strip():
+        parts.append(f"=== Staged changes ===\n{staged.stdout.strip()}")
+    if unstaged.stdout.strip():
+        parts.append(f"=== Unstaged changes ===\n{unstaged.stdout.strip()}")
+    if committed_diff:
+        parts.append(f"=== Committed (not deployed) ===\n{committed_diff}")
+
+    if not parts:
+        return {"status": "clean", "diff": "No changes in worktree."}
+
+    diff_text = "\n\n".join(parts)
+    # Truncate if huge.
+    if len(diff_text) > 8000:
+        diff_text = diff_text[:8000] + "\n\n[Truncated]"
+
+    return {"status": "changes", "diff": diff_text}
+
+
 # ---------------------------------------------------------------------------
 # Verification
 # ---------------------------------------------------------------------------

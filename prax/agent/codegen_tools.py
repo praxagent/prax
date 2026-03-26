@@ -246,10 +246,78 @@ def self_improve_cleanup(branch_name: str) -> str:
     return f"Cleaned up worktree for {result['branch']}"
 
 
+@tool
+def self_improve_patch(
+    branch_name: str, filepath: str, old_text: str, new_text: str,
+) -> str:
+    """Apply a targeted text replacement in a worktree file.
+
+    PREFER THIS OVER self_improve_write for editing existing files.
+    Only the exact text matching old_text is replaced — the rest of the
+    file is untouched.  This is much safer than rewriting an entire file.
+
+    old_text must appear exactly once in the file.  If it's ambiguous,
+    include more surrounding context lines to make it unique.
+
+    Args:
+        branch_name: The self-improvement branch name.
+        filepath: Relative path to the file to patch.
+        old_text: The exact text to find and replace (must be unique in file).
+        new_text: The replacement text.
+    """
+    result = codegen_service.patch_file(branch_name, filepath, old_text, new_text)
+    if "error" in result:
+        return f"Error: {result['error']}"
+    return (
+        f"Patched {result['filepath']} "
+        f"({result['old_size']} → {result['new_size']} bytes)"
+    )
+
+
+@tool
+def self_improve_diff(branch_name: str) -> str:
+    """Show the git diff of all changes in the self-improvement worktree.
+
+    Call this BEFORE deploying to review what you've actually changed.
+    Shows staged, unstaged, and committed-but-not-deployed changes.
+
+    Args:
+        branch_name: The self-improvement branch name.
+    """
+    result = codegen_service.diff_worktree(branch_name)
+    if "error" in result:
+        return f"Error: {result['error']}"
+    return result["diff"]
+
+
+@tool
+def self_improve_search(branch_name: str, pattern: str, file_glob: str = "*.py") -> str:
+    """Search the self-improvement worktree for a regex pattern.
+
+    Use this to find functions, imports, classes, or any text pattern
+    across the codebase.  Returns matching lines with file paths and
+    line numbers.
+
+    Args:
+        branch_name: The self-improvement branch name.
+        pattern: Regex pattern to search for (e.g. "def build_.*tools",
+                 "from prax.agent", "class.*Service").
+        file_glob: File glob to limit search (default: "*.py").
+                   Use "*.md" for markdown, "*" for all files.
+    """
+    result = codegen_service.search_worktree(branch_name, pattern, file_glob)
+    if "error" in result:
+        return f"Error: {result['error']}"
+    if result["status"] == "no_matches":
+        return f"No matches for pattern '{pattern}' in {file_glob} files."
+    return result["matches"]
+
+
 def build_codegen_tools() -> list:
     """Return all codegen tools (for use by sub-agents that do the work)."""
     return [
         self_improve_start, self_improve_read, self_improve_write,
+        self_improve_patch, self_improve_search, self_improve_diff,
         self_improve_test, self_improve_lint, self_improve_verify,
         self_improve_deploy, self_improve_rollback, self_improve_submit,
         self_improve_pending, self_improve_list, self_improve_cleanup,
