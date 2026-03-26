@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/praxagent/prax/compare/v0.2.0...v0.3.0) (2026-03-26)
+
+
+### Features
+
+* integrate prax with teamworks ([#7](https://github.com/praxagent/prax/issues/7)) ([c058365](https://github.com/praxagent/prax/commit/c0583655987fa2bfbb77c3d96c5e46c100488481))
+
 ## [0.2.0](https://github.com/praxagent/prax/compare/v0.1.0...v0.2.0) (2026-03-25)
 
 
