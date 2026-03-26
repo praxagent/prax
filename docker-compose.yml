@@ -22,6 +22,9 @@ services:
       # Override WORKSPACE_DIR from .env — inside the container the mount
       # point is always /app/workspaces regardless of the host path.
       - WORKSPACE_DIR=./workspaces
+      # TeamWork integration — Prax controls TeamWork as an external agent.
+      - TEAMWORK_URL=http://teamwork-backend:8000
+      - TEAMWORK_API_KEY=${TEAMWORK_API_KEY:-}
     volumes:
       - ./conversations.db:/app/conversations.db
       - ./static:/app/static
@@ -34,6 +37,8 @@ services:
       ngrok:
         condition: service_started
       sandbox:
+        condition: service_healthy
+      teamwork-backend:
         condition: service_healthy
 
   sandbox:
@@ -57,3 +62,51 @@ services:
       timeout: 3s
       start_period: 15s
       retries: 5
+
+  # ---- TeamWork (web UI for Prax) ----
+  # Slack-like interface: chat, file browser, task board, terminal.
+  # Prax controls it via the external agent API.
+
+  teamwork-backend:
+    build:
+      context: ${TEAMWORK_PATH:-../teamwork}/backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    # Alias "backend" so the frontend nginx config can resolve it.
+    networks:
+      default:
+        aliases:
+          - backend
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_KEY}
+      - OPENAI_API_KEY=${OPENAI_KEY}
+      - DATABASE_URL=sqlite+aiosqlite:///data/vteam.db
+      - WORKSPACE_PATH=/workspace
+      - EXTERNAL_API_KEY=${TEAMWORK_API_KEY:-}
+      - CORS_ORIGINS=["http://localhost:3000","http://localhost:5173"]
+    volumes:
+      - ${WORKSPACE_DIR:-./workspaces}/.teamwork:/app/data
+      - ${WORKSPACE_DIR:-./workspaces}:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  teamwork-frontend:
+    build:
+      context: ${TEAMWORK_PATH:-../teamwork}/frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      teamwork-backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3

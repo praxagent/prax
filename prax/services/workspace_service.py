@@ -570,6 +570,26 @@ def get_workspace_context(user_id: str) -> str:
         except Exception:
             pass
 
+    # Load active plan if one exists.
+    plan = read_plan(user_id)
+    if plan:
+        steps_text = []
+        done_count = 0
+        for s in plan.get("steps", []):
+            mark = "x" if s.get("done") else " "
+            if s.get("done"):
+                done_count += 1
+            steps_text.append(f"  [{mark}] {s['step']}. {s['description']}")
+        total = len(plan.get("steps", []))
+        parts.append(
+            f"\n\n## Active Plan ({done_count}/{total} done)\n"
+            f"Goal: {plan.get('goal', '(unknown)')}\n"
+            + "\n".join(steps_text)
+            + "\n\nContinue working through this plan. Mark steps done with "
+            "agent_step_done as you complete them. Do NOT respond to the user "
+            "about completed work until the relevant plan steps are actually done."
+        )
+
     files = list_active(user_id)
     if files:
         parts.append(

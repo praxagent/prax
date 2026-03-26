@@ -12,9 +12,23 @@ from prax.agent.llm_factory import build_llm
 from prax.agent.tool_registry import get_registered_tools
 from prax.agent.user_context import current_user_id
 from prax.plugins.prompt_manager import get_prompt_manager
-from prax.services.workspace_service import append_trace, save_instructions
+from prax.services.workspace_service import append_trace, read_plan, save_instructions
 from prax.settings import settings
 from prax.trace_events import TraceEvent
+
+# Maximum number of continuation rounds when a plan has incomplete steps.
+_MAX_PLAN_CONTINUATIONS = 3
+
+# Keywords/patterns that suggest a request is complex enough to benefit from
+# a plan.  Checked case-insensitively against the user input.
+_COMPLEXITY_SIGNALS = [
+    "deep dive", "deep-dive", "create a note", "make a note", "write a note",
+    "create a course", "make a course", "teach me",
+    "compare", "summarize and", "research",
+    "step by step", "step-by-step",
+    "build me", "set up", "configure",
+    "analyze", "investigate",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +122,55 @@ class ConversationAgent:
             )
             self._plugin_version = v
 
+    @staticmethod
+    def _classify_complexity(user_input: str) -> bool:
+        """Return True if the user input looks complex enough to warrant a plan.
+
+        Uses a simple keyword heuristic — fast and deterministic.  The system
+        prompt tells the agent to plan when it sees ≥2 tool calls ahead, so
+        this is a belt-and-suspenders nudge, not the sole trigger.
+        """
+        lower = user_input.lower()
+        return any(signal in lower for signal in _COMPLEXITY_SIGNALS)
+
+    @staticmethod
+    def _has_incomplete_plan(uid: str | None) -> bool:
+        """Check whether the user has an active plan with incomplete steps."""
+        if not uid:
+            return False
+        try:
+            plan = read_plan(uid)
+            if not plan:
+                return False
+            steps = plan.get("steps", [])
+            return any(not s.get("done") for s in steps)
+        except Exception:
+            return False
+
+    @staticmethod
+    def _plan_status_summary(uid: str) -> str:
+        """Return a short summary of incomplete plan steps for continuation."""
+        try:
+            plan = read_plan(uid)
+            if not plan:
+                return ""
+            incomplete = [
+                s for s in plan.get("steps", []) if not s.get("done")
+            ]
+            if not incomplete:
+                return ""
+            step_list = ", ".join(
+                f"step {s['step']}" for s in incomplete[:5]
+            )
+            return (
+                f"Your plan for \"{plan.get('goal', '')}\" has {len(incomplete)} "
+                f"incomplete step(s) ({step_list}). Continue working through "
+                "the plan — do NOT respond to the user until the remaining "
+                "steps are done or you've determined they can't be completed."
+            )
+        except Exception:
+            return ""
+
     def run(self, conversation: Iterable[BaseMessage], user_input: str, workspace_context: str = "") -> str:
         """Execute the agent graph and return the final string response."""
         # Register workspace plugins for the current user.
@@ -120,10 +183,21 @@ class ConversationAgent:
 
         history: list[BaseMessage] = list(conversation)
         logger.debug("Agent invoked with %d history messages", len(history))
-        full_prompt = _load_system_prompt() + workspace_context
+
+        # Complexity hint: if the request looks complex and there's no active
+        # plan, nudge the agent to create one.
+        complexity_hint = ""
+        if uid and self._classify_complexity(user_input) and not read_plan(uid):
+            from prax.services.teamwork_hooks import set_role_status
+            set_role_status("Planner", "working")
+            complexity_hint = (
+                "\n\n[SYSTEM HINT: This request looks like it will require "
+                "multiple steps. Create an agent_plan BEFORE doing any work.]"
+            )
+
+        full_prompt = _load_system_prompt() + workspace_context + complexity_hint
 
         # Persist instructions so the agent can re-read them mid-conversation.
-        uid = current_user_id.get()
         if uid:
             try:
                 save_instructions(uid, full_prompt)
@@ -144,16 +218,36 @@ class ConversationAgent:
         try:
             result = self._invoke_with_retry(messages, config, turn.user_id)
 
-            # If a plugin was activated mid-turn, the graph had stale tool
-            # bindings for any subsequent tool calls in the SAME turn.
-            # Rebuild now so the next turn starts clean.  This also covers
-            # the case where the agent activated a plugin and immediately
-            # tried to use it — it will fail this turn, but the retry path
-            # (line ~230) already rebuilds.  This ensures the NEXT turn
-            # is always up-to-date even if the current one succeeded.
+            # Plan enforcement: if the agent responded but has an incomplete
+            # plan, push it back into the loop to finish the work.
+            continuations = 0
+            while (
+                uid
+                and self._has_incomplete_plan(uid)
+                and continuations < _MAX_PLAN_CONTINUATIONS
+            ):
+                continuations += 1
+                nudge = self._plan_status_summary(uid)
+                logger.info(
+                    "Plan enforcement: %d incomplete steps, continuation %d/%d (user=%s)",
+                    nudge.count("step"), continuations, _MAX_PLAN_CONTINUATIONS, uid,
+                )
+
+                # Inject a system nudge as a new human message to continue.
+                continuation_messages = result.get("messages", []) + [
+                    HumanMessage(content=f"[SYSTEM] {nudge}"),
+                ]
+                result = self.graph.invoke(
+                    {"messages": continuation_messages}, config=config,
+                )
+
             self._rebuild_if_needed()
         finally:
             self.checkpoint_mgr.end_turn(turn.user_id)
+
+        # Reset all TeamWork role agents to idle now that the turn is done.
+        from prax.services.teamwork_hooks import reset_all_idle
+        reset_all_idle()
 
         # Write full agent trace to the user's workspace log.
         self._write_trace(uid, user_input, result.get("messages", []))
@@ -269,6 +363,9 @@ class ConversationAgent:
         """
         try:
             from prax.agent.claim_audit import audit_claims, format_audit_warning
+            from prax.services.teamwork_hooks import set_role_status, post_to_channel
+
+            set_role_status("Skeptic", "working")
 
             # Collect all tool results from this turn.
             tool_results: list[str] = []
@@ -281,6 +378,7 @@ class ConversationAgent:
             if findings:
                 warning = format_audit_warning(findings)
                 logger.warning("Claim audit flagged response (user=%s): %s", user_id, warning)
+                post_to_channel("general", f"[Claim Audit] {warning}", agent_name="Skeptic")
 
                 # Persist to trace as an audit event.
                 if user_id:
