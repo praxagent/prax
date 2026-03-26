@@ -85,6 +85,7 @@ services:
       - WORKSPACE_PATH=/workspace
       - HOST_WORKSPACE_PATH=${HOST_WORKSPACE_PATH:-}
       - EXTERNAL_API_KEY=${TEAMWORK_API_KEY:-}
+      - SANDBOX_CONTAINER=${SANDBOX_CONTAINER:-prax-sandbox-1}
       - CORS_ORIGINS=["http://localhost:3000","http://localhost:5173"]
     volumes:
       - ${WORKSPACE_DIR:-./workspaces}/.teamwork:/app/data
