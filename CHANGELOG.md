@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/praxagent/prax/compare/v0.3.0...v0.4.0) (2026-03-27)
+
+
+### Features
+
+* rewiring to work with teamwork browser ([#9](https://github.com/praxagent/prax/issues/9)) ([57ac73f](https://github.com/praxagent/prax/commit/57ac73fdd4023e9524c6875a57512bad77783de4))
+
 ## [0.3.0](https://github.com/praxagent/prax/compare/v0.2.0...v0.3.0) (2026-03-26)
 
 
