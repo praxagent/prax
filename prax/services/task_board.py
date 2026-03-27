@@ -83,7 +83,7 @@ def _now() -> str:
 
 
 def _task_log_path(user_id: str) -> str:
-    from prax.services.workspace_service import workspace_root, ensure_workspace
+    from prax.services.workspace_service import ensure_workspace, workspace_root
     ensure_workspace(user_id)
     return os.path.join(workspace_root(user_id), _TASK_LOG_FILENAME)
 
@@ -354,7 +354,7 @@ def create_plan_task(
     via the YAML plan file for agent_step_done().
     """
     checklist = "\n".join(
-        f"- [ ] {s.get('description', f'Step {s.get(\"step\", \"?\")}')})"
+        "- [ ] {}".format(s.get("description", "Step {}".format(s.get("step", "?"))))
         for s in steps
     )
     description = f"**Goal:** {goal}\n\n**Steps:**\n{checklist}"
@@ -386,7 +386,8 @@ def update_plan_task_progress(plan_id: str, steps: list[dict]) -> dict | None:
     checklist_lines = []
     for s in steps:
         check = "x" if s.get("done") else " "
-        checklist_lines.append(f"- [{check}] {s.get('description', f'Step {s.get(\"step\", \"?\")}')})")
+        label = s.get("description", "Step {}".format(s.get("step", "?")))
+        checklist_lines.append(f"- [{check}] {label}")
 
     done = sum(1 for s in steps if s.get("done"))
     total = len(steps)

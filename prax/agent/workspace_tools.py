@@ -366,8 +366,8 @@ def agent_plan(goal: str, steps: list[str]) -> str:
         lines.append(f"  {s['step']}. [ ] {s['description']}")
 
     # Mirror plan to TeamWork: announce in #general and create board task.
-    from prax.services.teamwork_hooks import post_to_channel, set_role_status
     from prax.services.task_board import create_plan_task
+    from prax.services.teamwork_hooks import post_to_channel, set_role_status
     set_role_status("Planner", "idle")
     post_to_channel("general", "\n".join(lines), agent_name="Planner")
     create_plan_task(user_id, plan["id"], goal, plan["steps"])

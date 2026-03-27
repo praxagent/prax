@@ -8,7 +8,6 @@ Uses only stdlib (urllib + socket) so no extra dependencies are needed.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
