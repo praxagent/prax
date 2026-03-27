@@ -23,7 +23,7 @@ services:
       # point is always /app/workspaces regardless of the host path.
       - WORKSPACE_DIR=./workspaces
       # TeamWork integration — Prax controls TeamWork as an external agent.
-      - TEAMWORK_URL=http://teamwork-backend:8000
+      - TEAMWORK_URL=http://teamwork:8000
       - TEAMWORK_API_KEY=${TEAMWORK_API_KEY:-}
       - TEAMWORK_USER_PHONE=${TEAMWORK_USER_PHONE:-}
     volumes:
@@ -39,7 +39,7 @@ services:
         condition: service_started
       sandbox:
         condition: service_healthy
-      teamwork-backend:
+      teamwork:
         condition: service_healthy
 
   sandbox:
@@ -67,25 +67,24 @@ services:
   # ---- TeamWork (web UI for Prax) ----
   # Slack-like interface: chat, file browser, task board, terminal.
   # Prax controls it via the external agent API.
+  # Single container — API + bundled React frontend served by FastAPI.
 
-  teamwork-backend:
+  teamwork:
     build:
-      context: ${TEAMWORK_PATH:-../teamwork}/backend
+      context: ${TEAMWORK_PATH:-../teamwork}
       dockerfile: Dockerfile
     restart: unless-stopped
-    # Alias "backend" so the frontend nginx config can resolve it.
-    networks:
-      default:
-        aliases:
-          - backend
+    ports:
+      - "3000:8000"
+      - "8000:8000"
     environment:
-      - ANTHROPIC_API_KEY=${ANTHROPIC_KEY}
-      - OPENAI_API_KEY=${OPENAI_KEY}
       - DATABASE_URL=sqlite+aiosqlite:///data/vteam.db
       - WORKSPACE_PATH=/workspace
       - HOST_WORKSPACE_PATH=${HOST_WORKSPACE_PATH:-}
       - EXTERNAL_API_KEY=${TEAMWORK_API_KEY:-}
       - SANDBOX_CONTAINER=${SANDBOX_CONTAINER:-prax-sandbox-1}
+      - CHROME_CDP_HOST=sandbox
+      - CHROME_CDP_PORT=9223
       - CORS_ORIGINS=["http://localhost:3000","http://localhost:5173"]
     volumes:
       - ${WORKSPACE_DIR:-./workspaces}/.teamwork:/app/data
@@ -97,19 +96,3 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-
-  teamwork-frontend:
-    build:
-      context: ${TEAMWORK_PATH:-../teamwork}/frontend
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    ports:
-      - "3000:80"
-    depends_on:
-      teamwork-backend:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3

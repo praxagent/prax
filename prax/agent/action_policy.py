@@ -117,10 +117,6 @@ _HIGH: set[str] = {
     "schedule_create",
     "schedule_update",
     "schedule_reminder",
-    # arbitrary code execution
-    "sandbox_execute",
-    "sandbox_start",
-    "sandbox_message",
     # system mutation
     "plugin_activate",
     "plugin_write",
@@ -142,7 +138,10 @@ _MEDIUM: set[str] = {
     "schedule_delete",
     "schedule_reload",
     "reminder_delete",
-    # sandbox lifecycle
+    # sandbox — the container itself is the safety boundary
+    "sandbox_execute",
+    "sandbox_start",
+    "sandbox_message",
     "sandbox_review",
     "sandbox_finish",
     "sandbox_abort",

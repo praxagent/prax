@@ -2,9 +2,11 @@
 
 # Prax
 
-**Your personal AI assistant — on Discord, SMS, and voice.**
+**Your personal AI assistant — on the web, Discord, SMS, and voice.**
 
 106+ tools. Self-modifying plugins. Git-backed memory. Runs on your own server.
+
+Includes [**TeamWork**](https://github.com/praxagent/teamwork) — a Slack-like web UI with real-time chat, Kanban board, file browser, terminal, and browser screencast.
 
 <img src="assets/prax_discord_example.jpg" alt="Prax on Discord" width="360">
 
@@ -20,11 +22,12 @@
 
 ```bash
 git clone <repo-url> prax && cd prax
+git clone https://github.com/praxagent/teamwork.git ../teamwork  # web UI
 cp .env-example .env                      # configure (at minimum: OPENAI_KEY)
-docker compose up --build                 # builds app + sandbox, starts everything
+docker compose up --build                 # builds app + sandbox + TeamWork, starts everything
 ```
 
-This brings up Prax, the always-on sandbox (with LaTeX, ffmpeg, poppler, pandoc), and ngrok — all wired together. Prax can install packages in the sandbox on the fly.
+This brings up Prax, the always-on sandbox (with LaTeX, ffmpeg, poppler, pandoc, headless Chrome), [TeamWork](https://github.com/praxagent/teamwork) web UI, and ngrok — all wired together. Open **http://localhost:3000** to access TeamWork.
 
 For developer mode (bind-mounts source code, Werkzeug auto-reloads on file changes):
 
@@ -61,6 +64,7 @@ uv run python app.py                      # start Prax
 ```
 
 Set up a channel in `.env`:
+- **TeamWork web UI (included):** runs automatically via Docker Compose — open http://localhost:3000
 - **Discord (free):** `DISCORD_BOT_TOKEN` + `DISCORD_ALLOWED_USERS`
 - **Twilio (paid):** `TWILIO_ACCOUNT_SID` + `TWILIO_AUTH_TOKEN` + `NGROK_URL`
 
@@ -69,6 +73,7 @@ Set up a channel in `.env`:
 ## Table of Contents
 
 - [Features](#features)
+- [TeamWork Web UI](#teamwork-web-ui)
 - [Architecture](#architecture)
 - [Sandbox Code Execution](#sandbox-code-execution)
 - [Self-Improving Fine-Tuning](#self-improving-fine-tuning)
@@ -96,7 +101,7 @@ Prax is a multi-channel AI assistant powered by a LangGraph ReAct agent. It conn
 
 | Category | Highlights |
 |----------|-----------|
-| **Channels** | Discord bot (free, WebSocket), Twilio voice + SMS (webhooks), configurable agent name |
+| **Channels** | [TeamWork](https://github.com/praxagent/teamwork) web UI (Slack-like chat, Kanban, terminal, browser, file browser), Discord bot (free, WebSocket), Twilio voice + SMS (webhooks) |
 | **Agent** | LangGraph ReAct loop, 106+ tools, dedicated sub-agents (self-improvement, plugin engineering, content authoring, research, coding), watchdog supervisor, automatic checkpoint & retry on failures |
 | **Memory** | SQLite conversations with auto-summarization, git-backed per-user workspaces, dynamic user notes, link history, to-do lists, task plans |
 | **Notes** | Conversation-to-note publishing (Hugo pages with KaTeX, mermaid, syntax highlighting), iterative updates, searchable index, shareable URLs, bidirectional knowledge graph links |
@@ -110,13 +115,37 @@ Prax is a multi-channel AI assistant powered by a LangGraph ReAct agent. It conn
 | **Plugins** | Folder-per-plugin, git submodule imports from public repos, security scanning, workspace push to private remote, auto-generated catalog |
 | **File sharing** | Opt-in file publishing via ngrok (shareable links for videos, PDFs), Twilio media serving |
 
+## TeamWork Web UI
+
+[**TeamWork**](https://github.com/praxagent/teamwork) is an agent-agnostic collaboration shell — a Slack-like web interface that gives Prax a visual frontend. It runs as a separate container alongside Prax and connects via the External Agent API.
+
+**What you get:**
+
+- **Real-time chat** — public channels (#general, #engineering, #research) and private DMs with Prax, with typing indicators and WebSocket updates
+- **Kanban board** — task management with drag-and-drop columns (pending / in progress / review / completed). Prax creates, assigns, and completes tasks automatically as it works through plans
+- **In-browser terminal** — full PTY shell into the sandbox container, or launch Claude Code directly from the UI
+- **Browser screencast** — live view of the headless Chrome running in the sandbox, with mouse/keyboard passthrough
+- **File browser** — browse and manage workspace files
+- **Multi-agent status** — see which role agents (Planner, Executor, Researcher, etc.) are active
+
+TeamWork is included in the default `docker-compose.yml`. After `docker compose up --build`, open **http://localhost:3000**. API docs (Swagger) are at **http://localhost:8000/docs**.
+
+For standalone use or integration with other agents, see the [TeamWork repository](https://github.com/praxagent/teamwork).
+
 ## Architecture
 
 ### High-Level System Overview
 
 ```mermaid
 graph TB
-    User["User (Phone / Discord)"]
+    User["User (Phone / Discord / Web)"]
+
+    subgraph TeamWork["TeamWork Web UI"]
+        TWChat["Chat Channels"]
+        TWKanban["Kanban Board"]
+        TWTerminal["Terminal"]
+        TWBrowser["Browser Screencast"]
+    end
 
     subgraph Twilio["Twilio Cloud (optional)"]
         Voice["Voice Webhook"]
@@ -205,9 +234,13 @@ graph TB
 
     Scheduler["APScheduler\n(background cron)"]
 
+    User -->|Web| TWChat
     User -->|Call| Voice
     User -->|Text| SMS
     User -->|Message| DiscordBot
+    TWChat -->|Webhook| ConvoSvc
+    TWTerminal -->|docker exec| Container
+    TWBrowser -->|CDP| Chromium
     Voice --> MainRoutes --> VoiceSvc
     SMS --> SmsRoute --> SmsSvc
     DiscordBot --> DiscordSvc
@@ -1462,9 +1495,27 @@ Key fields:
 
 ## Channel Setup
 
-You need at least one messaging channel. You can run both simultaneously.
+You need at least one messaging channel. You can run multiple simultaneously.
 
-### Option A: Discord (Free)
+### Option A: TeamWork Web UI (Included)
+
+[TeamWork](https://github.com/praxagent/teamwork) is included in `docker-compose.yml` and starts automatically. No extra configuration needed.
+
+```bash
+docker compose up --build    # TeamWork is at http://localhost:3000
+```
+
+TeamWork provides Slack-like chat channels, a Kanban board, an in-browser terminal, browser screencast, and a file browser. Prax connects to it automatically on startup via the `TEAMWORK_URL` environment variable.
+
+To link TeamWork conversations with your SMS/Discord identity (shared workspace and memory), set `TEAMWORK_USER_PHONE` in `.env` to your phone number.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TEAMWORK_URL` | `http://teamwork:8000` | TeamWork API URL (set by docker-compose) |
+| `TEAMWORK_API_KEY` | *(empty)* | API key for authentication (optional) |
+| `TEAMWORK_USER_PHONE` | *(empty)* | Phone number to share workspace with SMS/Discord |
+
+### Option B: Discord (Free)
 
 No ngrok, no per-message costs. The bot connects to Discord via WebSocket.
 
@@ -1565,7 +1616,7 @@ The Discord bot starts automatically if `DISCORD_BOT_TOKEN` is set. You'll see `
 
 > **Discord-only setup:** If you don't want Twilio at all, you can skip `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN` entirely. The app works with just Discord.
 
-### Option B: Twilio (Voice + SMS)
+### Option C: Twilio (Voice + SMS)
 
 Requires a Twilio account and ngrok for webhook forwarding.
 
