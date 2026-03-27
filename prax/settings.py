@@ -97,7 +97,7 @@ class AppSettings(BaseSettings):
         return self.prax_ssh_key_b64 or self.plugin_repo_ssh_key_b64
 
     # TeamWork integration (web UI)
-    teamwork_url: str = Field(default="", alias="TEAMWORK_URL")  # e.g. "http://teamwork-backend:8000"
+    teamwork_url: str = Field(default="", alias="TEAMWORK_URL")  # e.g. "http://teamwork:8000"
     teamwork_api_key: str = Field(default="", alias="TEAMWORK_API_KEY")
     teamwork_user_phone: str = Field(default="", alias="TEAMWORK_USER_PHONE")
 

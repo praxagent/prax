@@ -15,7 +15,7 @@ def _get_user_id() -> str:
     return uid
 
 
-@risk_tool(risk=RiskLevel.HIGH)
+@risk_tool(risk=RiskLevel.MEDIUM)
 def sandbox_start(task_description: str, model: str | None = None) -> str:
     """Start a sandboxed coding session with an AI coding agent.
 
@@ -33,7 +33,7 @@ def sandbox_start(task_description: str, model: str | None = None) -> str:
     )
 
 
-@risk_tool(risk=RiskLevel.HIGH)
+@risk_tool(risk=RiskLevel.MEDIUM)
 def sandbox_message(message: str, model: str | None = None) -> str:
     """Send a follow-up message or instruction to the active sandbox coding session.
 
@@ -126,7 +126,7 @@ def sandbox_search(query: str) -> str:
     return "Found solutions:\n\n" + "\n\n".join(lines)
 
 
-@risk_tool(risk=RiskLevel.HIGH)
+@risk_tool(risk=RiskLevel.MEDIUM)
 def sandbox_execute(solution_id: str, command: str | None = None) -> str:
     """Re-execute a previously archived sandbox solution.
 

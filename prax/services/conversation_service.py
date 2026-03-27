@@ -65,24 +65,33 @@ class ConversationService:
             for entry in conversation
         ]
 
-    def reply(self, from_number: str, text: str) -> str:
+    def reply(self, from_number: str, text: str, *, conversation_key: int | None = None) -> str:
+        """Process a user message and return the agent's response.
+
+        Args:
+            from_number: User phone number (used for workspace context).
+            text: The user's message.
+            conversation_key: Override the DB key for conversation history.
+                When provided (e.g. per-channel key for TeamWork), history is
+                isolated under this key instead of the phone-number-derived one.
+        """
         # Set user context so workspace tools know which user to operate on
         current_user_id.set(from_number)
 
-        phone_int = int(from_number[1:])
-        history = self._build_history(phone_int)
+        db_key = conversation_key if conversation_key is not None else int(from_number[1:])
+        history = self._build_history(db_key)
         if not history:
-            self._save(self._database, phone_int, {
+            self._save(self._database, db_key, {
                 "role": "system",
                 "content": "You are a helpful assistant."
             })
-            history = self._build_history(phone_int)
+            history = self._build_history(db_key)
 
-        self._save(self._database, phone_int, {"role": "user", "content": text})
+        self._save(self._database, db_key, {"role": "user", "content": text})
 
         lc_history = _history_to_messages(history)
         workspace_ctx = get_workspace_context(from_number)
-        logger.info("Agent invoked for %s: %s", from_number, text[:80])
+        logger.info("Agent invoked for %s (key=%s): %s", from_number, db_key, text[:80])
         response = self.agent.run(
             conversation=lc_history,
             user_input=text,
@@ -90,7 +99,7 @@ class ConversationService:
         )
         logger.info("Agent response for %s: %s", from_number, response[:80])
 
-        self._save(self._database, phone_int, {"role": "assistant", "content": response})
+        self._save(self._database, db_key, {"role": "assistant", "content": response})
         return response
 
 

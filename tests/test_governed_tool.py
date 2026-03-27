@@ -18,9 +18,10 @@ def _make_tool(name: str, func=None):
 
 def _reset():
     """Clear governed_tool module state between tests."""
-    from prax.agent.governed_tool import _audit_buffer, _high_risk_seen
-    _audit_buffer.clear()
-    _high_risk_seen.clear()
+    import prax.agent.governed_tool as _gov
+    _gov._audit_buffer.clear()
+    _gov._high_risk_seen.clear()
+    _gov._high_risk_confirmed = False
 
 
 # ---------------------------------------------------------------------------
@@ -83,24 +84,24 @@ class TestHighRiskToolBlocking:
     def test_high_risk_blocked_on_first_call(self):
         from prax.agent.governed_tool import wrap_with_governance
         _reset()
-        inner = _make_tool("sandbox_execute")
+        inner = _make_tool("plugin_write")
         governed = wrap_with_governance(inner)
-        result = governed.invoke({"x": "rm -rf"})
+        result = governed.invoke({"x": "data"})
         assert "HIGH risk" in result
         assert "confirm" in result.lower()
 
     def test_high_risk_audit_shows_blocked(self):
         from prax.agent.governed_tool import _audit_buffer, wrap_with_governance
         _reset()
-        inner = _make_tool("sandbox_execute")
+        inner = _make_tool("plugin_write")
         governed = wrap_with_governance(inner)
-        governed.invoke({"x": "rm -rf"})
+        governed.invoke({"x": "data"})
         assert "BLOCKED" in _audit_buffer[-1]["result"]
 
     def test_high_risk_executes_on_second_call(self):
         from prax.agent.governed_tool import wrap_with_governance
         _reset()
-        inner = _make_tool("sandbox_execute")
+        inner = _make_tool("plugin_write")
         governed = wrap_with_governance(inner)
         # First call: blocked.
         result1 = governed.invoke({"x": "echo hello"})
@@ -112,7 +113,7 @@ class TestHighRiskToolBlocking:
     def test_high_risk_second_call_audit_not_blocked(self):
         from prax.agent.governed_tool import _audit_buffer, wrap_with_governance
         _reset()
-        inner = _make_tool("sandbox_execute")
+        inner = _make_tool("plugin_write")
         governed = wrap_with_governance(inner)
         governed.invoke({"x": "test"})  # blocked
         governed.invoke({"x": "test"})  # executed
@@ -120,16 +121,17 @@ class TestHighRiskToolBlocking:
         assert "BLOCKED" in _audit_buffer[0]["result"]
         assert "BLOCKED" not in (_audit_buffer[1].get("result") or "")
 
-    def test_different_high_risk_tools_each_blocked_once(self):
+    def test_confirming_one_tool_unlocks_all_high_risk(self):
+        """Once the user confirms one HIGH-risk tool, all others execute immediately."""
         from prax.agent.governed_tool import wrap_with_governance
         _reset()
-        tool_a = wrap_with_governance(_make_tool("sandbox_execute"))
+        tool_a = wrap_with_governance(_make_tool("workspace_send_file"))
         tool_b = wrap_with_governance(_make_tool("plugin_write"))
-        # Each tool blocked on first call.
+        # First HIGH-risk call: blocked.
         assert "HIGH risk" in tool_a.invoke({"x": "a"})
-        assert "HIGH risk" in tool_b.invoke({"x": "b"})
-        # Each executes on second call.
+        # Confirm tool_a (second call): executes and unlocks all HIGH.
         assert "executed:a" in tool_a.invoke({"x": "a"})
+        # tool_b should now execute immediately — no blocking.
         assert "executed:b" in tool_b.invoke({"x": "b"})
 
 
@@ -150,10 +152,10 @@ class TestAuditDrain:
     def test_drain_resets_high_risk_seen(self):
         from prax.agent.governed_tool import _high_risk_seen, drain_audit_log, wrap_with_governance
         _reset()
-        inner = _make_tool("sandbox_execute")
+        inner = _make_tool("plugin_write")
         governed = wrap_with_governance(inner)
         governed.invoke({"x": "a"})  # blocked, adds to _high_risk_seen
-        assert "sandbox_execute" in _high_risk_seen
+        assert "plugin_write" in _high_risk_seen
         drain_audit_log()
         assert len(_high_risk_seen) == 0
         # After drain, first call should block again (new turn).

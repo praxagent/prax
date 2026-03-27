@@ -32,16 +32,21 @@ logger = logging.getLogger(__name__)
 _audit_buffer: list[dict] = []
 
 # Tracks which HIGH-risk tools have been called this turn.  First call
-# returns a confirmation prompt; second call (same tool) executes.
+# returns a confirmation prompt; second call (same tool name OR any
+# previously-seen tool) executes.  Once the user confirms ONE high-risk
+# action, all high-risk tools are unlocked for the remainder of the turn.
 # Cleared on ``drain_audit_log()`` (i.e. once per agent turn).
 _high_risk_seen: set[str] = set()
+_high_risk_confirmed: bool = False
 
 
 def drain_audit_log() -> list[dict]:
     """Return and clear all buffered audit entries since the last drain."""
+    global _high_risk_confirmed
     entries = list(_audit_buffer)
     _audit_buffer.clear()
     _high_risk_seen.clear()
+    _high_risk_confirmed = False
     return entries
 
 
@@ -65,21 +70,28 @@ def wrap_with_governance(tool: BaseTool) -> BaseTool:
     epistemic_note = capability.get("epistemic_note", "") if capability else ""
 
     def _governed_run(**kwargs: Any) -> Any:
-        # HIGH-risk gate: first invocation returns a warning, second executes.
-        if risk is RiskLevel.HIGH and tool_name not in _high_risk_seen:
-            _high_risk_seen.add(tool_name)
-            _audit_buffer.append(log_action(
-                tool_name, risk, kwargs, result="BLOCKED — awaiting confirmation",
-            ))
-            logger.info(
-                "HIGH-risk tool %s blocked pending confirmation (args=%s)",
-                tool_name, _summarize_args(kwargs),
-            )
-            return (
-                f"⚠️ This action ({tool_name}) is classified as HIGH risk. "
-                f"Please confirm with the user before proceeding. "
-                f"To execute, call {tool_name} again with the same arguments."
-            )
+        global _high_risk_confirmed
+        # HIGH-risk gate: first invocation returns a warning.  Once the user
+        # confirms ANY high-risk action (by the agent calling a high-risk tool
+        # a second time), ALL high-risk tools are unlocked for this turn.
+        if risk is RiskLevel.HIGH and not _high_risk_confirmed:
+            if tool_name not in _high_risk_seen:
+                _high_risk_seen.add(tool_name)
+                _audit_buffer.append(log_action(
+                    tool_name, risk, kwargs, result="BLOCKED — awaiting confirmation",
+                ))
+                logger.info(
+                    "HIGH-risk tool %s blocked pending confirmation (args=%s)",
+                    tool_name, _summarize_args(kwargs),
+                )
+                return (
+                    f"⚠️ This action ({tool_name}) is classified as HIGH risk. "
+                    f"Please confirm with the user before proceeding. "
+                    f"To execute, call {tool_name} again with the same arguments."
+                )
+            else:
+                # User confirmed — unlock all HIGH-risk tools for this turn.
+                _high_risk_confirmed = True
 
         # Execute the tool.
         logger.info("Tool %s starting [%s] (args=%s)", tool_name, risk.value, _summarize_args(kwargs))

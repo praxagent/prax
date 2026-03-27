@@ -1,6 +1,7 @@
 """TeamWork webhook — receives user messages from TeamWork's UI."""
 from __future__ import annotations
 
+import hashlib
 import logging
 import threading
 
@@ -91,14 +92,19 @@ def _handle_message(
 
             prefixed_content = f"{channel_hint}{content}"
 
-            # Set channel context for DMs so agent hooks route responses there.
-            # Only set for DMs — public channel messages use normal name→ID routing.
-            if is_dm:
-                current_channel_id.set(channel_id)
+            # Always set channel context so agent hooks know which channel
+            # originated the request (used for response routing).
+            current_channel_id.set(channel_id)
+
+            # Derive a per-channel conversation key so each TeamWork channel
+            # gets its own isolated conversation history.
+            channel_key = int(hashlib.sha256(channel_id.encode()).hexdigest()[:15], 16)
 
             # Keep typing indicator alive for the entire duration of processing.
             with tw.typing(channel_id=channel_id, agent_name="Prax"):
-                response = conversation_service.reply(user_id, prefixed_content)
+                response = conversation_service.reply(
+                    user_id, prefixed_content, conversation_key=channel_key,
+                )
 
             # Send response back to the SAME channel (could be DM, #general, etc.)
             tw.send_message(content=response, channel_id=channel_id, agent_name="Prax")

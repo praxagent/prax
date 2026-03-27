@@ -22,10 +22,7 @@ services:
       - DEBUG=true
 
   # In dev mode, mount TeamWork source for live reload.
-  teamwork-backend:
-    command: ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+  teamwork:
+    command: ["python", "-m", "uvicorn", "teamwork.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     volumes:
-      - ${TEAMWORK_PATH:-../teamwork}/backend/app:/app/app
-
-  # Frontend uses prod build (nginx) — no dev hot-reload for now.
-  # To iterate on frontend, rebuild: docker compose build teamwork-frontend
+      - ${TEAMWORK_PATH:-../teamwork}/src/teamwork:/app/teamwork

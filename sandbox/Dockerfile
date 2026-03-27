@@ -10,6 +10,7 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
     lmodern cm-super latexmk biber \
     ffmpeg poppler-utils pandoc hugo \
     git curl wget jq \
+    chromium socat \
     && rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g opencode-ai
@@ -19,9 +20,12 @@ WORKDIR /workspace
 RUN mkdir -p /root/.config/opencode
 COPY opencode.json /root/.config/opencode/opencode.json
 
-EXPOSE 4096
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+EXPOSE 4096 9223
 
 HEALTHCHECK --interval=3s --timeout=2s --start-period=15s --retries=5 \
     CMD curl -sf http://localhost:4096/global/health > /dev/null || exit 1
 
-CMD ["opencode", "serve", "--hostname", "0.0.0.0", "--port", "4096"]
+CMD ["/usr/local/bin/entrypoint.sh"]
