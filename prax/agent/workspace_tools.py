@@ -359,16 +359,18 @@ def agent_plan(goal: str, steps: list[str]) -> str:
         goal: One-line summary of what the user wants.
         steps: Ordered list of discrete actions to take.
     """
-    plan = workspace_service.create_plan(_get_user_id(), goal, steps)
+    user_id = _get_user_id()
+    plan = workspace_service.create_plan(user_id, goal, steps)
     lines = [f"Plan created: {plan['goal']}"]
     for s in plan["steps"]:
         lines.append(f"  {s['step']}. [ ] {s['description']}")
 
-    # Mirror plan to TeamWork: announce in #general and create tasks on the board.
-    from prax.services.teamwork_hooks import mirror_plan_to_tasks, post_to_channel, set_role_status
+    # Mirror plan to TeamWork: announce in #general and create board task.
+    from prax.services.teamwork_hooks import post_to_channel, set_role_status
+    from prax.services.task_board import create_plan_task
     set_role_status("Planner", "idle")
     post_to_channel("general", "\n".join(lines), agent_name="Planner")
-    mirror_plan_to_tasks(goal, plan["steps"])
+    create_plan_task(user_id, plan["id"], goal, plan["steps"])
 
     return "\n".join(lines)
 
@@ -376,10 +378,18 @@ def agent_plan(goal: str, steps: list[str]) -> str:
 @tool
 def agent_step_done(step: int) -> str:
     """Mark a plan step as completed after you finish it."""
-    result = workspace_service.complete_plan_step(_get_user_id(), step)
+    user_id = _get_user_id()
+    result = workspace_service.complete_plan_step(user_id, step)
     if "error" in result:
         return result["error"]
     s = result["step"]
+
+    # Sync progress to TeamWork board task.
+    plan = workspace_service.read_plan(user_id)
+    if plan:
+        from prax.services.task_board import update_plan_task_progress
+        update_plan_task_progress(plan["id"], plan["steps"])
+
     return f"Step {s['step']} done: {s['description']}"
 
 
@@ -401,7 +411,15 @@ def agent_plan_status() -> str:
 @tool
 def agent_plan_clear() -> str:
     """Clear the plan when all steps are complete or the task is abandoned."""
-    workspace_service.clear_plan(_get_user_id())
+    user_id = _get_user_id()
+
+    # Mark the board task as completed before clearing the plan file.
+    plan = workspace_service.read_plan(user_id)
+    if plan:
+        from prax.services.task_board import complete_plan_task
+        complete_plan_task(plan["id"])
+
+    workspace_service.clear_plan(user_id)
     return "Plan cleared."
 
 
