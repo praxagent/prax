@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 _CATEGORY_BUILDERS: dict[str, str] = {
     "research": "prax.agent.tools",
     "workspace": "prax.agent.workspace_tools",
-    "browser": "prax.agent.browser_tools",
+    "browser": "prax.agent.spokes.browser.agent",
     "scheduler": "prax.agent.scheduler_tools",
     "sandbox": "prax.agent.sandbox_tools",
     "codegen": "prax.agent.codegen_tools",
@@ -46,7 +46,8 @@ def _get_tools_for_category(category: str) -> list:
         return [background_search_tool, fetch_url_content, get_current_datetime]
 
     mod = importlib.import_module(builder_module)
-    builder_fn = getattr(mod, f"build_{category}_tools", None)
+    # Try category-specific name first, then generic spoke convention.
+    builder_fn = getattr(mod, f"build_{category}_tools", None) or getattr(mod, "build_tools", None)
     if builder_fn:
         return builder_fn()
     return [background_search_tool, fetch_url_content, get_current_datetime]
@@ -76,6 +77,7 @@ def _run_subagent(task: str, category: str) -> str:
         provider=cfg.get("provider"),
         model=cfg.get("model"),
         temperature=cfg.get("temperature"),
+        tier=cfg.get("tier") or "low",
     )
     subgraph = create_react_agent(llm, tools)
 

@@ -104,6 +104,27 @@ class PluginRegistry:
             entry = self._data["plugins"].get(rel_path, {})
             return entry.get("trust_tier", PluginTrust.IMPORTED)
 
+    def acknowledge_warnings(self, rel_path: str) -> None:
+        """Mark security warnings as acknowledged for a plugin.
+
+        IMPORTED plugins with unacknowledged warnings are not loaded by
+        the plugin loader.
+        """
+        with self._lock:
+            entry = self._data["plugins"].get(rel_path)
+            if not entry:
+                entry = {}
+                self._data["plugins"][rel_path] = entry
+            entry["security_warnings_acknowledged"] = True
+            self._save()
+        logger.info("Security warnings acknowledged for plugin %s", rel_path)
+
+    def is_warnings_acknowledged(self, rel_path: str) -> bool:
+        """Return True if security warnings have been acknowledged."""
+        with self._lock:
+            entry = self._data["plugins"].get(rel_path, {})
+            return entry.get("security_warnings_acknowledged", False)
+
     def record_failure(self, rel_path: str) -> int:
         """Record a tool failure. Returns updated failure count."""
         with self._lock:

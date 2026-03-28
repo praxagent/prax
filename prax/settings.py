@@ -33,9 +33,25 @@ class AppSettings(BaseSettings):
 
     # Models / Agents
     agent_name: str = Field(default="Prax", alias="AGENT_NAME")
-    base_model: str = Field(default="gpt-4o", alias="BASE_MODEL")
+    base_model: str = Field(default="gpt-5.4-nano", alias="BASE_MODEL")
     default_llm_provider: str = Field(default="openai", alias="LLM_PROVIDER")
     agent_temperature: float = Field(default=0.7, alias="AGENT_TEMPERATURE")
+
+    # Model tiers — provider-agnostic intelligence levels.
+    # Each tier maps to a concrete model name.  Set *_ENABLED=false to disable.
+    # The agent sees which tiers are available and can upgrade/downgrade as needed.
+    low_model: str = Field(default="gpt-5.4-nano", alias="LOW_MODEL")
+    low_enabled: bool = Field(default=True, alias="LOW_ENABLED")
+    medium_model: str = Field(default="gpt-5.4-mini", alias="MEDIUM_MODEL")
+    medium_enabled: bool = Field(default=True, alias="MEDIUM_ENABLED")
+    high_model: str = Field(default="gpt-5.4", alias="HIGH_MODEL")
+    high_enabled: bool = Field(default=True, alias="HIGH_ENABLED")
+    pro_model: str = Field(default="gpt-5.4-pro", alias="PRO_MODEL")
+    pro_enabled: bool = Field(default=False, alias="PRO_ENABLED")
+
+    # Vision / image understanding
+    vision_model: str = Field(default="gpt-image-1.5", alias="VISION_MODEL")
+    vision_provider: str = Field(default="openai", alias="VISION_PROVIDER")
 
     # Workspace
     workspace_dir: str = Field(default="./workspaces", alias="WORKSPACE_DIR")
@@ -52,6 +68,16 @@ class AppSettings(BaseSettings):
     sandbox_mem_limit: str = Field(default="1g", alias="SANDBOX_MEM_LIMIT")
     sandbox_cpu_limit: int = Field(default=2_000_000_000, alias="SANDBOX_CPU_LIMIT")
     sandbox_max_rounds: int = Field(default=10, alias="SANDBOX_MAX_ROUNDS")
+
+    # Agent guardrails
+    agent_max_tool_calls: int = Field(
+        default=40, alias="AGENT_MAX_TOOL_CALLS",
+        description=(
+            "Maximum number of tool-call steps (recursion limit) the main agent "
+            "can take per user message.  Prevents runaway loops.  Sub-agents and "
+            "spokes have their own separate limits."
+        ),
+    )
 
     @property
     def sandbox_persistent(self) -> bool:
@@ -75,6 +101,10 @@ class AppSettings(BaseSettings):
     browser_profile_dir: str | None = Field(default=None, alias="BROWSER_PROFILE_DIR")
     browser_vnc_enabled: bool = Field(default=False, alias="BROWSER_VNC_ENABLED")
     browser_vnc_base_port: int = Field(default=5900, alias="BROWSER_VNC_BASE_PORT")
+    # CDP endpoint — when set, Playwright connects to this Chrome instance
+    # instead of launching its own.  In Docker this points to the sandbox Chrome,
+    # unifying the agent's browser with TeamWork's screencast.
+    browser_cdp_url: str | None = Field(default=None, alias="BROWSER_CDP_URL")
 
     # Self-improvement (code modification via PRs)
     self_improve_enabled: bool = Field(default=False, alias="SELF_IMPROVE_ENABLED")

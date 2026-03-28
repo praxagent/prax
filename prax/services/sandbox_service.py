@@ -68,6 +68,7 @@ class SandboxSession:
     status: str = "starting"  # starting | running | finished | aborted | timed_out
     rounds_used: int = 0
     max_rounds: int = 10
+    consecutive_failures: int = 0
 
 
 _sessions: dict[str, SandboxSession] = {}
@@ -133,23 +134,34 @@ def _oc_auth() -> HTTPBasicAuth | None:
     return HTTPBasicAuth("opencode", _SANDBOX_AUTH_KEY)
 
 
-def _wait_for_ready(session: SandboxSession, timeout: float = 30) -> bool:
-    """Poll the OpenCode health endpoint until ready or timeout."""
+def _wait_for_ready(session: SandboxSession, timeout: float = 30) -> tuple[bool, str]:
+    """Poll the OpenCode health endpoint until ready or timeout.
+
+    Returns (success, detail) — *detail* is empty on success and describes
+    the last error on failure.
+    """
     deadline = time.time() + timeout
+    last_error = "no response within timeout"
     while time.time() < deadline:
         try:
             r = requests.get(_api_url(session, "/global/health"), auth=_oc_auth(), timeout=2)
             if r.status_code == 200:
-                return True
-        except requests.ConnectionError:
-            pass
+                return True, ""
+            last_error = f"health endpoint returned HTTP {r.status_code}"
+        except requests.ConnectionError as e:
+            last_error = f"connection refused ({e})"
+        except Exception as e:
+            last_error = str(e)
         time.sleep(1)
-    return False
+    return False, last_error
 
 
-def _create_opencode_session(session: SandboxSession, task: str) -> str | None:
+def _create_opencode_session(session: SandboxSession, task: str) -> tuple[str | None, str]:
     """Create an OpenCode session. The task is used as the title only;
-    the first real prompt is sent via send_message / _send_opencode_message."""
+    the first real prompt is sent via send_message / _send_opencode_message.
+
+    Returns (session_id, error_detail).  *error_detail* is empty on success.
+    """
     try:
         r = requests.post(
             _api_url(session, "/session"),
@@ -157,16 +169,22 @@ def _create_opencode_session(session: SandboxSession, task: str) -> str | None:
             auth=_oc_auth(),
             timeout=30,
         )
-        r.raise_for_status()
+        if r.status_code >= 400:
+            body = r.text[:300]
+            logger.error(
+                "OpenCode session creation failed HTTP %d for %s: %s",
+                r.status_code, session.session_id, body,
+            )
+            return None, f"HTTP {r.status_code}: {body}"
         data = r.json()
         oc_id = data.get("id") or data.get("session_id")
         if not oc_id:
             logger.error("No session ID in OpenCode response: %s", data)
-            return None
-        return oc_id
-    except Exception:
+            return None, f"OpenCode returned no session ID (response: {str(data)[:200]})"
+        return oc_id, ""
+    except Exception as e:
         logger.exception("Failed to create OpenCode session for %s", session.session_id)
-        return None
+        return None, str(e)
 
 
 def _send_opencode_message(session: SandboxSession, message: str, model: str | None = None) -> dict:
@@ -215,6 +233,8 @@ def _send_opencode_message(session: SandboxSession, message: str, model: str | N
 
     # Poll for the assistant's response (up to 5 min)
     deadline = time.time() + 300
+    poll_errors = 0
+    last_poll_error = ""
     while time.time() < deadline:
         time.sleep(5)
         try:
@@ -223,27 +243,61 @@ def _send_opencode_message(session: SandboxSession, message: str, model: str | N
                 auth=_oc_auth(),
                 timeout=10,
             )
-            if r.status_code == 200:
-                messages = r.json()
-                if not isinstance(messages, list) or len(messages) <= before_count:
-                    continue
-                # Find the latest assistant message that has completed
-                last = messages[-1]
-                info = last.get("info", {})
-                if info.get("role") != "assistant":
-                    continue
-                if not info.get("time", {}).get("completed"):
-                    continue  # still streaming
-                # Extract text from parts
-                parts = last.get("parts", [])
-                text = "\n".join(
-                    p.get("text", "") for p in parts if p.get("type") == "text"
+            if r.status_code != 200:
+                poll_errors += 1
+                last_poll_error = f"HTTP {r.status_code}: {r.text[:200]}"
+                logger.warning(
+                    "Poll error for sandbox %s: %s", session.session_id[:12], last_poll_error,
                 )
-                return {"response": text or "(no text output)", "raw": last}
-        except Exception:
-            continue
+                if poll_errors >= 10:
+                    return {
+                        "error": (
+                            f"Sandbox polling failed {poll_errors} times. "
+                            f"Last error: {last_poll_error}"
+                        ),
+                    }
+                continue
+            messages = r.json()
+            if not isinstance(messages, list) or len(messages) <= before_count:
+                continue
+            # Find the latest assistant message that has completed
+            last = messages[-1]
+            info = last.get("info", {})
+            if info.get("role") != "assistant":
+                continue
+            if not info.get("time", {}).get("completed"):
+                continue  # still streaming
+            # Extract text from parts
+            parts = last.get("parts", [])
+            text = "\n".join(
+                p.get("text", "") for p in parts if p.get("type") == "text"
+            )
+            return {"response": text or "(no text output)", "raw": last}
+        except requests.ConnectionError as e:
+            poll_errors += 1
+            last_poll_error = f"connection lost ({e})"
+            logger.warning("Poll connection error for sandbox %s: %s", session.session_id[:12], e)
+        except Exception as e:
+            poll_errors += 1
+            last_poll_error = str(e)
+            logger.warning("Poll exception for sandbox %s: %s", session.session_id[:12], e)
 
-    return {"error": "Sandbox timed out waiting for response (5 min)"}
+        if poll_errors >= 10:
+            return {
+                "error": (
+                    f"Sandbox polling failed {poll_errors} times. "
+                    f"Last error: {last_poll_error}"
+                ),
+            }
+
+    elapsed_poll = int(300 - max(0, deadline - time.time()))
+    return {
+        "error": (
+            f"Sandbox timed out waiting for response ({elapsed_poll}s). "
+            f"The coding agent may still be running. "
+            f"Poll errors during wait: {poll_errors}."
+        ),
+    }
 
 
 def _get_opencode_session(session: SandboxSession) -> dict:
@@ -471,14 +525,15 @@ def start_session(
             max_rounds=settings.sandbox_max_rounds,
         )
 
-        if not _wait_for_ready(session, timeout=10):
-            return {"error": "Persistent sandbox is not responding. Check docker-compose logs."}
+        ready, ready_detail = _wait_for_ready(session, timeout=10)
+        if not ready:
+            return {"error": f"Persistent sandbox is not responding ({ready_detail}). Check docker-compose logs."}
 
         session.status = "running"
 
-        oc_session_id = _create_opencode_session(session, task)
+        oc_session_id, oc_error = _create_opencode_session(session, task)
         if not oc_session_id:
-            return {"error": "Failed to create coding session inside the sandbox."}
+            return {"error": f"Failed to create coding session inside the sandbox: {oc_error}"}
         session.opencode_session_id = oc_session_id
 
         # Start timeout timer
@@ -546,18 +601,19 @@ def start_session(
     )
 
     # Wait for OpenCode to be ready
-    if not _wait_for_ready(session, timeout=45):
-        logger.error("OpenCode never became ready on port %d — tearing down", host_port)
+    ready, ready_detail = _wait_for_ready(session, timeout=45)
+    if not ready:
+        logger.error("OpenCode never became ready on port %d — tearing down: %s", host_port, ready_detail)
         _teardown_container(session)
-        return {"error": "Sandbox container started but OpenCode failed to become ready."}
+        return {"error": f"Sandbox container started but OpenCode failed to become ready: {ready_detail}"}
 
     session.status = "running"
 
     # Create the OpenCode session with the initial task
-    oc_session_id = _create_opencode_session(session, task)
+    oc_session_id, oc_error = _create_opencode_session(session, task)
     if not oc_session_id:
         _teardown_container(session)
-        return {"error": "Failed to create coding session inside the sandbox."}
+        return {"error": f"Failed to create coding session inside the sandbox: {oc_error}"}
 
     session.opencode_session_id = oc_session_id
 
@@ -604,8 +660,32 @@ def send_message(user_id: str, message: str, model: str | None = None) -> dict:
         session.model = model
         logger.info("Switched sandbox %s to model %s", session_id[:12], model)
 
-    session.rounds_used += 1
     response = _send_opencode_message(session, message, model=model)
+
+    # Only count the round if the message was actually processed.
+    if "error" in response:
+        session.consecutive_failures += 1
+        logger.warning(
+            "Sandbox %s message failed (consecutive=%d): %s",
+            session_id[:12], session.consecutive_failures, response["error"],
+        )
+        # Auto-abort after 3 consecutive failures — the session is stuck.
+        if session.consecutive_failures >= 3:
+            logger.error(
+                "Sandbox %s auto-aborting after %d consecutive failures",
+                session_id[:12], session.consecutive_failures,
+            )
+            return {
+                "error": (
+                    f"Sandbox session auto-aborted after {session.consecutive_failures} "
+                    f"consecutive failures. The coding agent appears stuck. "
+                    f"Last error: {response['error']}"
+                ),
+                "auto_aborted": True,
+            }
+    else:
+        session.rounds_used += 1
+        session.consecutive_failures = 0  # Reset on success.
 
     rounds_left = session.max_rounds - session.rounds_used
     return {
@@ -893,7 +973,8 @@ def rebuild_sandbox(dockerfile_content: str | None = None) -> dict:
         session_id="rebuild-check", user_id="system",
         model="", created_at=time.time(),
     )
-    if not _wait_for_ready(dummy_session, timeout=60):
-        return {"error": "Sandbox rebuilt but failed to become healthy within 60s."}
+    ready, ready_detail = _wait_for_ready(dummy_session, timeout=60)
+    if not ready:
+        return {"error": f"Sandbox rebuilt but failed to become healthy within 60s: {ready_detail}"}
 
     return {"status": "rebuilt", "image": settings.sandbox_image}

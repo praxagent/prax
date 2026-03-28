@@ -35,23 +35,18 @@ def test_sms_service_rejects_unknown():
 
 
 def test_sms_service_image(monkeypatch):
+    """Image attachments should route through the agent with the image URL."""
     module = importlib.reload(importlib.import_module('prax.services.sms_service'))
 
-    class FakeChoice:
-        def __init__(self, content):
-            self.message = type('msg', (), {'content': content})
-
-    class FakeResponse:
-        def __init__(self, text):
-            self.choices = [FakeChoice(text)]
-
-    module.sms_service.client = type('client', (), {
-        'chat': type('chat', (), {'completions': type('comp', (), {'create': staticmethod(lambda **kwargs: FakeResponse('Vision!'))})})
-    })
-
     sent = {}
+    agent_calls = []
+
+    def fake_reply(from_number, text):
+        agent_calls.append(text)
+        return "I see a cat in the image!"
+
+    monkeypatch.setattr(module.conversation_service, 'reply', fake_reply)
     monkeypatch.setattr(module, 'send_sms', lambda message, to: sent.setdefault('text', message))
-    monkeypatch.setattr(module, 'add_dict_to_list', lambda *args, **kwargs: None)
 
     payload = {
         'From': '+10000000000',
@@ -63,42 +58,36 @@ def test_sms_service_image(monkeypatch):
     }
 
     module.sms_service.process(payload, 'https://ngrok.test')
-    assert sent['text'] == 'Vision!'
+    assert sent['text'] == 'I see a cat in the image!'
+    assert 'https://img.test' in agent_calls[0]
+    assert '[Image attachment' in agent_calls[0]
 
 
-def test_sms_image_role_labels(monkeypatch):
-    """Image vision should save user role for the image and assistant role for the result."""
+def test_sms_image_with_caption(monkeypatch):
+    """Image with text body should include the caption in the agent message."""
     module = importlib.reload(importlib.import_module('prax.services.sms_service'))
 
-    class FakeChoice:
-        def __init__(self, content):
-            self.message = type('msg', (), {'content': content})
+    agent_calls = []
 
-    class FakeResponse:
-        def __init__(self, text):
-            self.choices = [FakeChoice(text)]
+    def fake_reply(from_number, text):
+        agent_calls.append(text)
+        return "That's a chart showing revenue growth."
 
-    module.sms_service.client = type('client', (), {
-        'chat': type('chat', (), {'completions': type('comp', (), {'create': staticmethod(lambda **kwargs: FakeResponse('A cat'))})})
-    })
-
-    saved = []
+    monkeypatch.setattr(module.conversation_service, 'reply', fake_reply)
     monkeypatch.setattr(module, 'send_sms', lambda msg, to: None)
-    monkeypatch.setattr(module, 'add_dict_to_list', lambda db, pid, entry: saved.append(entry))
 
     payload = {
         'From': '+10000000000',
         'MessageSid': 'SM1',
-        'Body': '',
+        'Body': 'What does this chart show?',
         'NumMedia': '1',
         'MediaContentType0': 'image/png',
-        'MediaUrl0': 'https://img.test',
+        'MediaUrl0': 'https://img.test/chart.png',
     }
 
     module.sms_service.process(payload, 'https://ngrok.test')
-
-    assert saved[0]['role'] == 'user'
-    assert saved[1]['role'] == 'assistant'
+    assert 'What does this chart show?' in agent_calls[0]
+    assert 'https://img.test/chart.png' in agent_calls[0]
 
 
 def test_sms_text_routes_through_agent(monkeypatch):

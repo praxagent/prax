@@ -4,7 +4,7 @@
 
 **Your personal AI assistant — on the web, Discord, SMS, and voice.**
 
-106+ tools. Self-modifying plugins. Git-backed memory. Runs on your own server.
+97+ built-in tools, extensible via self-modifying plugins. Git-backed memory. Runs on your own server.
 
 Includes [**TeamWork**](https://github.com/praxagent/teamwork) — a Slack-like web UI with real-time chat, Kanban board, file browser, terminal, and browser screencast.
 
@@ -14,6 +14,20 @@ Includes [**TeamWork**](https://github.com/praxagent/teamwork) — a Slack-like 
 
 </div>
 
+> **Warning — Active Development & API Cost Risk**
+>
+> This project is under heavy, rapid development. Interfaces, tool names, and
+> behaviors may change without notice. **Use at your own risk.**
+>
+> Prax runs agentic workflows that can chain many LLM calls per user message
+> (tool calls, sub-agent delegation, revision loops, sandbox sessions, etc.).
+> If you are using a non-local LLM provider (OpenAI, Anthropic, Google, etc.),
+> **you must set up spending limits and cost monitoring on your provider
+> account.** A stuck or misconfigured workflow can burn through API credits
+> quickly. Built-in guardrails (recursion limits, round budgets, auto-abort on
+> consecutive failures) reduce this risk but cannot eliminate it entirely.
+> The maintainers are not responsible for any API charges incurred.
+
 ---
 
 ## Quick Start
@@ -21,7 +35,7 @@ Includes [**TeamWork**](https://github.com/praxagent/teamwork) — a Slack-like 
 ### Docker Compose (recommended)
 
 ```bash
-git clone <repo-url> prax && cd prax
+git clone https://github.com/praxagent/prax.git && cd prax
 git clone https://github.com/praxagent/teamwork.git ../teamwork  # web UI
 cp .env-example .env                      # configure (at minimum: OPENAI_KEY)
 docker compose up --build                 # builds app + sandbox + TeamWork, starts everything
@@ -55,7 +69,7 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build app
 ### Local development
 
 ```bash
-git clone <repo-url> prax && cd prax
+git clone https://github.com/praxagent/prax.git && cd prax
 uv sync --python 3.13                    # install deps (requires uv)
 cp .env-example .env                      # configure (at minimum: OPENAI_KEY)
 mkdir -p static/temp
@@ -91,6 +105,7 @@ Set up a channel in `.env`:
 - [Docker](#docker)
 - [Extending the Agent](#extending-the-agent)
 - [Troubleshooting](#troubleshooting)
+- [Research](#research--academic-foundations-for-agentic-workflow-design)
 - [Roadmap](#roadmap)
 
 ---
@@ -102,7 +117,7 @@ Prax is a multi-channel AI assistant powered by a LangGraph ReAct agent. It conn
 | Category | Highlights |
 |----------|-----------|
 | **Channels** | [TeamWork](https://github.com/praxagent/teamwork) web UI (Slack-like chat, Kanban, terminal, browser, file browser), Discord bot (free, WebSocket), Twilio voice + SMS (webhooks) |
-| **Agent** | LangGraph ReAct loop, 106+ tools, dedicated sub-agents (self-improvement, plugin engineering, content authoring, research, coding), watchdog supervisor, automatic checkpoint & retry on failures |
+| **Agent** | LangGraph ReAct loop, 97+ built-in tools (extensible via plugins), dedicated sub-agents (self-improvement, plugin engineering, content authoring, research, coding), watchdog supervisor, automatic checkpoint & retry on failures |
 | **Memory** | SQLite conversations with auto-summarization, git-backed per-user workspaces, dynamic user notes, link history, to-do lists, task plans |
 | **Notes** | Conversation-to-note publishing (Hugo pages with KaTeX, mermaid, syntax highlighting), iterative updates, searchable index, shareable URLs, bidirectional knowledge graph links |
 | **Documents** | PDF extraction (arXiv, URLs, attachments), web page summaries, YouTube transcripts, LaTeX compilation, URL-to-note / PDF-to-note / arXiv-to-note pipelines |
@@ -527,147 +542,158 @@ Cron field reference (5 fields: `minute hour day month weekday`):
 
 **Manual editing:** Edit the YAML directly in the workspace, then tell the agent "I edited the schedules file" and it will call `schedule_reload` to pick up changes. All changes are git-committed automatically.
 
-### Agent Tool Map
+### Hub-and-Spoke Architecture
+
+Prax uses a hub-and-spoke model: the orchestrator holds only core tools (~10) and delegates domain-specific work to focused sub-agents, each with a curated tool set. This keeps the orchestrator's context lean — [research shows](#9-tool-overload-and-selection-degradation) that tool selection accuracy degrades significantly past 20–50 tools.
+
+> **Fallback:** If a delegated agent fails or can't handle the task, Prax can read the full tool catalog from a generated markdown file and call any tool directly. The spoke system is the fast path; direct tool access is the safety net.
+
+#### Orchestrator (Hub)
+
+```mermaid
+graph TB
+    Prax["🧠 Prax\nOrchestrator"]
+
+    Prax --> Core["Core Tools\nget_current_datetime\nbackground_search\nfetch_url_content\nanalyze_image"]
+    Prax --> Memory["Memory & Planning\nagent_plan / agent_step_done\nnote_create / note_search\nuser_notes_read / user_notes_update\ntodo_add / todo_list / todo_complete"]
+    Prax --> Config["Config & Tiers\nllm_config_read / llm_config_update\nmodel_tiers_info"]
+
+    Prax -->|"delegate_task\n(category)"| Spokes["Spoke Agents"]
+    Prax -->|"delegate_self_improve"| SI["Self-Improve Agent"]
+    Prax -->|"delegate_plugin_fix"| PF["Plugin Fix Agent"]
+    Prax -->|"delegate_course_author"| CA["Course Author Agent"]
+
+    style Prax fill:#4A90D9,color:#fff
+    style Spokes fill:#F5A623,color:#fff
+    style SI fill:#7ED321,color:#fff
+    style PF fill:#7ED321,color:#fff
+    style CA fill:#7ED321,color:#fff
+```
+
+#### Media Agent
+
+Handles images, PDFs, audio, video transcripts, and web content extraction.
 
 ```mermaid
 graph LR
-    subgraph "Kernel Tools (3)"
-        search["background_search"]
-        datetime["get_current_datetime"]
-        fetch_url["fetch_url_content"]
-    end
+    Media["📰 Media Agent"] --> analyze["analyze_image"]
+    Media --> pdf["pdf_summary_tool"]
+    Media --> yt["youtube_transcribe"]
+    Media --> arxiv["arxiv_fetch_papers"]
+    Media --> npr["npr_podcast_tool"]
+    Media --> web["web_summary_tool"]
+    Media --> dlf["deutschlandfunk_tool"]
+    Media --> fetch["fetch_url_content"]
+    style Media fill:#9013FE,color:#fff
+```
 
-    subgraph "Built-In Plugins (6)"
-        npr["npr_podcast_tool"]
-        web["web_summary_tool"]
-        pdf["pdf_summary_tool"]
-        yt["youtube_transcribe"]
-        arxiv["arxiv_fetch_papers"]
-        dlf["deutschlandfunk_tool"]
-    end
+#### Sandbox Agent
 
-    subgraph "Workspace Tools (19)"
-        ws_save["workspace_save"]
-        ws_read["workspace_read"]
-        ws_list["workspace_list"]
-        ws_archive["workspace_archive"]
-        ws_search["workspace_search"]
-        ws_restore["workspace_restore"]
-        un_update["user_notes_update"]
-        un_read["user_notes_read"]
-        reread["reread_instructions"]
-        log_link["log_link"]
-        links_hist["links_history"]
-        td_add["todo_add"]
-        td_list["todo_list"]
-        td_complete["todo_complete"]
-        td_remove["todo_remove"]
-        ap_plan["agent_plan"]
-        ap_step["agent_step_done"]
-        ap_status["agent_plan_status"]
-        ap_clear["agent_plan_clear"]
-    end
+Executes code in an isolated Docker container with a full dev environment.
 
-    subgraph "Sandbox Tools (7)"
-        sb_start["sandbox_start"]
-        sb_msg["sandbox_message"]
-        sb_review["sandbox_review"]
-        sb_finish["sandbox_finish"]
-        sb_abort["sandbox_abort"]
-        sb_search["sandbox_search"]
-        sb_exec["sandbox_execute"]
-    end
+```mermaid
+graph LR
+    Sandbox["🐳 Sandbox Agent"] --> exec["sandbox_execute"]
+    Sandbox --> start["sandbox_start"]
+    Sandbox --> msg["sandbox_message"]
+    Sandbox --> review["sandbox_review"]
+    Sandbox --> finish["sandbox_finish"]
+    Sandbox --> abort["sandbox_abort"]
+    Sandbox --> search["sandbox_search"]
+    Sandbox --> install["sandbox_install"]
+    style Sandbox fill:#4A90D9,color:#fff
+```
 
-    subgraph "Scheduler Tools (9)"
-        sc_create["schedule_create"]
-        sc_list["schedule_list"]
-        sc_update["schedule_update"]
-        sc_delete["schedule_delete"]
-        sc_tz["schedule_set_timezone"]
-        sc_reload["schedule_reload"]
-        rm_create["schedule_reminder"]
-        rm_list["reminder_list"]
-        rm_delete["reminder_delete"]
-    end
+#### Browser Agent
 
-    subgraph "Fine-Tune Tools (8)"
-        ft_harvest["finetune_harvest"]
-        ft_start["finetune_start"]
-        ft_status["finetune_status"]
-        ft_verify["finetune_verify"]
-        ft_load["finetune_load"]
-        ft_promote["finetune_promote"]
-        ft_rollback["finetune_rollback"]
-        ft_list["finetune_list_adapters"]
-    end
+Automates web interactions via Playwright with persistent profiles and credential management.
 
-    subgraph "Self-Improve Tools (10)"
-        si_start["self_improve_start"]
-        si_read["self_improve_read"]
-        si_write["self_improve_write"]
-        si_test["self_improve_test"]
-        si_lint["self_improve_lint"]
-        si_verify["self_improve_verify"]
-        si_deploy["self_improve_deploy"]
-        si_submit["self_improve_submit"]
-        si_list["self_improve_list"]
-        si_cleanup["self_improve_cleanup"]
-    end
+```mermaid
+graph LR
+    Browser["🌐 Browser Agent"] --> open["browser_open"]
+    Browser --> read["browser_read_page"]
+    Browser --> shot["browser_screenshot"]
+    Browser --> click["browser_click"]
+    Browser --> fill["browser_fill"]
+    Browser --> press["browser_press"]
+    Browser --> find["browser_find"]
+    Browser --> creds["browser_credentials"]
+    Browser --> login["browser_login"]
+    Browser --> close["browser_close"]
+    Browser --> profiles["browser_profiles"]
+    style Browser fill:#F5A623,color:#fff
+```
 
-    subgraph "Browser Tools (14)"
-        bw_open["browser_open"]
-        bw_read["browser_read_page"]
-        bw_shot["browser_screenshot"]
-        bw_click["browser_click"]
-        bw_fill["browser_fill"]
-        bw_press["browser_press"]
-        bw_find["browser_find"]
-        bw_creds["browser_credentials"]
-        bw_login["browser_login"]
-        bw_close["browser_close"]
-        bw_req["browser_request_login"]
-        bw_fin["browser_finish_login"]
-        bw_chk["browser_check_login"]
-        bw_prof["browser_profiles"]
-    end
+#### Workspace Agent
 
-    subgraph "Plugin Tools (17)"
-        pl_list["plugin_list"]
-        pl_read["plugin_read"]
-        pl_write["plugin_write"]
-        pl_test["plugin_test"]
-        pl_activate["plugin_activate"]
-        pl_rollback["plugin_rollback"]
-        pl_status["plugin_status"]
-        pl_remove["plugin_remove"]
-        pl_catalog["plugin_catalog"]
-        pr_read["prompt_read"]
-        pr_write["prompt_write"]
-        pr_rollback["prompt_rollback"]
-        pr_list["prompt_list"]
-        llm_read["llm_config_read"]
-        llm_update["llm_config_update"]
-        src_read["source_read"]
-        src_list["source_list"]
-    end
+Manages per-user file storage, git-backed workspaces, and link history.
 
-    subgraph "Sub-Agent Tools (4)"
-        delegate["delegate_task"]
-        delegate_si["delegate_self_improve"]
-        delegate_pf["delegate_plugin_fix"]
-        delegate_ca["delegate_course_author"]
-    end
+```mermaid
+graph LR
+    Workspace["📁 Workspace Agent"] --> save["workspace_save"]
+    Workspace --> rd["workspace_read"]
+    Workspace --> ls["workspace_list"]
+    Workspace --> arch["workspace_archive"]
+    Workspace --> srch["workspace_search"]
+    Workspace --> restore["workspace_restore"]
+    Workspace --> link["log_link"]
+    Workspace --> hist["links_history"]
+    Workspace --> push["workspace_push"]
+    Workspace --> share["workspace_share_file"]
+    style Workspace fill:#7ED321,color:#fff
+```
 
-    Agent["ReAct Agent\n(Prax)"] --> delegate & delegate_si & delegate_pf & delegate_ca
-    Agent --> search & datetime & fetch_url
-    Agent --> npr & web & pdf & yt & arxiv & dlf
-    Agent --> ws_save & ws_read & ws_list & ws_archive & ws_search & ws_restore & un_update & un_read & reread & log_link & links_hist & td_add & td_list & td_complete & td_remove & ap_plan & ap_step & ap_status & ap_clear
-    Agent --> sb_start & sb_msg & sb_review & sb_finish & sb_abort & sb_search & sb_exec
-    Agent --> sc_create & sc_list & sc_update & sc_delete & sc_tz & sc_reload & rm_create & rm_list & rm_delete
-    Agent --> ft_harvest & ft_start & ft_status & ft_verify & ft_load & ft_promote & ft_rollback & ft_list
-    Agent --> si_start & si_read & si_write & si_test & si_lint & si_verify & si_deploy & si_submit & si_list & si_cleanup
-    Agent --> bw_open & bw_read & bw_shot & bw_click & bw_fill & bw_press & bw_find & bw_creds & bw_login & bw_close & bw_req & bw_fin & bw_chk & bw_prof
-    Agent --> pl_list & pl_read & pl_write & pl_test & pl_activate & pl_rollback & pl_status & pl_remove & pl_catalog & pr_read & pr_write & pr_rollback & pr_list & llm_read & llm_update & src_read & src_list
+#### Scheduler Agent
+
+Manages recurring cron jobs and one-time reminders.
+
+```mermaid
+graph LR
+    Scheduler["⏰ Scheduler Agent"] --> create["schedule_create"]
+    Scheduler --> list["schedule_list"]
+    Scheduler --> update["schedule_update"]
+    Scheduler --> delete["schedule_delete"]
+    Scheduler --> tz["schedule_set_timezone"]
+    Scheduler --> reload["schedule_reload"]
+    Scheduler --> remind["schedule_reminder"]
+    Scheduler --> rlist["reminder_list"]
+    Scheduler --> rdel["reminder_delete"]
+    style Scheduler fill:#BD10E0,color:#fff
+```
+
+#### Plugin Engineering Agent
+
+Creates, tests, and manages hot-swappable plugins.
+
+```mermaid
+graph LR
+    Plugin["🔌 Plugin Agent"] --> plist["plugin_list"]
+    Plugin --> pread["plugin_read"]
+    Plugin --> pwrite["plugin_write"]
+    Plugin --> ptest["plugin_test"]
+    Plugin --> activate["plugin_activate"]
+    Plugin --> rollback["plugin_rollback"]
+    Plugin --> catalog["plugin_catalog"]
+    Plugin --> src["source_read / source_list"]
+    Plugin --> prompt["prompt_read / prompt_write"]
+    style Plugin fill:#D0021B,color:#fff
+```
+
+#### Self-Improvement Agent
+
+Diagnoses bugs in Prax's own code, writes patches in the sandbox, and deploys fixes.
+
+```mermaid
+graph LR
+    SelfImprove["🔧 Self-Improve Agent"] --> start["self_improve_start"]
+    SelfImprove --> rd["self_improve_read"]
+    SelfImprove --> wr["self_improve_write"]
+    SelfImprove --> test["self_improve_test"]
+    SelfImprove --> lint["self_improve_lint"]
+    SelfImprove --> verify["self_improve_verify"]
+    SelfImprove --> deploy["self_improve_deploy"]
+    SelfImprove --> logs["read_logs"]
+    style SelfImprove fill:#417505,color:#fff
 ```
 
 ### Key Modules
@@ -771,12 +797,14 @@ adapters/                  ← LoRA adapter storage (FINETUNE_OUTPUT_DIR)
 
 ### Dropbox Sync
 
-To back up workspaces to Dropbox automatically, symlink the workspace directory into your Dropbox folder:
+To back up workspaces to Dropbox, symlink the workspace directory into your Dropbox folder:
 
 ```bash
 # From the project root:
 ln -s "$PWD/workspaces" ~/Dropbox/prax-workspaces
 ```
+
+> **Caution:** Dropbox may conflict with `.git` repositories and SQLite databases during active writes. Pause Dropbox sync while the agent is running, or configure Dropbox to skip `.git` directories and `*.db` files.
 
 If you move the project, remove the old symlink and re-link:
 
@@ -803,7 +831,9 @@ Instead of adding infinite specialized tools (one for LaTeX, one for ffmpeg, one
 
 **Solution reuse:** Every `sandbox_finish()` commits code to the workspace git with a `SOLUTION.md`. When a similar task comes up, the agent searches the archive and re-executes the existing solution — zero tokens burned re-solving a solved problem.
 
-**Budget control:** Each session has a configurable round limit (`SANDBOX_MAX_ROUNDS`, default 10). The agent sees `rounds_remaining` in every response so it knows when to wrap up. After hitting the limit, only `sandbox_finish` or `sandbox_abort` are available.
+**Budget control:** Each session has a configurable round limit (`SANDBOX_MAX_ROUNDS`, default 10). The agent sees `rounds_remaining` in every response so it knows when to wrap up. After hitting the limit, only `sandbox_finish` or `sandbox_abort` are available. Timed-out messages do *not* consume a round — only successful responses count against the budget.
+
+**Stuck-session protection:** If the coding agent inside the sandbox stops responding (e.g. infinite loop, package install hang, OOM), `send_message` tracks consecutive failures. After 3 consecutive timeouts the session is **auto-aborted** and the agent is told to start fresh. The `sandbox_message` tool also returns explicit guidance to abort on individual timeouts, preventing the main agent from looping endlessly on a stuck session.
 
 **File sharing:** When the sandbox produces large files (videos, PDFs), Prax can publish them with `workspace_share_file()` to generate a public ngrok URL. Only explicitly published files are accessible — the rest of the workspace stays private. Links can be revoked with `workspace_unshare_file()`.
 
@@ -926,11 +956,13 @@ The harvester looks for user messages containing correction signals ("no,", "tha
 # Install vLLM (requires CUDA)
 pip install vllm
 
+# Enable runtime LoRA loading/unloading (required for /v1/load_lora_adapter)
+export VLLM_ALLOW_RUNTIME_LORA_UPDATING=True
+
 # Start vLLM with LoRA support
 vllm serve Qwen/Qwen3-8B \
   --enable-lora \
   --max-lora-rank 16 \
-  --lora-modules '' \
   --port 8000
 
 # Configure the app
@@ -979,11 +1011,13 @@ The agent works in a **staging clone** — a separate `git clone` of the live re
 
 Two deployment paths:
 
-**Path A — Hot-swap (quick fixes):**
+**Path A — Hot-swap (dev mode only, requires Werkzeug reloader):**
 1. **Start branch** — creates a worktree off the staging clone
 2. **Read/Write files** — operates entirely within the worktree
 3. **Verify** — runs tests + lint + app startup check (all must pass)
-4. **Deploy** — copies changed files to live repo + commits; Flask's Werkzeug reloader auto-restarts
+4. **Deploy** — copies changed files to live repo + commits; Werkzeug's reloader auto-restarts
+
+> Path A relies on Werkzeug's file-watching reloader (`docker compose -f docker-compose.yml -f docker-compose.dev.yml`). In production (gunicorn), use Path B — hot-swap will not trigger a reload.
 
 **Path B — PR (complex changes):**
 1. Same steps 1-2
@@ -1072,36 +1106,99 @@ sequenceDiagram
 
 ## Agent Delegation
 
-Prax keeps its main conversation loop lean by delegating coding-heavy work to focused sub-agents. Each sub-agent runs its own LangGraph ReAct loop with a specialized system prompt and a curated tool set.
+Prax keeps its main conversation loop lean by delegating domain-specific work to focused **spoke agents**.  Each spoke runs its own LangGraph ReAct loop with a specialized system prompt and curated tool set — the orchestrator sees only a single `delegate_*` tool per spoke.
 
-### Delegation Architecture
+Research shows that LLM tool-selection accuracy degrades past 20–30 tools ([see Research section](#9-tool-overload-and-selection-degradation)).  The hub-and-spoke pattern keeps the orchestrator's tool count low while giving each spoke deep domain capabilities.
 
-| Task | Tool | Sub-Agent Gets | Notes |
-|------|------|----------------|-------|
-| Bug in Prax's own code | `delegate_self_improve` | source_read, sandbox, codegen, read_logs | Diagnoses via logs, patches via sandbox (OpenCode), deploys via codegen tools |
-| Plugin create/fix/improve | `delegate_plugin_fix` | source_read, sandbox, plugin_write/test/activate/rollback | Full plugin lifecycle — write, sandbox-test, activate, rollback |
-| Research (web, PDFs, etc.) | `delegate_task(category="research")` | web search, fetch_url, plugin tools (NPR, PDF, YouTube) | For multi-step research that would bloat the main context |
-| Course content creation | `delegate_course_author` | sandbox, course_save_material, course_publish, course_status, course_tutor_notes | Produces rich markdown with mermaid diagrams, code blocks, LaTeX via iterative sandbox drafting |
-| General coding | `delegate_task(category="sandbox")` | sandbox_start/message/review/finish | OpenCode writes and executes code in Docker |
-| Browser automation | `delegate_task(category="browser")` | Playwright tools | Persistent profiles, VNC login |
-| Scheduling tasks | `delegate_task(category="scheduler")` | Cron + reminder tools | Recurring messages, one-time reminders |
+### Hub-and-Spoke Architecture
 
-### What stays with Prax
+```mermaid
+graph TB
+    User([User]) --> Prax[Prax Orchestrator<br/>~15 core tools]
 
-- **Tutoring conversation** — interactive Q&A, pacing, assessment (but content *creation* is delegated to the course author agent)
-- **Reminders/scheduling** — single tool calls, no coding needed
-- **Todos, workspace files, user notes** — simple CRUD
-- **URL handling** — fetch + summarize
-- **Plugin imports** — tool calls only, no code to write
+    Prax -->|delegate_browser| Browser[Browser Agent<br/>16 tools]
+    Prax -->|delegate_research| Research[Research Agent<br/>web search + plugins]
+    Prax -->|delegate_self_improve| SelfImprove[Self-Improve Agent<br/>source + sandbox + codegen]
+    Prax -->|delegate_plugin_fix| PluginFix[Plugin Engineer<br/>plugin lifecycle + sandbox]
+    Prax -->|delegate_course_author| CourseAuthor[Course Author<br/>sandbox + course tools]
+    Prax -->|delegate_task| Generic[Generic Sub-Agent<br/>category-routed tools]
 
-### How it works
+    Browser -->|CDP fast path| Chrome[Sandbox Chrome]
+    Browser -->|Playwright reliable path| Chrome
+    Research --> Web[Web Search + Fetch]
+    Research --> Plugins[Reader Plugins]
+    SelfImprove --> Sandbox[Docker Sandbox]
+    SelfImprove --> Codegen[Codegen / PR Tools]
+    PluginFix --> PluginTools[Plugin Write/Test/Activate]
+    CourseAuthor --> CourseSandbox[Sandbox + Course Tools]
+    Generic --> CategoryTools[Category-Specific Tools]
+```
 
-1. Prax detects that work requires coding (bug report, plugin failure, user request)
-2. Prax calls the appropriate delegation tool with a detailed task description
-3. The sub-agent runs autonomously with its own tools and system prompt
-4. The sub-agent returns a summary — Prax relays it to the user
+### Spoke Agents
 
-### Source code in the sandbox
+| Spoke | Delegation Tool | Tools | When Prax Uses It |
+|-------|----------------|-------|-------------------|
+| **Browser** | `delegate_browser` | 16 tools: CDP read/act + Playwright navigate/click/fill/find/login/VNC | Web navigation, page reading, login flows, screenshots, form filling |
+| **Research** | `delegate_research` | Web search, URL fetch, datetime, reader plugins | Multi-source research, paper summaries, fact-checking with citations |
+| **Self-Improve** | `delegate_self_improve` | Source read, sandbox, codegen, log reading | Bug fixes and improvements to Prax's own code |
+| **Plugin Engineer** | `delegate_plugin_fix` | Source read, plugin lifecycle, sandbox | Create, fix, test, and activate tool plugins |
+| **Course Author** | `delegate_course_author` | Sandbox, course tools, publishing | Rich markdown content with diagrams, code blocks, LaTeX |
+| **Generic** | `delegate_task(category=...)` | Category-routed (workspace, scheduler, sandbox, codegen, finetune) | Ad-hoc delegation when a specialized spoke doesn't exist |
+
+### Browser Spoke Detail
+
+The browser spoke is the reference implementation for the spoke pattern.  It demonstrates CDP-first routing with Playwright fallback:
+
+```mermaid
+graph LR
+    Prax[Orchestrator] -->|"delegate_browser('read this tweet')"| BA[Browser Agent]
+
+    BA -->|Fast path| CDP[sandbox_browser_read<br/>sandbox_browser_act]
+    BA -->|Reliable path| PW[browser_open<br/>browser_fill<br/>browser_click<br/>...]
+    BA -->|Login flow| Login[browser_credentials<br/>browser_login<br/>browser_request_login]
+
+    CDP --> Chrome[Sandbox Chrome<br/>shared with TeamWork]
+    PW --> Chrome
+```
+
+The browser agent decides internally:
+- **CDP first** — page reads, screenshots, quick navigation, simple clicks (faster)
+- **Playwright when needed** — login flows, form filling, auto-waiting, complex selectors (more reliable)
+- Both APIs hit the **same Chrome instance** the user sees in TeamWork
+
+### What Stays on the Orchestrator
+
+- **Conversation** — interactive Q&A, pacing, tone
+- **Simple tool calls** — workspace CRUD, notes, todos, scheduling
+- **URL handling** — lightweight `fetch_url_content` (no browser needed)
+- **Routing decisions** — choosing which spoke to delegate to
+
+### Adding a New Spoke
+
+The spoke system lives in `prax/agent/spokes/` with one folder per spoke:
+
+```
+prax/agent/spokes/
+├── __init__.py          # Registry — imports all spokes
+├── _runner.py           # Shared delegation engine (LLM, invoke, logging, TeamWork)
+├── browser/             # Reference implementation
+│   ├── __init__.py
+│   └── agent.py         # Prompt, tools, delegate function
+├── media/               # (future) PDF, image, audio, YouTube
+│   └── ...
+└── notes/               # (future) note-taking, project management
+    └── ...
+```
+
+To add a new spoke:
+
+1. Create `prax/agent/spokes/<name>/agent.py` with `SYSTEM_PROMPT`, `build_tools()`, `delegate_<name>()`, `build_spoke_tools()`
+2. Register in `prax/agent/spokes/__init__.py`
+3. Remove the spoke's direct tools from `tools.py`
+
+See `prax/agent/spokes/browser/agent.py` for the reference implementation.
+
+### Source Code in the Sandbox
 
 The app source is mounted in the sandbox container at `/source/` so OpenCode can read and modify Prax's own code:
 
@@ -1110,25 +1207,89 @@ The app source is mounted in the sandbox container at `/source/` so OpenCode can
 | Production | `./prax:/source/prax` | Read-only — OpenCode can inspect but not modify directly |
 | Dev mode | `./prax:/source/prax` | Read-write — changes propagate via bind mount, Werkzeug auto-reloads |
 
-In dev mode, the self-improvement agent can tell OpenCode to patch files at `/source/prax/...` and the live app picks up the changes immediately.
-
-### Key files
+### Key Files
 
 | File | Purpose |
 |------|---------|
-| `prax/agent/self_improve_agent.py` | Self-improvement sub-agent — diagnose, sandbox-patch, deploy |
-| `prax/agent/plugin_fix_agent.py` | Plugin engineering sub-agent — create, fix, test, activate |
-| `prax/agent/course_author_agent.py` | Content author sub-agent — produces rich markdown (mermaid, code, LaTeX) via iterative sandbox drafting |
-| `prax/agent/subagent.py` | General delegation (`delegate_task`) with category routing |
+| `prax/agent/spokes/` | Spoke agent directory — one folder per spoke |
+| `prax/agent/spokes/_runner.py` | Shared delegation engine — LLM config, invocation, logging, TeamWork hooks |
+| `prax/agent/spokes/browser/agent.py` | Browser spoke — CDP-first routing, Playwright fallback, login flows |
+| `prax/agent/self_improve_agent.py` | Self-improvement spoke — diagnose, sandbox-patch, deploy |
+| `prax/agent/plugin_fix_agent.py` | Plugin engineering spoke — create, fix, test, activate |
+| `prax/agent/course_author_agent.py` | Course author spoke — rich markdown via iterative sandbox drafting |
+| `prax/agent/research_agent.py` | Research spoke — multi-source investigation with citations |
+| `prax/agent/subagent.py` | Generic delegation (`delegate_task`) with category routing |
 | `scripts/watchdog.py` | Supervisor process — health checks, crash rollback, restart |
 
 ## Browser Automation
 
-### The Problem
+### Why a Live Browser?
 
-Many websites (Twitter/X, SPAs, pages behind logins) don't work with simple HTTP scraping. The agent needs a real browser to navigate, log in, and read content.
+Many websites (Twitter/X, SPAs, pages behind logins) return empty or broken HTML to a simple `requests.get()`.  Modern pages render content with JavaScript, gate it behind authentication, or use anti-bot protections.  Prax needs a **real browser** — one that executes JS, stores cookies, and renders the DOM — to interact with the web the way a human does.
 
-### The Solution: Playwright + Credential Store + Persistent Profiles + VNC
+### Architecture: One Chrome, Two APIs
+
+In Docker, the sandbox container runs a **headless Chromium** with remote debugging enabled (CDP on port 9222, forwarded to 9223 via socat).  **Three consumers share the same Chrome instance:**
+
+```
+                         ┌─────────────────────┐
+                         │   Sandbox Chrome     │
+                         │   (headless, CDP)    │
+                         │   :9222 → :9223      │
+                         └──────┬───────────────┘
+                                │
+               ┌────────────────┼────────────────┐
+               │                │                │
+      ┌────────▼────────┐  ┌───▼────────┐  ┌────▼───────────┐
+      │   Playwright    │  │  Raw CDP   │  │   TeamWork     │
+      │  (browser_*)    │  │  (sandbox  │  │  Screencast    │
+      │  Rich API       │  │  _browser  │  │  (user sees    │
+      │  via connect_   │  │  _read/act)│  │  the browser   │
+      │  over_cdp()     │  │            │  │  live)         │
+      └─────────────────┘  └────────────┘  └────────────────┘
+```
+
+- **Playwright** connects via `connect_over_cdp()` — the agent gets ergonomic selectors, auto-waiting, form filling, and file uploads, all operating on the shared Chrome
+- **Raw CDP** (`cdp_service.py`) — low-level WebSocket protocol for direct DOM evaluation, input dispatch, and screenshots; used by `sandbox_browser_read`/`sandbox_browser_act` tools
+- **TeamWork** — streams the Chrome screencast to the web UI so the user watches in real-time and can "Take Over" control
+
+When the user takes over (e.g. to solve a CAPTCHA), the agent sees the resulting page state immediately because it's the same browser.
+
+### Playwright vs Raw CDP
+
+Both APIs talk to the same Chrome instance.  Playwright wraps CDP with a high-level, reliable API; raw CDP gives direct protocol access when needed.
+
+| Capability | Playwright | Raw CDP |
+|------------|-----------|---------|
+| **Selectors** | `click("text=Sign In")`, CSS, XPath, role-based | You compute coordinates yourself |
+| **Waiting** | Auto-waits for elements, navigation, network idle | Manual — you poll DOM or listen for events |
+| **Forms** | `fill()`, `select_option()`, `check()` — handles focus, clear, type | `Input.dispatchKeyEvent` one keystroke at a time |
+| **Navigation** | `goto()`, `wait_for_url()`, `go_back()` — handles redirects | `Page.navigate` + manual lifecycle tracking |
+| **Screenshots** | One-liner | One-liner (equally good) |
+| **File uploads** | `set_input_files()` | `DOM.setFileInputFiles` (painful) |
+| **iframes** | `frame_locator()` traverses naturally | Manual frame tree management |
+| **Multi-tab** | Built-in page management | Manual `Target.createTarget` |
+| **Error messages** | `"Timeout waiting for selector 'button.submit'"` | `"Target closed"` or cryptic protocol errors |
+| **Stealth** | Anti-bot patches available (playwright-stealth) | You're on your own |
+| **Network interception** | `route()` for interception, but abstracted | Full access — `Network.getResponseBody`, `Fetch.fulfillRequest` |
+| **Performance profiling** | No | Full access — `Profiler`, `HeapProfiler`, `Tracing` |
+| **Console/JS eval** | `evaluate()` works fine | Direct `Runtime.evaluate` — equivalent |
+
+**In practice:** Prax uses Playwright for most browser tasks (navigation, login flows, form filling, content extraction).  Raw CDP is available for edge cases that need low-level protocol access (performance profiling, network interception, direct input dispatch).
+
+### Configuration
+
+```bash
+# docker-compose sets this automatically:
+BROWSER_CDP_URL=http://sandbox:9223   # Playwright connects to sandbox Chrome
+
+# Local dev (no sandbox) — leave unset and Playwright launches its own browser:
+#BROWSER_CDP_URL=
+```
+
+When `BROWSER_CDP_URL` is set, Playwright calls `connect_over_cdp()` to attach to the existing Chrome.  If the connection fails (sandbox not running), it falls back to launching a standalone browser — so local development works without Docker.
+
+### Login Strategies
 
 The agent gets a full Playwright-backed Chromium browser with per-user sessions. Two login strategies:
 
@@ -1263,7 +1424,9 @@ sites:
 
 The `aliases` field lets the agent match `twitter.com` URLs to `x.com` credentials. The `browser_credentials` tool returns the username but hides the password; `browser_login` exposes the password only to the Playwright fill action.
 
-### Browser Capabilities
+### Browser Tools
+
+**Playwright tools** (high-level, recommended for most tasks):
 
 | Tool | What It Does |
 |------|-------------|
@@ -1281,6 +1444,13 @@ The `aliases` field lets the agent match `twitter.com` URLs to `x.com` credentia
 | `browser_finish_login` | End VNC session and save persistent profile |
 | `browser_check_login` | Check if currently logged into a domain |
 | `browser_profiles` | List all saved browser profiles |
+
+**Raw CDP tools** (low-level, for direct Chrome DevTools Protocol access):
+
+| Tool | What It Does |
+|------|-------------|
+| `sandbox_browser_read` | Read from sandbox Chrome — text, URL, screenshot, scroll (user sees actions live in TeamWork) |
+| `sandbox_browser_act` | Act in sandbox Chrome — navigate, click (by text or CSS), type, press keys (user watches live) |
 
 ## Agent Checkpointing
 
@@ -1350,24 +1520,116 @@ Starting Prax — provider=openai model=gpt-4o temperature=0.7 encoding=o200k_ba
 - **Path traversal protection** — workspace file operations (`save_file`, `read_file`, `archive_file`, etc.) and self-improvement file operations validate that resolved paths stay within the expected root directory. Attempts to escape via `../` or absolute paths are blocked.
 - **Sandbox auth** — each app process generates a random per-process auth key (`secrets.token_urlsafe(32)`) for sandbox container communication. Never committed to source.
 - **Docker socket** — the app container needs `/var/run/docker.sock` mounted for sandbox management. This grants host Docker access; only run in trusted environments.
-- **VNC** — when enabled, VNC servers bind to `127.0.0.1` only. Access requires an SSH tunnel.
+- **VNC** — when enabled, VNC ports are mapped to the host's `127.0.0.1` only (not exposed on `0.0.0.0`). Remote access requires an SSH tunnel to the host: `ssh -NL 5901:localhost:5901 your-server`.
 - **Secret key validation** — the app warns on startup if `FLASK_SECRET_KEY` is set to a weak placeholder like `change-me`.
 
 ### Plugin security
 
-Plugins imported from external repos are subject to multiple security layers:
+Plugins imported from external repos pass through multiple security gates before and during execution:
 
 | Layer | What it does |
 |-------|-------------|
-| **AST-based static analysis** | Parses plugin source with Python's `ast` module to detect `subprocess`, `eval`, `exec`, `compile`, `__import__`, `os.environ`, `os.system`, `socket`, and `getattr(__builtins__, ...)`. Catches obfuscation that regex scanning misses. |
+| **AST-based static analysis** | Parses plugin source with Python's `ast` module to detect `subprocess`, `eval`, `exec`, `compile`, `__import__`, `os.environ`, `os.system`, `socket`, `getattr(__builtins__, ...)`, and 12+ evasion patterns (`__globals__`, `__subclasses__`, `vars(os)`, `codecs.decode`, etc.). |
 | **Regex pattern scanning** | Supplements AST analysis with line-level pattern matching for HTTP calls, file deletion, hex-encoded strings, and base64 decoding. |
 | **Built-in tool name protection** | Plugins cannot register tools with the same name as built-in tools. A plugin trying to override `browser_read_page` or `get_current_datetime` is rejected at load time. |
-| **Sandbox environment isolation** | Plugin test runs execute in a subprocess with a stripped environment — only `PATH`, `HOME`, `LANG`, and `PYTHONPATH` are passed. API keys and secrets are not inherited. |
-| **Subprocess sandbox testing** | Before activation, plugins are imported in a separate subprocess with a 30-second timeout. Failures prevent activation. |
+| **Subprocess sandbox testing** | Before activation, plugins are imported in a separate subprocess with a stripped environment and 30-second timeout. Failures prevent activation. |
 | **Runtime monitoring + auto-rollback** | Active plugin tools are wrapped with failure tracking. After consecutive failures, the plugin is automatically rolled back to its previous version. |
 | **Governance layer** | All tools (built-in and plugin) pass through a single governance choke point with risk classification (LOW/MEDIUM/HIGH), confirmation gating for HIGH-risk actions, and audit logging to the workspace trace. |
+| **Blocking security scan** | `import_plugin_repo()` and `update_plugin_repo()` flag security warnings and require explicit acknowledgement before activation. |
 
-**Limitations:** Plugins still execute in the main process after passing security checks. The static analysis catches common attack patterns but cannot prevent all forms of obfuscation. Only import plugins from sources you trust. For maximum isolation, run Prax in a container.
+### Subprocess isolation
+
+IMPORTED plugins execute in **isolated subprocesses** — separate OS processes with no access to API keys, secrets, or the parent's memory. The OS process boundary is the primary security guarantee, not Python-level tricks.
+
+#### Architecture
+
+```
+┌─────────────────────────────────┐     JSON-lines     ┌──────────────────────────────┐
+│         Parent Process          │    on stdin/stdout   │     Plugin Subprocess        │
+│                                 │◄───────────────────►│                              │
+│  MonitoredTool                  │                      │  host.py                     │
+│    ├─ call budget (10/msg)      │  ── invoke ──►       │    ├─ import plugin module   │
+│    ├─ governance (HIGH risk)    │  ◄── result ──       │    ├─ call tool.invoke()     │
+│    └─ bridge.invoke()           │                      │    └─ CapsProxy             │
+│                                 │  ◄── caps_call ──    │         ├─ http_get(url)     │
+│  Bridge                         │  ── caps_result ──►  │         ├─ build_llm()       │
+│    ├─ spawn subprocess          │                      │         ├─ save_file()       │
+│    ├─ service caps callbacks    │                      │         └─ get_config()      │
+│    ├─ timeout → SIGKILL         │                      │                              │
+│    └─ PluginCapabilities (real) │                      │  Env: PATH, HOME, LANG only  │
+│         ├─ API keys ✓           │                      │  No API keys. No secrets.    │
+│         ├─ prax.settings ✓      │                      │  No Docker socket.           │
+│         └─ network access ✓     │                      │  No prax.settings.           │
+└─────────────────────────────────┘                      └──────────────────────────────┘
+```
+
+When a plugin calls `caps.http_get(url)`, the proxy in the subprocess serializes the call as a JSON-RPC message, sends it to the parent over stdout, and blocks. The parent — which holds the real API keys — makes the HTTP request and sends the result back. The plugin experiences a normal synchronous method call but never touches a credential.
+
+#### What's isolated
+
+| Attack vector | Result |
+|---------------|--------|
+| `os.environ["OPENAI_KEY"]` | `KeyError` — key is not in the subprocess environment |
+| `os.environ["ANTHROPIC_KEY"]` | `KeyError` — same reason |
+| `gc.get_objects()` to find `prax.settings` | Returns nothing — settings object is in a different process |
+| `().__class__.__base__.__subclasses__()` → `BuiltinImporter` | Can import modules, but there are no secrets in memory to steal |
+| `open("/proc/self/environ")` | Contains only `PATH`, `HOME`, `LANG`, `PYTHONPATH` |
+| Infinite loop / memory bomb | `SIGALRM` → `SIGTERM` → `SIGKILL` (uncatchable) |
+| `ctypes` memory writes to bypass audit hooks | Nothing to find — no API keys in process memory |
+| Docker socket access | Not mounted in subprocess environment |
+
+#### Capabilities proxy
+
+Plugins access Prax services through a `PluginCapabilities` proxy. Every method is forwarded to the parent via JSON-RPC — the plugin never directly holds credentials or network connections:
+
+| Method | What the parent does |
+|--------|---------------------|
+| `caps.build_llm(tier)` | Constructs a LangChain LLM with the real API key and returns it (serialized) |
+| `caps.http_get(url)` / `caps.http_post(url)` | Makes the HTTP request with credentials, rate-limited (50/invocation), returns serialized response |
+| `caps.save_file(name, content)` | Writes to the user's workspace via `workspace_service` |
+| `caps.run_command(cmd)` | Executes in the parent with auditing and timeout |
+| `caps.tts_synthesize(text, path)` | Calls OpenAI/ElevenLabs TTS API with the real key |
+| `caps.get_config(key)` | Returns non-secret config values; blocks keys matching `key`, `secret`, `token`, `password`, `credential` |
+| `caps.workspace_path()` / `caps.get_user_id()` / `caps.shared_tempdir()` | Returns strings — no credential exposure |
+
+#### Framework-enforced limits
+
+These limits are enforced in the **parent process** (in `MonitoredTool`), outside the subprocess — the plugin cannot increase its own budget or disable enforcement:
+
+| Limit | Value | Enforcement |
+|-------|-------|-------------|
+| Tool calls per message | 10 | `_increment_call_count()` in parent, checked before each bridge invocation |
+| HTTP requests per invocation | 50 | Counted in `PluginCapabilities._check_http()` in parent |
+| Invocation timeout | 30 seconds | `SIGALRM` in parent → `SIGTERM` → 5s grace → `SIGKILL` |
+| Risk classification | HIGH | All IMPORTED tools require user confirmation before first execution |
+
+#### Subprocess lifecycle
+
+| Event | What happens |
+|-------|-------------|
+| **First tool call** | Subprocess spawned lazily, plugin registered via JSON-RPC handshake |
+| **Subsequent calls** | Same subprocess reused (~5ms overhead per call) |
+| **Agent turn ends** | `shutdown_all_bridges()` terminates all subprocesses |
+| **Process exit** | `atexit` handler kills any surviving subprocesses |
+| **Plugin reload** | Old subprocess shut down, new one spawned on next call |
+| **Subprocess crash** | Error propagated to agent, failure recorded, auto-rollback may trigger |
+
+#### Defence-in-depth (in-process layers)
+
+The following in-process guards remain active as a secondary defense. They are no longer the primary security boundary — the subprocess is — but they catch bugs in the bridge and provide redundancy:
+
+| Control | What it does |
+|---------|-------------|
+| **Python audit hook** (PEP 578) | `sys.addaudithook` blocks `subprocess.Popen`, `os.system`, `ctypes.dlopen`, etc. during IMPORTED execution |
+| **Import blocker** (`sys.meta_path`) | Blocks `subprocess`, `ctypes`, `pickle`, `marshal`, `shutil`, `multiprocessing`, `signal` |
+| **`PluginCapabilities` gateway** | `build_llm()`, `http_get/post()`, `save_file()`, `get_config()` — all without exposing API keys |
+| **Per-tier policy** | `PluginPolicy` dataclass controls `can_access_env`, `can_make_http`, `can_use_llm`, `max_http_requests_per_invocation`, etc. |
+
+#### Migration for plugin authors
+
+If your plugin's `register()` function accepts a parameter, it receives a `PluginCapabilities` instance (or a proxy that behaves identically in the subprocess). Use `caps.http_get()` instead of `requests.get()`, `caps.build_llm()` instead of importing the LLM factory, and `caps.get_config("workspace_dir")` instead of `settings.workspace_dir`. Zero-arg `register()` still works for backward-compatible built-in plugins.
+
+BUILTIN and WORKSPACE plugins remain fully in-process with no overhead — subprocess isolation applies only to IMPORTED plugins from external repos.
 
 ### Tool risk classification
 
@@ -1423,20 +1685,23 @@ Prax applies the following mitigations against this class of attack:
 | **GitHub Actions** | All actions pinned to full commit SHAs, not mutable version tags. A tag like `@v4` can be force-pushed; a SHA cannot. | Done |
 | **Docker base images** | `Dockerfile` and `sandbox/Dockerfile` pin base images to `@sha256:` digests. Tag hijacking on Docker Hub or GHCR has no effect. | Done |
 | **Python dependencies** | `uv.lock` contains SHA-256 hashes for every wheel and sdist. `uv sync --frozen` in Docker builds rejects any package whose hash doesn't match. A poisoned PyPI upload (the LiteLLM vector) fails verification. | Done |
+| **PyPI quarantine window** | `exclude-newer = "7 days"` in `pyproject.toml` prevents uv from resolving any package version published less than 7 days ago. Most PyPI compromises (LiteLLM, TeamPCP) are detected within 24–72 hours; a 7-day rolling buffer ensures poisoned releases are flagged and yanked before they can enter the dependency tree. | Done |
 | **CI/CD secrets** | CI jobs have no publishing credentials, API keys, or deploy tokens. There is nothing to steal from a compromised workflow. | Done |
 | **No `pull_request_target`** | CI uses `pull_request` (safe — runs on the PR's merge commit with read-only access), not `pull_request_target` (the Trivy entry point — runs in the base repo context with write access and secrets). | Done |
 
 **Updating pinned digests:** Each Dockerfile contains a comment with the `docker inspect` command to refresh the digest. For GitHub Actions, look up the SHA at `https://api.github.com/repos/{owner}/{repo}/git/ref/tags/{tag}`.
 
+**Upgrading dependencies:** Since `exclude-newer = "7 days"` is a rolling window, simply run `uv lock --upgrade` at any time to pull the latest packages that have cleared the 7-day quarantine. Review the `uv.lock` diff for unexpected new packages or version jumps, then commit both files together.
+
 #### Remaining risk: plugin code execution
 
-Imported plugins execute in the main Prax process after passing AST-based static analysis and sandbox testing (see [Plugin security](#plugin-security) above). This is a deliberate tradeoff: the plugin system is designed for self-modification, which requires code execution.
+Imported plugins execute in **isolated subprocesses** with a stripped environment (no API keys, no secrets). The OS process boundary prevents credential theft and memory-space attacks. However:
 
-The static analysis catches common patterns (`subprocess`, `eval`, `exec`, `os.environ`, socket access, obfuscated strings) but cannot guarantee detection of all malicious payloads. An attacker who controls a plugin repo could craft an obfuscated credential stealer that bypasses AST scanning.
+- **Side-channel attacks** (timing, cache) are theoretically possible but impractical over JSON-RPC pipes.
+- **Capability abuse** — a malicious plugin could use `caps.http_get()` to exfiltrate workspace file contents to an external server. The HTTP rate limit (50 requests/invocation) and HIGH-risk confirmation gate mitigate but do not eliminate this.
+- **Subprocess escape** — if a kernel vulnerability allows escaping process isolation, the subprocess has access to the host filesystem (though not to env vars). Docker container isolation (future enhancement) would add a second boundary.
 
-**Current controls:** static analysis + regex scanning + sandbox pre-test + user confirmation gate + runtime failure auto-rollback.
-
-**Future mitigation (TODO):** Run imported plugins in the sandboxed Docker container rather than the main process, communicating via the existing sandbox API. This would contain damage from a compromised plugin to an ephemeral container with no access to API keys or host resources. Built-in and user-created workspace plugins would remain in-process.
+**Current controls:** subprocess isolation + static analysis + capabilities gateway + per-tier policy + call budgets + HIGH risk classification + user confirmation gate + audit hooks + import blockers + runtime auto-rollback + blocking security scan.
 
 ## Configuration
 
@@ -1660,6 +1925,9 @@ The server listens on `0.0.0.0:5001` (configurable via `.env`). The scheduler st
 # Run all tests
 uv run pytest tests/ -q
 
+# Run only end-to-end workflow tests
+uv run pytest tests/e2e/ -v
+
 # With coverage
 uv run coverage run -m pytest
 uv run coverage report
@@ -1674,6 +1942,60 @@ make ci   # actionlint + ruff + pytest
 This mirrors the GitHub Actions CI pipeline and catches issues before they hit remote.
 
 Coverage configuration (see `pyproject.toml`) focuses on business logic; Twilio blueprints and heavy IO helpers are excluded until integration tests are added.
+
+### End-to-End Workflow Tests
+
+The `tests/e2e/` directory contains integration tests that exercise the **full agent orchestration loop** — from user message through tool calls and back to final response — with a `ScriptedLLM` that plays back predetermined responses. No real API calls are made.
+
+**Architecture:**
+
+```
+User message ──▶ ConversationAgent.run() ──▶ LangGraph ReAct loop
+                         │                         │
+                    ScriptedLLM              Real tool execution
+                  (plays back script)        (mocked backends)
+                         │                         │
+                  AIMessage with               Governance wrapper,
+                  tool_calls or text           audit logging, etc.
+                         │                         │
+                         ◀─────── ToolMessage ─────┘
+```
+
+- **`ScriptedLLM`** — A `BaseChatModel` that returns pre-scripted `AIMessage` responses in sequence. Some responses include `tool_calls` to trigger the real tool execution path; others are plain text (final response).
+- **Service mocks** — External backends (`background_search`, `sandbox_service`, `note_service`, etc.) are mocked at the service boundary. Everything above that runs for real: tool registry, governance wrapper, risk classification, audit logging, checkpoint management, and trace logging.
+- **`run_e2e` fixture** — Creates a `ConversationAgent` with the `ScriptedLLM`, patches TeamWork hooks and the plugin loader, and runs the full orchestration loop. Per-test service mocks are passed via the `mocks={}` parameter.
+
+| File | Tests | What it covers |
+|------|-------|----------------|
+| `test_chat.py` | 3 | Greetings, factual Q&A, multi-sentence — no tool calls |
+| `test_search.py` | 4 | Web search, URL fetch, search follow-up, parallel tool calls |
+| `test_notes.py` | 3 | Note creation, user notes update, workspace file save |
+| `test_sandbox.py` | 6 | Full sandbox lifecycle, review, abort, model switch, timeout guidance, auto-abort on repeated failures |
+| `test_delegation.py` | 4 | Research sub-agent, browser spoke, content editor spoke, parallel delegation |
+| `test_errors.py` | 6 | Empty search, no sandbox, note service failure, URL timeout, delegation failure, max rounds |
+
+**Adding a new workflow test:**
+
+```python
+# tests/e2e/test_example.py
+from tests.e2e.conftest import ai, ai_tools, make_async_return, tc
+
+def test_my_workflow(run_e2e):
+    response, llm = run_e2e(
+        "User message here",
+        [
+            # Step 1: Agent calls a tool
+            ai_tools(tc("background_search_tool", {"query": "something"})),
+            # Step 2: Agent gives final response
+            ai("Here's what I found..."),
+        ],
+        mocks={
+            "prax.helpers_functions.background_search": make_async_return("search results"),
+        },
+    )
+    assert "found" in response
+    assert llm.call_count == 2
+```
 
 ### Releases and Semantic Versioning
 
@@ -1738,6 +2060,10 @@ The app waits for the sandbox health check before starting. Environment detectio
 
 ```bash
 docker build -t prax .
+
+# Ensure the database file exists (Docker will create a directory otherwise)
+touch "$HOME/conversations.db"
+
 docker run -d -p 5001:5001 --restart always \
   -v "$HOME/workspaces:/app/workspaces" \
   -v "$HOME/conversations.db:/app/conversations.db" \
@@ -1782,16 +2108,20 @@ from langchain_core.tools import tool
 PLUGIN_VERSION = "1"
 PLUGIN_DESCRIPTION = "Weather lookup for any city"
 
-@tool
-def weather_lookup(city: str) -> str:
-    """Get the current weather for a city."""
-    import requests
-    resp = requests.get(f"https://wttr.in/{city}?format=3")
-    return resp.text
+def register(caps):
+    @tool
+    def weather_lookup(city: str) -> str:
+        """Get the current weather for a city."""
+        resp = caps.http_get(f"https://wttr.in/{city}?format=3")
+        return resp.text
 
-def register():
     return [weather_lookup]
 ```
+
+> **Note:** `register(caps)` receives a [`PluginCapabilities`](#plugin-security) instance.
+> Use `caps.http_get()` instead of `requests.get()`, `caps.build_llm()` instead of
+> importing the LLM factory, and `caps.get_config()` instead of reading `prax.settings`
+> directly. Zero-arg `register()` still works for backward-compatible built-in plugins.
 
 **Lifecycle:**
 
@@ -1827,7 +2157,16 @@ This creates two files:
 4. **Check "Allow write access"** — this is required for Prax to push
 5. Click **Add key**
 
-**Step 4 — Base64-encode the private key and add to `.env`:**
+**Step 4 — Make the private key available to Prax:**
+
+*Option A — Bind-mount (preferred, avoids env var leakage):*
+
+```bash
+# In docker-compose.yml, add under app.volumes:
+#   - ~/.ssh/prax_deploy_key:/run/secrets/prax_ssh_key:ro
+```
+
+*Option B — Base64 in `.env` (simpler, but env vars can leak in crash dumps, APM traces, `/proc/self/environ`, and child processes):*
 
 ```bash
 cat ~/.ssh/prax_deploy_key | base64 | tr -d '\n'
@@ -2069,6 +2408,105 @@ Several production agent frameworks have converged on similar architectural patt
 | Bounded retry with rollback | OpenHands, LangGraph | `CheckpointManager` + `_invoke_with_retry` |
 | Complexity-triggered planning | ADaPT | `_classify_complexity` + orchestrator hints |
 
+### 9. Tool Overload and Selection Degradation
+
+**Finding:** Giving an LLM access to too many tools simultaneously degrades tool selection accuracy, increases hallucinated tool calls, and wastes context on definitions the agent rarely uses. Every major LLM provider has documented this effect, and multiple academic benchmarks confirm it.
+
+**Industry guidance:**
+
+- **OpenAI** notes that o3/o4-mini handle up to ~100 tools "in-distribution," but performance still degrades as tool count grows: "longer lists mean the model has more options to parse during its reasoning phase... tool hallucinations can increase with complexity" ([o3/o4-mini Prompting Guide](https://developers.openai.com/cookbook/examples/o-series/o3o4-mini_prompting_guide)). Their [Function Calling Guide](https://developers.openai.com/api/docs/guides/function-calling) recommends keeping tool definitions concise.
+- **Anthropic** reports that tool selection accuracy "degrades significantly once you exceed 30–50 available tools" ([Tool Search Tool docs](https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool)). In their advanced tool use study, loading 58 tools from 5 MCP servers consumed ~55K tokens before the conversation even started. Implementing on-demand tool search improved Claude Opus 4 accuracy from 49% to 74% ([Advanced Tool Use](https://www.anthropic.com/engineering/advanced-tool-use)).
+
+**Academic evidence:**
+
+- **RAG-MCP** (Gan & Sun, 2025) measured tool selection accuracy at just 13.62% when all tool definitions are present, vs. 43.13% with RAG-based pre-filtering — a 3× improvement from simply not showing irrelevant tools ([arXiv:2505.03275](https://arxiv.org/abs/2505.03275)).
+- **ToolLoad-Bench** (Wang et al., AAAI 2026) formalized "cognitive load" for tool-using agents and found "distinct performance cliffs" as load increases. GPT-4o achieved 68% overall with graceful degradation, while open-source models collapsed to 17% ([arXiv:2601.20412](https://arxiv.org/abs/2601.20412)).
+- **ToolLLM** (Qin et al., ICLR 2024) showed that using an API retriever to pre-filter relevant tools from a pool of 16,464 APIs actually *outperformed* giving the model the ground-truth API set, because a smaller search space reduces confusion ([arXiv:2307.16789](https://arxiv.org/abs/2307.16789)).
+- **Gorilla** (Patil et al., NeurIPS 2024) demonstrated that LLMs hallucinate wrong API calls when exposed to large tool sets, and that retrieval-augmented tool selection outperforms GPT-4 by 20.43% on API call accuracy ([arXiv:2305.15334](https://arxiv.org/abs/2305.15334)).
+- **BFCL** (Patil et al., ICML 2025) found that even top models "still stumble when they must remember context, manage long conversations, or decide when not to act" — performance degrades as tool selection difficulty increases ([proceedings](https://proceedings.mlr.press/v267/patil25a.html)).
+
+**Prax implementation:** Hub-and-spoke architecture — the orchestrator holds ~10 core tools and delegates domain-specific work to focused sub-agents (media, browser, sandbox, workspace, scheduler, codegen), each with a curated tool set of 7–15 tools. If delegation fails, Prax can fall back to reading a generated tool catalog and calling any tool directly.
+
+### 10. Multi-Agent Content Pipelines and Iterative Refinement
+
+**Finding:** Multi-agent pipelines with dedicated reviewer agents and iterative revision loops produce significantly higher-quality content than single-pass generation. Diverse agents (different models or providers) outperform homogeneous ones.
+
+**Key results:**
+
+| Study | Finding | Source |
+|-------|---------|--------|
+| **Self-Refine** (NeurIPS 2023) | ~20% average improvement over single-pass; most gains in first 1-2 iterations | [arXiv:2303.17651](https://arxiv.org/abs/2303.17651) |
+| **MAR: Multi-Agent Reflexion** (2024) | Multi-critic debate: HumanEval 76.4% → 82.6% vs single-agent reflexion | [arXiv:2512.20845](https://arxiv.org/abs/2512.20845) |
+| **ICLR 2025 Review Study** | 45,000 reviews; 89% of updated reviews improved after AI feedback | [arXiv:2504.09737](https://arxiv.org/abs/2504.09737) |
+| **Diverse-Model Debate** (2024) | 91% on GSM-8K (beats GPT-4); same-model debate only 82% | [arXiv:2410.12853](https://arxiv.org/abs/2410.12853) |
+| **STORM** (Stanford) | 25% improvement in organization, 10% in coverage vs baselines | [arXiv:2402.14207](https://arxiv.org/abs/2402.14207) |
+| **Google Agent Scaling** (2024) | +80.9% on parallelizable tasks; -39% to -70% on sequential reasoning | [arXiv:2512.08296](https://arxiv.org/abs/2512.08296) |
+| **Writer-R1** (2026) | Generation-Reflection-Revision loop; 4B model outperforms 100B+ baselines | [arXiv:2603.15061](https://arxiv.org/abs/2603.15061) |
+| **CycleResearcher** (ICLR 2025) | Research-Review-Refinement cycle; reviewer achieves 26.89% reduction in MAE | [arXiv:2411.00816](https://arxiv.org/abs/2411.00816) |
+
+**Proven orchestration patterns** (from Google ADK and [multi-agent collaboration survey](https://arxiv.org/html/2501.06322v1)):
+
+| Pattern | How It Works | Best For |
+|---------|-------------|----------|
+| Sequential Pipeline | A → B → C → D | Simple content, each stage independent |
+| Evaluator-Optimizer Loop | Writer → Reviewer → Writer (until threshold) | Iterative refinement |
+| Parallel Fan-Out/Gather | Multiple agents in parallel, then merge | Research-heavy tasks |
+| Generator-Critic | One creates, another tears it apart | Quality assurance |
+
+**Optimal revision cycles:** 2-3 rounds.  Self-Refine showed most gains in passes 1-2.  Multi-agent debate peaks at round 3, can degrade at rounds 4-5.
+
+**Prax implementation:** The Content Editor spoke (`prax/agent/spokes/content/`) runs a 5-phase pipeline: Research → Write (MEDIUM tier) → Publish → Review (HIGH tier, different provider when available) → Revise (up to 3 cycles).  The Reviewer visually inspects the rendered Hugo page via the Browser Agent and gives structured adversarial feedback.  The Writer and Reviewer use different LLM providers when multiple are configured (e.g. Claude reviews GPT's writing), leveraging the diverse-agent improvement.
+
+**References:**
+- Madaan et al., "Self-Refine," NeurIPS 2023 — [arXiv:2303.17651](https://arxiv.org/abs/2303.17651)
+- Du et al., "Improving Factuality and Reasoning via Multi-Agent Debate," ICML 2024 — [arXiv:2305.14325](https://arxiv.org/abs/2305.14325)
+- Shao et al., "STORM," 2024 — [arXiv:2402.14207](https://arxiv.org/abs/2402.14207)
+- Huang et al., "Google Agent Scaling," 2024 — [arXiv:2512.08296](https://arxiv.org/abs/2512.08296)
+- Gu et al., "Writer-R1," 2026 — [arXiv:2603.15061](https://arxiv.org/abs/2603.15061)
+- Li et al., "CycleResearcher," ICLR 2025 — [arXiv:2411.00816](https://arxiv.org/abs/2411.00816)
+- Multi-Agent Collaboration Survey — [arXiv:2501.06322](https://arxiv.org/html/2501.06322v1)
+- Google ADK Patterns — [developers.googleblog.com](https://developers.googleblog.com/developers-guide-to-multi-agent-patterns-in-adk/)
+
+### 11. Plugin Sandboxing and the Glass Sandbox Problem
+
+**Finding:** In-process Python sandboxing is fundamentally fragile. Python's object graph allows traversal from any object to `__subclasses__()` → `BuiltinImporter` → arbitrary module import. Every major in-process sandbox has been bypassed: RestrictedPython (CVE-2025-22153, CVE-2023-37271), n8n's AST sandbox (CVE-2026-0863, CVE-2026-1470), and Python audit hooks (bypassable via ctypes memory writes). The industry consensus — reflected in LangChain's evolution to microVM sandboxes, OpenAI's gVisor-based code interpreter, and HashiCorp's go-plugin process isolation — is that security boundaries must exist at the OS/process level, not the language level.
+
+**The Glass Sandbox problem** (Checkmarx, 2024): Python's introspection creates "visible boundaries that give the illusion of security." Starting from any object (even `()`), an attacker can use `.__class__.__base__.__subclasses__()` to walk the entire class hierarchy and import any module. This is not a fixable bug — it is an architectural property of CPython.
+
+**Phase 2 response (implemented):** IMPORTED plugins now execute in **isolated subprocesses** with a stripped environment. The OS process boundary is the primary security guarantee:
+
+| Layer | Mechanism | What It Provides | Bypassable? |
+|-------|-----------|-----------------|-------------|
+| **1. Process isolation** | Separate subprocess, stripped env | No API keys in memory or environment. `os.environ["OPENAI_KEY"]` → `KeyError`. Object graph traversal finds nothing. | No — keys are not in the process |
+| **2. JSON-RPC bridge** | stdin/stdout JSON-lines protocol | No shared memory between parent and child. No `gc.get_objects()`, no `__globals__` traversal across the boundary. | No — OS process boundary |
+| **3. Capabilities proxy** | `PluginCapabilities` forwarded via RPC | Plugin can only access services the parent explicitly proxies. All credentialed calls execute in the parent. | No — plugin cannot bypass the proxy |
+| **4. SIGKILL timeout** | `SIGALRM` → `SIGTERM` → `SIGKILL` | Unresponsive plugins are force-killed. SIGKILL cannot be caught or blocked. | No |
+| **5. Call budget** | Framework-enforced 10 calls/message | Runaway recursion, infinite loops. Enforced in parent, outside subprocess. | No |
+
+**Defence-in-depth (still active):** The Phase 1 in-process layers remain as secondary defenses — they catch bugs in the bridge itself and add depth:
+
+| Layer | Mechanism | What It Catches |
+|-------|-----------|----------------|
+| AST + regex scanning | Static analysis before activation | Dangerous patterns caught before code even loads |
+| `sys.addaudithook` | Runtime event monitoring (PEP 578) | `subprocess.Popen`, `os.system`, `ctypes.dlopen`, etc. |
+| `sys.meta_path` import blocker | Blocks dangerous module imports | `subprocess`, `ctypes`, `pickle`, `marshal`, `shutil` |
+| Blocking security scan | Requires acknowledgement of warnings | Gates activation on human review |
+
+**Key design principle:** The subprocess boundary makes the in-process layers *redundant* for credential theft — but redundant defenses are good engineering. If a future change accidentally routes a plugin in-process, the Phase 1 layers still catch it.
+
+**Academic foundations:**
+
+| Paper | Contribution | How Prax Applies It |
+|-------|-------------|---------------------|
+| Christodorescu et al., "Systems Security Foundations for Agentic Computing," IEEE SAGAI 2025 ([arXiv:2512.01295](https://arxiv.org/abs/2512.01295)) | Identifies five classical security principles for agents: least privilege, TCB tamper resistance, complete mediation, secure information flow, human weak link. Documents 11 real attacks including Cursor AgentFlayer (Jira→AWS creds) and Claude Code .env exfiltration via DNS. | Capabilities gateway = least privilege; audit hook = complete mediation; call budget = TCB tamper resistance (framework-enforced, not bypassable). |
+| Checkmarx, "The Glass Sandbox" (2024) | Proves Python's object graph makes language-level sandboxing impossible against determined adversaries. | Prax's primary boundary is subprocess isolation (Phase 2), not in-process sandboxing. In-process layers remain as defence-in-depth. |
+| SandboxEval ([arXiv:2504.00018](https://arxiv.org/abs/2504.00018)) and CIBER ([arXiv:2602.19547](https://arxiv.org/abs/2602.19547)) | Benchmarks for sandbox security in LLM code execution environments. | Prax's scanner covers all SandboxEval test categories (information exposure, filesystem manipulation, external communication). |
+| Nahum et al., "Fault-Tolerant Sandboxing for AI Coding Agents" ([arXiv:2512.12806](https://arxiv.org/abs/2512.12806)) | Proposes transactional agent execution with rollback on policy violation. | Auto-rollback after 3 consecutive failures + checkpoint-based retry in orchestrator. |
+| PEP 578, Python Runtime Audit Hooks | Defines `sys.addaudithook` for monitoring 200+ runtime events. Authors explicitly state it is not a sandbox — but it is the best available detection layer in CPython. | Prax uses audit hooks for enforcement (raising exceptions on dangerous events) with awareness that determined attackers can bypass them. The hook is one layer in a seven-layer stack. |
+| HashiCorp go-plugin | Gold standard for plugin security: separate process + gRPC + mTLS + checksum verification. | Prax's Phase 2 uses the same model: separate process + JSON-RPC + stripped env + capabilities proxy. |
+
+**Phase 2 implementation:** IMPORTED plugins now run in isolated subprocesses with JSON-RPC communication (see [Plugin security](#plugin-security)). This moves the security boundary from "seven imperfect Python layers" to "OS-level process isolation." Future enhancement: run the subprocess inside the sandbox Docker container for cgroups + seccomp + filesystem isolation on top of process isolation.
+
 ### Key Takeaways
 
 1. **Planning is not optional** — it's the single highest-leverage intervention for multi-step tasks.
@@ -2076,6 +2514,9 @@ Several production agent frameworks have converged on similar architectural patt
 3. **Persistence prevents drift** — re-inject state every turn; don't trust the context window to remember.
 4. **Bound your parallelism** — diminishing returns kick in hard after ~4 concurrent sub-agents.
 5. **Make the honest path the smooth path** — architectural enforcement (plan requirements, verification gates) works better than prompt-only instructions.
+6. **Fewer tools, better choices** — tool selection accuracy collapses past 20–50 tools. Use hub-and-spoke delegation or on-demand tool search to keep each agent's tool set focused.
+7. **Diverse reviewers improve quality** — different models/providers in a review loop outperform same-model self-critique by 9+ percentage points.
+8. **Put security boundaries at the OS level** — in-process Python sandboxing is fundamentally fragile (the Glass Sandbox). Use subprocess/process isolation as the primary boundary, keep in-process guards as defence-in-depth, and make the framework enforce limits the plugin code cannot override.
 
 ## Roadmap
 
@@ -2107,6 +2548,7 @@ Several production agent frameworks have converged on similar architectural patt
 - [x] Folder-per-plugin layout with auto-generated CATALOG.md
 - [x] Reader-to-plugin migration (NPR, web summary, PDF, YouTube, arXiv, Deutschlandfunk)
 - [x] Plugin repository support (separate private git repo with SSH deploy key)
+- [x] Subprocess isolation for imported plugins (Phase 2 — JSON-RPC bridge, stripped env, capabilities proxy)
 - [ ] Apple Silicon support (MLX backend as alternative to vLLM/CUDA)
 - [ ] Sandbox Docker image build + integration test with live OpenCode
 - [ ] Voice-triggered sandbox sessions
@@ -2116,3 +2558,6 @@ Several production agent frameworks have converged on similar architectural patt
 - [ ] Multi-step browser workflows (e.g., "check my Twitter DMs every morning")
 - [ ] Adapter A/B testing (serve two adapters, compare quality metrics)
 
+## License
+
+[Apache License 2.0](LICENSE)
