@@ -768,9 +768,9 @@ class TestPluginSecuritySandbox:
 
     def test_imported_plugin_tools_get_high_risk(self, tmp_path):
         """IMPORTED plugin tools should be classified as HIGH risk."""
+        import prax.plugins.loader as loader_mod
         from prax.agent.action_policy import RiskLevel, get_risk_level
         from prax.plugins.registry import PluginTrust
-        import prax.plugins.loader as loader_mod
 
         registry = PluginRegistry(registry_path=str(tmp_path / "reg.json"))
         registry.activate_plugin("shared/evil", "1", trust_tier=PluginTrust.IMPORTED)

@@ -23,7 +23,6 @@ def test_web_search(run_e2e):
 
 def test_url_fetch(run_e2e):
     """Agent fetches a URL and summarizes its content."""
-    import requests as _requests
 
     class FakeResponse:
         status_code = 200

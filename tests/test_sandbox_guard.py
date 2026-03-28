@@ -2,13 +2,11 @@
 from __future__ import annotations
 
 import platform
-import sys
 import textwrap
 
 import pytest
 
 from prax.plugins.monitored_tool import (
-    _call_counts,
     _increment_call_count,
     current_plugin_rel_path,
     current_plugin_trust,
@@ -16,15 +14,13 @@ from prax.plugins.monitored_tool import (
 )
 from prax.plugins.registry import PluginTrust
 from prax.plugins.sandbox_guard import (
+    _BLOCKED_EVENTS,
     BLOCKED_MODULES,
     PluginImportBlocker,
     PluginSecurityViolation,
-    _BLOCKED_EVENTS,
     _plugin_audit_hook,
-    install_import_blocker,
     resource_limits,
 )
-
 
 # ---------------------------------------------------------------------------
 # Audit hook

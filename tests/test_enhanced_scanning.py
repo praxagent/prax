@@ -1,10 +1,7 @@
 """Tests for the enhanced security scanner evasion pattern detection."""
 from __future__ import annotations
 
-import pytest
-
 from prax.services.workspace_service import _ast_scan
-
 
 # ---------------------------------------------------------------------------
 # Helper

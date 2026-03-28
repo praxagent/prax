@@ -172,6 +172,7 @@ class PluginCapabilities:
         )
         if provider == "openai":
             from openai import OpenAI
+
             from prax.settings import settings
             client = OpenAI(api_key=settings.openai_key)
             response = client.audio.speech.create(
@@ -179,8 +180,9 @@ class PluginCapabilities:
             )
             response.stream_to_file(output_path)
         elif provider == "elevenlabs":
-            from prax.settings import settings
             import requests
+
+            from prax.settings import settings
             resp = requests.post(
                 f"https://api.elevenlabs.io/v1/text-to-speech/{voice}",
                 headers={"xi-api-key": settings.elevenlabs_key},

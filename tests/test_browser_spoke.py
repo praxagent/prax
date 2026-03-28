@@ -1,5 +1,5 @@
 """Tests for the browser spoke agent."""
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 
 def test_build_spoke_tools_returns_delegate():

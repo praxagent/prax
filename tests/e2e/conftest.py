@@ -62,7 +62,7 @@ class ScriptedLLM(BaseChatModel):
         self.counter[0] = idx + 1
         return ChatResult(generations=[ChatGeneration(message=msg)])
 
-    def bind_tools(self, tools: Any, **kwargs: Any) -> "ScriptedLLM":
+    def bind_tools(self, tools: Any, **kwargs: Any) -> ScriptedLLM:
         """Return self — tool schemas are irrelevant for scripted responses."""
         return self
 

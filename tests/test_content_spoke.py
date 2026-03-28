@@ -37,7 +37,7 @@ def test_is_approved_negative():
 
 def test_reviewer_provider_diversity():
     """When multiple providers are available, the reviewer picks a different one."""
-    from prax.agent.spokes.content.reviewer import _available_providers, _pick_reviewer_llm
+    from prax.agent.spokes.content.reviewer import _available_providers
 
     with patch("prax.agent.spokes.content.reviewer.settings") as mock_settings:
         mock_settings.openai_key = "sk-test"

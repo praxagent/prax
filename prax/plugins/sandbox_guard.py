@@ -77,7 +77,7 @@ def _plugin_audit_hook(event: str, args: tuple) -> None:
     ``PluginTrust.IMPORTED``.  BUILTIN and WORKSPACE plugins are
     unrestricted.
     """
-    from prax.plugins.monitored_tool import current_plugin_trust, current_plugin_rel_path
+    from prax.plugins.monitored_tool import current_plugin_rel_path, current_plugin_trust
     from prax.plugins.registry import PluginTrust
 
     trust = current_plugin_trust.get()
@@ -140,7 +140,7 @@ class PluginImportBlocker:
 
     def find_module(self, fullname: str, path: object = None) -> None:
         """Raise ImportError if the module is blocked for the current plugin."""
-        from prax.plugins.monitored_tool import current_plugin_trust, current_plugin_rel_path
+        from prax.plugins.monitored_tool import current_plugin_rel_path, current_plugin_trust
         from prax.plugins.registry import PluginTrust
 
         trust = current_plugin_trust.get()

@@ -105,7 +105,7 @@ def restricted_import_env(plugin_name: str = "<unknown>"):
     sanitized = SanitizedEnviron(plugin_name=plugin_name)
 
     # Monkey-patch os.environ and os.getenv.
-    os.environ = sanitized  # type: ignore[assignment]
+    os.environ = sanitized  # type: ignore[assignment]  # noqa: B003
 
     def _restricted_getenv(key: str, default: str | None = None) -> str | None:
         if _is_sensitive(key):
@@ -121,5 +121,5 @@ def restricted_import_env(plugin_name: str = "<unknown>"):
     try:
         yield sanitized
     finally:
-        os.environ = original_environ
+        os.environ = original_environ  # noqa: B003
         os.getenv = original_getenv  # type: ignore[assignment]

@@ -8,7 +8,6 @@ import pytest
 from prax.plugins.capabilities import PluginCapabilities
 from prax.plugins.registry import PluginTrust
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -107,7 +106,7 @@ class TestHTTP:
         # so we mock the module-level import.
         import requests as req_mod
         monkeypatch.setattr(req_mod, "get", mock_requests.get)
-        resp = imported_caps.http_get("https://example.com")
+        imported_caps.http_get("https://example.com")
         mock_requests.get.assert_called_once()
         assert imported_caps._http_request_count == 1
 

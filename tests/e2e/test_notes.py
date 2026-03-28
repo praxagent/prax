@@ -1,5 +1,4 @@
 """E2E tests for note creation and user notes workflows."""
-from unittest.mock import patch
 
 from tests.e2e.conftest import ai, ai_tools, tc
 
