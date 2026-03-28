@@ -91,11 +91,65 @@ class BrowserSession:
         self._context = None
         self.page = None
         self._persistent = False
+        self._cdp = False  # True when connected to external Chrome via CDP
+
+    def _start_cdp(self) -> bool:
+        """Try to connect to the sandbox Chrome via CDP.
+
+        Returns True on success. On failure, logs and returns False so the
+        caller can fall back to launching a standalone browser.
+        """
+        cdp_url = settings.browser_cdp_url
+        if not cdp_url:
+            return False
+
+        try:
+            self._browser = self._pw.chromium.connect_over_cdp(cdp_url)
+            self._cdp = True
+
+            # Use the browser's default context (the sandbox Chrome's context).
+            contexts = self._browser.contexts
+            if contexts:
+                self._context = contexts[0]
+                self.page = (
+                    self._context.pages[0]
+                    if self._context.pages
+                    else self._context.new_page()
+                )
+            else:
+                self._context = self._browser.new_context(
+                    viewport={"width": 1280, "height": 720},
+                    user_agent=_USER_AGENT,
+                )
+                self.page = self._context.new_page()
+
+            logger.info("Playwright connected to sandbox Chrome via CDP: %s", cdp_url)
+            return True
+        except Exception as exc:
+            logger.warning("CDP connection to %s failed, falling back to standalone: %s", cdp_url, exc)
+            # Clean up partial state
+            try:
+                if self._browser:
+                    self._browser.close()
+            except Exception:
+                pass
+            self._browser = None
+            self._context = None
+            self.page = None
+            self._cdp = False
+            return False
 
     def start(self, headless: bool | None = None, vnc_display: str | None = None) -> None:
         from playwright.sync_api import sync_playwright
 
         self._pw = sync_playwright().start()
+
+        # If a CDP endpoint is configured and we're not doing VNC, try CDP first.
+        if not vnc_display and self._start_cdp():
+            self.page.set_default_timeout(settings.browser_timeout)
+            return
+
+        # Standalone browser (local dev or VNC login flow).
         h = headless if headless is not None else settings.browser_headless
         profile = _get_profile_dir(self.user_id)
 
@@ -130,7 +184,11 @@ class BrowserSession:
 
     def close(self) -> None:
         try:
-            if self._persistent and self._context:
+            if self._cdp:
+                # Don't close the shared Chrome — just disconnect Playwright.
+                if self._browser:
+                    self._browser.close()
+            elif self._persistent and self._context:
                 self._context.close()
             elif self._browser:
                 self._browser.close()
@@ -143,6 +201,7 @@ class BrowserSession:
         self._context = None
         self.page = None
         self._persistent = False
+        self._cdp = False
 
 
 # ---------------------------------------------------------------------------

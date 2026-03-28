@@ -19,6 +19,9 @@ services:
       - NGROK_API_URL=http://ngrok:4040
       - RUNNING_IN_DOCKER=true
       - SANDBOX_HOST=sandbox
+      # Playwright connects to the sandbox Chrome instead of launching its own.
+      # This unifies the agent's browser with TeamWork's screencast.
+      - BROWSER_CDP_URL=http://sandbox:9223
       # Override WORKSPACE_DIR from .env — inside the container the mount
       # point is always /app/workspaces regardless of the host path.
       - WORKSPACE_DIR=./workspaces

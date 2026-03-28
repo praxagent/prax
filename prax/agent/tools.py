@@ -13,7 +13,6 @@ from datetime import UTC, datetime
 
 from langchain_core.tools import tool
 
-from prax.agent.browser_tools import build_browser_tools
 from prax.agent.codegen_tools import build_codegen_tools_for_main_agent
 from prax.agent.course_author_agent import build_course_author_tools
 from prax.agent.course_tools import build_course_tools
@@ -26,7 +25,9 @@ from prax.agent.research_agent import build_research_tools
 from prax.agent.sandbox_tools import build_sandbox_tools
 from prax.agent.scheduler_tools import build_scheduler_tools
 from prax.agent.self_improve_agent import build_self_improve_tools
+from prax.agent.spokes import build_all_spoke_tools
 from prax.agent.subagent import build_subagent_tools
+from prax.agent.vision_tools import build_vision_tools
 from prax.agent.workspace_tools import build_workspace_tools
 from prax.helpers_functions import background_search
 
@@ -87,7 +88,7 @@ def fetch_url_content(url: str) -> str:
     Use this as the FIRST approach when a user shares a URL.  It is fast and
     lightweight.  Supports x.com/twitter.com links via the oEmbed API.
     For JavaScript-heavy sites that return empty content, fall back to
-    browser_open.
+    delegate_browser.
     """
     import re
 
@@ -181,8 +182,8 @@ def build_default_tools():
         + build_scheduler_tools()
         + build_finetune_tools()
         + build_codegen_tools_for_main_agent()
-        + build_browser_tools()
         + build_subagent_tools()
+        + build_all_spoke_tools()
         + build_plugin_tools()
         + build_course_tools()
         + build_self_improve_tools()
@@ -191,4 +192,5 @@ def build_default_tools():
         + build_research_tools()
         + build_note_tools()
         + build_project_tools()
+        + build_vision_tools()
     )

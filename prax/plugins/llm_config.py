@@ -1,7 +1,7 @@
 """Hot-reloadable LLM routing configuration.
 
 Reads ``plugins/configs/llm_routing.yaml`` and provides per-component
-overrides for provider, model, and temperature.  The config file can be
+overrides for provider, model, tier, and temperature.  The config file can be
 modified by the agent at runtime — changes take effect on the next call
 to ``get_component_config()``.
 """
@@ -32,7 +32,7 @@ def _load_config() -> dict:
 def get_component_config(component: str) -> dict[str, str | float | None]:
     """Return LLM config for a named component.
 
-    Returns a dict with keys ``provider``, ``model``, ``temperature``.
+    Returns a dict with keys ``provider``, ``model``, ``tier``, ``temperature``.
     Values are ``None`` if not overridden (meaning use global defaults).
     """
     config = _load_config()
@@ -43,6 +43,7 @@ def get_component_config(component: str) -> dict[str, str | float | None]:
     return {
         "provider": overrides.get("provider") or defaults.get("provider"),
         "model": overrides.get("model") or defaults.get("model"),
+        "tier": overrides.get("tier") or defaults.get("tier"),
         "temperature": overrides.get("temperature") if "temperature" in overrides else defaults.get("temperature"),
     }
 
@@ -52,7 +53,7 @@ def update_component_config(component: str, **kwargs) -> dict:
 
     Args:
         component: Component name (e.g. "orchestrator", "subagent_research").
-        **kwargs: Keys to update (provider, model, temperature).
+        **kwargs: Keys to update (provider, model, tier, temperature).
 
     Returns:
         The updated component config.
@@ -63,7 +64,7 @@ def update_component_config(component: str, **kwargs) -> dict:
     if component not in config["components"]:
         config["components"][component] = {}
 
-    for key in ("provider", "model", "temperature"):
+    for key in ("provider", "model", "tier", "temperature"):
         if key in kwargs:
             config["components"][component][key] = kwargs[key]
 

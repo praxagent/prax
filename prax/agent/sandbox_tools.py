@@ -42,11 +42,20 @@ def sandbox_message(message: str, model: str | None = None) -> str:
     isn't producing good results.
     """
     result = sandbox_service.send_message(_get_user_id(), message, model=model)
+    if result.get("auto_aborted"):
+        return (
+            f"⚠️ Sandbox AUTO-ABORTED: {result['error']}. "
+            f"Start a new session with sandbox_start if you want to try again."
+        )
     if "error" in result:
         return f"Sandbox error: {result['error']}"
     response = result.get("response", {})
     if isinstance(response, dict) and "error" in response:
-        return f"Coding agent error: {response['error']}"
+        return (
+            f"Coding agent error: {response['error']}. "
+            f"If this keeps happening, use sandbox_abort to stop the session "
+            f"and sandbox_start to begin fresh."
+        )
     model_info = f" (model: {result.get('model', 'unknown')})" if model else ""
     rounds_left = result.get("rounds_remaining")
     budget_info = f" [{rounds_left} rounds remaining]" if rounds_left is not None else ""

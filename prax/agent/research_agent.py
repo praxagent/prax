@@ -96,6 +96,7 @@ def delegate_research(question: str) -> str:
         provider=cfg.get("provider"),
         model=cfg.get("model"),
         temperature=cfg.get("temperature"),
+        tier=cfg.get("tier") or "low",
     )
     graph = create_react_agent(llm, tools)
 

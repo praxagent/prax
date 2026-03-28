@@ -163,9 +163,17 @@ def git_commit(root: str, message: str) -> None:
     """Stage all changes and commit if there's anything to commit."""
     r = subprocess.run(["git", "add", "-A"], cwd=root, capture_output=True, text=True)
     if r.returncode != 0:
-        logger.warning("git add -A failed (rc=%d): %s", r.returncode, r.stderr[:300])
-        # Fallback: try adding without -A (just tracked files + new).
-        subprocess.run(["git", "add", "."], cwd=root, capture_output=True)
+        # Self-heal "dubious ownership" errors from Docker UID mismatch.
+        if "dubious ownership" in r.stderr:
+            subprocess.run(
+                ["git", "config", "--global", "--add", "safe.directory", root],
+                capture_output=True,
+            )
+            r = subprocess.run(["git", "add", "-A"], cwd=root, capture_output=True, text=True)
+        if r.returncode != 0:
+            logger.warning("git add -A failed (rc=%d): %s", r.returncode, r.stderr[:300])
+            # Fallback: try adding without -A (just tracked files + new).
+            subprocess.run(["git", "add", "."], cwd=root, capture_output=True)
     result = subprocess.run(
         ["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True,
     )
@@ -805,6 +813,20 @@ _SECURITY_PATTERNS: list[tuple[str, str]] = [
     (r"\bos\.remove\b|\bos\.unlink\b|\bshutil\.rmtree\b", "file deletion operations"),
     (r"\bbase64\.b64decode\b", "base64 decoding — may hide obfuscated code"),
     (r"\\x[0-9a-fA-F]{2}", "hex-escaped strings — possibly obfuscated code"),
+    # --- evasion patterns (Phase 1 sandbox hardening) ---
+    (r"getattr\s*\([^,]*,\s*['\"]environ['\"]", "getattr(…, 'environ') — env access evasion"),
+    (r"\bvars\s*\(\s*os\s*\)", "vars(os) — env access evasion via vars()"),
+    (r"\bos\.__dict__\b", "os.__dict__ — env access evasion via __dict__"),
+    (r"\bimportlib\.import_module\b", "importlib.import_module — dynamic import evasion"),
+    (r"\bsys\.modules\[", "sys.modules[ — module injection / access evasion"),
+    (r"\b__globals__\b", "access to function __globals__ — may leak secrets"),
+    (r"\b__subclasses__\b", "__subclasses__() — sandbox escape via class hierarchy"),
+    (r"\b__bases__\b", "__bases__ — sandbox escape via class hierarchy"),
+    (r"\bctypes\b", "ctypes — native code execution / memory access"),
+    (r"\bpickle\b", "pickle — arbitrary code execution via deserialization"),
+    (r"\bmarshal\b", "marshal — bytecode manipulation / code execution"),
+    (r"\bopen\s*\(\s*['\"]/?proc/self/environ['\"]", "open('/proc/self/environ') — env access evasion via procfs"),
+    (r"\bcodecs\.decode\b", "codecs.decode — potential ROT13/obfuscation evasion"),
 ]
 
 
@@ -832,28 +854,36 @@ def _ast_scan(source: str, rel_path: str = "<unknown>") -> list[dict]:
     # Dangerous built-in function names.
     _DANGEROUS_CALLS = {"eval", "exec", "compile", "__import__"}
 
+    # Dangerous module imports (AST).
+    _DANGEROUS_IMPORTS = {
+        "subprocess", "socket", "ctypes", "pickle", "marshal",
+    }
+
     for node in _ast.walk(tree):
-        # 1. import subprocess / from subprocess import ...
+        # 1. import <dangerous> / from <dangerous> import ...
         if isinstance(node, _ast.Import):
             for alias in node.names:
-                if alias.name == "subprocess" or alias.name.startswith("subprocess."):
+                base = alias.name.split(".")[0]
+                if base in _DANGEROUS_IMPORTS:
                     findings.append({
                         "file": rel_path,
                         "line": node.lineno,
-                        "pattern": "AST: import subprocess — may execute arbitrary shell commands",
+                        "pattern": f"AST: import {alias.name} — dangerous module",
                         "code": _code_at(node.lineno),
                     })
         elif isinstance(node, _ast.ImportFrom):
-            if node.module and (node.module == "subprocess" or node.module.startswith("subprocess.")):
-                findings.append({
-                    "file": rel_path,
-                    "line": node.lineno,
-                    "pattern": "AST: from subprocess import — may execute arbitrary shell commands",
-                    "code": _code_at(node.lineno),
-                })
+            if node.module:
+                base = node.module.split(".")[0]
+                if base in _DANGEROUS_IMPORTS:
+                    findings.append({
+                        "file": rel_path,
+                        "line": node.lineno,
+                        "pattern": f"AST: from {node.module} import — dangerous module",
+                        "code": _code_at(node.lineno),
+                    })
 
-        # 2–4. Calls to eval/exec/compile/__import__, os.system, os.popen
-        elif isinstance(node, _ast.Call):
+        # 2. Calls to eval/exec/compile/__import__, os.system, os.popen
+        if isinstance(node, _ast.Call):
             func = node.func
             # Plain name calls: eval(...), exec(...), etc.
             if isinstance(func, _ast.Name) and func.id in _DANGEROUS_CALLS:
@@ -876,27 +906,55 @@ def _ast_scan(source: str, rel_path: str = "<unknown>") -> list[dict]:
                         "pattern": f"AST: os.{func.attr}() — executes shell commands",
                         "code": _code_at(node.lineno),
                     })
-                # 6. getattr on __builtins__
+
+                # importlib.import_module(...)
                 if (
                     isinstance(func.value, _ast.Name)
-                    and func.value.id == "getattr"
+                    and func.value.id == "importlib"
+                    and func.attr == "import_module"
                 ):
-                    # getattr(__builtins__, ...) is caught when getattr is the call name;
-                    # but getattr is a Name call, handled below.
-                    pass
-
-            # getattr(__builtins__, ...)
-            if isinstance(func, _ast.Name) and func.id == "getattr":
-                if node.args and isinstance(node.args[0], _ast.Name) and node.args[0].id == "__builtins__":
                     findings.append({
                         "file": rel_path,
                         "line": node.lineno,
-                        "pattern": "AST: getattr(__builtins__) — may bypass restrictions",
+                        "pattern": "AST: importlib.import_module() — dynamic import evasion",
                         "code": _code_at(node.lineno),
                     })
 
-        # 3. Access to os.environ (attribute access, not necessarily a call)
-        elif isinstance(node, _ast.Attribute):
+            # getattr(__builtins__, ...) or getattr(os, 'environ')
+            if isinstance(func, _ast.Name) and func.id == "getattr":
+                if node.args:
+                    first_arg = node.args[0]
+                    if isinstance(first_arg, _ast.Name) and first_arg.id == "__builtins__":
+                        findings.append({
+                            "file": rel_path,
+                            "line": node.lineno,
+                            "pattern": "AST: getattr(__builtins__) — may bypass restrictions",
+                            "code": _code_at(node.lineno),
+                        })
+                    # getattr(os, 'environ') or getattr(x, 'environ')
+                    if len(node.args) >= 2 and isinstance(node.args[1], _ast.Constant):
+                        attr_name = node.args[1].value
+                        if isinstance(attr_name, str) and attr_name == "environ":
+                            findings.append({
+                                "file": rel_path,
+                                "line": node.lineno,
+                                "pattern": "AST: getattr(…, 'environ') — env access evasion",
+                                "code": _code_at(node.lineno),
+                            })
+
+            # vars(os) — access evasion
+            if isinstance(func, _ast.Name) and func.id == "vars":
+                if node.args and isinstance(node.args[0], _ast.Name) and node.args[0].id == "os":
+                    findings.append({
+                        "file": rel_path,
+                        "line": node.lineno,
+                        "pattern": "AST: vars(os) — env access evasion via vars()",
+                        "code": _code_at(node.lineno),
+                    })
+
+        # 3. Attribute access patterns
+        if isinstance(node, _ast.Attribute):
+            # os.environ
             if (
                 isinstance(node.value, _ast.Name)
                 and node.value.id == "os"
@@ -909,22 +967,40 @@ def _ast_scan(source: str, rel_path: str = "<unknown>") -> list[dict]:
                     "code": _code_at(node.lineno),
                 })
 
-        # 5. import socket / from socket import ...
-        if isinstance(node, _ast.Import):
-            for alias in node.names:
-                if alias.name == "socket" or alias.name.startswith("socket."):
-                    findings.append({
-                        "file": rel_path,
-                        "line": node.lineno,
-                        "pattern": "AST: import socket — raw network access",
-                        "code": _code_at(node.lineno),
-                    })
-        elif isinstance(node, _ast.ImportFrom):
-            if node.module and (node.module == "socket" or node.module.startswith("socket.")):
+            # os.__dict__
+            if (
+                isinstance(node.value, _ast.Name)
+                and node.value.id == "os"
+                and node.attr == "__dict__"
+            ):
                 findings.append({
                     "file": rel_path,
                     "line": node.lineno,
-                    "pattern": "AST: from socket import — raw network access",
+                    "pattern": "AST: os.__dict__ — env access evasion via __dict__",
+                    "code": _code_at(node.lineno),
+                })
+
+            # __globals__, __subclasses__, __bases__
+            if node.attr in ("__globals__", "__subclasses__", "__bases__"):
+                findings.append({
+                    "file": rel_path,
+                    "line": node.lineno,
+                    "pattern": f"AST: {node.attr} — sandbox escape via introspection",
+                    "code": _code_at(node.lineno),
+                })
+
+        # 4. Subscript: sys.modules[...]
+        if isinstance(node, _ast.Subscript):
+            if (
+                isinstance(node.value, _ast.Attribute)
+                and isinstance(node.value.value, _ast.Name)
+                and node.value.value.id == "sys"
+                and node.value.attr == "modules"
+            ):
+                findings.append({
+                    "file": rel_path,
+                    "line": node.lineno,
+                    "pattern": "AST: sys.modules[] — module injection / access evasion",
                     "code": _code_at(node.lineno),
                 })
 
@@ -1107,7 +1183,7 @@ def import_plugin_repo(
             msg += f" (subfolder: {subfolder})"
         git_commit(root, msg)
 
-    return {
+    result = {
         "status": "imported",
         "name": safe_name,
         "path": submodule_path,
@@ -1115,6 +1191,17 @@ def import_plugin_repo(
         "subfolder": subfolder,
         "security_warnings": security_warnings,
     }
+
+    # If there are security warnings, the plugin is NOT activated until
+    # the user explicitly acknowledges them.
+    if security_warnings:
+        result["requires_acknowledgement"] = True
+        result["message"] = (
+            f"Plugin '{safe_name}' imported but NOT activated — "
+            f"{len(security_warnings)} security warning(s) found. "
+            "Call acknowledge_warnings() to activate."
+        )
+    return result
 
 
 def remove_plugin_repo(user_id: str, name: str) -> dict:
@@ -1199,13 +1286,22 @@ def update_plugin_repo(user_id: str, name: str) -> dict:
 
         git_commit(root, f"Update shared plugin: {safe_name} ({old_hash[:8]}→{new_hash[:8]})")
 
-    return {
+    result = {
         "status": "updated",
         "name": safe_name,
         "old_commit": old_hash[:12],
         "new_commit": new_hash[:12],
         "security_warnings": security_warnings,
     }
+
+    if security_warnings:
+        result["requires_acknowledgement"] = True
+        result["message"] = (
+            f"Plugin '{safe_name}' updated but NOT re-activated — "
+            f"{len(security_warnings)} security warning(s) found. "
+            "Call acknowledge_warnings() to re-activate."
+        )
+    return result
 
 
 def list_shared_plugins(user_id: str) -> list[dict]:

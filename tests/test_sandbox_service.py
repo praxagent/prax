@@ -83,10 +83,10 @@ def sandbox_mod(monkeypatch, tmp_path):
 @pytest.fixture()
 def mock_opencode(sandbox_mod, monkeypatch):
     """Mock all OpenCode HTTP API calls."""
-    monkeypatch.setattr(sandbox_mod, "_wait_for_ready", lambda s, timeout=30: True)
+    monkeypatch.setattr(sandbox_mod, "_wait_for_ready", lambda s, timeout=30: (True, ""))
     monkeypatch.setattr(
         sandbox_mod, "_create_opencode_session",
-        lambda s, task: "oc-session-001",
+        lambda s, task: ("oc-session-001", ""),
     )
     monkeypatch.setattr(
         sandbox_mod, "_send_opencode_message",
@@ -203,6 +203,80 @@ class TestSendMessage:
         result = mod.send_message("+10000000000", "First message")
         assert "rounds_remaining" in result
         assert result["rounds_remaining"] == mod.settings.sandbox_max_rounds - 1
+
+    def test_timeout_does_not_consume_round(self, sandbox_mod, monkeypatch):
+        """A timed-out message should NOT count against the round budget."""
+        mod = sandbox_mod
+        monkeypatch.setattr(mod, "_wait_for_ready", lambda s, timeout=30: (True, ""))
+        monkeypatch.setattr(mod, "_create_opencode_session", lambda s, task: ("oc-001", ""))
+        monkeypatch.setattr(
+            mod, "_send_opencode_message",
+            lambda s, msg, model=None: {"error": "Sandbox timed out waiting for response (5 min)"},
+        )
+        monkeypatch.setattr(mod, "_get_opencode_session", lambda s: {})
+        monkeypatch.setattr(mod, "_export_opencode_session", lambda s: None)
+
+        mod.start_session("+10000000000", "Task")
+        result = mod.send_message("+10000000000", "msg 1")
+        assert result["rounds_used"] == 0  # Not consumed on failure
+
+    def test_consecutive_failures_auto_abort(self, sandbox_mod, monkeypatch):
+        """After 3 consecutive timeouts, send_message returns auto_aborted."""
+        mod = sandbox_mod
+        monkeypatch.setattr(mod, "_wait_for_ready", lambda s, timeout=30: (True, ""))
+        monkeypatch.setattr(mod, "_create_opencode_session", lambda s, task: ("oc-001", ""))
+        monkeypatch.setattr(
+            mod, "_send_opencode_message",
+            lambda s, msg, model=None: {"error": "Sandbox timed out"},
+        )
+        monkeypatch.setattr(mod, "_get_opencode_session", lambda s: {})
+        monkeypatch.setattr(mod, "_export_opencode_session", lambda s: None)
+
+        mod.start_session("+10000000000", "Task")
+
+        # First two failures — still allowed to continue
+        for i in range(2):
+            result = mod.send_message("+10000000000", f"msg {i}")
+            assert "auto_aborted" not in result
+
+        # Third failure — auto-abort triggered
+        result = mod.send_message("+10000000000", "msg 2")
+        assert result.get("auto_aborted") is True
+        assert "auto-aborted" in result["error"].lower()
+
+    def test_success_resets_consecutive_failures(self, sandbox_mod, monkeypatch):
+        """A successful message resets the failure counter."""
+        mod = sandbox_mod
+        monkeypatch.setattr(mod, "_wait_for_ready", lambda s, timeout=30: (True, ""))
+        monkeypatch.setattr(mod, "_create_opencode_session", lambda s, task: ("oc-001", ""))
+        monkeypatch.setattr(mod, "_get_opencode_session", lambda s: {})
+        monkeypatch.setattr(mod, "_export_opencode_session", lambda s: None)
+
+        call_count = [0]
+
+        def _alternating(s, msg, model=None):
+            call_count[0] += 1
+            if call_count[0] <= 2:
+                return {"error": "Sandbox timed out"}
+            return {"response": "Success!", "raw": {}}
+
+        monkeypatch.setattr(mod, "_send_opencode_message", _alternating)
+
+        mod.start_session("+10000000000", "Task")
+
+        # Two failures
+        mod.send_message("+10000000000", "fail 1")
+        mod.send_message("+10000000000", "fail 2")
+
+        # Success — resets counter
+        result = mod.send_message("+10000000000", "success")
+        assert "error" not in result
+        assert result["rounds_used"] == 1  # Only successful round counted
+
+        # Session should have consecutive_failures reset to 0
+        session_id = mod._user_sessions["+10000000000"]
+        session = mod._sessions[session_id]
+        assert session.consecutive_failures == 0
 
 
 class TestReviewSession:

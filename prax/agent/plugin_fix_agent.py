@@ -120,6 +120,7 @@ def delegate_plugin_fix(task: str) -> str:
         provider=cfg.get("provider"),
         model=cfg.get("model"),
         temperature=cfg.get("temperature"),
+        tier=cfg.get("tier") or "medium",
     )
     graph = create_react_agent(llm, tools)
 

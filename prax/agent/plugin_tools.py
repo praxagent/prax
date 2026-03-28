@@ -418,6 +418,7 @@ def llm_config_read(component: str = "orchestrator") -> str:
         f"**LLM Config: {component}**",
         f"- Provider: {cfg['provider'] or '(global default)'}",
         f"- Model: {cfg['model'] or '(global default)'}",
+        f"- Tier: {cfg['tier'] or '(global default)'}",
         f"- Temperature: {cfg['temperature'] if cfg['temperature'] is not None else '(global default)'}",
     ]
     return "\n".join(lines)
@@ -425,18 +426,24 @@ def llm_config_read(component: str = "orchestrator") -> str:
 
 @tool
 def llm_config_update(component: str, provider: str | None = None,
-                       model: str | None = None, temperature: float | None = None) -> str:
+                       model: str | None = None, tier: str | None = None,
+                       temperature: float | None = None) -> str:
     """Update the LLM routing config for a component.
 
     Changes are persisted to llm_routing.yaml and take effect on the next
     agent initialization (or next conversation turn for subagents).
 
     Supported providers: openai, anthropic, google, ollama, vllm.
+    Supported tiers: low, medium, high, pro.
+
+    Use ``tier`` to select by intelligence level (recommended), or ``model``
+    to override with a specific model name.  If both are set, ``model`` wins.
 
     Args:
         component: Component name — e.g. "orchestrator", "subagent_research".
         provider: LLM provider (or None to keep current).
-        model: Model name (or None to keep current).
+        model: Specific model name (or None to keep current).
+        tier: Model tier — low/medium/high/pro (or None to keep current).
         temperature: Temperature (or None to keep current).
     """
     from prax.plugins.llm_config import update_component_config
@@ -445,20 +452,44 @@ def llm_config_update(component: str, provider: str | None = None,
         kwargs["provider"] = provider
     if model is not None:
         kwargs["model"] = model
+    if tier is not None:
+        kwargs["tier"] = tier
     if temperature is not None:
         kwargs["temperature"] = temperature
 
     if not kwargs:
-        return "No changes specified. Pass provider, model, and/or temperature."
+        return "No changes specified. Pass provider, model, tier, and/or temperature."
 
     result = update_component_config(component, **kwargs)
     return (
         f"Updated LLM config for '{component}':\n"
         f"- Provider: {result.get('provider', '(unchanged)')}\n"
         f"- Model: {result.get('model', '(unchanged)')}\n"
+        f"- Tier: {result.get('tier', '(unchanged)')}\n"
         f"- Temperature: {result.get('temperature', '(unchanged)')}\n"
         f"Changes saved to llm_routing.yaml."
     )
+
+
+@tool
+def model_tiers_info() -> str:
+    """Show available model tiers and their mapped models.
+
+    Returns the tier configuration so the agent knows which intelligence
+    levels are available and can choose the right tier for each task.
+    Tiers: LOW (cheap/fast), MEDIUM (everyday), HIGH (complex), PRO (maximum).
+    """
+    from prax.agent.model_tiers import Tier, get_tier_configs
+    configs = get_tier_configs()
+    lines = ["**Model Tiers**", ""]
+    for tier in [Tier.LOW, Tier.MEDIUM, Tier.HIGH, Tier.PRO]:
+        tc = configs[tier]
+        status = f"{tc.model}" if tc.enabled else f"{tc.model} (DISABLED)"
+        lines.append(f"- **{tier.value.upper()}**: {status}")
+    lines.append("")
+    lines.append("Use `llm_config_update(component, tier='medium')` to change a component's tier.")
+    lines.append("Use `tier` in your delegation to select intelligence level for sub-agents.")
+    return "\n".join(lines)
 
 
 # ------------------------------------------------------------------
@@ -906,6 +937,7 @@ def build_plugin_tools() -> list:
         prompt_list,
         llm_config_read,
         llm_config_update,
+        model_tiers_info,
         source_read,
         source_list,
         workspace_set_remote,

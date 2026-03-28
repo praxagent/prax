@@ -140,7 +140,7 @@ def latex_compile(filename: str) -> str:
         return "pdflatex is not installed on this system."
 
 
-@risk_tool(risk=RiskLevel.HIGH)
+@risk_tool(risk=RiskLevel.MEDIUM)
 def workspace_send_file(filename: str, message: str = "") -> str:
     """Send a file from the active workspace to the user via their current channel.
 

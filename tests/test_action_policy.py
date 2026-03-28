@@ -19,7 +19,7 @@ from prax.agent.action_policy import (
 
 def test_known_tools_classified():
     assert get_risk_level("sandbox_execute") is RiskLevel.MEDIUM
-    assert get_risk_level("workspace_send_file") is RiskLevel.HIGH
+    assert get_risk_level("workspace_send_file") is RiskLevel.MEDIUM
     assert get_risk_level("browser_open") is RiskLevel.MEDIUM
     assert get_risk_level("arxiv_search") is RiskLevel.MEDIUM
     assert get_risk_level("note_create") is RiskLevel.MEDIUM
@@ -36,7 +36,6 @@ def test_unknown_tool_defaults_to_medium():
 
 
 def test_high_risk_requires_confirmation():
-    assert requires_confirmation("workspace_send_file") is True
     assert requires_confirmation("plugin_write") is True
     assert requires_confirmation("self_improve_deploy") is True
 

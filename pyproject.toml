@@ -114,6 +114,13 @@ omit = [
 fail_under = 80
 show_missing = true
 
+[tool.uv]
+# Supply chain hardening: only resolve packages published at least 7 days ago.
+# A poisoned PyPI release (the LiteLLM/TeamPCP vector) is typically detected
+# within 24-72 hours; a 7-day buffer gives the community ample time to flag
+# and yank compromised versions before they enter our dependency tree.
+exclude-newer = "7 days"
+
 [dependency-groups]
 dev = [
     "ruff>=0.15.7",

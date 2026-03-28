@@ -11,7 +11,6 @@ from urllib.parse import urlparse
 
 from openai import OpenAI
 
-from prax.conversation_memory import add_dict_to_list
 from prax.helpers_dictionaries import num_to_names
 from prax.services.conversation_service import conversation_service
 from prax.services.pdf_service import detect_pdf_url, process_pdf_url_with_paths
@@ -146,29 +145,13 @@ class SmsService:
                 ).start()
                 return '', 200
 
-            # Image attachment
-            phone_int = int(from_number[1:])
-            if self.client and media_url:
-                add_dict_to_list(self.database_name, phone_int, {'role': 'user', 'content': "I'm sending you an image to describe."})
-                response = self.client.chat.completions.create(
-                    model="gpt-4o",
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "text", "text": "Describe this image"},
-                                {"type": "image_url", "image_url": {"url": media_url}},
-                            ],
-                        }
-                    ],
-                    max_tokens=1000,
-                )
-                add_dict_to_list(
-                    self.database_name,
-                    phone_int,
-                    {'role': 'assistant', 'content': f"Vision result: {response.choices[0].message.content}"},
-                )
-                send_sms(response.choices[0].message.content, from_number)
+            # Image attachment — route through the agent so it can use
+            # the analyze_image tool with the configured vision model.
+            if media_url:
+                user_text = text_input or "I'm sending you an image."
+                image_msg = f"{user_text}\n[Image attachment: {media_type}, URL: {media_url}]"
+                response = conversation_service.reply(from_number, image_msg)
+                send_sms(response, from_number)
                 return '', 200
 
         # --- Text messages ---
