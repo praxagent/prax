@@ -1554,7 +1554,8 @@ IMPORTED plugins execute in **isolated subprocesses** — separate OS processes 
 │                                 │  ◄── caps_call ──    │         ├─ http_get(url)     │
 │  Bridge                         │  ── caps_result ──►  │         ├─ build_llm()       │
 │    ├─ spawn subprocess          │                      │         ├─ save_file()       │
-│    ├─ service caps callbacks    │                      │         └─ get_config()      │
+│    ├─ service caps callbacks    │                      │         ├─ read_file()       │
+│    ├─ scoped plugin_data dir    │                      │         └─ get_config()      │
 │    ├─ timeout → SIGKILL         │                      │                              │
 │    └─ PluginCapabilities (real) │                      │  Env: PATH, HOME, LANG only  │
 │         ├─ API keys ✓           │                      │  No API keys. No secrets.    │
@@ -1577,6 +1578,8 @@ When a plugin calls `caps.http_get(url)`, the proxy in the subprocess serializes
 | Infinite loop / memory bomb | `SIGALRM` → `SIGTERM` → `SIGKILL` (uncatchable) |
 | `ctypes` memory writes to bypass audit hooks | Nothing to find — no API keys in process memory |
 | Docker socket access | Not mounted in subprocess environment |
+| Read other plugins' files | Blocked — `save_file`/`read_file`/`workspace_path` scoped to `plugin_data/{plugin}/`; path traversal blocked by `safe_join` |
+| Read user workspace (`active/`) | Blocked — IMPORTED plugins' filesystem ops are confined to their scoped directory |
 
 #### Capabilities proxy
 
@@ -1586,11 +1589,12 @@ Plugins access Prax services through a `PluginCapabilities` proxy. Every method 
 |--------|---------------------|
 | `caps.build_llm(tier)` | Constructs a LangChain LLM with the real API key and returns it (serialized) |
 | `caps.http_get(url)` / `caps.http_post(url)` | Makes the HTTP request with credentials, rate-limited (50/invocation), returns serialized response |
-| `caps.save_file(name, content)` | Writes to the user's workspace via `workspace_service` |
-| `caps.run_command(cmd)` | Executes in the parent with auditing and timeout |
+| `caps.save_file(name, content)` | Writes to the plugin's scoped directory (`plugin_data/{plugin}/`) for IMPORTED; `active/` for BUILTIN/WORKSPACE |
+| `caps.read_file(name)` | Reads from the plugin's scoped directory only — IMPORTED plugins cannot read other plugins' files or user workspace |
+| `caps.run_command(cmd)` | Executes in the parent with auditing and timeout; IMPORTED plugins have `cwd` forced to their scoped directory |
 | `caps.tts_synthesize(text, path)` | Calls OpenAI/ElevenLabs TTS API with the real key |
 | `caps.get_config(key)` | Returns non-secret config values; blocks keys matching `key`, `secret`, `token`, `password`, `credential` |
-| `caps.workspace_path()` / `caps.get_user_id()` / `caps.shared_tempdir()` | Returns strings — no credential exposure |
+| `caps.workspace_path()` / `caps.get_user_id()` / `caps.shared_tempdir()` | IMPORTED plugins get their scoped path (`plugin_data/{plugin}/`), not the full workspace root |
 
 #### Framework-enforced limits
 
@@ -1622,7 +1626,7 @@ The following in-process guards remain active as a secondary defense. They are n
 |---------|-------------|
 | **Python audit hook** (PEP 578) | `sys.addaudithook` blocks `subprocess.Popen`, `os.system`, `ctypes.dlopen`, etc. during IMPORTED execution |
 | **Import blocker** (`sys.meta_path`) | Blocks `subprocess`, `ctypes`, `pickle`, `marshal`, `shutil`, `multiprocessing`, `signal` |
-| **`PluginCapabilities` gateway** | `build_llm()`, `http_get/post()`, `save_file()`, `get_config()` — all without exposing API keys |
+| **`PluginCapabilities` gateway** | `build_llm()`, `http_get/post()`, `save_file()`, `read_file()`, `get_config()` — all without exposing API keys; filesystem scoped to `plugin_data/{plugin}/` |
 | **Per-tier policy** | `PluginPolicy` dataclass controls `can_access_env`, `can_make_http`, `can_use_llm`, `max_http_requests_per_invocation`, etc. |
 
 #### Migration for plugin authors
@@ -1698,7 +1702,7 @@ Prax applies the following mitigations against this class of attack:
 Imported plugins execute in **isolated subprocesses** with a stripped environment (no API keys, no secrets). The OS process boundary prevents credential theft and memory-space attacks. However:
 
 - **Side-channel attacks** (timing, cache) are theoretically possible but impractical over JSON-RPC pipes.
-- **Capability abuse** — a malicious plugin could use `caps.http_get()` to exfiltrate workspace file contents to an external server. The HTTP rate limit (50 requests/invocation) and HIGH-risk confirmation gate mitigate but do not eliminate this.
+- **Capability abuse** — a malicious plugin could use `caps.http_get()` to exfiltrate data from its scoped directory to an external server. The HTTP rate limit (50 requests/invocation), filesystem scoping (plugins can only read/write their own `plugin_data/{plugin}/` directory), and HIGH-risk confirmation gate mitigate but do not eliminate this.
 - **Subprocess escape** — if a kernel vulnerability allows escaping process isolation, the subprocess has access to the host filesystem (though not to env vars). Docker container isolation (future enhancement) would add a second boundary.
 
 **Current controls:** subprocess isolation + static analysis + capabilities gateway + per-tier policy + call budgets + HIGH risk classification + user confirmation gate + audit hooks + import blockers + runtime auto-rollback + blocking security scan.

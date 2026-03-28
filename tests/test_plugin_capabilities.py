@@ -133,3 +133,116 @@ class TestWorkspace:
 
     def test_get_user_id(self, imported_caps):
         assert imported_caps.get_user_id() == "test-user"
+
+    def test_read_file_without_user_raises(self):
+        caps = PluginCapabilities("test", PluginTrust.IMPORTED, user_id=None)
+        with pytest.raises(RuntimeError, match="No user context"):
+            caps.read_file("test.txt")
+
+
+# ---------------------------------------------------------------------------
+# Scoped filesystem — IMPORTED plugins are jailed to plugin_data/
+# ---------------------------------------------------------------------------
+
+class TestScopedFilesystem:
+    """IMPORTED plugins write to plugin_data/{rel_path}/, not active/."""
+
+    @pytest.fixture
+    def workspace(self, tmp_path, monkeypatch):
+        """Set up a fake workspace directory."""
+        import os
+        ws = tmp_path / "workspaces"
+        ws.mkdir()
+        # Use realpath to match safe_join's resolution (macOS /var → /private/var).
+        ws_real = os.path.realpath(str(ws))
+        mock_settings = MagicMock()
+        mock_settings.workspace_dir = ws_real
+        monkeypatch.setattr("prax.settings.settings", mock_settings)
+        monkeypatch.setattr("prax.services.workspace_service.settings", mock_settings)
+        return ws
+
+    # -- save_file --
+
+    def test_imported_save_file_uses_scoped_dir(self, imported_caps, workspace):
+        path = imported_caps.save_file("report.pdf", b"data")
+        assert "/plugin_data/shared/evil_plugin/" in path
+        assert path.endswith("report.pdf")
+        assert "/active/" not in path
+
+    def test_imported_save_file_creates_dir(self, imported_caps, workspace):
+        import os
+        path = imported_caps.save_file("out.txt", b"hello")
+        assert os.path.isfile(path)
+        with open(path, "rb") as f:
+            assert f.read() == b"hello"
+
+    def test_imported_save_file_blocks_traversal(self, imported_caps, workspace):
+        with pytest.raises(ValueError, match="Path traversal"):
+            imported_caps.save_file("../../etc/passwd", b"pwned")
+
+    def test_builtin_save_file_uses_active(self, builtin_caps, workspace, monkeypatch):
+        mock_save = MagicMock(return_value="/fake/active/report.pdf")
+        monkeypatch.setattr("prax.services.workspace_service.save_file", mock_save)
+        result = builtin_caps.save_file("report.pdf", b"data")
+        mock_save.assert_called_once_with("test-user", "report.pdf", b"data")
+        assert result == "/fake/active/report.pdf"
+
+    # -- read_file --
+
+    def test_imported_read_file_scoped(self, imported_caps, workspace):
+        # Write via save_file, then read back.
+        imported_caps.save_file("notes.txt", b"hello from plugin")
+        result = imported_caps.read_file("notes.txt")
+        assert result == "hello from plugin"
+
+    def test_imported_read_file_blocks_traversal(self, imported_caps, workspace):
+        # Create a file outside the scoped dir
+        active = workspace / "test-user" / "active"
+        active.mkdir(parents=True)
+        (active / "secret.txt").write_text("secret data")
+        with pytest.raises(ValueError, match="Path traversal"):
+            imported_caps.read_file("../../active/secret.txt")
+
+    def test_builtin_read_file_uses_active(self, builtin_caps, workspace, monkeypatch):
+        mock_read = MagicMock(return_value="file contents")
+        monkeypatch.setattr("prax.services.workspace_service.read_file", mock_read)
+        result = builtin_caps.read_file("notes.txt")
+        mock_read.assert_called_once_with("test-user", "notes.txt")
+        assert result == "file contents"
+
+    # -- workspace_path --
+
+    def test_imported_workspace_path_returns_scoped(self, imported_caps, workspace):
+        path = imported_caps.workspace_path()
+        assert path.endswith("plugin_data/shared/evil_plugin")
+
+    def test_imported_workspace_path_with_parts(self, imported_caps, workspace):
+        path = imported_caps.workspace_path("subdir", "file.txt")
+        assert "/plugin_data/shared/evil_plugin/" in path
+        assert path.endswith("subdir/file.txt")
+
+    def test_imported_workspace_path_blocks_traversal(self, imported_caps, workspace):
+        with pytest.raises(ValueError, match="Path traversal"):
+            imported_caps.workspace_path("../../etc")
+
+    def test_builtin_workspace_path_returns_full_root(self, builtin_caps, workspace):
+        path = builtin_caps.workspace_path()
+        assert path.endswith("test-user")
+        assert "plugin_data" not in path
+
+    # -- run_command --
+
+    def test_imported_run_command_forces_cwd(self, imported_caps, workspace):
+        import os
+        result = imported_caps.run_command(["pwd"])
+        actual = result.stdout.strip()
+        assert "/plugin_data/shared/evil_plugin" in actual
+        assert os.path.isdir(actual)
+
+    def test_imported_run_command_ignores_cwd_escape(self, imported_caps, workspace):
+        with pytest.raises(ValueError, match="Path traversal"):
+            imported_caps.run_command(["pwd"], cwd="../../../etc")
+
+    def test_builtin_run_command_respects_cwd(self, builtin_caps, workspace, tmp_path):
+        result = builtin_caps.run_command(["pwd"], cwd=str(tmp_path))
+        assert result.stdout.strip() == str(tmp_path)

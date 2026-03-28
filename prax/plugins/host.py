@@ -93,6 +93,9 @@ class CapsProxy:
     def save_file(self, filename: str, content: bytes) -> str:
         return self._call_parent("save_file", filename, content)
 
+    def read_file(self, filename: str) -> str:
+        return self._call_parent("read_file", filename)
+
     def workspace_path(self, *parts: str) -> str:
         return self._call_parent("workspace_path", *parts)
 
