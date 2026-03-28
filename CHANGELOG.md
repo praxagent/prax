@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/praxagent/prax/compare/v0.4.0...v0.5.0) (2026-03-28)
+
+
+### Features
+
+* plugin security sandbox and subprocess isolation ([#12](https://github.com/praxagent/prax/issues/12)) ([af6e954](https://github.com/praxagent/prax/commit/af6e954d47f1d621a0a0bf65f1aacd92fb8874f6))
+
 ## [0.4.0](https://github.com/praxagent/prax/compare/v0.3.0...v0.4.0) (2026-03-27)
 
 
