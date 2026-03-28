@@ -111,8 +111,6 @@ _HIGH: set[str] = {
     "browser_fill",
     "browser_request_login",
     "browser_finish_login",
-    # outbound file send
-    "workspace_send_file",
     # automated message scheduling
     "schedule_create",
     "schedule_update",
@@ -124,6 +122,8 @@ _HIGH: set[str] = {
 }
 
 _MEDIUM: set[str] = {
+    # outbound file delivery — user asked for it, don't gate it
+    "workspace_send_file",
     # external reads
     "browser_open",
     "browser_read_page",
@@ -170,8 +170,32 @@ TOOL_RISK_MAP: dict[str, RiskLevel] = {
 
 
 def get_risk_level(tool_name: str) -> RiskLevel:
-    """Return the risk level for *tool_name*, defaulting to MEDIUM."""
-    return TOOL_RISK_MAP.get(tool_name, RiskLevel.MEDIUM)
+    """Return the risk level for *tool_name*, defaulting to MEDIUM.
+
+    IMPORTED plugin tools are automatically elevated to HIGH risk so
+    they require user confirmation before execution.
+    """
+    # Static classification takes precedence.
+    static = TOOL_RISK_MAP.get(tool_name)
+    if static is not None:
+        return static
+
+    # Dynamic: check if the tool belongs to an IMPORTED plugin.
+    try:
+        from prax.plugins.loader import get_plugin_loader
+        from prax.plugins.registry import PluginTrust
+
+        loader = get_plugin_loader()
+        tool_map = loader.get_tool_plugin_map()
+        rel_path = tool_map.get(tool_name)
+        if rel_path:
+            tier = loader.registry.get_trust_tier(rel_path)
+            if tier == PluginTrust.IMPORTED:
+                return RiskLevel.HIGH
+    except Exception:
+        pass  # Best-effort — don't break risk classification
+
+    return RiskLevel.MEDIUM
 
 
 def requires_confirmation(tool_name: str) -> bool:

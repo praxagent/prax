@@ -22,6 +22,10 @@ COPY --from=ghcr.io/astral-sh/uv@sha256:e49fde5daf002023f0a2e2643861ce9ca8a8da5b
 WORKDIR /app
 RUN mkdir /app/logs
 
+# Trust all directories — workspace volumes are mounted from the host and
+# may be owned by a different UID than the container process.
+RUN git config --global --add safe.directory '*'
+
 COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-dev
 

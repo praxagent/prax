@@ -13,14 +13,17 @@ Also scans the external plugin repository if configured.
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import logging
 import threading
 from pathlib import Path
 
 from langchain_core.tools import BaseTool
 
+from prax.plugins.capabilities import PluginCapabilities
 from prax.plugins.monitored_tool import wrap_with_monitoring
 from prax.plugins.registry import PluginRegistry, PluginTrust
+from prax.plugins.restricted_env import restricted_import_env
 from prax.plugins.sandbox import sandbox_test_plugin
 
 # Late import helper to avoid circular dependency with tools module.
@@ -197,9 +200,20 @@ class PluginLoader:
 
         for plugin_file, rel_key, trust_tier in ordered_plugins:
             try:
-                mod = self._import_plugin(plugin_file)
+                mod = self._import_plugin(plugin_file, trust_tier=trust_tier)
                 if hasattr(mod, "register"):
-                    plugin_tools = mod.register()
+                    # Pass PluginCapabilities if register() accepts a parameter.
+                    reg_fn = mod.register
+                    sig = inspect.signature(reg_fn)
+                    if sig.parameters:
+                        caps = PluginCapabilities(
+                            plugin_rel_path=rel_key,
+                            trust_tier=trust_tier,
+                        )
+                        plugin_tools = reg_fn(caps)
+                    else:
+                        plugin_tools = reg_fn()
+
                     if isinstance(plugin_tools, list):
                         new_tools = []
                         for t in plugin_tools:
@@ -215,7 +229,7 @@ class PluginLoader:
                                     t.name, rel_key,
                                 )
                                 continue
-                            monitored = wrap_with_monitoring(t, rel_key)
+                            monitored = wrap_with_monitoring(t, rel_key, trust_tier=trust_tier)
                             tools.append(monitored)
                             tool_map[t.name] = rel_key
                             seen_tool_names.add(t.name)
@@ -435,13 +449,30 @@ class PluginLoader:
         return roots
 
     @staticmethod
-    def _import_plugin(path: Path):
-        """Import a plugin module from an absolute path."""
+    def _import_plugin(path: Path, trust_tier: str = PluginTrust.BUILTIN):
+        """Import a plugin module from an absolute path.
+
+        For IMPORTED plugins the module is loaded inside a
+        :func:`restricted_import_env` context so that top-level code
+        cannot read sensitive environment variables.  After import, the
+        module's ``os`` attribute (if any) is replaced with a restricted
+        copy so runtime access is also blocked.
+        """
         spec = importlib.util.spec_from_file_location(f"plugin_{path.stem}_{path.parent.name}", str(path))
         if spec is None or spec.loader is None:
             raise ImportError(f"Cannot create spec for {path}")
         mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
+
+        if trust_tier == PluginTrust.IMPORTED:
+            with restricted_import_env(plugin_name=str(path)):
+                spec.loader.exec_module(mod)
+            # Post-import: replace module's os.environ with sanitized version.
+            if hasattr(mod, "os"):
+                from prax.plugins.restricted_env import SanitizedEnviron
+                mod.os.environ = SanitizedEnviron(plugin_name=str(path))
+        else:
+            spec.loader.exec_module(mod)
+
         return mod
 
     @staticmethod

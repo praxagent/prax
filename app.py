@@ -53,13 +53,16 @@ def create_app():
 
     logger = logging.getLogger(__name__)
     logger.info(
-        "Starting %s — provider=%s model=%s temperature=%s encoding=%s",
+        "Starting %s — provider=%s default_model=%s temperature=%s encoding=%s",
         settings.agent_name,
         settings.default_llm_provider,
         settings.base_model,
         settings.agent_temperature,
         get_encoding_for_model(settings.base_model),
     )
+
+    from prax.agent.model_tiers import tier_summary
+    logger.info("Model tiers:\n%s", tier_summary())
 
     init_database(settings.database_name)
 

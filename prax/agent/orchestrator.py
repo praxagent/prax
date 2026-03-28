@@ -41,6 +41,8 @@ _FALLBACK_PROMPT = (
 
 def _load_system_prompt() -> str:
     """Load the system prompt from the plugin prompts directory."""
+    from prax.agent.model_tiers import tier_for_system_prompt
+
     mgr = get_prompt_manager()
     runtime_env = "Docker (persistent sandbox)" if settings.running_in_docker else "local"
     if settings.sandbox_persistent:
@@ -65,6 +67,7 @@ def _load_system_prompt() -> str:
         "AGENT_NAME": settings.agent_name,
         "RUNTIME_ENV": runtime_env,
         "SANDBOX_GUIDANCE": sandbox_guidance,
+        "MODEL_TIERS": tier_for_system_prompt(),
     })
     return prompt or _FALLBACK_PROMPT
 
@@ -77,6 +80,7 @@ class ConversationAgent:
         provider: str | None = None,
         model: str | None = None,
         temperature: float | None = None,
+        tier: str | None = None,
     ) -> None:
         from prax.plugins.llm_config import get_component_config
         cfg = get_component_config("orchestrator")
@@ -84,6 +88,7 @@ class ConversationAgent:
             provider=provider or cfg.get("provider"),
             model=model or cfg.get("model"),
             temperature=temperature if temperature is not None else cfg.get("temperature"),
+            tier=tier or cfg.get("tier") or "low",
         )
         self.checkpoint_mgr = CheckpointManager()
         self.tools = get_registered_tools()
@@ -173,6 +178,10 @@ class ConversationAgent:
 
     def run(self, conversation: Iterable[BaseMessage], user_input: str, workspace_context: str = "") -> str:
         """Execute the agent graph and return the final string response."""
+        # Reset per-plugin call counters for the new message.
+        from prax.plugins.monitored_tool import reset_plugin_call_counts
+        reset_plugin_call_counts()
+
         # Register workspace plugins for the current user.
         uid = current_user_id.get()
         if uid:
@@ -213,7 +222,10 @@ class ConversationAgent:
 
         # Start a checkpointed turn for this user.
         turn = self.checkpoint_mgr.start_turn(uid or "anonymous")
-        config = self.checkpoint_mgr.graph_config(turn)
+        config = {
+            **self.checkpoint_mgr.graph_config(turn),
+            "recursion_limit": settings.agent_max_tool_calls,
+        }
 
         try:
             result = self._invoke_with_retry(messages, config, turn.user_id)
@@ -318,7 +330,10 @@ class ConversationAgent:
                     # Reset to a fresh thread so the bad checkpoint is abandoned.
                     import uuid
                     turn.thread_id = f"{user_id}:{uuid.uuid4().hex[:12]}"
-                    config = self.checkpoint_mgr.graph_config(turn)
+                    config = {
+                        **self.checkpoint_mgr.graph_config(turn),
+                        "recursion_limit": settings.agent_max_tool_calls,
+                    }
                     continue
 
                 if not self.checkpoint_mgr.can_retry(user_id):
@@ -338,9 +353,12 @@ class ConversationAgent:
                 if rollback_cfg is None:
                     # Not enough checkpoints to roll back — re-run from scratch.
                     logger.info("No rollback target, retrying from scratch (user=%s)", user_id)
-                    config = self.checkpoint_mgr.graph_config(
-                        self.checkpoint_mgr.get_turn(user_id),  # type: ignore[arg-type]
-                    )
+                    config = {
+                        **self.checkpoint_mgr.graph_config(
+                            self.checkpoint_mgr.get_turn(user_id),  # type: ignore[arg-type]
+                        ),
+                        "recursion_limit": settings.agent_max_tool_calls,
+                    }
                     continue
 
                 logger.info(

@@ -125,7 +125,7 @@ class TestHighRiskToolBlocking:
         """Once the user confirms one HIGH-risk tool, all others execute immediately."""
         from prax.agent.governed_tool import wrap_with_governance
         _reset()
-        tool_a = wrap_with_governance(_make_tool("workspace_send_file"))
+        tool_a = wrap_with_governance(_make_tool("schedule_create"))
         tool_b = wrap_with_governance(_make_tool("plugin_write"))
         # First HIGH-risk call: blocked.
         assert "HIGH risk" in tool_a.invoke({"x": "a"})

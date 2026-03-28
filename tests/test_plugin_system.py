@@ -758,6 +758,162 @@ class TestPluginRepo:
         repo = PluginRepo(repo_url="git@custom-server.internal:a/b.git", ssh_key_b64="ZmFrZQ==")
         assert repo.verify_private() is False
 
+
+# ---------------------------------------------------------------------------
+# Plugin Security Sandbox
+# ---------------------------------------------------------------------------
+
+class TestPluginSecuritySandbox:
+    """Tests for the trust-tier-aware plugin security sandbox."""
+
+    def test_imported_plugin_tools_get_high_risk(self, tmp_path):
+        """IMPORTED plugin tools should be classified as HIGH risk."""
+        from prax.agent.action_policy import RiskLevel, get_risk_level
+        from prax.plugins.registry import PluginTrust
+        import prax.plugins.loader as loader_mod
+
+        registry = PluginRegistry(registry_path=str(tmp_path / "reg.json"))
+        registry.activate_plugin("shared/evil", "1", trust_tier=PluginTrust.IMPORTED)
+
+        loader = PluginLoader(registry=registry)
+
+        # Write a simple plugin.
+        plugin_dir = tmp_path / "plugins" / "shared" / "evil"
+        plugin_dir.mkdir(parents=True)
+        (plugin_dir / "plugin.py").write_text(textwrap.dedent("""\
+            from langchain_core.tools import tool
+
+            PLUGIN_VERSION = "1"
+
+            @tool
+            def evil_tool(x: str) -> str:
+                \"\"\"Do something.\"\"\"
+                return x
+
+            def register():
+                return [evil_tool]
+        """))
+
+        loader.add_workspace_plugins_dir(tmp_path / "plugins" / "shared")
+        loader._tool_to_plugin["evil_tool"] = "shared/evil"
+
+        # Patch the singleton so get_risk_level finds our test loader.
+        original = loader_mod._loader
+        loader_mod._loader = loader
+        try:
+            risk = get_risk_level("evil_tool")
+            assert risk == RiskLevel.HIGH
+        finally:
+            loader_mod._loader = original
+
+    def test_builtin_plugin_tools_keep_medium_risk(self, tmp_path):
+        """BUILTIN plugin tools should remain MEDIUM risk (default)."""
+        from prax.agent.action_policy import RiskLevel, get_risk_level
+
+        registry = PluginRegistry(registry_path=str(tmp_path / "reg.json"))
+        registry.activate_plugin("pdf_reader", "1", trust_tier=PluginTrust.BUILTIN)
+
+        loader = PluginLoader(registry=registry)
+        loader._tool_to_plugin["pdf_read"] = "pdf_reader"
+
+        # Patch the singleton so get_risk_level finds our test loader.
+        import prax.plugins.loader as loader_mod
+        original = loader_mod._loader
+        loader_mod._loader = loader
+        try:
+            risk = get_risk_level("pdf_read")
+            assert risk == RiskLevel.MEDIUM
+        finally:
+            loader_mod._loader = original
+
+    def test_loader_passes_trust_tier_to_import(self, tmp_path):
+        """Loader should pass trust_tier to _import_plugin."""
+        plugin_dir = tmp_path / "tools" / "test_plug"
+        plugin_dir.mkdir(parents=True)
+        (plugin_dir / "plugin.py").write_text(textwrap.dedent("""\
+            from langchain_core.tools import tool
+
+            @tool
+            def test_func(x: str) -> str:
+                \"\"\"Test.\"\"\"
+                return x
+
+            def register():
+                return [test_func]
+        """))
+
+        registry = PluginRegistry(registry_path=str(tmp_path / "reg.json"))
+        loader = PluginLoader(registry=registry)
+
+        # _import_plugin should accept trust_tier without error.
+        mod = loader._import_plugin(
+            plugin_dir / "plugin.py",
+            trust_tier=PluginTrust.IMPORTED,
+        )
+        assert hasattr(mod, "register")
+
+    def test_register_with_caps_backward_compat(self, tmp_path):
+        """register() that takes no args should still work (backward compat)."""
+        plugin_dir = tmp_path / "tools" / "compat_plug"
+        plugin_dir.mkdir(parents=True)
+        (plugin_dir / "plugin.py").write_text(textwrap.dedent("""\
+            from langchain_core.tools import tool
+
+            @tool
+            def compat_tool(x: str) -> str:
+                \"\"\"Compatible.\"\"\"
+                return x
+
+            def register():
+                return [compat_tool]
+        """))
+
+        registry = PluginRegistry(registry_path=str(tmp_path / "reg.json"))
+        loader = PluginLoader(registry=registry)
+        loader.add_workspace_plugins_dir(tmp_path / "tools")
+        tools = loader.load_all()
+
+        # Should have loaded the tool without error.
+        tool_names = [t.name for t in tools]
+        assert "compat_tool" in tool_names
+
+    def test_register_with_caps_parameter(self, tmp_path):
+        """register(caps) should receive a PluginCapabilities instance."""
+        plugin_dir = tmp_path / "tools" / "caps_plug"
+        plugin_dir.mkdir(parents=True)
+        (plugin_dir / "plugin.py").write_text(textwrap.dedent("""\
+            from langchain_core.tools import tool
+
+            received_caps = None
+
+            @tool
+            def caps_tool(x: str) -> str:
+                \"\"\"Uses caps.\"\"\"
+                return x
+
+            def register(caps):
+                global received_caps
+                received_caps = caps
+                return [caps_tool]
+        """))
+
+        registry = PluginRegistry(registry_path=str(tmp_path / "reg.json"))
+        loader = PluginLoader(registry=registry)
+        loader.add_workspace_plugins_dir(tmp_path / "tools")
+        tools = loader.load_all()
+
+        tool_names = [t.name for t in tools]
+        assert "caps_tool" in tool_names
+
+    def test_registry_acknowledge_warnings(self, tmp_path):
+        """Registry should track security warning acknowledgement."""
+        registry = PluginRegistry(registry_path=str(tmp_path / "reg.json"))
+        registry.activate_plugin("shared/test", "1", trust_tier=PluginTrust.IMPORTED)
+
+        assert registry.is_warnings_acknowledged("shared/test") is False
+        registry.acknowledge_warnings("shared/test")
+        assert registry.is_warnings_acknowledged("shared/test") is True
+
     def test_commit_and_push_blocked_for_public_repo(self, monkeypatch):
         """commit_and_push should refuse if repo is public."""
         from prax.plugins.repo import PluginRepo
