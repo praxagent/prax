@@ -256,6 +256,12 @@ class ConversationAgent:
             self._rebuild_if_needed()
         finally:
             self.checkpoint_mgr.end_turn(turn.user_id)
+            # Shut down idle plugin subprocesses after each turn.
+            try:
+                from prax.plugins.bridge import shutdown_all_bridges
+                shutdown_all_bridges()
+            except Exception:
+                pass
 
         # Reset all TeamWork role agents to idle now that the turn is done.
         from prax.services.teamwork_hooks import reset_all_idle

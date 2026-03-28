@@ -18,7 +18,7 @@ import logging
 import threading
 from pathlib import Path
 
-from langchain_core.tools import BaseTool
+from langchain_core.tools import BaseTool, StructuredTool
 
 from prax.plugins.capabilities import PluginCapabilities
 from prax.plugins.monitored_tool import wrap_with_monitoring
@@ -200,6 +200,19 @@ class PluginLoader:
 
         for plugin_file, rel_key, trust_tier in ordered_plugins:
             try:
+                if trust_tier == PluginTrust.IMPORTED:
+                    # Phase 2: IMPORTED plugins are loaded in an isolated subprocess.
+                    loaded = self._load_imported_via_bridge(
+                        plugin_file, rel_key, trust_tier,
+                        builtin_names, seen_tool_names,
+                    )
+                    for t, name in loaded:
+                        tools.append(t)
+                        tool_map[name] = rel_key
+                        seen_tool_names.add(name)
+                    continue
+
+                # BUILTIN / WORKSPACE — load in-process as before.
                 mod = self._import_plugin(plugin_file, trust_tier=trust_tier)
                 if hasattr(mod, "register"):
                     # Pass PluginCapabilities if register() accepts a parameter.
@@ -259,6 +272,115 @@ class PluginLoader:
         self._update_catalog()
 
         return tools
+
+    def _load_imported_via_bridge(
+        self,
+        plugin_file: Path,
+        rel_key: str,
+        trust_tier: str,
+        builtin_names: set[str],
+        seen_tool_names: set[str],
+    ) -> list[tuple[BaseTool, str]]:
+        """Load an IMPORTED plugin in an isolated subprocess via the bridge.
+
+        Returns a list of ``(wrapped_tool, tool_name)`` pairs.
+        """
+        from prax.plugins.bridge import get_bridge, shutdown_bridge
+
+        # Shut down any existing bridge for this plugin (e.g., on reload).
+        shutdown_bridge(rel_key)
+
+        bridge = get_bridge(rel_key)
+        caps = PluginCapabilities(
+            plugin_rel_path=rel_key,
+            trust_tier=trust_tier,
+        )
+
+        try:
+            tool_metadata = bridge.register(
+                plugin_path=str(plugin_file),
+                trust_tier=trust_tier,
+                caps=caps,
+            )
+        except Exception:
+            logger.exception("Failed to register IMPORTED plugin %s via subprocess", rel_key)
+            shutdown_bridge(rel_key)
+            return []
+
+        loaded: list[tuple[BaseTool, str]] = []
+        for meta in tool_metadata:
+            name = meta["name"]
+            if name in builtin_names:
+                logger.warning(
+                    "Rejecting plugin tool %s from %s — cannot override built-in tool",
+                    name, rel_key,
+                )
+                continue
+            if name in seen_tool_names:
+                logger.info(
+                    "Skipping duplicate tool %s from %s (already loaded from higher-priority source)",
+                    name, rel_key,
+                )
+                continue
+
+            # Create a proxy StructuredTool that delegates invocations to the bridge.
+            proxy_tool = self._make_proxy_tool(meta, rel_key, trust_tier)
+            monitored = wrap_with_monitoring(proxy_tool, rel_key, trust_tier=trust_tier)
+            loaded.append((monitored, name))
+
+        if loaded:
+            self.registry.activate_plugin(rel_key, "1", trust_tier=trust_tier)
+            logger.info(
+                "Loaded IMPORTED plugin %s via subprocess: %s",
+                rel_key, [name for _, name in loaded],
+            )
+
+        return loaded
+
+    @staticmethod
+    def _make_proxy_tool(meta: dict, rel_key: str, trust_tier: str) -> BaseTool:
+        """Create a StructuredTool that delegates invocation to the subprocess bridge."""
+        from pydantic import create_model
+
+        tool_name = meta["name"]
+        description = meta.get("description", "")
+        schema = meta.get("args_schema", {})
+
+        # Build a Pydantic model from the JSON schema for args.
+        fields: dict = {}
+        props = schema.get("properties", {})
+        required = set(schema.get("required", []))
+        for field_name, field_info in props.items():
+            field_type = str  # Default to str for simplicity.
+            json_type = field_info.get("type", "string")
+            if json_type == "integer":
+                field_type = int
+            elif json_type == "number":
+                field_type = float
+            elif json_type == "boolean":
+                field_type = bool
+            elif json_type == "array":
+                field_type = list
+
+            if field_name in required:
+                fields[field_name] = (field_type, ...)
+            else:
+                default = field_info.get("default")
+                fields[field_name] = (field_type | None, default)
+
+        ArgsModel = create_model(f"{tool_name}_args", **fields)
+
+        def _proxy_invoke(**kwargs):
+            from prax.plugins.bridge import get_bridge
+            bridge = get_bridge(rel_key)
+            return bridge.invoke(tool_name, kwargs)
+
+        return StructuredTool.from_function(
+            func=_proxy_invoke,
+            name=tool_name,
+            description=description,
+            args_schema=ArgsModel,
+        )
 
     def get_tools(self) -> list[BaseTool]:
         """Return the current list of plugin-provided tools."""

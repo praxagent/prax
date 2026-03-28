@@ -4,7 +4,7 @@
 
 **Your personal AI assistant — on the web, Discord, SMS, and voice.**
 
-106+ tools. Self-modifying plugins. Git-backed memory. Runs on your own server.
+97+ built-in tools, extensible via self-modifying plugins. Git-backed memory. Runs on your own server.
 
 Includes [**TeamWork**](https://github.com/praxagent/teamwork) — a Slack-like web UI with real-time chat, Kanban board, file browser, terminal, and browser screencast.
 
@@ -35,7 +35,7 @@ Includes [**TeamWork**](https://github.com/praxagent/teamwork) — a Slack-like 
 ### Docker Compose (recommended)
 
 ```bash
-git clone <repo-url> prax && cd prax
+git clone https://github.com/praxagent/prax.git && cd prax
 git clone https://github.com/praxagent/teamwork.git ../teamwork  # web UI
 cp .env-example .env                      # configure (at minimum: OPENAI_KEY)
 docker compose up --build                 # builds app + sandbox + TeamWork, starts everything
@@ -69,7 +69,7 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build app
 ### Local development
 
 ```bash
-git clone <repo-url> prax && cd prax
+git clone https://github.com/praxagent/prax.git && cd prax
 uv sync --python 3.13                    # install deps (requires uv)
 cp .env-example .env                      # configure (at minimum: OPENAI_KEY)
 mkdir -p static/temp
@@ -117,7 +117,7 @@ Prax is a multi-channel AI assistant powered by a LangGraph ReAct agent. It conn
 | Category | Highlights |
 |----------|-----------|
 | **Channels** | [TeamWork](https://github.com/praxagent/teamwork) web UI (Slack-like chat, Kanban, terminal, browser, file browser), Discord bot (free, WebSocket), Twilio voice + SMS (webhooks) |
-| **Agent** | LangGraph ReAct loop, 106+ tools, dedicated sub-agents (self-improvement, plugin engineering, content authoring, research, coding), watchdog supervisor, automatic checkpoint & retry on failures |
+| **Agent** | LangGraph ReAct loop, 97+ built-in tools (extensible via plugins), dedicated sub-agents (self-improvement, plugin engineering, content authoring, research, coding), watchdog supervisor, automatic checkpoint & retry on failures |
 | **Memory** | SQLite conversations with auto-summarization, git-backed per-user workspaces, dynamic user notes, link history, to-do lists, task plans |
 | **Notes** | Conversation-to-note publishing (Hugo pages with KaTeX, mermaid, syntax highlighting), iterative updates, searchable index, shareable URLs, bidirectional knowledge graph links |
 | **Documents** | PDF extraction (arXiv, URLs, attachments), web page summaries, YouTube transcripts, LaTeX compilation, URL-to-note / PDF-to-note / arXiv-to-note pipelines |
@@ -797,12 +797,14 @@ adapters/                  ← LoRA adapter storage (FINETUNE_OUTPUT_DIR)
 
 ### Dropbox Sync
 
-To back up workspaces to Dropbox automatically, symlink the workspace directory into your Dropbox folder:
+To back up workspaces to Dropbox, symlink the workspace directory into your Dropbox folder:
 
 ```bash
 # From the project root:
 ln -s "$PWD/workspaces" ~/Dropbox/prax-workspaces
 ```
+
+> **Caution:** Dropbox may conflict with `.git` repositories and SQLite databases during active writes. Pause Dropbox sync while the agent is running, or configure Dropbox to skip `.git` directories and `*.db` files.
 
 If you move the project, remove the old symlink and re-link:
 
@@ -954,11 +956,13 @@ The harvester looks for user messages containing correction signals ("no,", "tha
 # Install vLLM (requires CUDA)
 pip install vllm
 
+# Enable runtime LoRA loading/unloading (required for /v1/load_lora_adapter)
+export VLLM_ALLOW_RUNTIME_LORA_UPDATING=True
+
 # Start vLLM with LoRA support
 vllm serve Qwen/Qwen3-8B \
   --enable-lora \
   --max-lora-rank 16 \
-  --lora-modules '' \
   --port 8000
 
 # Configure the app
@@ -1007,11 +1011,13 @@ The agent works in a **staging clone** — a separate `git clone` of the live re
 
 Two deployment paths:
 
-**Path A — Hot-swap (quick fixes):**
+**Path A — Hot-swap (dev mode only, requires Werkzeug reloader):**
 1. **Start branch** — creates a worktree off the staging clone
 2. **Read/Write files** — operates entirely within the worktree
 3. **Verify** — runs tests + lint + app startup check (all must pass)
-4. **Deploy** — copies changed files to live repo + commits; Flask's Werkzeug reloader auto-restarts
+4. **Deploy** — copies changed files to live repo + commits; Werkzeug's reloader auto-restarts
+
+> Path A relies on Werkzeug's file-watching reloader (`docker compose -f docker-compose.yml -f docker-compose.dev.yml`). In production (gunicorn), use Path B — hot-swap will not trigger a reload.
 
 **Path B — PR (complex changes):**
 1. Same steps 1-2
@@ -1102,7 +1108,7 @@ sequenceDiagram
 
 Prax keeps its main conversation loop lean by delegating domain-specific work to focused **spoke agents**.  Each spoke runs its own LangGraph ReAct loop with a specialized system prompt and curated tool set — the orchestrator sees only a single `delegate_*` tool per spoke.
 
-Research shows that LLM tool-selection accuracy degrades sharply past 20-30 tools ([see Research section](#9-tool-overload-and-selection-degradation)).  The hub-and-spoke pattern keeps the orchestrator's tool count low while giving each spoke deep domain capabilities.
+Research shows that LLM tool-selection accuracy degrades past 20–30 tools ([see Research section](#9-tool-overload-and-selection-degradation)).  The hub-and-spoke pattern keeps the orchestrator's tool count low while giving each spoke deep domain capabilities.
 
 ### Hub-and-Spoke Architecture
 
@@ -1514,41 +1520,116 @@ Starting Prax — provider=openai model=gpt-4o temperature=0.7 encoding=o200k_ba
 - **Path traversal protection** — workspace file operations (`save_file`, `read_file`, `archive_file`, etc.) and self-improvement file operations validate that resolved paths stay within the expected root directory. Attempts to escape via `../` or absolute paths are blocked.
 - **Sandbox auth** — each app process generates a random per-process auth key (`secrets.token_urlsafe(32)`) for sandbox container communication. Never committed to source.
 - **Docker socket** — the app container needs `/var/run/docker.sock` mounted for sandbox management. This grants host Docker access; only run in trusted environments.
-- **VNC** — when enabled, VNC servers bind to `127.0.0.1` only. Access requires an SSH tunnel.
+- **VNC** — when enabled, VNC ports are mapped to the host's `127.0.0.1` only (not exposed on `0.0.0.0`). Remote access requires an SSH tunnel to the host: `ssh -NL 5901:localhost:5901 your-server`.
 - **Secret key validation** — the app warns on startup if `FLASK_SECRET_KEY` is set to a weak placeholder like `change-me`.
 
 ### Plugin security
 
-Plugins imported from external repos are subject to multiple security layers:
+Plugins imported from external repos pass through multiple security gates before and during execution:
 
 | Layer | What it does |
 |-------|-------------|
-| **AST-based static analysis** | Parses plugin source with Python's `ast` module to detect `subprocess`, `eval`, `exec`, `compile`, `__import__`, `os.environ`, `os.system`, `socket`, and `getattr(__builtins__, ...)`. Catches obfuscation that regex scanning misses. |
+| **AST-based static analysis** | Parses plugin source with Python's `ast` module to detect `subprocess`, `eval`, `exec`, `compile`, `__import__`, `os.environ`, `os.system`, `socket`, `getattr(__builtins__, ...)`, and 12+ evasion patterns (`__globals__`, `__subclasses__`, `vars(os)`, `codecs.decode`, etc.). |
 | **Regex pattern scanning** | Supplements AST analysis with line-level pattern matching for HTTP calls, file deletion, hex-encoded strings, and base64 decoding. |
 | **Built-in tool name protection** | Plugins cannot register tools with the same name as built-in tools. A plugin trying to override `browser_read_page` or `get_current_datetime` is rejected at load time. |
-| **Sandbox environment isolation** | Plugin test runs execute in a subprocess with a stripped environment — only `PATH`, `HOME`, `LANG`, and `PYTHONPATH` are passed. API keys and secrets are not inherited. |
-| **Subprocess sandbox testing** | Before activation, plugins are imported in a separate subprocess with a 30-second timeout. Failures prevent activation. |
+| **Subprocess sandbox testing** | Before activation, plugins are imported in a separate subprocess with a stripped environment and 30-second timeout. Failures prevent activation. |
 | **Runtime monitoring + auto-rollback** | Active plugin tools are wrapped with failure tracking. After consecutive failures, the plugin is automatically rolled back to its previous version. |
 | **Governance layer** | All tools (built-in and plugin) pass through a single governance choke point with risk classification (LOW/MEDIUM/HIGH), confirmation gating for HIGH-risk actions, and audit logging to the workspace trace. |
+| **Blocking security scan** | `import_plugin_repo()` and `update_plugin_repo()` flag security warnings and require explicit acknowledgement before activation. |
 
-**Capabilities gateway (Phase 1 sandbox):** IMPORTED plugins are additionally sandboxed at the Python level:
+### Subprocess isolation
+
+IMPORTED plugins execute in **isolated subprocesses** — separate OS processes with no access to API keys, secrets, or the parent's memory. The OS process boundary is the primary security guarantee, not Python-level tricks.
+
+#### Architecture
+
+```
+┌─────────────────────────────────┐     JSON-lines     ┌──────────────────────────────┐
+│         Parent Process          │    on stdin/stdout   │     Plugin Subprocess        │
+│                                 │◄───────────────────►│                              │
+│  MonitoredTool                  │                      │  host.py                     │
+│    ├─ call budget (10/msg)      │  ── invoke ──►       │    ├─ import plugin module   │
+│    ├─ governance (HIGH risk)    │  ◄── result ──       │    ├─ call tool.invoke()     │
+│    └─ bridge.invoke()           │                      │    └─ CapsProxy             │
+│                                 │  ◄── caps_call ──    │         ├─ http_get(url)     │
+│  Bridge                         │  ── caps_result ──►  │         ├─ build_llm()       │
+│    ├─ spawn subprocess          │                      │         ├─ save_file()       │
+│    ├─ service caps callbacks    │                      │         └─ get_config()      │
+│    ├─ timeout → SIGKILL         │                      │                              │
+│    └─ PluginCapabilities (real) │                      │  Env: PATH, HOME, LANG only  │
+│         ├─ API keys ✓           │                      │  No API keys. No secrets.    │
+│         ├─ prax.settings ✓      │                      │  No Docker socket.           │
+│         └─ network access ✓     │                      │  No prax.settings.           │
+└─────────────────────────────────┘                      └──────────────────────────────┘
+```
+
+When a plugin calls `caps.http_get(url)`, the proxy in the subprocess serializes the call as a JSON-RPC message, sends it to the parent over stdout, and blocks. The parent — which holds the real API keys — makes the HTTP request and sends the result back. The plugin experiences a normal synchronous method call but never touches a credential.
+
+#### What's isolated
+
+| Attack vector | Result |
+|---------------|--------|
+| `os.environ["OPENAI_KEY"]` | `KeyError` — key is not in the subprocess environment |
+| `os.environ["ANTHROPIC_KEY"]` | `KeyError` — same reason |
+| `gc.get_objects()` to find `prax.settings` | Returns nothing — settings object is in a different process |
+| `().__class__.__base__.__subclasses__()` → `BuiltinImporter` | Can import modules, but there are no secrets in memory to steal |
+| `open("/proc/self/environ")` | Contains only `PATH`, `HOME`, `LANG`, `PYTHONPATH` |
+| Infinite loop / memory bomb | `SIGALRM` → `SIGTERM` → `SIGKILL` (uncatchable) |
+| `ctypes` memory writes to bypass audit hooks | Nothing to find — no API keys in process memory |
+| Docker socket access | Not mounted in subprocess environment |
+
+#### Capabilities proxy
+
+Plugins access Prax services through a `PluginCapabilities` proxy. Every method is forwarded to the parent via JSON-RPC — the plugin never directly holds credentials or network connections:
+
+| Method | What the parent does |
+|--------|---------------------|
+| `caps.build_llm(tier)` | Constructs a LangChain LLM with the real API key and returns it (serialized) |
+| `caps.http_get(url)` / `caps.http_post(url)` | Makes the HTTP request with credentials, rate-limited (50/invocation), returns serialized response |
+| `caps.save_file(name, content)` | Writes to the user's workspace via `workspace_service` |
+| `caps.run_command(cmd)` | Executes in the parent with auditing and timeout |
+| `caps.tts_synthesize(text, path)` | Calls OpenAI/ElevenLabs TTS API with the real key |
+| `caps.get_config(key)` | Returns non-secret config values; blocks keys matching `key`, `secret`, `token`, `password`, `credential` |
+| `caps.workspace_path()` / `caps.get_user_id()` / `caps.shared_tempdir()` | Returns strings — no credential exposure |
+
+#### Framework-enforced limits
+
+These limits are enforced in the **parent process** (in `MonitoredTool`), outside the subprocess — the plugin cannot increase its own budget or disable enforcement:
+
+| Limit | Value | Enforcement |
+|-------|-------|-------------|
+| Tool calls per message | 10 | `_increment_call_count()` in parent, checked before each bridge invocation |
+| HTTP requests per invocation | 50 | Counted in `PluginCapabilities._check_http()` in parent |
+| Invocation timeout | 30 seconds | `SIGALRM` in parent → `SIGTERM` → 5s grace → `SIGKILL` |
+| Risk classification | HIGH | All IMPORTED tools require user confirmation before first execution |
+
+#### Subprocess lifecycle
+
+| Event | What happens |
+|-------|-------------|
+| **First tool call** | Subprocess spawned lazily, plugin registered via JSON-RPC handshake |
+| **Subsequent calls** | Same subprocess reused (~5ms overhead per call) |
+| **Agent turn ends** | `shutdown_all_bridges()` terminates all subprocesses |
+| **Process exit** | `atexit` handler kills any surviving subprocesses |
+| **Plugin reload** | Old subprocess shut down, new one spawned on next call |
+| **Subprocess crash** | Error propagated to agent, failure recorded, auto-rollback may trigger |
+
+#### Defence-in-depth (in-process layers)
+
+The following in-process guards remain active as a secondary defense. They are no longer the primary security boundary — the subprocess is — but they catch bugs in the bridge and provide redundancy:
 
 | Control | What it does |
 |---------|-------------|
-| **`SanitizedEnviron`** | At import time and runtime, `os.environ` is replaced with a dict that blocks reads of keys matching `KEY`, `SECRET`, `TOKEN`, `PASSWORD`, `CREDENTIAL`, `OPENAI`, `ANTHROPIC`, `ELEVENLABS`, `AMADEUS`, `AWS_`, `AZURE_`, etc. Blocked reads log a warning and behave as if the key doesn't exist. |
-| **`PluginCapabilities` gateway** | Instead of importing `prax.settings` directly, plugins receive a `PluginCapabilities` object at registration time. It exposes `build_llm()`, `http_get/post()`, `save_file()`, `run_command()`, `tts_synthesize()`, and `get_config()` — all without exposing API keys. `get_config()` blocks any key whose name contains `key`, `secret`, `token`, `password`, or `credential`. |
-| **Per-tier policy** | `PluginPolicy` dataclass controls what each trust tier can do (`can_access_env`, `can_access_settings`, `can_make_http`, `can_use_llm`, `max_http_requests_per_invocation`, `max_tool_calls_per_message`, `cpu_seconds_per_call`, `memory_bytes_per_call`). BUILTIN plugins are unrestricted; WORKSPACE and IMPORTED are restricted by default. |
-| **HIGH risk classification** | All tools from IMPORTED plugins are automatically classified as HIGH risk and require user confirmation before execution. |
-| **Python audit hook** (PEP 578) | `sys.addaudithook` monitors 200+ CPython runtime events. Blocks `subprocess.Popen`, `os.system`, `os.exec`, `os.fork`, `ctypes.dlopen`, `ctypes.call_function`, and `shutil.rmtree` during IMPORTED plugin execution. Logs `socket.*`, `open`, and `import` events for audit trail. |
-| **Import blocker** (`sys.meta_path`) | A custom finder blocks IMPORTED plugins from importing `subprocess`, `ctypes`, `pickle`, `marshal`, `shutil`, `multiprocessing`, and `signal` at runtime. |
-| **OS resource limits** | `resource.setrlimit` enforces per-invocation caps: 30s CPU time (`RLIMIT_CPU` → `SIGXCPU`), 512 MB virtual memory (`RLIMIT_AS`), 64 open file descriptors (`RLIMIT_NOFILE`). Kernel-enforced, not bypassable by Python code. |
-| **Per-plugin call budget** | Framework-enforced limit of 10 tool calls per plugin per user message. Enforced in the `MonitoredTool` wrapper, outside plugin code — the plugin cannot increase its own budget. Counters reset at the start of each message. |
-| **Enhanced evasion detection** | The security scanner catches 12+ additional evasion patterns: `getattr(os, 'environ')`, `vars(os)`, `os.__dict__`, `importlib.import_module`, `sys.modules[...]`, `__globals__`, `__subclasses__`, `__bases__`, `ctypes`, `pickle`, `marshal`, `open('/proc/self/environ')`, and `codecs.decode`. |
-| **Blocking security scan** | `import_plugin_repo()` and `update_plugin_repo()` flag plugins with security warnings as requiring explicit acknowledgement before activation. |
+| **Python audit hook** (PEP 578) | `sys.addaudithook` blocks `subprocess.Popen`, `os.system`, `ctypes.dlopen`, etc. during IMPORTED execution |
+| **Import blocker** (`sys.meta_path`) | Blocks `subprocess`, `ctypes`, `pickle`, `marshal`, `shutil`, `multiprocessing`, `signal` |
+| **`PluginCapabilities` gateway** | `build_llm()`, `http_get/post()`, `save_file()`, `get_config()` — all without exposing API keys |
+| **Per-tier policy** | `PluginPolicy` dataclass controls `can_access_env`, `can_make_http`, `can_use_llm`, `max_http_requests_per_invocation`, etc. |
 
-**Migration for plugin authors:** If your plugin's `register()` function accepts a parameter, it will receive a `PluginCapabilities` instance. Use `caps.build_llm()` instead of importing the LLM factory, `caps.http_get()` instead of `requests.get()`, and `caps.get_config("workspace_dir")` instead of `settings.workspace_dir`. Zero-arg `register()` still works for backward compatibility.
+#### Migration for plugin authors
 
-**Limitations:** Plugins still execute in the main process after passing security checks. The in-process sandbox is defence-in-depth — it catches casual credential exfiltration but cannot prevent determined attacks. Only import plugins from sources you trust. For maximum isolation, run Prax in a container. Phase 2 (subprocess isolation for IMPORTED plugins) is planned.
+If your plugin's `register()` function accepts a parameter, it receives a `PluginCapabilities` instance (or a proxy that behaves identically in the subprocess). Use `caps.http_get()` instead of `requests.get()`, `caps.build_llm()` instead of importing the LLM factory, and `caps.get_config("workspace_dir")` instead of `settings.workspace_dir`. Zero-arg `register()` still works for backward-compatible built-in plugins.
+
+BUILTIN and WORKSPACE plugins remain fully in-process with no overhead — subprocess isolation applies only to IMPORTED plugins from external repos.
 
 ### Tool risk classification
 
@@ -1614,13 +1695,13 @@ Prax applies the following mitigations against this class of attack:
 
 #### Remaining risk: plugin code execution
 
-Imported plugins execute in the main Prax process after passing AST-based static analysis and sandbox testing (see [Plugin security](#plugin-security) above). This is a deliberate tradeoff: the plugin system is designed for self-modification, which requires code execution.
+Imported plugins execute in **isolated subprocesses** with a stripped environment (no API keys, no secrets). The OS process boundary prevents credential theft and memory-space attacks. However:
 
-The static analysis catches common patterns (`subprocess`, `eval`, `exec`, `os.environ`, socket access, obfuscated strings) but cannot guarantee detection of all malicious payloads. An attacker who controls a plugin repo could craft an obfuscated credential stealer that bypasses AST scanning.
+- **Side-channel attacks** (timing, cache) are theoretically possible but impractical over JSON-RPC pipes.
+- **Capability abuse** — a malicious plugin could use `caps.http_get()` to exfiltrate workspace file contents to an external server. The HTTP rate limit (50 requests/invocation) and HIGH-risk confirmation gate mitigate but do not eliminate this.
+- **Subprocess escape** — if a kernel vulnerability allows escaping process isolation, the subprocess has access to the host filesystem (though not to env vars). Docker container isolation (future enhancement) would add a second boundary.
 
-**Current controls:** static analysis + enhanced regex scanning + sandbox pre-test + `SanitizedEnviron` + `PluginCapabilities` gateway + per-tier policy + HIGH risk auto-classification for IMPORTED tools + user confirmation gate + runtime failure auto-rollback + blocking security scan with acknowledgement.
-
-**Future mitigation (Phase 2):** Run imported plugins in the sandboxed Docker container rather than the main process, communicating via the existing sandbox API. This would contain damage from a compromised plugin to an ephemeral container with no access to API keys or host resources. Built-in and user-created workspace plugins would remain in-process.
+**Current controls:** subprocess isolation + static analysis + capabilities gateway + per-tier policy + call budgets + HIGH risk classification + user confirmation gate + audit hooks + import blockers + runtime auto-rollback + blocking security scan.
 
 ## Configuration
 
@@ -1979,6 +2060,10 @@ The app waits for the sandbox health check before starting. Environment detectio
 
 ```bash
 docker build -t prax .
+
+# Ensure the database file exists (Docker will create a directory otherwise)
+touch "$HOME/conversations.db"
+
 docker run -d -p 5001:5001 --restart always \
   -v "$HOME/workspaces:/app/workspaces" \
   -v "$HOME/conversations.db:/app/conversations.db" \
@@ -2023,16 +2108,20 @@ from langchain_core.tools import tool
 PLUGIN_VERSION = "1"
 PLUGIN_DESCRIPTION = "Weather lookup for any city"
 
-@tool
-def weather_lookup(city: str) -> str:
-    """Get the current weather for a city."""
-    import requests
-    resp = requests.get(f"https://wttr.in/{city}?format=3")
-    return resp.text
+def register(caps):
+    @tool
+    def weather_lookup(city: str) -> str:
+        """Get the current weather for a city."""
+        resp = caps.http_get(f"https://wttr.in/{city}?format=3")
+        return resp.text
 
-def register():
     return [weather_lookup]
 ```
+
+> **Note:** `register(caps)` receives a [`PluginCapabilities`](#plugin-security) instance.
+> Use `caps.http_get()` instead of `requests.get()`, `caps.build_llm()` instead of
+> importing the LLM factory, and `caps.get_config()` instead of reading `prax.settings`
+> directly. Zero-arg `register()` still works for backward-compatible built-in plugins.
 
 **Lifecycle:**
 
@@ -2068,7 +2157,16 @@ This creates two files:
 4. **Check "Allow write access"** — this is required for Prax to push
 5. Click **Add key**
 
-**Step 4 — Base64-encode the private key and add to `.env`:**
+**Step 4 — Make the private key available to Prax:**
+
+*Option A — Bind-mount (preferred, avoids env var leakage):*
+
+```bash
+# In docker-compose.yml, add under app.volumes:
+#   - ~/.ssh/prax_deploy_key:/run/secrets/prax_ssh_key:ro
+```
+
+*Option B — Base64 in `.env` (simpler, but env vars can leak in crash dumps, APM traces, `/proc/self/environ`, and child processes):*
 
 ```bash
 cat ~/.ssh/prax_deploy_key | base64 | tr -d '\n'
@@ -2316,7 +2414,7 @@ Several production agent frameworks have converged on similar architectural patt
 
 **Industry guidance:**
 
-- **OpenAI** recommends fewer than 20 tools at the start of a turn ([Function Calling Guide](https://developers.openai.com/api/docs/guides/function-calling)). Even their o3/o4-mini models, which handle up to ~100 tools "in-distribution," show degraded performance as tool count grows: "longer lists mean the model has more options to parse during its reasoning phase... tool hallucinations can increase with complexity" ([o3/o4-mini Prompting Guide](https://developers.openai.com/cookbook/examples/o-series/o3o4-mini_prompting_guide)).
+- **OpenAI** notes that o3/o4-mini handle up to ~100 tools "in-distribution," but performance still degrades as tool count grows: "longer lists mean the model has more options to parse during its reasoning phase... tool hallucinations can increase with complexity" ([o3/o4-mini Prompting Guide](https://developers.openai.com/cookbook/examples/o-series/o3o4-mini_prompting_guide)). Their [Function Calling Guide](https://developers.openai.com/api/docs/guides/function-calling) recommends keeping tool definitions concise.
 - **Anthropic** reports that tool selection accuracy "degrades significantly once you exceed 30–50 available tools" ([Tool Search Tool docs](https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool)). In their advanced tool use study, loading 58 tools from 5 MCP servers consumed ~55K tokens before the conversation even started. Implementing on-demand tool search improved Claude Opus 4 accuracy from 49% to 74% ([Advanced Tool Use](https://www.anthropic.com/engineering/advanced-tool-use)).
 
 **Academic evidence:**
@@ -2375,32 +2473,39 @@ Several production agent frameworks have converged on similar architectural patt
 
 **The Glass Sandbox problem** (Checkmarx, 2024): Python's introspection creates "visible boundaries that give the illusion of security." Starting from any object (even `()`), an attacker can use `.__class__.__base__.__subclasses__()` to walk the entire class hierarchy and import any module. This is not a fixable bug — it is an architectural property of CPython.
 
-**Defence-in-depth response:** Since Prax's plugin system is designed for self-modification (which requires code execution), and Phase 2 subprocess isolation is planned, the current approach layers seven imperfect mechanisms that together catch the overwhelming majority of real-world attacks:
+**Phase 2 response (implemented):** IMPORTED plugins now execute in **isolated subprocesses** with a stripped environment. The OS process boundary is the primary security guarantee:
 
-| Layer | Mechanism | What It Catches | Bypassable? |
-|-------|-----------|----------------|-------------|
-| 1. AST + regex scanning | Static analysis before activation | Import of dangerous modules, `eval`/`exec`, env access patterns, 30+ evasion vectors | Yes — obfuscation, encoding tricks |
-| 2. `SanitizedEnviron` | `os.environ` replaced at import & runtime | Direct credential reads via `os.environ`, `os.getenv` | Yes — object graph traversal to real environ |
-| 3. Capabilities gateway | `PluginCapabilities` API with secret filtering | Direct `prax.settings` imports, reading API keys via config | Yes — if plugin can import `prax.settings` directly |
-| 4. `sys.addaudithook` | Runtime event monitoring (PEP 578) | `subprocess.Popen`, `os.system`, `ctypes.dlopen`, `socket.*`, 200+ events | Yes — ctypes memory writes (but ctypes itself is blocked at layers 1, 2, 5) |
-| 5. `sys.meta_path` import blocker | Blocks `import subprocess/ctypes/pickle/marshal/shutil` | Runtime import of dangerous modules | Yes — `__subclasses__()` traversal, `sys.meta_path.clear()` |
-| 6. `resource.setrlimit` | OS-enforced CPU (30s), memory (512MB), file descriptors (64) | CPU exhaustion, memory bombs, FD exhaustion | Partially — `MemoryError` is catchable; `SIGXCPU` is not |
-| 7. Per-plugin call budget | Framework-enforced 10 calls/message, in `MonitoredTool` wrapper | Infinite tool-call loops, runaway recursion | No — enforced outside plugin code |
+| Layer | Mechanism | What It Provides | Bypassable? |
+|-------|-----------|-----------------|-------------|
+| **1. Process isolation** | Separate subprocess, stripped env | No API keys in memory or environment. `os.environ["OPENAI_KEY"]` → `KeyError`. Object graph traversal finds nothing. | No — keys are not in the process |
+| **2. JSON-RPC bridge** | stdin/stdout JSON-lines protocol | No shared memory between parent and child. No `gc.get_objects()`, no `__globals__` traversal across the boundary. | No — OS process boundary |
+| **3. Capabilities proxy** | `PluginCapabilities` forwarded via RPC | Plugin can only access services the parent explicitly proxies. All credentialed calls execute in the parent. | No — plugin cannot bypass the proxy |
+| **4. SIGKILL timeout** | `SIGALRM` → `SIGTERM` → `SIGKILL` | Unresponsive plugins are force-killed. SIGKILL cannot be caught or blocked. | No |
+| **5. Call budget** | Framework-enforced 10 calls/message | Runaway recursion, infinite loops. Enforced in parent, outside subprocess. | No |
 
-**Key design principle:** No single layer is sufficient, but an attacker must bypass *all seven simultaneously*. The audit hook catches what the import blocker misses; the import blocker catches what AST scanning misses; resource limits catch what the audit hook can't prevent. And the call budget is enforced by the framework wrapper, outside plugin code entirely — the plugin cannot increase its own budget.
+**Defence-in-depth (still active):** The Phase 1 in-process layers remain as secondary defenses — they catch bugs in the bridge itself and add depth:
+
+| Layer | Mechanism | What It Catches |
+|-------|-----------|----------------|
+| AST + regex scanning | Static analysis before activation | Dangerous patterns caught before code even loads |
+| `sys.addaudithook` | Runtime event monitoring (PEP 578) | `subprocess.Popen`, `os.system`, `ctypes.dlopen`, etc. |
+| `sys.meta_path` import blocker | Blocks dangerous module imports | `subprocess`, `ctypes`, `pickle`, `marshal`, `shutil` |
+| Blocking security scan | Requires acknowledgement of warnings | Gates activation on human review |
+
+**Key design principle:** The subprocess boundary makes the in-process layers *redundant* for credential theft — but redundant defenses are good engineering. If a future change accidentally routes a plugin in-process, the Phase 1 layers still catch it.
 
 **Academic foundations:**
 
 | Paper | Contribution | How Prax Applies It |
 |-------|-------------|---------------------|
 | Christodorescu et al., "Systems Security Foundations for Agentic Computing," IEEE SAGAI 2025 ([arXiv:2512.01295](https://arxiv.org/abs/2512.01295)) | Identifies five classical security principles for agents: least privilege, TCB tamper resistance, complete mediation, secure information flow, human weak link. Documents 11 real attacks including Cursor AgentFlayer (Jira→AWS creds) and Claude Code .env exfiltration via DNS. | Capabilities gateway = least privilege; audit hook = complete mediation; call budget = TCB tamper resistance (framework-enforced, not bypassable). |
-| Checkmarx, "The Glass Sandbox" (2024) | Proves Python's object graph makes language-level sandboxing impossible against determined adversaries. | Prax does not claim in-process sandboxing is a security boundary — it is positioned as defence-in-depth. Phase 2 (subprocess isolation) is the real boundary. |
+| Checkmarx, "The Glass Sandbox" (2024) | Proves Python's object graph makes language-level sandboxing impossible against determined adversaries. | Prax's primary boundary is subprocess isolation (Phase 2), not in-process sandboxing. In-process layers remain as defence-in-depth. |
 | SandboxEval ([arXiv:2504.00018](https://arxiv.org/abs/2504.00018)) and CIBER ([arXiv:2602.19547](https://arxiv.org/abs/2602.19547)) | Benchmarks for sandbox security in LLM code execution environments. | Prax's scanner covers all SandboxEval test categories (information exposure, filesystem manipulation, external communication). |
 | Nahum et al., "Fault-Tolerant Sandboxing for AI Coding Agents" ([arXiv:2512.12806](https://arxiv.org/abs/2512.12806)) | Proposes transactional agent execution with rollback on policy violation. | Auto-rollback after 3 consecutive failures + checkpoint-based retry in orchestrator. |
 | PEP 578, Python Runtime Audit Hooks | Defines `sys.addaudithook` for monitoring 200+ runtime events. Authors explicitly state it is not a sandbox — but it is the best available detection layer in CPython. | Prax uses audit hooks for enforcement (raising exceptions on dangerous events) with awareness that determined attackers can bypass them. The hook is one layer in a seven-layer stack. |
-| HashiCorp go-plugin | Gold standard for plugin security: separate process + gRPC + mTLS + checksum verification. | Phase 2 target architecture. Current in-process approach is explicitly a bridge to subprocess isolation. |
+| HashiCorp go-plugin | Gold standard for plugin security: separate process + gRPC + mTLS + checksum verification. | Prax's Phase 2 uses the same model: separate process + JSON-RPC + stripped env + capabilities proxy. |
 
-**Phase 2 plan:** Run IMPORTED plugins in the existing sandbox Docker container (which already has cgroups, seccomp, and no API key access), communicating via the sandbox API. This moves the security boundary from "seven imperfect Python layers" to "OS-level process isolation" — the proven production approach.
+**Phase 2 implementation:** IMPORTED plugins now run in isolated subprocesses with JSON-RPC communication (see [Plugin security](#plugin-security)). This moves the security boundary from "seven imperfect Python layers" to "OS-level process isolation." Future enhancement: run the subprocess inside the sandbox Docker container for cgroups + seccomp + filesystem isolation on top of process isolation.
 
 ### Key Takeaways
 
@@ -2411,7 +2516,7 @@ Several production agent frameworks have converged on similar architectural patt
 5. **Make the honest path the smooth path** — architectural enforcement (plan requirements, verification gates) works better than prompt-only instructions.
 6. **Fewer tools, better choices** — tool selection accuracy collapses past 20–50 tools. Use hub-and-spoke delegation or on-demand tool search to keep each agent's tool set focused.
 7. **Diverse reviewers improve quality** — different models/providers in a review loop outperform same-model self-critique by 9+ percentage points.
-8. **Layer imperfect defenses** — no single in-process sandbox survives a determined attacker. Stack seven mechanisms so an attacker must bypass all of them simultaneously, and make the framework enforce limits the plugin code cannot override.
+8. **Put security boundaries at the OS level** — in-process Python sandboxing is fundamentally fragile (the Glass Sandbox). Use subprocess/process isolation as the primary boundary, keep in-process guards as defence-in-depth, and make the framework enforce limits the plugin code cannot override.
 
 ## Roadmap
 
@@ -2443,6 +2548,7 @@ Several production agent frameworks have converged on similar architectural patt
 - [x] Folder-per-plugin layout with auto-generated CATALOG.md
 - [x] Reader-to-plugin migration (NPR, web summary, PDF, YouTube, arXiv, Deutschlandfunk)
 - [x] Plugin repository support (separate private git repo with SSH deploy key)
+- [x] Subprocess isolation for imported plugins (Phase 2 — JSON-RPC bridge, stripped env, capabilities proxy)
 - [ ] Apple Silicon support (MLX backend as alternative to vLLM/CUDA)
 - [ ] Sandbox Docker image build + integration test with live OpenCode
 - [ ] Voice-triggered sandbox sessions
@@ -2452,3 +2558,6 @@ Several production agent frameworks have converged on similar architectural patt
 - [ ] Multi-step browser workflows (e.g., "check my Twitter DMs every morning")
 - [ ] Adapter A/B testing (serve two adapters, compare quality metrics)
 
+## License
+
+[Apache License 2.0](LICENSE)

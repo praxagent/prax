@@ -111,16 +111,19 @@ class MonitoredTool:
         )
 
     def _run_sandboxed(self, inner: BaseTool, kwargs: dict, loader: Any) -> Any:
-        """Execute an IMPORTED plugin tool with full sandbox enforcement."""
-        from prax.plugins.policy import get_policy
-        from prax.plugins.sandbox_guard import install_all_guards, resource_limits
+        """Execute an IMPORTED plugin tool in an isolated subprocess.
 
-        # Ensure audit hook and import blocker are installed.
-        install_all_guards()
+        Phase 2: the tool runs in a separate process with no API keys in
+        its environment.  The OS process boundary provides the isolation
+        guarantee — all Phase 1 in-process guards (audit hooks, import
+        blocker, resource limits) remain as defense-in-depth.
+        """
+        from prax.plugins.bridge import get_bridge
+        from prax.plugins.policy import get_policy
 
         policy = get_policy(self.trust_tier)
 
-        # 1. Check per-plugin call budget.
+        # 1. Check per-plugin call budget (framework-enforced, outside the subprocess).
         count = _increment_call_count(self.plugin_rel_path)
         if count > policy.max_tool_calls_per_message:
             logger.warning(
@@ -132,12 +135,13 @@ class MonitoredTool:
                 f"of {policy.max_tool_calls_per_message} calls per message."
             )
 
-        # 2. Apply OS-level resource limits.
-        with resource_limits(
-            cpu_seconds=policy.cpu_seconds_per_call,
-            memory_bytes=policy.memory_bytes_per_call,
-        ):
-            result = inner.invoke(kwargs if kwargs else {})
+        # 2. Invoke in the isolated subprocess via the bridge.
+        bridge = get_bridge(self.plugin_rel_path)
+        result = bridge.invoke(
+            inner.name,
+            kwargs if kwargs else {},
+            timeout=policy.cpu_seconds_per_call,
+        )
 
         loader.record_tool_success(inner.name)
         return result
