@@ -12,6 +12,21 @@ logger = logging.getLogger(__name__)
 teamwork_routes = Blueprint("teamwork", __name__)
 
 
+@teamwork_routes.route("/teamwork/observability", methods=["GET"])
+def observability_config():
+    """Return observability URLs for the TeamWork frontend.
+
+    TeamWork polls this once on load to know where Grafana/Tempo live
+    and whether the trace button should be shown.
+    """
+    from prax.settings import settings
+    return jsonify({
+        "enabled": settings.observability_enabled,
+        "grafana_url": settings.grafana_url or None,
+        "tempo_url": settings.grafana_url + "/explore" if settings.grafana_url else None,
+    })
+
+
 @teamwork_routes.route("/teamwork/webhook", methods=["POST"])
 def teamwork_webhook():
     """Receive a user message from TeamWork and process it asynchronously."""
@@ -43,6 +58,33 @@ def teamwork_webhook():
     thread.start()
 
     return jsonify({"status": "accepted"}), 200
+
+
+def _build_trace_metadata() -> dict | None:
+    """Build observability metadata to attach to the agent's response message.
+
+    Returns a dict with trace_id and Grafana deep-link, or None if
+    observability is disabled or no trace is available.
+    """
+    from prax.settings import settings
+    if not settings.observability_enabled:
+        return None
+
+    from prax.agent.trace import last_root_trace_id
+    trace_id = last_root_trace_id.get()
+    if not trace_id:
+        return None
+
+    metadata: dict = {"trace_id": trace_id}
+    if settings.grafana_url:
+        # Deep-link to Tempo trace search in Grafana
+        metadata["grafana_trace_url"] = (
+            f"{settings.grafana_url.rstrip('/')}/explore?"
+            f"left=%7B%22datasource%22:%22tempo%22,"
+            f"%22queries%22:%5B%7B%22queryType%22:%22traceqlsearch%22,"
+            f"%22query%22:%22{trace_id}%22%7D%5D%7D"
+        )
+    return metadata
 
 
 def _get_teamwork_user_id() -> str:
@@ -106,8 +148,16 @@ def _handle_message(
                     user_id, prefixed_content, conversation_key=channel_key,
                 )
 
+            # Attach trace metadata so TeamWork can link to the observability stack.
+            extra_data = _build_trace_metadata()
+
             # Send response back to the SAME channel (could be DM, #general, etc.)
-            tw.send_message(content=response, channel_id=channel_id, agent_name="Prax")
+            tw.send_message(
+                content=response,
+                channel_id=channel_id,
+                agent_name="Prax",
+                extra_data=extra_data,
+            )
 
         except Exception:
             logger.exception("Failed to process TeamWork message")

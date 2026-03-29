@@ -6,6 +6,7 @@ from flask import Flask
 #from flask_session import Session
 from prax.blueprints.conference_routes import conference_routes
 from prax.blueprints.main_routes import main_routes
+from prax.blueprints.plugin_routes import plugin_routes
 from prax.blueprints.reader_routes import reader_routes
 from prax.blueprints.teamwork_routes import teamwork_routes
 from prax.blueprints.textchat_routes import textchat_routes
@@ -20,13 +21,30 @@ def create_app():
     app = Flask(__name__)
     app.config.from_object('config.Config')
 
+    # Initialize OpenTelemetry tracing (gated on OBSERVABILITY_ENABLED).
+    if settings.observability_enabled:
+        try:
+            from prax.observability import init_observability
+            init_observability(service_name=settings.agent_name.lower())
+        except Exception:
+            pass
+
     init_database(app.config['DATABASE_NAME'])
 
     app.register_blueprint(main_routes)
     app.register_blueprint(conference_routes)
+    app.register_blueprint(plugin_routes)
     app.register_blueprint(reader_routes)
     app.register_blueprint(teamwork_routes)
     app.register_blueprint(textchat_routes)
+
+    # Prometheus metrics endpoint — scraped by Prometheus every 10s.
+    if settings.observability_enabled:
+        @app.route("/metrics")
+        def metrics():
+            from flask import Response
+            from prax.observability.metrics import generate_latest, CONTENT_TYPE_LATEST
+            return Response(generate_latest(), mimetype=CONTENT_TYPE_LATEST)
 
 
     log_path = settings.log_path

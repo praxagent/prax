@@ -45,15 +45,22 @@ def build_llm(
 
     logger.info("build_llm → provider=%s model=%s tier=%s temp=%s", provider_name, model_name, tier, temp)
 
+    # Attach OTel callbacks for tracing and metrics on every LLM instance.
+    try:
+        from prax.observability.callbacks import get_otel_callbacks
+        callbacks = get_otel_callbacks()
+    except Exception:
+        callbacks = []
+
     if provider_name == "openai":
         if not settings.openai_key:
             raise ValueError("OPENAI_KEY is required for OpenAI provider")
-        return ChatOpenAI(model=model_name, api_key=settings.openai_key, temperature=temp)
+        return ChatOpenAI(model=model_name, api_key=settings.openai_key, temperature=temp, callbacks=callbacks)
 
     if provider_name == "anthropic":
         if not settings.anthropic_key:
             raise ValueError("ANTHROPIC_KEY is required for Anthropic provider")
-        return ChatAnthropic(model=model_name, api_key=settings.anthropic_key, temperature=temp)
+        return ChatAnthropic(model=model_name, api_key=settings.anthropic_key, temperature=temp, callbacks=callbacks)
 
     if provider_name in {"google", "google-vertex"}:
         if not settings.google_vertex_project or not settings.google_vertex_location:
@@ -63,10 +70,11 @@ def build_llm(
             temperature=temp,
             project=settings.google_vertex_project,
             location=settings.google_vertex_location,
+            callbacks=callbacks,
         )
 
     if provider_name in {"ollama", "local"}:
-        return ChatOllama(model=model_name, temperature=temp)
+        return ChatOllama(model=model_name, temperature=temp, callbacks=callbacks)
 
     if provider_name == "vllm":
         return ChatOpenAI(
@@ -74,6 +82,7 @@ def build_llm(
             api_key="not-needed",
             base_url=settings.vllm_base_url,
             temperature=temp,
+            callbacks=callbacks,
         )
 
     raise ValueError(f"Unsupported LLM provider: {provider}")

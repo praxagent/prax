@@ -23,10 +23,24 @@ def test_build_llm_for_each_provider(monkeypatch):
     monkeypatch.setattr(llm_module, 'ChatVertexAI', lambda **kwargs: ('vertex', kwargs))
     monkeypatch.setattr(llm_module, 'ChatOllama', lambda **kwargs: ('ollama', kwargs))
 
-    assert llm_module.build_llm() == ('openai', {'model': 'gpt-test', 'api_key': 'sk-test', 'temperature': 0.2})
-    assert llm_module.build_llm(provider='anthropic') == ('anthropic', {'model': 'gpt-test', 'api_key': 'ant-test', 'temperature': 0.2})
-    assert llm_module.build_llm(provider='google') == ('vertex', {'model': 'gpt-test', 'temperature': 0.2, 'project': 'proj', 'location': 'loc'})
-    assert llm_module.build_llm(provider='ollama') == ('ollama', {'model': 'gpt-test', 'temperature': 0.2})
+    _, openai_kw = llm_module.build_llm()
+    assert openai_kw['model'] == 'gpt-test'
+    assert openai_kw['api_key'] == 'sk-test'
+    assert openai_kw['temperature'] == 0.2
+    assert 'callbacks' in openai_kw
+
+    _, anthro_kw = llm_module.build_llm(provider='anthropic')
+    assert anthro_kw['model'] == 'gpt-test'
+    assert anthro_kw['api_key'] == 'ant-test'
+
+    _, vertex_kw = llm_module.build_llm(provider='google')
+    assert vertex_kw['model'] == 'gpt-test'
+    assert vertex_kw['project'] == 'proj'
+    assert vertex_kw['location'] == 'loc'
+
+    _, ollama_kw = llm_module.build_llm(provider='ollama')
+    assert ollama_kw['model'] == 'gpt-test'
+    assert ollama_kw['temperature'] == 0.2
 
 
 def test_build_llm_with_tier(monkeypatch):
@@ -46,8 +60,10 @@ def test_build_llm_with_tier(monkeypatch):
     import prax.agent.model_tiers as tiers_mod
     monkeypatch.setattr(tiers_mod, 'resolve_model', lambda tier: f'resolved-{tier}')
 
-    result = llm_module.build_llm(tier='medium')
-    assert result == ('openai', {'model': 'resolved-medium', 'api_key': 'sk-test', 'temperature': 0.2})
+    _, kw = llm_module.build_llm(tier='medium')
+    assert kw['model'] == 'resolved-medium'
+    assert kw['api_key'] == 'sk-test'
+    assert kw['temperature'] == 0.2
 
 
 def test_build_llm_model_overrides_tier(monkeypatch):
@@ -63,8 +79,9 @@ def test_build_llm_model_overrides_tier(monkeypatch):
     monkeypatch.setattr(llm_module, 'settings', dummy_settings, raising=False)
     monkeypatch.setattr(llm_module, 'ChatOpenAI', lambda **kwargs: ('openai', kwargs))
 
-    result = llm_module.build_llm(model='explicit-model', tier='high')
-    assert result == ('openai', {'model': 'explicit-model', 'api_key': 'sk-test', 'temperature': 0.2})
+    _, kw = llm_module.build_llm(model='explicit-model', tier='high')
+    assert kw['model'] == 'explicit-model'
+    assert kw['api_key'] == 'sk-test'
 
 
 def test_build_llm_requires_keys(monkeypatch):

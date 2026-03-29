@@ -178,6 +178,12 @@ class ConversationAgent:
 
     def run(self, conversation: Iterable[BaseMessage], user_input: str, workspace_context: str = "") -> str:
         """Execute the agent graph and return the final string response."""
+        from prax.agent.trace import start_span
+
+        # Start a root span that wraps the entire orchestrator invocation.
+        # This sets last_root_trace_id so callers can attach it to responses.
+        root_span = start_span("orchestrator", "orchestrator")
+
         # Reset per-plugin call counters for the new message.
         from prax.plugins.monitored_tool import reset_plugin_call_counts
         reset_plugin_call_counts()
@@ -281,6 +287,7 @@ class ConversationAgent:
         if response:
             response = self._audit_claims(response, result.get("messages", []), uid)
 
+        root_span.end(status="completed", summary=response[:200] if response else "")
         return response
 
     @staticmethod

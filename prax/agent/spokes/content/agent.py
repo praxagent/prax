@@ -1,10 +1,12 @@
 """Content Editor spoke — orchestrates the multi-agent content pipeline.
 
-Pipeline: Research → Write → Publish → Review → Revise (loop) → Final Publish
+Two modes:
+- **blog** (default): Research → Write → Publish → Review → Revise (loop)
+- **course_module**: Sandbox-based rich content via the Course Author sub-agent
 
 The Content Editor is a procedural coordinator, not a ReAct agent.  It calls
-sub-agents (researcher, writer, reviewer) in sequence and manages the
-revision loop.  Prax delegates here via ``delegate_content_editor``.
+sub-agents (researcher, writer, reviewer, course author) in sequence and
+manages the revision loop.  Prax delegates here via ``delegate_content_editor``.
 """
 from __future__ import annotations
 
@@ -166,37 +168,67 @@ def _finish() -> None:
         pass
 
 
+def _run_course_author(task: str) -> str:
+    """Run the course author sub-agent for rich course module content."""
+    from prax.agent.course_author_agent import (
+        _COURSE_AUTHOR_PROMPT,
+        _build_course_author_tools,
+    )
+
+    from prax.agent.spokes._runner import run_spoke
+
+    prompt = _COURSE_AUTHOR_PROMPT.format(agent_name=settings.agent_name)
+    return run_spoke(
+        task=task,
+        system_prompt=prompt,
+        tools=_build_course_author_tools(),
+        config_key="subagent_codegen",
+        default_tier="medium",
+        role_name="Content Editor",
+        channel="content",
+        recursion_limit=80,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Delegation function — what the orchestrator calls
 # ---------------------------------------------------------------------------
 
 @tool
-def delegate_content_editor(topic: str, notes: str = "", tags: str = "") -> str:
-    """Delegate blog post creation to the Content Editor pipeline.
+def delegate_content_editor(
+    topic: str, notes: str = "", tags: str = "",
+    mode: str = "blog",
+) -> str:
+    """Delegate content creation to the Content Editor pipeline.
 
-    The Content Editor runs a multi-agent pipeline:
-    1. **Research** — gathers sources, data, and context
-    2. **Write** — produces a publication-ready draft
-    3. **Publish** — deploys to Hugo for live preview
-    4. **Review** — adversarial critique + visual inspection of the rendered page
-    5. **Revise** — incorporates feedback (up to 3 cycles)
-
-    The Reviewer uses a different LLM provider when available (e.g. Claude
-    reviews GPT's writing) for diversity of perspective.
+    Two modes:
+    - **blog** (default): Multi-agent pipeline — Research → Write → Publish →
+      Review → Revise (up to 3 cycles).  The Reviewer uses a different LLM
+      provider for adversarial diversity.
+    - **course_module**: Rich course content via the sandbox — produces markdown
+      with mermaid diagrams, LaTeX, code blocks, and structured pedagogy.
+      Include the course_id and module number in the topic.
 
     Use this for:
     - "Write a blog post about quantum error correction"
     - "Create an article comparing React and Vue"
     - "Write a deep-dive on the latest transformer architectures"
+    - "Generate content for Module 3 of course abc123" (mode="course_module")
 
     Args:
-        topic: What the blog post should be about.  Be specific — include
-               scope, angle, target audience if relevant.
+        topic: What to write about.  Be specific — include scope, angle,
+               target audience.  For course_module mode, include the course_id
+               and module number.
         notes: Optional additional context, instructions, or constraints.
-               E.g. "focus on practical applications" or "target audience
-               is senior engineers".
-        tags: Optional comma-separated tags for the published post.
+        tags: Optional comma-separated tags (blog mode only).
+        mode: "blog" (default) for the full review pipeline, or
+              "course_module" for sandbox-based course content.
     """
+    if mode == "course_module":
+        task = topic
+        if notes:
+            task += f"\n\nAdditional context: {notes}"
+        return _run_course_author(task)
     return run_content_pipeline(topic, notes=notes, tags=tags)
 
 

@@ -160,6 +160,7 @@ class TeamWorkClient:
         channel: str = "general",
         agent_name: str | None = None,
         channel_id: str | None = None,
+        extra_data: dict | None = None,
     ) -> str | None:
         """Send a message to a TeamWork channel.
 
@@ -168,6 +169,8 @@ class TeamWorkClient:
                         (bypasses name lookup — use for DM channels or
                         channels not in the registered set).
             channel: Channel name to look up if channel_id is not given.
+            extra_data: Optional metadata dict attached to the message
+                        (e.g. ``{"trace_id": "abc123", "grafana_url": "..."}``).
         """
         if not self._project_id:
             return None
@@ -177,12 +180,15 @@ class TeamWorkClient:
             logger.warning("Unknown channel: %s (known: %s)", channel, list(self._channels.keys()))
             return None
         agent_id = self._agents.get(agent_name) if agent_name else None
+        payload: dict = {
+            "channel_id": channel_id,
+            "agent_id": agent_id,
+            "content": content,
+        }
+        if extra_data:
+            payload["extra_data"] = extra_data
         try:
-            result = self._post(f"/projects/{self._project_id}/messages", {
-                "channel_id": channel_id,
-                "agent_id": agent_id,
-                "content": content,
-            })
+            result = self._post(f"/projects/{self._project_id}/messages", payload)
             return result.get("message_id")
         except Exception:
             logger.warning("Failed to send TeamWork message", exc_info=True)

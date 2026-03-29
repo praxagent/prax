@@ -14,14 +14,24 @@ from prax.settings import settings
 logger = logging.getLogger(__name__)
 
 # Tool category imports — deferred to avoid circular imports at module level.
+# Categories that have dedicated spokes (browser, sandbox, finetune) are NOT
+# listed here — use delegate_browser, delegate_sandbox, delegate_finetune instead.
 _CATEGORY_BUILDERS: dict[str, str] = {
     "research": "prax.agent.tools",
     "workspace": "prax.agent.workspace_tools",
-    "browser": "prax.agent.spokes.browser.agent",
     "scheduler": "prax.agent.scheduler_tools",
-    "sandbox": "prax.agent.sandbox_tools",
     "codegen": "prax.agent.codegen_tools",
-    "finetune": "prax.agent.finetune_tools",
+}
+
+# Spoke name → callable that accepts (task: str) -> str.
+# Used by delegate_parallel for concurrent spoke execution.
+_SPOKE_DELEGATES: dict[str, str] = {
+    "browser": "prax.agent.spokes.browser.agent.delegate_browser",
+    "content": "prax.agent.spokes.content.agent.delegate_content_editor",
+    "finetune": "prax.agent.spokes.finetune.agent.delegate_finetune",
+    "knowledge": "prax.agent.spokes.knowledge.agent.delegate_knowledge",
+    "sandbox": "prax.agent.spokes.sandbox.agent.delegate_sandbox",
+    "sysadmin": "prax.agent.spokes.sysadmin.agent.delegate_sysadmin",
 }
 
 
@@ -59,6 +69,10 @@ def _run_subagent(task: str, category: str) -> str:
     This is the shared implementation used by both :func:`delegate_task` and
     :func:`delegate_parallel`.
     """
+    from prax.agent.trace import build_identity_context, start_span
+
+    span = start_span(category, category)
+
     logger.info("Sub-agent delegated [%s]: %s", category, task[:80])
 
     # Route engineering-related work to TeamWork.
@@ -69,6 +83,7 @@ def _run_subagent(task: str, category: str) -> str:
 
     tools = _get_tools_for_category(category)
     if not tools:
+        span.end(status="failed", summary="No tools available")
         return f"No tools available for category '{category}'."
 
     from prax.plugins.llm_config import get_component_config
@@ -81,12 +96,14 @@ def _run_subagent(task: str, category: str) -> str:
     )
     subgraph = create_react_agent(llm, tools)
 
+    identity = build_identity_context(category)
     system_msg = (
         f"You are a focused sub-agent of {settings.agent_name}. "
         f"Your task category is '{category}'. "
         "Complete the task below using your tools, then give a clear, "
         "concise summary of what you found or did. "
-        "Do NOT ask follow-up questions — just do the work."
+        "Do NOT ask follow-up questions — just do the work.\n\n"
+        f"## Execution Context\n{identity}"
     )
 
     try:
@@ -99,13 +116,16 @@ def _run_subagent(task: str, category: str) -> str:
         )
     except Exception as exc:
         logger.warning("Sub-agent [%s] failed: %s", category, exc, exc_info=True)
+        span.end(status="failed", summary=str(exc)[:200])
         return f"Sub-agent failed: {exc}"
 
     # Log the sub-agent's tool call trace for debugging.
     from langchain_core.messages import ToolMessage
+    tool_count = 0
     for msg in result.get("messages", []):
         if isinstance(msg, AIMessage):
             for tc in getattr(msg, "tool_calls", []) or []:
+                tool_count += 1
                 logger.info("Sub-agent [%s] tool: %s(%s)", category, tc.get("name"), str(tc.get("args", {}))[:80])
         elif isinstance(msg, ToolMessage):
             preview = (msg.content or "")[:200]
@@ -118,6 +138,7 @@ def _run_subagent(task: str, category: str) -> str:
     for msg in reversed(result.get("messages", [])):
         if isinstance(msg, AIMessage) and msg.content:
             logger.info("Sub-agent [%s] completed: %s", category, msg.content[:80])
+            span.end(status="completed", summary=msg.content[:200], tool_calls=tool_count)
             # Route engineering work to the #engineering channel.
             if category in _engineering_categories:
                 from prax.services.teamwork_hooks import post_to_channel, set_role_status
@@ -128,6 +149,7 @@ def _run_subagent(task: str, category: str) -> str:
     if category in _engineering_categories:
         from prax.services.teamwork_hooks import set_role_status
         set_role_status("Executor", "idle")
+    span.end(status="completed", summary="No output produced", tool_calls=tool_count)
     return "Sub-agent completed but produced no output."
 
 
@@ -140,17 +162,18 @@ def delegate_task(task: str, category: str = "research") -> str:
     involvement at each step.  The sub-agent has access to a focused set of tools
     based on the category.
 
+    For specialized work, prefer the dedicated spoke agents instead:
+    delegate_browser, delegate_sandbox, delegate_sysadmin, delegate_finetune,
+    delegate_content_editor, delegate_knowledge.
+
     Args:
         task: A clear, self-contained description of what the sub-agent should do.
               Include all context it needs — it cannot see your conversation history.
         category: Which tool set the sub-agent gets.  One of:
                   "research" (web search, URL fetch, PDFs — default),
-                  "workspace" (file management, notes, todos),
-                  "browser" (Playwright automation),
+                  "workspace" (file management, todos),
                   "scheduler" (cron jobs, reminders),
-                  "sandbox" (Docker code execution),
-                  "codegen" (self-improvement PRs),
-                  "finetune" (model training).
+                  "codegen" (self-improvement PRs).
     """
     return _run_subagent(task, category)
 
@@ -158,36 +181,100 @@ def delegate_task(task: str, category: str = "research") -> str:
 _PARALLEL_TIMEOUT_SECONDS = 120
 
 
+def _run_spoke_or_subagent(spec: dict) -> str:
+    """Route a parallel task to a spoke or generic sub-agent.
+
+    If ``spoke`` is set, invokes the named spoke's delegate function directly.
+    Otherwise falls back to ``_run_subagent`` with the given category.
+
+    Each task gets a named span in the execution graph for traceability.
+    """
+    import importlib
+
+    from prax.agent.trace import start_span
+
+    task_desc = spec.get("task", "")
+    spoke_name = spec.get("spoke")
+    task_name = spec.get("name", spoke_name or spec.get("category", "research"))
+    spoke_or_cat = spoke_name or spec.get("category", "research")
+
+    span = start_span(task_name, spoke_or_cat)
+
+    try:
+        if spoke_name:
+            delegate_path = _SPOKE_DELEGATES.get(spoke_name)
+            if not delegate_path:
+                result = f"Unknown spoke: '{spoke_name}'. Available: {', '.join(_SPOKE_DELEGATES)}"
+                span.end(status="failed", summary=result)
+                return result
+            module_path, func_name = delegate_path.rsplit(".", 1)
+            mod = importlib.import_module(module_path)
+            delegate_fn = getattr(mod, func_name)
+            # Spokes are @tool-decorated — invoke via .invoke() for LangChain compat.
+            result = delegate_fn.invoke({"task": task_desc})
+        else:
+            category = spec.get("category", "research")
+            result = _run_subagent(task_desc, category)
+
+        span.end(status="completed", summary=(result or "")[:200])
+        return result
+    except Exception as exc:
+        span.end(status="failed", summary=str(exc)[:200])
+        raise
+
+
 @tool
 def delegate_parallel(tasks: list[dict]) -> str:
-    """Run multiple independent sub-agent tasks in parallel.
+    """Run multiple independent tasks in parallel — across spokes and sub-agents.
 
     Each task is a dict with:
         - task: str — self-contained description with all needed context
-        - category: str — tool set category (research, workspace, browser, sandbox, etc.)
+        - spoke: str — (optional) spoke name: browser, content, finetune,
+          knowledge, sandbox, sysadmin.  Routes to the dedicated spoke agent.
+        - category: str — (optional, if no spoke) sub-agent category:
+          research, workspace, scheduler, codegen.
+        - name: str — (optional) human-readable identity for this task.
+          Auto-generated as ``{spoke_or_category}-{index}`` if not set.
 
-    Returns a numbered summary of all results.
+    Use ``spoke`` for specialized work, ``category`` for generic sub-agent tasks.
+    If neither is set, defaults to category="research".
+
+    Returns a summary of all results plus an execution graph showing the
+    full delegation tree with timing and status.
 
     Example:
         delegate_parallel([
-            {"task": "Search arXiv for the TurboQuant paper and summarize it", "category": "research"},
-            {"task": "Fetch https://research.google/blog/turboquant and extract key points", "category": "research"},
+            {"task": "Search arXiv for TurboQuant and summarize", "category": "research"},
+            {"task": "Check all plugins for updates", "spoke": "sysadmin"},
+            {"task": "Open example.com and take a screenshot", "spoke": "browser", "name": "screenshot"},
         ])
     """
     if not tasks:
         return "No tasks provided."
 
-    logger.info("delegate_parallel: launching %d sub-agents", len(tasks))
+    from prax.agent.trace import get_graph_summary, start_span
 
-    # Submit all tasks to a thread pool so they run concurrently.
+    span = start_span("parallel", "parallel")
+
+    # Assign names to tasks that don't have one
+    for idx, spec in enumerate(tasks):
+        if "name" not in spec:
+            spoke = spec.get("spoke")
+            cat = spec.get("category", "research")
+            spec["name"] = f"{spoke or cat}-{idx + 1}"
+
+    logger.info(
+        "delegate_parallel: launching %d tasks: %s",
+        len(tasks),
+        ", ".join(s.get("name", "?") for s in tasks),
+    )
+
     results: list[str] = [""] * len(tasks)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks)) as pool:
         future_to_idx: dict[concurrent.futures.Future, int] = {}
         for idx, spec in enumerate(tasks):
-            task_desc = spec.get("task", "")
-            category = spec.get("category", "research")
-            future = pool.submit(_run_subagent, task_desc, category)
+            future = pool.submit(_run_spoke_or_subagent, spec)
             future_to_idx[future] = idx
 
         done, not_done = concurrent.futures.wait(
@@ -208,13 +295,21 @@ def delegate_parallel(tasks: list[dict]) -> str:
             future.cancel()
             results[idx] = "Task timed out."
 
-    # Build a numbered summary preserving original task order.
     parts: list[str] = []
     for idx, result_text in enumerate(results, start=1):
+        task_name = tasks[idx - 1].get("name", f"task-{idx}")
         task_label = tasks[idx - 1].get("task", "(unknown)")[:80]
-        parts.append(f"--- Task {idx}: {task_label} ---\n{result_text}")
+        spoke_or_cat = tasks[idx - 1].get("spoke") or tasks[idx - 1].get("category", "research")
+        parts.append(f"--- {task_name} [{spoke_or_cat}]: {task_label} ---\n{result_text}")
 
     summary = "\n\n".join(parts)
+
+    # Append execution graph for the governing agent
+    graph = get_graph_summary()
+    if graph and "No active trace" not in graph:
+        summary += f"\n\n## Execution Graph\n{graph}"
+
+    span.end(status="completed", summary=f"{len(tasks)} tasks completed")
     logger.info("delegate_parallel: all %d tasks complete", len(tasks))
     return summary
 

@@ -46,6 +46,10 @@ dependencies = [
     "langgraph>=1.1.3",
     "pillow>=12.1.1",
     "feedparser>=6.0.12",
+    "opentelemetry-api>=1.40.0",
+    "opentelemetry-sdk>=1.40.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.40.0",
+    "prometheus-client>=0.24.1",
 ]
 
 [project.optional-dependencies]
