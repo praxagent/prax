@@ -77,10 +77,24 @@ def user_notes_read() -> str:
 def workspace_save(filename: str, content: str) -> str:
     """Save a file to the active workspace. Use for markdown notes, extracted content, etc."""
     try:
-        workspace_service.save_file(_get_user_id(), filename, content)
+        uid = _get_user_id()
+        workspace_service.save_file(uid, filename, content)
+
+        # Self-verification: confirm the file was actually saved
+        verify_msg = ""
+        try:
+            from prax.agent.verification import verify_workspace_file
+            ws_root = workspace_service.workspace_root(uid)
+            result = verify_workspace_file(ws_root, filename)
+            if not result.passed:
+                verify_msg = f" [WARNING: verification failed: {result.summary}]"
+                _ws_logger.warning("workspace_save verification failed for %s: %s", filename, result.summary)
+        except Exception:
+            pass
+
         # Auto-advance the plan — saving a file is a concrete step completion.
         _auto_advance_plan_step()
-        return f"Saved {filename} to active workspace."
+        return f"Saved {filename} to active workspace.{verify_msg}"
     except Exception as e:
         return f"Failed to save {filename}: {e}"
 

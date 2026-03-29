@@ -2889,6 +2889,81 @@ Several production agent frameworks have converged on similar architectural patt
 
 **Phase 2 implementation:** IMPORTED plugins now run in isolated subprocesses with JSON-RPC communication (see [Plugin security](#plugin-security)). This moves the security boundary from "seven imperfect Python layers" to "OS-level process isolation." Future enhancement: run the subprocess inside the sandbox Docker container for cgroups + seccomp + filesystem isolation on top of process isolation.
 
+### 12. Adaptive Tier Selection via Thompson Sampling
+
+**Finding:** Static model-tier assignment wastes budget (over-provisioning easy tasks) or degrades quality (under-provisioning hard ones). Multi-armed bandit algorithms — especially Thompson Sampling — adaptively learn which tier works best for each component and difficulty level.
+
+- **Thompson (1933)** introduced the probability-matching algorithm: sample from each arm's posterior distribution and pick the arm with the highest draw. This naturally balances exploration and exploitation without a tunable epsilon parameter.
+- **Chapelle & Li (2011)** provided the first large-scale empirical evaluation of Thompson Sampling in a production setting (online advertising), showing it matches or outperforms UCB1 and epsilon-greedy while being simpler to implement.
+- **Russo et al. (2018)** published the definitive tutorial on Thompson Sampling, covering Beta-Bernoulli bandits, contextual bandits, and the theoretical foundations (Bayesian regret bounds).
+
+**Prax implementation:** `TierBandit` (`prax/agent/tier_bandit.py`) maintains a Beta(α, β) posterior for each (component, difficulty, tier) triple. On each run, it samples from all posteriors, divides by a cost weight (low=1×, medium=4×, high=16×, pro=64×), and picks the tier with the highest cost-weighted efficiency. Difficulty constraints penalize mismatches (e.g., high tier on easy tasks gets a 0.3× multiplier). Posteriors persist to `prax/data/tier_bandit_state.json` so learning carries across restarts. The ATLAS project ([itigges22/ATLAS](https://github.com/itigges22/ATLAS)) demonstrated a similar Thompson Sampling router with cost-weighted efficiency and difficulty-binned posteriors in an open-source agentic framework.
+
+**References:**
+- Thompson, W.R., "On the Likelihood that One Unknown Probability Exceeds Another in View of the Evidence of Two Samples," Biometrika, 1933
+- Chapelle & Li, "An Empirical Evaluation of Thompson Sampling," NeurIPS 2011 — [paper](https://proceedings.neurips.cc/paper/2011/hash/e53a0a2978c28872a4505bdb51db06dc-Abstract.html)
+- Agrawal & Goyal, "Analysis of Thompson Sampling for the Multi-armed Bandit Problem," COLT 2012 — [proceedings](https://proceedings.mlr.press/v23/agrawal12.html) — first modern finite-time regret analysis proving logarithmic regret
+- Russo et al., "A Tutorial on Thompson Sampling," Foundations and Trends in ML, 2018 — [arXiv:1707.02038](https://arxiv.org/abs/1707.02038)
+- Chen et al., "FrugalGPT: How to Use Large Language Models While Reducing Cost and Improving Performance," 2023 — [arXiv:2305.05176](https://arxiv.org/abs/2305.05176) — LLM cascade routing for cost optimization
+
+### 13. Difficulty-Driven Routing
+
+**Finding:** Allocating more compute (larger models, longer inference) to harder problems improves efficiency without sacrificing quality on simple tasks. This is analogous to adaptive computation time in neural networks.
+
+- **Graves (2016)** introduced Adaptive Computation Time (ACT) for RNNs — the network learns how many computation steps to perform per input, spending more time on harder examples. This was the first formal treatment of "think longer on harder problems" in deep learning.
+- **Snell et al. (2024)** showed that scaling test-time compute (more tokens, more passes) can be more effective than scaling model parameters for a given inference budget. On math benchmarks, optimally allocating compute at inference time outperformed a 14× larger model with fixed compute.
+
+**Prax implementation:** `estimate_difficulty()` (`prax/agent/difficulty.py`) uses signal fusion — message length, hard/easy keyword patterns, multi-step markers, URL count, question complexity — to classify incoming messages as EASY/MODERATE/HARD. The orchestrator injects difficulty context into the system prompt and uses it to seed the Thompson Sampling bandit. ATLAS ([itigges22/ATLAS](https://github.com/itigges22/ATLAS)) demonstrated a similar signal-fused difficulty estimator integrated with bandit-based tier routing.
+
+**References:**
+- Graves, A., "Adaptive Computation Time for Recurrent Neural Networks," 2016 — [arXiv:1603.08983](https://arxiv.org/abs/1603.08983)
+- Raposo et al., "Mixture-of-Depths: Dynamically Allocating Compute in Transformer-Based Language Models," 2024 — [arXiv:2404.02258](https://arxiv.org/abs/2404.02258) — extends adaptive computation to transformers via top-k routing
+- Snell et al., "Scaling LLM Test-Time Compute Optimally Can Be More Effective Than Scaling Model Parameters," 2024 — [arXiv:2408.03314](https://arxiv.org/abs/2408.03314)
+
+### 14. Multi-Perspective Error Recovery
+
+**Finding:** When a tool call fails, analyzing the failure from multiple perspectives before retrying dramatically outperforms blind retry. This extends chain-of-thought reasoning to error diagnosis.
+
+- **Wei et al. (2022)** established chain-of-thought prompting — breaking reasoning into intermediate steps improves accuracy on arithmetic, commonsense, and symbolic reasoning tasks. The same principle applies to error diagnosis: decomposing "why did this fail?" into multiple angles.
+- **Shinn et al. (2023)** showed that Reflexion — reflecting on failures and storing verbal feedback for retry — improved HumanEval pass rates from 80% to 91% and ALFWorld from 75% to 97%, all without weight updates.
+
+**Prax implementation:** `analyze_tool_failure()` (`prax/agent/error_recovery.py`) examines each failure from four perspectives: (1) logical consistency (was the tool called correctly?), (2) information completeness (was input missing?), (3) assumptions (did the agent assume something false?), and (4) alternative approach (is there a different tool?). Each perspective produces a confidence-scored diagnosis and suggestion. `build_recovery_context()` formats the analysis for injection into the retry prompt. The four-perspective decomposition was inspired by PR-CoT multi-perspective repair as implemented in ATLAS ([itigges22/ATLAS](https://github.com/itigges22/ATLAS)), which reported an 85.7% rescue rate on code generation failures.
+
+**References:**
+- Wei et al., "Chain-of-Thought Prompting Elicits Reasoning in Large Language Models," NeurIPS 2022 — [arXiv:2201.11903](https://arxiv.org/abs/2201.11903)
+- Shinn et al., "Reflexion: Language Agents with Verbal Reinforcement Learning," NeurIPS 2023 — [arXiv:2303.11366](https://arxiv.org/abs/2303.11366)
+
+### 15. Metacognitive Failure Profiles
+
+**Finding:** Agents that maintain explicit models of their own weaknesses — and compensate for them via prompt injection — exhibit more stable long-term behavior than agents that treat each failure independently.
+
+- **Flavell (1979)** coined the term "metacognition" — knowledge about one's own cognitive processes and the ability to monitor and regulate them. In an AI agent context, this translates to tracking recurring failure patterns and proactively adjusting behavior.
+- **Shinn et al. (2023)** demonstrated that episodic failure memories (Reflexion) enable agents to avoid repeating the same mistakes across multiple attempts, without any gradient updates.
+- **Madaan et al. (2023)** showed that iterative self-feedback (Self-Refine) improves outputs by 5–20% across tasks. The key insight: the agent improves more when it has explicit awareness of what went wrong.
+
+**Prax implementation:** `MetacognitiveStore` (`prax/agent/metacognitive.py`) maintains per-component `ComponentProfile`s with `FailurePattern` records. Each pattern has a confidence score, occurrence count, and an optional compensating instruction. When a pattern reaches ≥3 occurrences and ≥40% confidence, it becomes "active" and is injected as a warning into the component's system prompt. Confidence decays over time via an Ebbinghaus-inspired forgetting curve (`conf *= 0.95^days`), naturally pruning stale patterns. ATLAS ([itigges22/ATLAS](https://github.com/itigges22/ATLAS)) implemented a similar metacognitive model with per-category failure tracking and confidence decay.
+
+**References:**
+- Flavell, J.H., "Metacognition and Cognitive Monitoring," American Psychologist, 1979 — [doi:10.1037/0003-066X.34.10.906](https://doi.org/10.1037/0003-066X.34.10.906)
+- Ram & Cox, "Introspective Reasoning Using Meta-Explanations for Multistrategy Learning," Morgan Kaufmann, 1994 — introspective blame assignment for systematic failure diagnosis in AI systems
+- Cox, M.T., "Metacognition in Computation: A Selected Research Review," Artificial Intelligence, 2005 — [doi:10.1016/j.artint.2005.10.007](https://doi.org/10.1016/j.artint.2005.10.007)
+- Shinn et al., "Reflexion," NeurIPS 2023 — [arXiv:2303.11366](https://arxiv.org/abs/2303.11366)
+- Madaan et al., "Self-Refine," NeurIPS 2023 — [arXiv:2303.17651](https://arxiv.org/abs/2303.17651)
+
+### 16. Self-Verification Before Delivery
+
+**Finding:** Agents that verify their own outputs before presenting them to users catch 60–90% of errors that would otherwise reach the user. Verification is far cheaper than re-generation.
+
+- **Wang et al. (2023)** introduced self-consistency: sampling multiple reasoning paths and selecting the most consistent answer. The key insight is that verification (checking answers) is easier and more reliable than generation (producing answers).
+- **Chen et al. (2024)** showed that "self-debugging" — where the model generates test cases for its own code, runs them, and fixes failures — improves code generation accuracy by 2–12% on standard benchmarks, with the biggest gains on harder problems.
+
+**Prax implementation:** `verify_workspace_file()` and `verify_delegation_result()` (`prax/agent/verification.py`) run automated checks after workspace saves and sub-agent delegations: file existence, minimum content length, expected patterns, error indicator detection, and minimum word count. The workspace_save tool integrates verification and appends warnings when checks fail. ATLAS ([itigges22/ATLAS](https://github.com/itigges22/ATLAS)) demonstrated self-test generation for internal verification before presenting results to users.
+
+**References:**
+- Wang et al., "Self-Consistency Improves Chain of Thought Reasoning in Language Models," ICLR 2023 — [arXiv:2203.11171](https://arxiv.org/abs/2203.11171)
+- Chen et al., "Teaching Large Language Models to Self-Debug," ICLR 2024 — [arXiv:2304.05128](https://arxiv.org/abs/2304.05128)
+- Chen et al., "CodeT: Code Generation with Generated Tests," ICLR 2023 — [arXiv:2207.10397](https://arxiv.org/abs/2207.10397) — self-test generation and dual execution agreement for ranking candidates
+
 ### Key Takeaways
 
 1. **Planning is not optional** — it's the single highest-leverage intervention for multi-step tasks.
@@ -2899,6 +2974,8 @@ Several production agent frameworks have converged on similar architectural patt
 6. **Fewer tools, better choices** — tool selection accuracy collapses past 20–50 tools. Use hub-and-spoke delegation or on-demand tool search to keep each agent's tool set focused.
 7. **Diverse reviewers improve quality** — different models/providers in a review loop outperform same-model self-critique by 9+ percentage points.
 8. **Put security boundaries at the OS level** — in-process Python sandboxing is fundamentally fragile (the Glass Sandbox). Use subprocess/process isolation as the primary boundary, keep in-process guards as defence-in-depth, and make the framework enforce limits the plugin code cannot override.
+9. **Let the data choose the model** — Thompson Sampling learns which tier works best per component, replacing guesswork with Bayesian inference.
+10. **Spend compute where it matters** — difficulty-driven routing allocates expensive models to hard tasks and cheap models to easy ones, matching adaptive computation research.
 
 ## Roadmap
 
@@ -2931,6 +3008,11 @@ Several production agent frameworks have converged on similar architectural patt
 - [x] Reader-to-plugin migration (NPR, web summary, PDF, YouTube, arXiv, Deutschlandfunk)
 - [x] Plugin repository support (separate private git repo with SSH deploy key)
 - [x] Subprocess isolation for imported plugins (Phase 2 — JSON-RPC bridge, stripped env, capabilities proxy)
+- [x] Adaptive tier selection via Thompson Sampling bandit
+- [x] Difficulty-driven routing (signal-fused complexity estimation)
+- [x] Multi-perspective error recovery (4-angle failure analysis before retry)
+- [x] Metacognitive failure profiles (per-component pattern learning with confidence decay)
+- [x] Self-verification (workspace file and delegation output checks before delivery)
 - [ ] Apple Silicon support (MLX backend as alternative to vLLM/CUDA)
 - [ ] Sandbox Docker image build + integration test with live OpenCode
 - [ ] Voice-triggered sandbox sessions

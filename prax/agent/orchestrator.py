@@ -259,6 +259,11 @@ class ConversationAgent:
         history: list[BaseMessage] = list(conversation)
         logger.debug("Agent invoked with %d history messages", len(history))
 
+        # Difficulty-driven routing: estimate task difficulty and inject
+        # context so the agent knows how the system classified the request.
+        from prax.agent.difficulty import difficulty_context_for_prompt, estimate_difficulty
+        difficulty = estimate_difficulty(user_input)
+
         # Complexity hint: if the request looks complex and there's no active
         # plan, nudge the agent to create one.
         complexity_hint = ""
@@ -270,7 +275,24 @@ class ConversationAgent:
                 "multiple steps. Create an agent_plan BEFORE doing any work.]"
             )
 
-        full_prompt = _load_system_prompt() + workspace_context + complexity_hint
+        # Metacognitive injection: if the orchestrator has known failure
+        # patterns from past runs, inject warnings into the prompt.
+        metacognitive_hint = ""
+        try:
+            from prax.agent.metacognitive import get_metacognitive_store
+            metacognitive_hint = get_metacognitive_store().get_prompt_injection("orchestrator")
+        except Exception:
+            pass
+
+        difficulty_hint = "\n\n" + difficulty_context_for_prompt(user_input)
+
+        full_prompt = (
+            _load_system_prompt()
+            + workspace_context
+            + complexity_hint
+            + difficulty_hint
+            + metacognitive_hint
+        )
 
         # Persist instructions so the agent can re-read them mid-conversation.
         if uid:
@@ -401,6 +423,33 @@ class ConversationAgent:
                 logger.warning(
                     "Agent graph failed (user=%s): %s", user_id, exc,
                 )
+
+                # Multi-perspective error analysis for structured recovery
+                try:
+                    from prax.agent.error_recovery import build_recovery_context
+                    turn = self.checkpoint_mgr.get_turn(user_id)
+                    attempt = turn.retries_used + 1 if turn else 1
+                    recovery_ctx = build_recovery_context(
+                        tool_name="orchestrator_graph",
+                        error_message=str(exc),
+                        attempt=attempt,
+                    )
+                    logger.info("Recovery context: %s", recovery_ctx[:200])
+                except Exception:
+                    pass
+
+                # Record failure for metacognitive learning
+                try:
+                    from prax.agent.metacognitive import get_metacognitive_store
+                    error_type = type(exc).__name__
+                    get_metacognitive_store().record_failure(
+                        component="orchestrator",
+                        pattern_id=f"graph_{error_type}",
+                        description=f"Graph invocation failed: {error_type}: {str(exc)[:80]}",
+                        compensating_instruction=f"Previous runs hit {error_type} — verify tool args before calling.",
+                    )
+                except Exception:
+                    pass
 
                 # If this error is from an invalid checkpoint state (dangling
                 # tool_calls), don't count it as a retry — just start fresh.

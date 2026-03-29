@@ -130,6 +130,17 @@ def _run_subagent(task: str, category: str) -> str:
     subgraph = create_react_agent(llm, tools)
 
     identity = build_identity_context(category)
+
+    # Metacognitive injection: inject known failure patterns for this spoke
+    metacognitive_hint = ""
+    try:
+        from prax.agent.metacognitive import get_metacognitive_store
+        metacognitive_hint = get_metacognitive_store().get_prompt_injection(
+            f"subagent_{category}"
+        )
+    except Exception:
+        pass
+
     system_msg = (
         f"You are a focused sub-agent of {settings.agent_name}. "
         f"Your task category is '{category}'. "
@@ -137,6 +148,7 @@ def _run_subagent(task: str, category: str) -> str:
         "concise summary of what you found or did. "
         "Do NOT ask follow-up questions — just do the work.\n\n"
         f"## Execution Context\n{identity}"
+        f"{metacognitive_hint}"
     )
 
     try:
@@ -149,6 +161,37 @@ def _run_subagent(task: str, category: str) -> str:
         )
     except Exception as exc:
         logger.warning("Sub-agent [%s] failed: %s", category, exc, exc_info=True)
+
+        # Multi-perspective error analysis for structured recovery context
+        try:
+            from prax.agent.error_recovery import analyze_tool_failure
+            analysis = analyze_tool_failure(
+                tool_name=f"subagent_{category}",
+                error_message=str(exc),
+                context=task,
+            )
+            recovery_hint = analysis.best_suggestion
+            logger.info(
+                "Error recovery suggestion for %s: %s",
+                category, recovery_hint[:120],
+            )
+        except Exception:
+            recovery_hint = ""
+
+        # Record failure pattern for metacognitive learning
+        try:
+            from prax.agent.metacognitive import get_metacognitive_store
+            error_type = type(exc).__name__
+            get_metacognitive_store().record_failure(
+                component=f"subagent_{category}",
+                pattern_id=f"{error_type}_{category}",
+                description=f"{error_type}: {str(exc)[:100]}",
+                category=category,
+                compensating_instruction=recovery_hint or f"Watch for {error_type} in {category} tasks.",
+            )
+        except Exception:
+            pass
+
         span.end(status="failed", summary=str(exc)[:200])
         return f"Sub-agent failed: {exc}"
 
