@@ -63,6 +63,38 @@ def _get_tools_for_category(category: str) -> list:
     return [background_search_tool, fetch_url_content, get_current_datetime]
 
 
+def _auto_advance_plan() -> None:
+    """Mark the next incomplete plan step as done after a successful delegation.
+
+    This is the reliable signaling mechanism — instead of depending on the LLM
+    to call agent_step_done(), the framework auto-advances the plan whenever a
+    delegation tool completes successfully.  Steps are advanced sequentially
+    (the first incomplete step gets marked done).
+    """
+    try:
+        from prax.agent.user_context import current_user_id
+        from prax.services.workspace_service import complete_plan_step, read_plan
+
+        uid = current_user_id.get()
+        if not uid:
+            return
+
+        plan = read_plan(uid)
+        if not plan:
+            return
+
+        for step in plan.get("steps", []):
+            if not step.get("done"):
+                complete_plan_step(uid, step["step"])
+                logger.info(
+                    "Auto-advanced plan step %d after delegation: %s",
+                    step["step"], step.get("description", "")[:60],
+                )
+                return
+    except Exception:
+        pass  # Best-effort — don't break the delegation return.
+
+
 def _run_subagent(task: str, category: str) -> str:
     """Execute a single sub-agent run and return its textual result.
 
@@ -78,8 +110,9 @@ def _run_subagent(task: str, category: str) -> str:
     # Route engineering-related work to TeamWork.
     _engineering_categories = {"sandbox", "codegen", "workspace"}
     if category in _engineering_categories:
-        from prax.services.teamwork_hooks import set_role_status
+        from prax.services.teamwork_hooks import set_role_status, push_live_output
         set_role_status("Executor", "working")
+        push_live_output("Executor", f"[{category}] Starting: {task[:120]}\n", status="running", append=False)
 
     tools = _get_tools_for_category(category)
     if not tools:
@@ -112,7 +145,7 @@ def _run_subagent(task: str, category: str) -> str:
                 SystemMessage(content=system_msg),
                 HumanMessage(content=task),
             ]},
-            config={"recursion_limit": 60},
+            config={"recursion_limit": 30},
         )
     except Exception as exc:
         logger.warning("Sub-agent [%s] failed: %s", category, exc, exc_info=True)
@@ -122,17 +155,26 @@ def _run_subagent(task: str, category: str) -> str:
     # Log the sub-agent's tool call trace for debugging.
     from langchain_core.messages import ToolMessage
     tool_count = 0
+    live_lines: list[str] = []
     for msg in result.get("messages", []):
         if isinstance(msg, AIMessage):
             for tc in getattr(msg, "tool_calls", []) or []:
                 tool_count += 1
                 logger.info("Sub-agent [%s] tool: %s(%s)", category, tc.get("name"), str(tc.get("args", {}))[:80])
+                live_lines.append(f"  → {tc.get('name')}({str(tc.get('args', {}))[:80]})")
         elif isinstance(msg, ToolMessage):
             preview = (msg.content or "")[:200]
             if "error" in preview.lower() or "fail" in preview.lower():
                 logger.warning("Sub-agent [%s] tool error [%s]: %s", category, msg.name, preview)
+                live_lines.append(f"  ✗ {msg.name}: {preview[:120]}")
             else:
                 logger.info("Sub-agent [%s] result [%s]: %s", category, msg.name, preview[:120])
+                live_lines.append(f"  ✓ {msg.name}: {preview[:120]}")
+
+    # Push tool call log to TeamWork live output for engineering categories
+    if category in _engineering_categories and live_lines:
+        from prax.services.teamwork_hooks import push_live_output
+        push_live_output("Executor", "\n".join(live_lines) + "\n")
 
     # Extract the final AI response.
     for msg in reversed(result.get("messages", [])):
@@ -141,14 +183,19 @@ def _run_subagent(task: str, category: str) -> str:
             span.end(status="completed", summary=msg.content[:200], tool_calls=tool_count)
             # Route engineering work to the #engineering channel.
             if category in _engineering_categories:
-                from prax.services.teamwork_hooks import post_to_channel, set_role_status
+                from prax.services.teamwork_hooks import post_to_channel, set_role_status, push_live_output
                 set_role_status("Executor", "idle")
                 post_to_channel("engineering", msg.content[:3000], agent_name="Executor")
+                push_live_output("Executor", f"\n[{category}] completed: {msg.content[:200]}\n", status="completed")
+            # Auto-advance the plan — mark the next incomplete step as done
+            # so the orchestrator doesn't loop trying to re-delegate.
+            _auto_advance_plan()
             return msg.content
 
     if category in _engineering_categories:
-        from prax.services.teamwork_hooks import set_role_status
+        from prax.services.teamwork_hooks import set_role_status, push_live_output
         set_role_status("Executor", "idle")
+        push_live_output("Executor", f"\n[{category}] completed (no output)\n", status="completed")
     span.end(status="completed", summary="No output produced", tool_calls=tool_count)
     return "Sub-agent completed but produced no output."
 

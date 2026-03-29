@@ -270,6 +270,37 @@ class TeamWorkClient:
         except Exception:
             logger.warning("Failed to update TeamWork task", exc_info=True)
 
+    # ----- Live output -----
+
+    def update_live_output(
+        self,
+        agent_name: str,
+        output: str,
+        status: str = "running",
+        append: bool = True,
+        error: str | None = None,
+    ) -> None:
+        """Push live execution output for an agent to TeamWork.
+
+        Called during spoke/subagent execution so the frontend can display
+        real-time tool call logs.
+        """
+        agent_id = self._agents.get(agent_name)
+        if not agent_id or not self._project_id:
+            return
+        try:
+            self._post(
+                f"/projects/{self._project_id}/agents/{agent_id}/live-output",
+                {
+                    "output": output,
+                    "status": status,
+                    "append": append,
+                    "error": error,
+                },
+            )
+        except Exception:
+            logger.debug("Failed to push live output for %s", agent_name, exc_info=True)
+
     # ----- Channel management -----
 
     def get_channel_id(self, name: str) -> str | None:

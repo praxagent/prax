@@ -1172,12 +1172,18 @@ Some spokes are **sub-hubs** — they don't just run a single ReAct loop, they o
 
 **Blog mode** (default) — a procedural coordinator that runs a multi-phase pipeline:
 
+```mermaid
+flowchart LR
+    A[Research] --> B[Write]
+    B --> C[Publish]
+    C --> D[Review]
+    D -->|APPROVED| E[Done]
+    D -->|REVISE| F[Write\nwith feedback]
+    F --> G[Re-publish]
+    G --> D
+    style E fill:#2d6,stroke:#1a4
 ```
-Research → Write → Publish → Review ──┐
-                                      │ APPROVED? → Done
-                                      │ REVISE?   → ↓
-                              Write (with feedback) → Re-publish → Review (max 3 cycles)
-```
+*Max 3 revision cycles.*
 
 Each phase uses a different sub-agent:
 - **Researcher** — generic research sub-agent via `_run_subagent(query, "research")`
@@ -1432,22 +1438,12 @@ Many websites (Twitter/X, SPAs, pages behind logins) return empty or broken HTML
 
 In Docker, the sandbox container runs a **headless Chromium** with remote debugging enabled (CDP on port 9222, forwarded to 9223 via socat).  **Three consumers share the same Chrome instance:**
 
-```
-                         ┌─────────────────────┐
-                         │   Sandbox Chrome     │
-                         │   (headless, CDP)    │
-                         │   :9222 → :9223      │
-                         └──────┬───────────────┘
-                                │
-               ┌────────────────┼────────────────┐
-               │                │                │
-      ┌────────▼────────┐  ┌───▼────────┐  ┌────▼───────────┐
-      │   Playwright    │  │  Raw CDP   │  │   TeamWork     │
-      │  (browser_*)    │  │  (sandbox  │  │  Screencast    │
-      │  Rich API       │  │  _browser  │  │  (user sees    │
-      │  via connect_   │  │  _read/act)│  │  the browser   │
-      │  over_cdp()     │  │            │  │  live)         │
-      └─────────────────┘  └────────────┘  └────────────────┘
+```mermaid
+flowchart TD
+    Chrome["Sandbox Chrome\n(headless, CDP)\n:9222 → :9223"]
+    Chrome --> PW["Playwright\n(browser_*)\nRich API via\nconnect_over_cdp()"]
+    Chrome --> CDP["Raw CDP\n(sandbox_browser\n_read/_act)"]
+    Chrome --> TW["TeamWork\nScreencast\n(user sees browser live)"]
 ```
 
 - **Playwright** connects via `connect_over_cdp()` — the agent gets ergonomic selectors, auto-waiting, form filling, and file uploads, all operating on the shared Chrome
@@ -1744,25 +1740,17 @@ IMPORTED plugins execute in **isolated subprocesses** — separate OS processes 
 
 #### Architecture
 
-```
-┌─────────────────────────────────┐     JSON-lines     ┌──────────────────────────────┐
-│         Parent Process          │    on stdin/stdout   │     Plugin Subprocess        │
-│                                 │◄───────────────────►│                              │
-│  MonitoredTool                  │                      │  host.py                     │
-│    ├─ call budget (10/msg)      │  ── invoke ──►       │    ├─ import plugin module   │
-│    ├─ governance (HIGH risk)    │  ◄── result ──       │    ├─ call tool.invoke()     │
-│    └─ bridge.invoke()           │                      │    └─ CapsProxy             │
-│                                 │  ◄── caps_call ──    │         ├─ http_get(url)     │
-│  Bridge                         │  ── caps_result ──►  │         ├─ build_llm()       │
-│    ├─ spawn subprocess          │                      │         ├─ save_file()       │
-│    ├─ service caps callbacks    │                      │         ├─ read_file()       │
-│    ├─ scoped plugin_data dir    │                      │         └─ get_config()      │
-│    ├─ timeout → SIGKILL         │                      │                              │
-│    └─ PluginCapabilities (real) │                      │  Env: PATH, HOME, LANG only  │
-│         ├─ API keys ✓           │                      │  No API keys. No secrets.    │
-│         ├─ prax.settings ✓      │                      │  No Docker socket.           │
-│         └─ network access ✓     │                      │  No prax.settings.           │
-└─────────────────────────────────┘                      └──────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph Parent["Parent Process"]
+        MT["MonitoredTool\n• call budget (10/msg)\n• governance (HIGH risk)\n• bridge.invoke()"]
+        BR["Bridge\n• spawn subprocess\n• service caps callbacks\n• timeout → SIGKILL\n• PluginCapabilities (real)\n  – API keys ✓\n  – prax.settings ✓\n  – network access ✓"]
+    end
+    subgraph Sub["Plugin Subprocess"]
+        HP["host.py\n• import plugin module\n• call tool.invoke()\n• CapsProxy\n  – http_get(url)\n  – build_llm()\n  – save_file()\n  – get_config()"]
+        ENV["Env: PATH, HOME, LANG only\nNo API keys. No secrets.\nNo Docker socket."]
+    end
+    Parent <-->|"JSON-lines\non stdin/stdout"| Sub
 ```
 
 When a plugin calls `caps.http_get(url)`, the proxy in the subprocess serializes the call as a JSON-RPC message, sends it to the parent over stdout, and blocks. The parent — which holds the real API keys — makes the HTTP request and sends the result back. The plugin experiences a normal synchronous method call but never touches a credential.
@@ -2154,16 +2142,17 @@ The `tests/e2e/` directory contains integration tests that exercise the **full a
 
 **Architecture:**
 
-```
-User message ──▶ ConversationAgent.run() ──▶ LangGraph ReAct loop
-                         │                         │
-                    ScriptedLLM              Real tool execution
-                  (plays back script)        (mocked backends)
-                         │                         │
-                  AIMessage with               Governance wrapper,
-                  tool_calls or text           audit logging, etc.
-                         │                         │
-                         ◀─────── ToolMessage ─────┘
+```mermaid
+flowchart LR
+    A[User message] --> B[ConversationAgent.run]
+    B --> C[LangGraph ReAct loop]
+    C --> D[ScriptedLLM\nplays back script]
+    C --> E[Real tool execution\nmocked backends]
+    D --> F[AIMessage with\ntool_calls or text]
+    E --> G[Governance wrapper\naudit logging]
+    G --> H[ToolMessage]
+    H --> C
+    F --> C
 ```
 
 - **`ScriptedLLM`** — A `BaseChatModel` that returns pre-scripted `AIMessage` responses in sequence. Some responses include `tool_calls` to trigger the real tool execution path; others are plain text (final response).
@@ -2201,6 +2190,194 @@ def test_my_workflow(run_e2e):
     assert "found" in response
     assert llm.call_count == 2
 ```
+
+### Integration Tests (Real LLM + LLM Judge)
+
+The `tests/integration/` directory contains tests that send **real messages through the full Prax pipeline** (real LLM, real tools, real workspace) and then have an LLM judge evaluate whether the result met expectations. These require a real API key.
+
+```bash
+# Run all integration tests
+uv run pytest tests/integration/ -m integration -v -s
+
+# Run a single scenario (useful when developing a new skill)
+uv run pytest tests/integration/test_workflows.py -k create_simple_note -v -s
+
+# Run only research-related scenarios
+uv run pytest tests/integration/test_workflows.py -k research -v -s
+```
+
+**Requirements:**
+- A real API key in `.env` (`OPENAI_KEY` or `ANTHROPIC_KEY`)
+- Docker is NOT required for current scenarios (no sandbox-dependent tests yet)
+- Tests are skipped automatically when no API key is available
+
+**Architecture:**
+
+```mermaid
+flowchart LR
+    A[User message] --> B[ConversationAgent.run]
+    B --> C[Real LLM + Real Tools]
+    C --> D[Real workspace\ntemp directory]
+    B --> E[Cost Tracker\nper-call pricing]
+    D --> F[IntegrationResult]
+    E --> F
+    C --> F
+    F --> G[LLM Judge]
+    G --> H[JudgeVerdict\npass/fail + reasoning]
+```
+
+**Artifacts:** Each test run saves detailed artifacts to `tests/integration/.artifacts/<scenario>/`:
+
+| File | Contents |
+|------|----------|
+| `SUMMARY.md` | Duration, cost breakdown by model, judge verdict |
+| `response.md` | Full agent response text |
+| `cost.json` | Per-call token usage and USD cost |
+| `spans.json` | Structured execution graph spans (includes per-span tier choices) |
+| `tiers.json` | Every tier→model resolution with span context and timestamps |
+| `execution_graph.txt` | Human-readable delegation tree with tier annotations |
+| `verdict.json` | Judge pass/fail, reasoning, issues |
+| `workspace/` | All workspace files created during the run |
+
+**Judging:** Each test uses **3 parallel LLM judges** with majority voting (2/3 must pass). This eliminates flaky verdicts from single-judge hallucination.
+
+**Tier tracking:** Every `build_llm()` call records which tier was requested, which model it resolved to, which provider, and which span (agent/spoke) made the call. This data flows to:
+- `tiers.json` artifact — for offline analysis
+- Execution graph summary — human-readable tier annotations per span
+- Workspace `trace.log` — `[TIER_CHOICE]` entries for production trace analysis
+- OTel spans — `prax.tier` attribute for Grafana queries
+
+**Current scenarios:**
+
+| Scenario | What it tests | Expected cost | Timeout |
+|----------|--------------|---------------|---------|
+| `create_simple_note` | Basic workspace_save | ~$0.004 | 60s |
+| `create_structured_note` | Structured markdown generation | ~$0.003 | 60s |
+| `research_and_note` | Research delegation + workspace save | ~$0.030 | 180s |
+| `factual_question` | Direct response, no tools | ~$0.002 | 45s |
+| `multi_step_plan` | Multi-step planning, two workspace saves | ~$0.005 | 90s |
+| `arxiv_course_creation` | PDF download + course creation (real plugins) | ~$0.080 | 300s |
+| `compare_two_topics` | Multi-source research synthesis | ~$0.040 | 180s |
+| `workspace_read_and_extend` | Simple workspace save | ~$0.003 | 45s |
+| `simple_save_no_delegation` | Verifies simple tasks don't over-delegate | ~$0.003 | 30s |
+| `graceful_missing_capability` | Truthfulness guardrails (real-time data) | ~$0.002 | 45s |
+| `linked_workspace_files` | Three cross-referenced workspace files | ~$0.005 | 90s |
+| `note_without_ngrok` | NGROK graceful degradation | ~$0.012 | 90s |
+
+**Adding a new scenario:**
+
+```python
+# tests/integration/scenarios.py
+Scenario(
+    name="my_new_scenario",
+    message="Ask Prax to do something specific",
+    expected_flow="""\
+Describe what tools/spokes should fire and in what order.
+The judge uses this to evaluate the execution graph.
+""",
+    quality_criteria="""\
+Describe what the output should look like.
+The judge uses this to evaluate workspace files and response.
+""",
+    expected_artifacts=["*pattern*"],  # glob patterns for workspace files
+    max_duration=60,
+    min_tool_calls=1,   # 0 = no minimum check
+    max_tool_calls=15,  # safety valve — anything above is probably a loop
+)
+```
+
+**Cost tracking:** Token usage and USD cost are tracked per LLM call during integration tests. Default pricing is built-in for major models; override via the `PRAX_MODEL_PRICING` env var:
+
+```bash
+# Override pricing for specific models (JSON dict, merged on top of defaults)
+export PRAX_MODEL_PRICING='{"my-custom-model": {"input": 2.0, "output": 8.0}}'
+```
+
+### A/B Testing (Tier Experiments)
+
+Prax includes an A/B replay system for measuring how tier/model changes affect cost, latency, and output quality. Experiments define tier overrides to apply on top of an existing scenario, then run baseline vs experiment side by side.
+
+```bash
+# Run all experiments
+uv run pytest tests/integration/test_ab_replay.py -m ab -v -s
+
+# Run a single experiment
+uv run pytest tests/integration/test_ab_replay.py -k upgrade_research -v -s
+```
+
+**How it works:**
+
+```mermaid
+flowchart LR
+    A[Experiment YAML] --> B[Load scenario +\ntier overrides]
+    B --> C[Run A: Baseline\nno overrides]
+    B --> D[Run B: Experiment\nwith overrides]
+    C --> E[Judge A\n3x majority vote]
+    D --> F[Judge B\n3x majority vote]
+    E --> G[Comparison Report]
+    F --> G
+    G --> H[comparison.md\ncomparison.json]
+```
+
+**Creating an experiment:**
+
+Create a YAML file in `tests/integration/experiments/`:
+
+```yaml
+# tests/integration/experiments/upgrade_research_to_medium.yaml
+name: upgrade-research-to-medium
+description: Does bumping research from low to medium improve output?
+base_scenario: research_and_note
+
+overrides:
+  subagent_research:
+    tier: medium
+```
+
+The `overrides` keys match the component names from `llm_routing.yaml` (`orchestrator`, `subagent_research`, `subagent_browser`, `subagent_codegen`, etc.). You can override `tier`, `model`, `provider`, and `temperature`.
+
+**Included experiments:**
+
+| Experiment | Question | Scenario |
+|------------|----------|----------|
+| `upgrade_research_to_medium` | Does smarter research improve citations? | `research_and_note` |
+| `orchestrator_medium_vs_low` | Does smarter routing reduce over-delegation? | `multi_step_plan` |
+| `all_medium` | What's the ceiling for quality gains from tier upgrades? | `compare_two_topics` |
+
+**Comparison report** (`tests/integration/.artifacts/experiments/<name>/<timestamp>/comparison.md`):
+
+The report includes:
+- Cost delta (baseline vs experiment, percentage change)
+- Timing delta
+- Per-span tier differences (which spokes changed, what they changed to)
+- Judge verdicts for both runs
+- Response previews and execution graphs
+
+**Using experiments as a feedback loop:**
+
+1. Run integration tests to identify quality issues (e.g., shallow research, over-delegation)
+2. Hypothesize a tier change that might fix it (e.g., "research spoke needs medium tier")
+3. Create an experiment YAML
+4. Run the A/B test — compare cost vs quality
+5. If the experiment wins, update `llm_routing.yaml` to make it permanent
+6. If it doesn't, try a different approach (prompt changes, tool improvements)
+
+**Programmatic overrides** (for custom scripts or CI):
+
+```python
+from prax.plugins.llm_config import set_experiment_overrides, clear_experiment_overrides
+
+token = set_experiment_overrides({
+    "subagent_research": {"tier": "medium"},
+    "orchestrator": {"tier": "high"},
+})
+try:
+    result = agent.run(user_input="Research quantum computing")
+finally:
+    clear_experiment_overrides(token)
+```
+
+Overrides use `contextvars.ContextVar` so parallel test runs don't interfere.
 
 ### Releases and Semantic Versioning
 

@@ -86,10 +86,11 @@ def run_spoke(
             _finish(role_name, label=label, status="aborted", start_time=_spoke_start)
             return f"Pre-check failed for spoke '{label}': {guard_result}"
 
-    # TeamWork status
+    # TeamWork status + live output
     if role_name:
-        from prax.services.teamwork_hooks import set_role_status
+        from prax.services.teamwork_hooks import set_role_status, push_live_output
         set_role_status(role_name, "working")
+        push_live_output(role_name, f"[{label}] Starting: {task[:120]}\n", status="running", append=False)
 
     if not tools:
         span.end(status="failed", summary="No tools available")
@@ -131,7 +132,7 @@ def run_spoke(
         return f"Spoke agent failed: {exc}"
 
     # Log tool calls for debugging
-    tool_count = _log_tool_calls(result, label)
+    tool_count = _log_tool_calls(result, label, role_name=role_name)
 
     # Extract the final AI response
     for msg in reversed(result.get("messages", [])):
@@ -146,18 +147,30 @@ def run_spoke(
     return f"Spoke [{label}] completed but produced no output."
 
 
-def _log_tool_calls(result: dict, label: str) -> int:
+def _log_tool_calls(result: dict, label: str, role_name: str | None = None) -> int:
     """Log all tool calls and flag errors.  Returns the total call count."""
     tool_count = 0
+    live_lines: list[str] = []
     for msg in result.get("messages", []):
         if isinstance(msg, AIMessage):
             for tc in getattr(msg, "tool_calls", []) or []:
                 tool_count += 1
+                tool_line = f"  → {tc.get('name')}({str(tc.get('args', {}))[:80]})"
                 logger.info("Spoke [%s] tool: %s(%s)", label, tc.get("name"), str(tc.get("args", {}))[:80])
+                live_lines.append(tool_line)
         elif isinstance(msg, ToolMessage):
             preview = (msg.content or "")[:200]
             if "error" in preview.lower() or "fail" in preview.lower():
                 logger.warning("Spoke [%s] tool error [%s]: %s", label, msg.name, preview)
+                live_lines.append(f"  ✗ {msg.name}: {preview[:120]}")
+            else:
+                live_lines.append(f"  ✓ {msg.name}: {preview[:120]}")
+
+    # Push tool call log to TeamWork live output
+    if role_name and live_lines:
+        from prax.services.teamwork_hooks import push_live_output
+        push_live_output(role_name, "\n".join(live_lines) + "\n")
+
     return tool_count
 
 
@@ -170,10 +183,15 @@ def _finish(
     status: str = "success",
     start_time: float = 0,
 ) -> None:
-    """Set TeamWork role to idle, post to channel, and record metrics."""
+    """Set TeamWork role to idle, post to channel, push final live output, and record metrics."""
     if role_name:
-        from prax.services.teamwork_hooks import set_role_status
+        from prax.services.teamwork_hooks import set_role_status, push_live_output
         set_role_status(role_name, "idle")
+        live_status = "completed" if status == "success" else status
+        summary = f"\n[{label}] {live_status}"
+        if content:
+            summary += f": {content[:200]}"
+        push_live_output(role_name, summary + "\n", status=live_status)
     if channel and content:
         from prax.services.teamwork_hooks import post_to_channel
         post_to_channel(channel, content[:3000], agent_name=role_name or "Agent")

@@ -58,6 +58,22 @@ def post_to_channel(channel: str, content: str, agent_name: str | None = None) -
         logger.debug("TeamWork hook: post_to_channel(%s) failed", channel, exc_info=True)
 
 
+def push_live_output(
+    agent_name: str,
+    output: str,
+    status: str = "running",
+    append: bool = True,
+    error: str | None = None,
+) -> None:
+    """Push live execution output for an agent to the TeamWork frontend."""
+    try:
+        tw = _tw()
+        if tw:
+            tw.update_live_output(agent_name, output, status=status, append=append, error=error)
+    except Exception:
+        logger.debug("TeamWork hook: push_live_output(%s) failed", agent_name, exc_info=True)
+
+
 def mirror_plan_to_tasks(goal: str, steps: list[dict]) -> list[str]:
     """Create TeamWork tasks mirroring an agent plan. Returns task IDs."""
     task_ids: list[str] = []

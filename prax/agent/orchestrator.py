@@ -165,20 +165,80 @@ class ConversationAgent:
             if not incomplete:
                 return ""
             step_list = ", ".join(
-                f"step {s['step']}" for s in incomplete[:5]
+                f"step {s['step']}: {s.get('description', '')[:60]}"
+                for s in incomplete[:5]
             )
             return (
                 f"Your plan for \"{plan.get('goal', '')}\" has {len(incomplete)} "
-                f"incomplete step(s) ({step_list}). Continue working through "
-                "the plan — do NOT respond to the user until the remaining "
-                "steps are done or you've determined they can't be completed."
+                f"incomplete step(s): {step_list}. "
+                "If you already completed any of these steps (via delegation, "
+                "tool calls, or direct work), call agent_step_done(step_number) "
+                "for each one NOW. Do NOT re-delegate or repeat work that "
+                "already returned results. If all steps are actually done, "
+                "call agent_plan_clear() and respond to the user."
             )
         except Exception:
             return ""
 
+    # Tools whose successful return means substantive work was done.
+    _DELEGATION_TOOLS = frozenset({
+        "delegate_task", "delegate_parallel", "delegate_research",
+        "delegate_browser", "delegate_sandbox", "delegate_sysadmin",
+        "delegate_finetune", "delegate_content_editor", "delegate_knowledge",
+        "workspace_save", "workspace_patch", "note_create", "note_update",
+    })
+
+    @staticmethod
+    def _auto_complete_plan_steps(uid: str, messages: list) -> None:
+        """Auto-mark plan steps done when delegation/work tools returned successfully.
+
+        Scans messages for completed delegation tool calls. If the plan has
+        incomplete steps and work was clearly done (delegation returned, files
+        saved), marks ALL incomplete steps as done. This prevents the plan
+        enforcement loop from re-delegating work that already completed.
+        """
+        plan = read_plan(uid)
+        if not plan:
+            return
+
+        incomplete_steps = [s for s in plan.get("steps", []) if not s.get("done")]
+        if not incomplete_steps:
+            return
+
+        # Check if delegation/work tools were called AND returned non-error results
+        from prax.services.workspace_service import complete_plan_step
+
+        work_done = False
+        for msg in messages:
+            if isinstance(msg, ToolMessage) and msg.name in ConversationAgent._DELEGATION_TOOLS:
+                content = (msg.content or "").lower()
+                # Only count as done if the result doesn't look like an error
+                if not any(err in content for err in ("failed", "error:", "sub-agent failed")):
+                    work_done = True
+                    break
+
+        if not work_done:
+            return
+
+        # Auto-mark all incomplete steps as done — the work was completed
+        # but the agent forgot to call agent_step_done().
+        for step in incomplete_steps:
+            try:
+                complete_plan_step(uid, step["step"])
+                logger.info(
+                    "Auto-marked plan step %d done (agent forgot agent_step_done): %s",
+                    step["step"], step.get("description", "")[:60],
+                )
+            except Exception:
+                pass
+
     def run(self, conversation: Iterable[BaseMessage], user_input: str, workspace_context: str = "") -> str:
         """Execute the agent graph and return the final string response."""
+        import time as _time
+
         from prax.agent.trace import start_span
+
+        _run_deadline = _time.monotonic() + settings.agent_run_timeout
 
         # Start a root span that wraps the entire orchestrator invocation.
         # This sets last_root_trace_id so callers can attach it to responses.
@@ -243,12 +303,19 @@ class ConversationAgent:
                 uid
                 and self._has_incomplete_plan(uid)
                 and continuations < _MAX_PLAN_CONTINUATIONS
+                and _time.monotonic() < _run_deadline
             ):
+                # Auto-mark plan steps done if substantial work was completed
+                # (delegation tools returned results) but steps weren't marked.
+                self._auto_complete_plan_steps(uid, result.get("messages", []))
+                if not self._has_incomplete_plan(uid):
+                    break
+
                 continuations += 1
                 nudge = self._plan_status_summary(uid)
                 logger.info(
-                    "Plan enforcement: %d incomplete steps, continuation %d/%d (user=%s)",
-                    nudge.count("step"), continuations, _MAX_PLAN_CONTINUATIONS, uid,
+                    "Plan enforcement: continuation %d/%d (user=%s)",
+                    continuations, _MAX_PLAN_CONTINUATIONS, uid,
                 )
 
                 # Inject a system nudge as a new human message to continue.
@@ -257,6 +324,12 @@ class ConversationAgent:
                 ]
                 result = self.graph.invoke(
                     {"messages": continuation_messages}, config=config,
+                )
+
+            if _time.monotonic() >= _run_deadline:
+                logger.warning(
+                    "Agent run hit wall-clock timeout (%ds) for user %s",
+                    settings.agent_run_timeout, uid,
                 )
 
             self._rebuild_if_needed()
@@ -472,6 +545,20 @@ class ConversationAgent:
                 "content": (
                     f"[{audit.get('risk', '?').upper()}] {audit.get('tool_name', '?')} "
                     f"args={audit.get('args', '')} result={audit.get('result', '')}"
+                ),
+            })
+
+        # Flush tier choice log into the trace for A/B analysis.
+        from prax.agent.llm_factory import drain_tier_choices
+        tier_entries = drain_tier_choices()
+        for tc in tier_entries:
+            entries.append({
+                "type": TraceEvent.TIER_CHOICE,
+                "content": (
+                    f"tier={tc.get('tier_requested', '?')} "
+                    f"model={tc.get('model', '?')} "
+                    f"provider={tc.get('provider', '?')} "
+                    f"span={tc.get('span_name', '?')}"
                 ),
             })
 

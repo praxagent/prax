@@ -78,6 +78,23 @@ class AppSettings(BaseSettings):
             "spokes have their own separate limits."
         ),
     )
+    agent_max_delegation_depth: int = Field(
+        default=4, alias="AGENT_MAX_DELEGATION_DEPTH",
+        description=(
+            "Maximum nesting depth for agent delegation chains. "
+            "Orchestrator=0, first sub-agent=1, etc.  Prevents infinite "
+            "recursive delegation.  A depth of 4 allows orchestrator → spoke "
+            "→ sub-agent → sub-sub-agent."
+        ),
+    )
+    agent_run_timeout: int = Field(
+        default=300, alias="AGENT_RUN_TIMEOUT",
+        description=(
+            "Hard wall-clock timeout (seconds) for a single agent.run() "
+            "invocation.  If the agent hasn't finished within this time, "
+            "the run is aborted.  Prevents unbounded API spend."
+        ),
+    )
 
     @property
     def sandbox_persistent(self) -> bool:

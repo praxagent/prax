@@ -68,12 +68,7 @@ def note_update(note_id: str, content: str, title: str = "", tags: str = "") -> 
         title: New title (leave empty to keep the current title).
         tags: New comma-separated tags (leave empty to keep current tags).
     """
-    from prax.utils.ngrok import get_ngrok_url
-
     uid = _get_user_id()
-    base_url = get_ngrok_url()
-    if not base_url:
-        return "Cannot publish — NGROK_URL is not configured."
 
     tag_list: list[str] | None = None
     if tags:
@@ -86,6 +81,15 @@ def note_update(note_id: str, content: str, title: str = "", tags: str = "") -> 
             title=title or None,
             tags=tag_list,
         )
+
+        # Publish if NGROK is available; degrade gracefully if not.
+        from prax.utils.ngrok import get_ngrok_url
+        base_url = get_ngrok_url()
+        if not base_url:
+            return (
+                f"Note updated: **{meta['title']}**\n"
+                f"(saved locally — NGROK_URL not configured for web publishing)"
+            )
         result = note_service.publish_notes(uid, base_url, slug=meta["slug"])
         if "error" in result:
             return f"Note updated but Hugo build failed: {result['error']}"

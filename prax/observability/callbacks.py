@@ -78,6 +78,9 @@ class OTelLLMCallback(BaseCallbackHandler):
                 serialized.get("kwargs", {}).get("model", "unknown")
         provider = _infer_provider(serialized)
 
+        # Resolve tier from the factory's latest choice for this model
+        tier = _infer_tier_for_model(model)
+
         span = tracer.start_span(
             name=f"chat.{model}",
             attributes={
@@ -85,6 +88,7 @@ class OTelLLMCallback(BaseCallbackHandler):
                 "gen_ai.request.model": model,
                 "gen_ai.request.temperature": kwargs.get("invocation_params", {}).get("temperature", 0),
                 "prax.message_count": sum(len(batch) for batch in messages),
+                "prax.tier": tier,
             },
         )
         self._spans[run_id] = span
@@ -206,6 +210,18 @@ class OTelToolCallback(BaseCallbackHandler):
 def _get_tracer():
     from prax.observability.setup import get_tracer
     return get_tracer()
+
+
+def _infer_tier_for_model(model: str) -> str:
+    """Look up the tier that resolved to *model* from the factory's log."""
+    try:
+        from prax.agent.llm_factory import peek_tier_choices
+        for entry in reversed(peek_tier_choices()):
+            if entry["model"] == model:
+                return entry.get("tier_requested") or "default"
+    except Exception:
+        pass
+    return "unknown"
 
 
 def _infer_provider(serialized: dict) -> str:

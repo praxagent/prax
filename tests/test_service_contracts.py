@@ -175,7 +175,7 @@ class TestNoteServiceSaveAndPublishContract:
         assert "url" in result
         assert result["title"] == "Contract Test"
 
-    def test_error_when_ngrok_missing(self, monkeypatch, tmp_path):
+    def test_graceful_degradation_when_ngrok_missing(self, monkeypatch, tmp_path):
         from prax.services import note_service
 
         workspace = tmp_path / "workspace"
@@ -185,14 +185,17 @@ class TestNoteServiceSaveAndPublishContract:
         monkeypatch.setattr(note_service, "get_lock", _FakeLock)
         monkeypatch.setattr(note_service, "git_commit", lambda *a, **kw: None)
 
-        # ngrok not configured.
+        # ngrok not configured — should save locally without error.
         monkeypatch.setattr(
             "prax.utils.ngrok.get_ngrok_url",
             lambda: None,
         )
 
         result = note_service.save_and_publish("u1", "No Ngrok", "body")
-        assert "error" in result
+        assert "error" not in result
+        assert "slug" in result
+        assert "title" in result
+        assert "saved locally" in result["url"]
 
 
 # ---------------------------------------------------------------------------

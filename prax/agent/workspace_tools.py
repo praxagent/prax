@@ -8,11 +8,42 @@ from prax.agent.user_context import current_user_id
 from prax.services import workspace_service
 
 
+import logging as _logging
+
+_ws_logger = _logging.getLogger(__name__)
+
+
 def _get_user_id() -> str:
     uid = current_user_id.get()
     if not uid:
         return "unknown"
     return uid
+
+
+def _auto_advance_plan_step() -> None:
+    """Mark the next incomplete plan step as done after a workspace write.
+
+    Called automatically by workspace_save so the plan enforcement loop
+    doesn't re-trigger work that's already finished.  Sequential: marks
+    the first incomplete step as done.
+    """
+    try:
+        uid = _get_user_id()
+        if uid == "unknown":
+            return
+        plan = workspace_service.read_plan(uid)
+        if not plan:
+            return
+        for step in plan.get("steps", []):
+            if not step.get("done"):
+                workspace_service.complete_plan_step(uid, step["step"])
+                _ws_logger.info(
+                    "Auto-advanced plan step %d after workspace_save: %s",
+                    step["step"], step.get("description", "")[:60],
+                )
+                return
+    except Exception:
+        pass
 
 
 @tool
@@ -47,6 +78,8 @@ def workspace_save(filename: str, content: str) -> str:
     """Save a file to the active workspace. Use for markdown notes, extracted content, etc."""
     try:
         workspace_service.save_file(_get_user_id(), filename, content)
+        # Auto-advance the plan — saving a file is a concrete step completion.
+        _auto_advance_plan_step()
         return f"Saved {filename} to active workspace."
     except Exception as e:
         return f"Failed to save {filename}: {e}"

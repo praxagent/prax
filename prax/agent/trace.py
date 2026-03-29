@@ -49,6 +49,7 @@ class SpanNode:
     finished_at: datetime | None = None
     tool_calls: int = 0
     summary: str = ""
+    tier_choices: list[dict] = field(default_factory=list)
 
 
 class ExecutionGraph:
@@ -70,6 +71,7 @@ class ExecutionGraph:
         status: str = "completed",
         summary: str = "",
         tool_calls: int = 0,
+        tier_choices: list[dict] | None = None,
     ) -> None:
         with self._lock:
             node = self._nodes.get(span_id)
@@ -79,6 +81,8 @@ class ExecutionGraph:
                 node.summary = summary[:200]
                 if tool_calls:
                     node.tool_calls = tool_calls
+                if tier_choices:
+                    node.tier_choices = tier_choices
 
     def get_summary(self) -> str:
         """Human-readable tree summary for governing agents."""
@@ -121,6 +125,17 @@ class ExecutionGraph:
             line += f" -- {node.tool_calls} tool calls"
         lines.append(line)
 
+        if node.tier_choices:
+            # Compact tier summary: "low→gpt-5.4-nano x2, medium→gpt-5.4-mini x1"
+            tier_counts: dict[str, int] = {}
+            for tc in node.tier_choices:
+                key = f"{tc.get('tier_requested', '?')}→{tc.get('model', '?')}"
+                tier_counts[key] = tier_counts.get(key, 0) + 1
+            tier_str = ", ".join(
+                f"{k} x{v}" if v > 1 else k for k, v in tier_counts.items()
+            )
+            lines.append(f"{prefix}  tiers: {tier_str}")
+
         if node.summary:
             summary_text = node.summary[:120].replace("\n", " ")
             lines.append(f"{prefix}  > {summary_text}")
@@ -160,6 +175,11 @@ last_root_trace_id: contextvars.ContextVar[str | None] = (
     contextvars.ContextVar("last_root_trace_id", default=None)
 )
 
+# Preserves the execution graph from the most recent completed root span.
+# Without this, the graph is lost when root_span.end() resets the contextvar.
+# Read by integration tests and diagnostics after agent.run() returns.
+_last_completed_graph: ExecutionGraph | None = None
+
 
 # ---------------------------------------------------------------------------
 # Span handle
@@ -183,15 +203,36 @@ class SpanHandle:
         status: str = "completed",
         summary: str = "",
         tool_calls: int = 0,
+        tier_choices: list[dict] | None = None,
     ) -> None:
         if self._ended:
             return
         self._ended = True
+
+        # Auto-collect tier choices made during this span's lifetime
+        if tier_choices is None:
+            try:
+                from prax.agent.llm_factory import drain_tier_choices
+                all_choices = drain_tier_choices()
+                # Keep only choices that belong to this span
+                tier_choices = [
+                    c for c in all_choices if c.get("span_id") == self.span_id
+                ]
+                # Put back choices for other spans
+                if all_choices and len(tier_choices) < len(all_choices):
+                    from prax.agent.llm_factory import _tier_lock, _tier_choice_log
+                    others = [c for c in all_choices if c.get("span_id") != self.span_id]
+                    with _tier_lock:
+                        _tier_choice_log.extend(others)
+            except Exception:
+                tier_choices = None
+
         self.ctx.graph.complete_node(
             self.span_id,
             status=status,
             summary=summary,
             tool_calls=tool_calls,
+            tier_choices=tier_choices,
         )
 
         # Close the OTel span with status and attributes
@@ -206,6 +247,12 @@ class SpanHandle:
                 self._otel_span.end()
             except Exception:
                 pass
+
+        # Preserve the graph when a root span ends so callers (integration
+        # tests, diagnostics) can still access it after the contextvar resets.
+        if self.ctx.parent_id is None:
+            global _last_completed_graph
+            _last_completed_graph = self.ctx.graph
 
         try:
             _current_trace.reset(self._token)
@@ -247,6 +294,10 @@ def _start_otel_span(name: str, spoke_or_category: str, trace_id: str):
         return None
 
 
+class DelegationDepthExceeded(RuntimeError):
+    """Raised when delegation nesting exceeds the configured limit."""
+
+
 def start_span(name: str, spoke_or_category: str) -> SpanHandle:
     """Create a span -- child of current trace, or new trace if none exists.
 
@@ -255,6 +306,9 @@ def start_span(name: str, spoke_or_category: str) -> SpanHandle:
 
     If OpenTelemetry is initialized, a corresponding OTel span is also created
     and linked to the Prax execution graph for distributed trace export.
+
+    Raises :class:`DelegationDepthExceeded` if the delegation chain exceeds
+    the configured ``AGENT_MAX_DELEGATION_DEPTH``.
     """
     parent = _current_trace.get()
 
@@ -263,6 +317,23 @@ def start_span(name: str, spoke_or_category: str) -> SpanHandle:
         parent_id = parent.span_id
         graph = parent.graph
         depth = parent.depth + 1
+
+        # Enforce delegation depth limit to prevent infinite recursive delegation.
+        try:
+            from prax.settings import settings
+            max_depth = settings.agent_max_delegation_depth
+        except Exception:
+            max_depth = 4  # safe default
+        if depth > max_depth:
+            logger.error(
+                "Delegation depth %d exceeds limit %d — aborting span '%s' [%s]",
+                depth, max_depth, name, spoke_or_category,
+            )
+            raise DelegationDepthExceeded(
+                f"Delegation depth {depth} exceeds maximum of {max_depth}. "
+                f"Refusing to start span '{name}'. This usually means the agent "
+                f"is in a recursive delegation loop."
+            )
     else:
         trace_id = uuid.uuid4().hex[:16]
         parent_id = None
@@ -314,9 +385,42 @@ def get_current_trace() -> TraceContext | None:
 def get_graph_summary() -> str:
     """Return a human-readable summary of the current execution graph."""
     ctx = _current_trace.get()
-    if not ctx:
-        return "No active trace."
-    return ctx.graph.get_summary()
+    if ctx:
+        return ctx.graph.get_summary()
+    # Fall back to the last completed root graph (e.g. after agent.run() returns)
+    if _last_completed_graph:
+        return _last_completed_graph.get_summary()
+    return "No active trace."
+
+
+def get_last_completed_graph() -> ExecutionGraph | None:
+    """Return the execution graph from the most recent completed root span.
+
+    Useful for integration tests and diagnostics that need to inspect the
+    graph after ``agent.run()`` has returned (by which time the contextvar
+    has been reset).
+    """
+    return _last_completed_graph
+
+
+def get_all_tier_choices(graph: ExecutionGraph | None = None) -> list[dict]:
+    """Collect tier choices from all nodes in the graph.
+
+    If no graph is provided, uses the last completed root graph.
+    Returns a flat list of tier choice dicts, ordered by timestamp.
+    """
+    g = graph or _last_completed_graph
+    if not g:
+        return []
+    with g._lock:
+        choices = []
+        for node in g._nodes.values():
+            for tc in node.tier_choices:
+                tc_copy = dict(tc)
+                tc_copy["span_name"] = tc_copy.get("span_name") or node.name
+                choices.append(tc_copy)
+    choices.sort(key=lambda c: c.get("ts", 0))
+    return choices
 
 
 def build_identity_context(name: str) -> str:

@@ -1,0 +1,26 @@
+# Experiment: What if we run everything on medium tier instead of low?
+#
+# This is a "ceiling test" — measures the maximum quality improvement
+# from upgrading all components, and the corresponding cost increase.
+# Useful as a benchmark: if all-medium doesn't improve quality much,
+# then targeted upgrades won't either.
+
+name: all-medium
+description: >
+  Upgrade ALL components to medium tier.  Establishes the cost ceiling
+  and quality ceiling for tier-based optimization.
+base_scenario: compare_two_topics
+
+overrides:
+  orchestrator:
+    tier: medium
+  subagent_research:
+    tier: medium
+  subagent_browser:
+    tier: medium
+  subagent_knowledge:
+    tier: medium
+  subagent_codegen:
+    tier: medium
+  subagent_content_writer:
+    tier: medium

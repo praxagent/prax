@@ -80,6 +80,11 @@ include = [
     "static",
 ]
 
+[tool.pytest.ini_options]
+markers = [
+    "integration: real LLM integration tests (slow, requires API key)",
+]
+
 [tool.ruff]
 target-version = "py313"
 line-length = 120
