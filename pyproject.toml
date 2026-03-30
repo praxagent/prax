@@ -83,6 +83,8 @@ include = [
 [tool.pytest.ini_options]
 markers = [
     "integration: real LLM integration tests (slow, requires API key)",
+    "e2e_live: end-to-end tests against running docker-compose stack",
+    "ab: A/B experiment tests",
 ]
 
 [tool.ruff]

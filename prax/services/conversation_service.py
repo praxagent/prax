@@ -25,7 +25,7 @@ from collections.abc import Callable
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from prax.agent import ConversationAgent
-from prax.agent.user_context import current_user_id
+from prax.agent.user_context import current_user, current_user_id
 from prax.conversation_memory import add_dict_to_list, retrieve_dict
 from prax.services.workspace_service import get_workspace_context
 from prax.settings import settings
@@ -65,20 +65,40 @@ class ConversationService:
             for entry in conversation
         ]
 
-    def reply(self, from_number: str, text: str, *, conversation_key: int | None = None) -> str:
+    def reply(self, user_id: str, text: str, *, conversation_key: int | None = None) -> str:
         """Process a user message and return the agent's response.
 
         Args:
-            from_number: User phone number (used for workspace context).
+            user_id: User UUID (preferred) or legacy phone number / ``D{id}``.
             text: The user's message.
             conversation_key: Override the DB key for conversation history.
                 When provided (e.g. per-channel key for TeamWork), history is
-                isolated under this key instead of the phone-number-derived one.
+                isolated under this key instead of the default user-derived one.
         """
-        # Set user context so workspace tools know which user to operate on
-        current_user_id.set(from_number)
+        # Set user context so workspace tools know which user to operate on.
+        current_user_id.set(user_id)
 
-        db_key = conversation_key if conversation_key is not None else int(from_number[1:])
+        # Resolve User object for richer context (display_name, timezone, etc.)
+        user_obj = None
+        try:
+            from prax.services.identity_service import get_user
+            user_obj = get_user(user_id)
+            if user_obj:
+                current_user.set(user_obj)
+        except Exception:
+            pass
+
+        # Derive the database key for conversation history.
+        if conversation_key is not None:
+            db_key = conversation_key
+        elif user_obj:
+            # Stable integer derived from UUID (first 15 hex digits).
+            db_key = int(user_id.replace("-", "")[:15], 16)
+        else:
+            # Legacy fallback: phone number (+1555...) or D{discord_id}.
+            raw = user_id.lstrip("+").lstrip("D")
+            db_key = int(raw)
+
         history = self._build_history(db_key)
         if not history:
             self._save(self._database, db_key, {
@@ -90,14 +110,14 @@ class ConversationService:
         self._save(self._database, db_key, {"role": "user", "content": text})
 
         lc_history = _history_to_messages(history)
-        workspace_ctx = get_workspace_context(from_number)
-        logger.info("Agent invoked for %s (key=%s): %s", from_number, db_key, text[:80])
+        workspace_ctx = get_workspace_context(user_id)
+        logger.info("Agent invoked for %s (key=%s): %s", user_id, db_key, text[:80])
         response = self.agent.run(
             conversation=lc_history,
             user_input=text,
             workspace_context=workspace_ctx,
         )
-        logger.info("Agent response for %s: %s", from_number, response[:80])
+        logger.info("Agent response for %s: %s", user_id, response[:80])
 
         self._save(self._database, db_key, {"role": "assistant", "content": response})
         return response

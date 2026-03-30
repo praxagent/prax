@@ -22,11 +22,14 @@ Usage::
 from __future__ import annotations
 
 import contextvars
+import json
 import logging
+import os
 import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +102,39 @@ class ExecutionGraph:
             for root in sorted(roots, key=lambda n: n.started_at):
                 self._format_node(root, lines, indent=1)
             return "\n".join(lines)
+
+    def to_dict(self) -> dict:
+        """Return a JSON-serializable representation of the graph."""
+        with self._lock:
+            nodes = []
+            overall_status = "completed"
+            for n in self._nodes.values():
+                if n.status == "running":
+                    overall_status = "running"
+                nodes.append({
+                    "span_id": n.span_id,
+                    "name": n.name,
+                    "parent_id": n.parent_id,
+                    "status": n.status,
+                    "spoke_or_category": n.spoke_or_category,
+                    "started_at": n.started_at.isoformat(),
+                    "finished_at": n.finished_at.isoformat() if n.finished_at else None,
+                    "tool_calls": n.tool_calls,
+                    "summary": n.summary,
+                    "duration_s": round(
+                        (n.finished_at - n.started_at).total_seconds(), 1
+                    ) if n.finished_at else round(
+                        (datetime.now(UTC) - n.started_at).total_seconds(), 1
+                    ),
+                })
+            # Sort nodes by started_at so roots come first
+            nodes.sort(key=lambda n: n["started_at"])
+            return {
+                "trace_id": self.trace_id,
+                "status": overall_status,
+                "node_count": len(nodes),
+                "nodes": nodes,
+            }
 
     def _format_node(
         self, node: SpanNode, lines: list[str], indent: int
@@ -180,6 +216,134 @@ last_root_trace_id: contextvars.ContextVar[str | None] = (
 # Read by integration tests and diagnostics after agent.run() returns.
 _last_completed_graph: ExecutionGraph | None = None
 
+# ---------------------------------------------------------------------------
+# Global registry of active + recently completed execution graphs.
+# Keyed by trace_id.  Active graphs are added when a root span starts;
+# completed graphs are kept for up to _COMPLETED_TTL seconds.
+# ---------------------------------------------------------------------------
+
+_active_graphs: dict[str, ExecutionGraph] = {}
+_active_graphs_lock = threading.Lock()
+_COMPLETED_MAX = 20  # keep at most this many completed graphs in memory
+_GRAPH_RETENTION_DAYS = 7  # keep graph files for this many days
+_graphs_loaded = False
+
+
+# ---------------------------------------------------------------------------
+# Persistence — save completed graphs to disk, load on startup
+# ---------------------------------------------------------------------------
+
+
+def _graphs_dir() -> Path:
+    """Return the directory for persisted graph JSONL files."""
+    try:
+        from prax.settings import settings
+        base = Path(settings.workspace_dir).resolve().parent
+    except Exception:
+        base = Path(".")
+    d = base / ".prax" / "graphs"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _persist_graph(graph: ExecutionGraph) -> None:
+    """Append a completed graph as one JSON line to today's file."""
+    try:
+        d = _graphs_dir()
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        filepath = d / f"graphs-{today}.jsonl"
+        line = json.dumps(graph.to_dict(), default=str)
+        with open(filepath, "a") as f:
+            f.write(line + "\n")
+    except Exception:
+        logger.debug("Failed to persist execution graph %s", graph.trace_id, exc_info=True)
+
+
+def _rotate_graph_files() -> None:
+    """Delete graph files older than _GRAPH_RETENTION_DAYS."""
+    try:
+        d = _graphs_dir()
+        cutoff = datetime.now(UTC).strftime("%Y-%m-%d")
+        from datetime import timedelta
+        cutoff_date = datetime.now(UTC) - timedelta(days=_GRAPH_RETENTION_DAYS)
+        cutoff_str = cutoff_date.strftime("%Y-%m-%d")
+        for f in d.glob("graphs-*.jsonl"):
+            # Extract date from filename: graphs-YYYY-MM-DD.jsonl
+            date_part = f.stem.replace("graphs-", "")
+            if date_part < cutoff_str:
+                f.unlink(missing_ok=True)
+                logger.debug("Rotated old graph file: %s", f.name)
+    except Exception:
+        logger.debug("Graph file rotation failed", exc_info=True)
+
+
+def _load_persisted_graphs() -> None:
+    """Load recently persisted graphs into _active_graphs on startup."""
+    global _graphs_loaded
+    if _graphs_loaded:
+        return
+    _graphs_loaded = True
+
+    try:
+        d = _graphs_dir()
+        if not d.exists():
+            return
+
+        # Load files from most recent first, up to _COMPLETED_MAX total
+        files = sorted(d.glob("graphs-*.jsonl"), reverse=True)
+        loaded = 0
+        for filepath in files:
+            if loaded >= _COMPLETED_MAX:
+                break
+            try:
+                for line in filepath.read_text().strip().splitlines():
+                    if loaded >= _COMPLETED_MAX:
+                        break
+                    data = json.loads(line)
+                    graph = _graph_from_dict(data)
+                    if graph and graph.trace_id not in _active_graphs:
+                        _active_graphs[graph.trace_id] = graph
+                        loaded += 1
+            except Exception:
+                logger.debug("Failed to load graph file %s", filepath.name, exc_info=True)
+
+        if loaded:
+            logger.info("Loaded %d persisted execution graphs", loaded)
+
+        # Rotate old files in the background
+        _rotate_graph_files()
+    except Exception:
+        logger.debug("Failed to load persisted graphs", exc_info=True)
+
+
+def _graph_from_dict(data: dict) -> ExecutionGraph | None:
+    """Reconstruct an ExecutionGraph from its serialized dict."""
+    trace_id = data.get("trace_id")
+    nodes = data.get("nodes", [])
+    if not trace_id or not nodes:
+        return None
+
+    graph = ExecutionGraph(trace_id)
+    for nd in nodes:
+        started_at = datetime.fromisoformat(nd["started_at"])
+        finished_at = (
+            datetime.fromisoformat(nd["finished_at"]) if nd.get("finished_at") else None
+        )
+        node = SpanNode(
+            span_id=nd["span_id"],
+            name=nd["name"],
+            parent_id=nd.get("parent_id"),
+            trace_id=trace_id,
+            spoke_or_category=nd.get("spoke_or_category", ""),
+            status=nd.get("status", "completed"),
+            started_at=started_at,
+            finished_at=finished_at,
+            tool_calls=nd.get("tool_calls", 0),
+            summary=nd.get("summary", ""),
+        )
+        graph._nodes[node.span_id] = node
+    return graph
+
 
 # ---------------------------------------------------------------------------
 # Span handle
@@ -253,6 +417,18 @@ class SpanHandle:
         if self.ctx.parent_id is None:
             global _last_completed_graph
             _last_completed_graph = self.ctx.graph
+            # Persist to disk so graphs survive restarts.
+            _persist_graph(self.ctx.graph)
+            # Prune old completed graphs from the in-memory registry.
+            with _active_graphs_lock:
+                completed = [
+                    tid for tid, g in _active_graphs.items()
+                    if tid != self.trace_id and not any(
+                        n.status == "running" for n in g._nodes.values()
+                    )
+                ]
+                while len(completed) > _COMPLETED_MAX:
+                    _active_graphs.pop(completed.pop(0), None)
 
         try:
             _current_trace.reset(self._token)
@@ -341,6 +517,9 @@ def start_span(name: str, spoke_or_category: str) -> SpanHandle:
         depth = 0
         # Record the root trace_id so callers can attach it to responses.
         last_root_trace_id.set(trace_id)
+        # Register in global registry for the graphs API.
+        with _active_graphs_lock:
+            _active_graphs[trace_id] = graph
 
     span_id = uuid.uuid4().hex[:12]
 
@@ -421,6 +600,26 @@ def get_all_tier_choices(graph: ExecutionGraph | None = None) -> list[dict]:
                 choices.append(tc_copy)
     choices.sort(key=lambda c: c.get("ts", 0))
     return choices
+
+
+def get_active_graphs_json() -> list[dict]:
+    """Return all active and recently completed execution graphs as dicts.
+
+    Used by the ``/execution/graphs`` API endpoint to feed the TeamWork
+    graph visualization panel.  On first call, loads persisted graphs from
+    disk so they survive Prax restarts.
+    """
+    with _active_graphs_lock:
+        _load_persisted_graphs()
+        graphs = list(_active_graphs.values())
+    # Sort: running first, then by most recent
+    result = [g.to_dict() for g in graphs]
+    result.sort(key=lambda g: (0 if g["status"] == "running" else 1, g["nodes"][0]["started_at"] if g["nodes"] else ""), reverse=False)
+    # Running first
+    running = [g for g in result if g["status"] == "running"]
+    done = [g for g in result if g["status"] != "running"]
+    done.sort(key=lambda g: g["nodes"][0]["started_at"] if g["nodes"] else "", reverse=True)
+    return running + done
 
 
 def build_identity_context(name: str) -> str:

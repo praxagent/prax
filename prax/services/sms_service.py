@@ -56,8 +56,18 @@ class SmsService:
     def _reply_via_agent(self, from_number: str, text: str) -> None:
         """Call conversation_service and SMS the result. Meant to run in a thread."""
         try:
-            response = conversation_service.reply(from_number, text)
+            from prax.services.identity_service import resolve_user
+            user = resolve_user("sms", from_number)
+
+            # Mirror incoming SMS to TeamWork's #sms channel.
+            from prax.services.teamwork_hooks import forward_to_channel
+            forward_to_channel("sms", user.display_name, text)
+
+            response = conversation_service.reply(user.id, text)
             send_sms(response, from_number)
+
+            # Mirror the agent response to #sms.
+            forward_to_channel("sms", "Prax", response, agent_name="Prax")
         except Exception:
             logger.exception("Agent reply failed for %s", from_number)
             send_sms(APOLOGY_MSG, from_number)
@@ -65,6 +75,9 @@ class SmsService:
     def _handle_pdf(self, from_number: str, pdf_url: str, original_text: str) -> None:
         """Download PDF, save to workspace, send through agent for summarization. Runs in a thread."""
         try:
+            from prax.services.identity_service import resolve_user
+            user = resolve_user("sms", from_number)
+
             markdown, pdf_path = process_pdf_url_with_paths(pdf_url)
 
             # Derive filenames and save to workspace
@@ -76,8 +89,8 @@ class SmsService:
                 f"---\nsource: {pdf_url}\noriginal_pdf: archive/{pdf_filename}\n---\n\n"
                 + markdown
             )
-            save_file(from_number, md_filename, workspace_markdown)
-            save_binary(from_number, pdf_filename, pdf_path)
+            save_file(user.id, md_filename, workspace_markdown)
+            save_binary(user.id, pdf_filename, pdf_path)
             os.unlink(pdf_path)
 
             # Truncate for inline prompt (workspace has the full version)
@@ -96,7 +109,7 @@ class SmsService:
             if stripped and stripped != pdf_url.strip():
                 prompt += f"\n\nThe user also said: {stripped}"
 
-            response = conversation_service.reply(from_number, prompt)
+            response = conversation_service.reply(user.id, prompt)
             send_sms(response, from_number)
         except Exception:
             logger.exception("PDF processing failed for %s", from_number)
@@ -148,9 +161,11 @@ class SmsService:
             # Image attachment — route through the agent so it can use
             # the analyze_image tool with the configured vision model.
             if media_url:
+                from prax.services.identity_service import resolve_user
+                user = resolve_user("sms", from_number)
                 user_text = text_input or "I'm sending you an image."
                 image_msg = f"{user_text}\n[Image attachment: {media_type}, URL: {media_url}]"
-                response = conversation_service.reply(from_number, image_msg)
+                response = conversation_service.reply(user.id, image_msg)
                 send_sms(response, from_number)
                 return '', 200
 

@@ -117,13 +117,19 @@ def run_spoke(
             f"\n\n## Current State (observed before execution)\n{state_context}"
         )
 
+    # Set component context for earned trust and apply autonomy-aware limits.
+    from prax.agent.autonomy import get_recursion_limit
+    from prax.agent.user_context import current_component
+    current_component.set(label)
+    effective_limit = get_recursion_limit(recursion_limit)
+
     try:
         result = graph.invoke(
             {"messages": [
                 SystemMessage(content=enhanced_prompt),
                 HumanMessage(content=task),
             ]},
-            config={"recursion_limit": recursion_limit},
+            config={"recursion_limit": effective_limit},
         )
     except Exception as exc:
         logger.warning("Spoke [%s] failed: %s", label, exc, exc_info=True)

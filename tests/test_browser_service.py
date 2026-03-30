@@ -28,6 +28,9 @@ class FakePage:
     def fill(self, selector, value, **kw):
         self._fills.append((selector, value))
 
+    def type(self, selector, value, **kw):
+        self._fills.append((selector, value))
+
     def screenshot(self, path=None, **kw):
         if path:
             with open(path, "wb") as f:

@@ -3,16 +3,18 @@
 Every tool invocation passes through ``wrap_with_governance`` before
 reaching the LangGraph agent.  This is the ONE choke point where:
 
-1. The tool's risk level is classified
+1. The tool's risk level is classified (with earned-trust downgrade)
 2. Arguments are summarized/scrubbed
-3. Confirmation requirement is evaluated
+3. Confirmation requirement is evaluated (with smart auto-approve)
 4. An audit record is emitted to the workspace trace log
+5. Tool call budget is tracked (with agent-initiated escalation)
 
 Wired into the agent via ``tool_registry.get_registered_tools()``.
 """
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from langchain_core.tools import BaseTool, StructuredTool
@@ -39,15 +41,68 @@ _audit_buffer: list[dict] = []
 _high_risk_seen: set[str] = set()
 _high_risk_confirmed: bool = False
 
+# Budget tracking — soft limit on tool calls per turn.
+_tool_call_count: int = 0
+_tool_call_budget: int = 0  # Set from settings at turn start
+
+# Pattern for detecting user-requested actions in browser context.
+_USER_ACTION_PATTERN = re.compile(
+    r"\b(click|press|tap|fill|submit|log\s*in|sign\s*in|enter|type|"
+    r"open|navigate|go to|visit|browse|check|read|scroll|search)\b",
+    re.IGNORECASE,
+)
+
 
 def drain_audit_log() -> list[dict]:
     """Return and clear all buffered audit entries since the last drain."""
-    global _high_risk_confirmed
+    global _high_risk_confirmed, _tool_call_count, _tool_call_budget
     entries = list(_audit_buffer)
     _audit_buffer.clear()
     _high_risk_seen.clear()
     _high_risk_confirmed = False
+    _tool_call_count = 0
+    _tool_call_budget = 0
     return entries
+
+
+def init_turn_budget(budget: int) -> None:
+    """Set the soft tool-call budget for the current turn."""
+    global _tool_call_budget, _tool_call_count
+    _tool_call_budget = budget
+    _tool_call_count = 0
+
+
+def extend_budget(additional: int) -> None:
+    """Increase the tool-call budget (called by request_extended_budget)."""
+    global _tool_call_budget
+    _tool_call_budget += min(additional, 50)  # cap single extension at 50
+
+
+def get_budget_status() -> tuple[int, int]:
+    """Return (calls_used, budget)."""
+    return _tool_call_count, _tool_call_budget
+
+
+def _user_explicitly_requested_action(tool_name: str) -> bool:
+    """Check if the user's message explicitly requested this tool's action.
+
+    When the user says "click the login button" and the agent calls
+    browser_click, we should auto-approve rather than blocking with a
+    confirmation prompt.
+    """
+    from prax.agent.user_context import current_user_message
+    msg = current_user_message.get("")
+    if not msg:
+        return False
+
+    # Only auto-approve browser interaction tools
+    if tool_name not in (
+        "browser_click", "browser_fill", "browser_request_login",
+        "browser_finish_login",
+    ):
+        return False
+
+    return bool(_USER_ACTION_PATTERN.search(msg))
 
 
 def wrap_with_governance(tool: BaseTool) -> BaseTool:
@@ -58,7 +113,7 @@ def wrap_with_governance(tool: BaseTool) -> BaseTool:
     through the governance layer.
     """
     tool_name = tool.name
-    risk = getattr(tool, "_risk_level", None) or get_risk_level(tool_name)
+    static_risk = getattr(tool, "_risk_level", None) or get_risk_level(tool_name)
 
     # Resolve capability metadata for epistemic tagging.
     capability = get_tool_capability(tool_name)
@@ -70,12 +125,50 @@ def wrap_with_governance(tool: BaseTool) -> BaseTool:
     epistemic_note = capability.get("epistemic_note", "") if capability else ""
 
     def _governed_run(**kwargs: Any) -> Any:
-        global _high_risk_confirmed
-        # HIGH-risk gate: first invocation returns a warning.  Once the user
-        # confirms ANY high-risk action (by the agent calling a high-risk tool
-        # a second time), ALL high-risk tools are unlocked for this turn.
+        global _high_risk_confirmed, _tool_call_count
+
+        # --- Earned trust: dynamic risk adjustment ---
+        risk = static_risk
+        if risk is RiskLevel.HIGH:
+            try:
+                from prax.agent.earned_trust import get_trust_adjustments
+                from prax.agent.user_context import current_component
+                component = current_component.get("orchestrator")
+                trust = get_trust_adjustments(component)
+                if tool_name in trust.risk_downgrade_eligible:
+                    risk = RiskLevel.MEDIUM
+                    logger.debug(
+                        "Earned trust: downgraded %s from HIGH to MEDIUM for %s",
+                        tool_name, component,
+                    )
+            except Exception:
+                pass
+
+        # --- Budget tracking ---
+        if _tool_call_budget > 0:
+            _tool_call_count += 1
+            if _tool_call_count > _tool_call_budget and tool_name != "request_extended_budget":
+                _audit_buffer.append(log_action(
+                    tool_name, risk, kwargs,
+                    result="BLOCKED — tool call budget exhausted",
+                ))
+                return (
+                    f"Tool call budget exhausted ({_tool_call_budget} calls used). "
+                    f"Use request_extended_budget(reason, additional_calls) to "
+                    f"request more calls if the task genuinely requires it."
+                )
+
+        # --- HIGH-risk gate with smart auto-approve ---
         if risk is RiskLevel.HIGH and not _high_risk_confirmed:
-            if tool_name not in _high_risk_seen:
+            # Smart confirmation: if the user explicitly requested this
+            # action (e.g., "click the login button"), auto-approve.
+            if _user_explicitly_requested_action(tool_name):
+                _high_risk_confirmed = True
+                logger.info(
+                    "Smart auto-approve: %s (user explicitly requested action)",
+                    tool_name,
+                )
+            elif tool_name not in _high_risk_seen:
                 _high_risk_seen.add(tool_name)
                 _audit_buffer.append(log_action(
                     tool_name, risk, kwargs, result="BLOCKED — awaiting confirmation",

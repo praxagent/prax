@@ -1,0 +1,14 @@
+{
+  "component": "subagent_research",
+  "patterns": {
+    "DDGSException_research": {
+      "pattern_id": "DDGSException_research",
+      "description": "DDGSException: TimeoutError: TimeoutError('error sending request for url (https://leta.mullvad.net/search/__data.js",
+      "category": "research",
+      "confidence": 0.5,
+      "occurrences": 1,
+      "last_seen": 1774818033.9132879,
+      "compensating_instruction": "Check the argument types and format for subagent_research."
+    }
+  }
+}

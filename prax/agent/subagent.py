@@ -151,13 +151,18 @@ def _run_subagent(task: str, category: str) -> str:
         f"{metacognitive_hint}"
     )
 
+    # Set component context for earned trust and autonomy-aware limits.
+    from prax.agent.autonomy import get_recursion_limit
+    from prax.agent.user_context import current_component
+    current_component.set(f"subagent_{category}")
+
     try:
         result = subgraph.invoke(
             {"messages": [
                 SystemMessage(content=system_msg),
                 HumanMessage(content=task),
             ]},
-            config={"recursion_limit": 30},
+            config={"recursion_limit": get_recursion_limit(30)},
         )
     except Exception as exc:
         logger.warning("Sub-agent [%s] failed: %s", category, exc, exc_info=True)

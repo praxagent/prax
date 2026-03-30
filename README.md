@@ -65,6 +65,12 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml restart app
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build app
 ```
 
+In dev mode, TeamWork's Python source is bind-mounted and auto-reloads via `uvicorn --reload`. For **frontend** changes, rebuild the bundle locally — no Docker rebuild needed:
+
+```bash
+cd ../teamwork/frontend && npx vite build   # ~2s, output is already mounted
+# Refresh browser — done
+```
 
 ### Local development
 
@@ -116,7 +122,7 @@ Prax is a multi-channel AI assistant powered by a LangGraph ReAct agent. It conn
 
 | Category | Highlights |
 |----------|-----------|
-| **Channels** | [TeamWork](https://github.com/praxagent/teamwork) web UI (Slack-like chat, Kanban, terminal, browser, file browser), Discord bot (free, WebSocket), Twilio voice + SMS (webhooks) |
+| **Channels** | [TeamWork](https://github.com/praxagent/teamwork) web UI (Slack-like chat, Kanban, terminal, browser, file browser, execution graphs, live agent output), Discord bot (free, WebSocket), Twilio voice + SMS (webhooks), cross-channel mirroring (Discord/SMS → TeamWork #discord/#sms channels) |
 | **Agent** | LangGraph ReAct loop, 97+ built-in tools (extensible via plugins), dedicated sub-agents (self-improvement, plugin engineering, content authoring, research, coding), watchdog supervisor, automatic checkpoint & retry on failures |
 | **Memory** | SQLite conversations with auto-summarization, git-backed per-user workspaces, dynamic user notes, link history, to-do lists, task plans |
 | **Notes** | Conversation-to-note publishing (Hugo pages with KaTeX, mermaid, syntax highlighting), iterative updates, searchable index, shareable URLs, bidirectional knowledge graph links |
@@ -137,7 +143,10 @@ Prax is a multi-channel AI assistant powered by a LangGraph ReAct agent. It conn
 **What you get:**
 
 - **Real-time chat** — public channels (#general, #engineering, #research) and private DMs with Prax, with typing indicators and WebSocket updates
+- **Channel mirroring** — Discord and SMS conversations are mirrored to dedicated #discord and #sms channels in TeamWork, so you can follow cross-channel conversations in one place
 - **Kanban board** — task management with drag-and-drop columns (pending / in progress / review / completed). Prax creates, assigns, and completes tasks automatically as it works through plans
+- **Execution graphs** — real-time visualization of agent delegation trees. Watch LangGraph execution as it happens: see which spokes are running, tool call counts, timing, and status. Click any node to inspect its details and live output
+- **Live agent output** — terminal-style view of each agent's real-time execution output (Observability > Live Agents tab). Select any agent to watch its work stream
 - **In-browser terminal** — full PTY shell into the sandbox container, or launch Claude Code directly from the UI
 - **Browser screencast** — live view of the headless Chrome running in the sandbox, with mouse/keyboard passthrough
 - **File browser** — browse and manage workspace files
@@ -1387,12 +1396,12 @@ When TeamWork is connected and observability is enabled, each agent response mes
 
 ### TeamWork Integration
 
-The TeamWork web UI includes an **Observability tab** (Activity icon in the toolbar) that provides:
+The TeamWork web UI includes an **Observability tab** (Activity icon in the toolbar) with two sub-tabs:
 
-- Links to pre-provisioned Grafana dashboards
-- Direct access to Trace Explorer, Log Explorer, and Metrics Explorer
-- Stack component overview with ports
-- Status indicator showing whether observability is active
+- **Live Agents** — real-time terminal output from each agent. Select any agent in the sidebar to watch its execution stream. Working agents are highlighted and sorted to the top. The panel goes full-width (channel sidebar hidden) for maximum space
+- **Dashboards** — links to pre-provisioned Grafana dashboards (LLM Performance, Agent Overview, Trace Explorer, Log Explorer, Metrics Explorer) and stack component overview
+
+A separate **Execution Graphs** panel (Workflow icon) provides a tree visualization of the current LangGraph delegation chains. Each node shows status (running/completed/failed), spoke category, duration, and tool call count. Click a node to see its live output and summary
 
 ### Configuration
 
@@ -2124,6 +2133,9 @@ uv run pytest tests/e2e/ -v
 # With coverage
 uv run coverage run -m pytest
 uv run coverage report
+
+# Run TeamWork UI smoke tests (requires docker-compose stack running)
+cd ../teamwork/frontend && npx playwright test
 ```
 
 Before opening a pull request, run `make ci` to validate everything locally:

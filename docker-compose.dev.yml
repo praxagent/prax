@@ -27,6 +27,9 @@ services:
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4318
 
   # In dev mode, mount TeamWork source for live reload.
+  # Python changes auto-reload via uvicorn --reload.
+  # Frontend changes: run `cd ../teamwork/frontend && npx vite build` — output
+  # lands in src/teamwork/static/ which is already mounted, so just refresh browser.
   teamwork:
     command: ["python", "-m", "uvicorn", "teamwork.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     volumes:

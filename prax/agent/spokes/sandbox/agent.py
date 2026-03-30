@@ -104,7 +104,7 @@ def delegate_sandbox(task: str) -> str:
         default_tier="low",
         role_name="Sandbox Agent",
         channel="engineering",
-        recursion_limit=40,
+        recursion_limit=80,
     )
 
 

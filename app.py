@@ -10,7 +10,9 @@ from prax.blueprints.plugin_routes import plugin_routes
 from prax.blueprints.reader_routes import reader_routes
 from prax.blueprints.teamwork_routes import teamwork_routes
 from prax.blueprints.textchat_routes import textchat_routes
+from prax.blueprints.user_routes import user_routes
 from prax.conversation_memory import init_database
+from prax.services.identity_service import init_identity_db, migrate_legacy_users
 from prax.services.discord_service import start_bot as start_discord_bot
 from prax.services.scheduler_service import init_scheduler
 from prax.settings import settings
@@ -37,6 +39,7 @@ def create_app():
     app.register_blueprint(reader_routes)
     app.register_blueprint(teamwork_routes)
     app.register_blueprint(textchat_routes)
+    app.register_blueprint(user_routes)
 
     # Prometheus metrics endpoint — scraped by Prometheus every 10s.
     if settings.observability_enabled:
@@ -83,6 +86,8 @@ def create_app():
     logger.info("Model tiers:\n%s", tier_summary())
 
     init_database(settings.database_name)
+    init_identity_db()
+    migrate_legacy_users()
 
     init_scheduler()
 
@@ -118,6 +123,11 @@ def create_app():
                 ("Auditor", "auditor", "Reviews governance logs and tool risk classifications"),
             ]:
                 tw.create_agent(name=role_name, role=role_type, soul=soul)
+            # Ensure #discord and #sms mirror channels exist (backfills
+            # for projects created before mirroring was added).
+            from prax.services.teamwork_hooks import ensure_mirror_channels, sync_conversation_history
+            ensure_mirror_channels()
+            sync_conversation_history()
         except Exception:
             logger.warning("TeamWork integration failed to initialize", exc_info=True)
 

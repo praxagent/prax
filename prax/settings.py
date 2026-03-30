@@ -17,6 +17,7 @@ class AppSettings(BaseSettings):
     log_path: str = Field(default="app.log", alias="LOG_PATH")
     port: int = Field(default=5001, alias="PORT")
     database_name: str = Field(default="conversations.db", alias="DATABASE_NAME")
+    identity_db: str = Field(default="identity.db", alias="IDENTITY_DB")
 
     # Providers / API Keys
     openai_key: str | None = Field(default=None, alias="OPENAI_KEY")
@@ -68,6 +69,12 @@ class AppSettings(BaseSettings):
     sandbox_mem_limit: str = Field(default="1g", alias="SANDBOX_MEM_LIMIT")
     sandbox_cpu_limit: int = Field(default=2_000_000_000, alias="SANDBOX_CPU_LIMIT")
     sandbox_max_rounds: int = Field(default=10, alias="SANDBOX_MAX_ROUNDS")
+
+    # Agent autonomy level — controls how constrained the agent is.
+    # guided:    current behavior, all safety gates, prescriptive workflow rules
+    # balanced:  removes prescriptive workflow rules, agent uses judgment
+    # autonomous: also relaxes recursion limits, lets agent self-upgrade tier
+    autonomy: str = Field(default="guided", alias="PRAX_AUTONOMY")
 
     # Agent guardrails
     agent_max_tool_calls: int = Field(

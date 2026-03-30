@@ -36,8 +36,8 @@ _user_jobs: dict[str, dict[str, str]] = {}
 # ---------------------------------------------------------------------------
 
 def _schedules_path(user_id: str) -> Path:
-    safe_id = user_id.lstrip("+")
-    return Path(settings.workspace_dir) / safe_id / "schedules.yaml"
+    from prax.services.workspace_service import workspace_root
+    return Path(workspace_root(user_id)) / "schedules.yaml"
 
 
 def _read_schedules(user_id: str) -> dict:
@@ -62,7 +62,8 @@ def _write_schedules(user_id: str, data: dict, *, commit: bool = True) -> None:
 
 
 def _git_commit(user_id: str, message: str) -> None:
-    repo_dir = Path(settings.workspace_dir) / user_id.lstrip("+")
+    from prax.services.workspace_service import workspace_root
+    repo_dir = Path(workspace_root(user_id))
     if not (repo_dir / ".git").exists():
         return
     try:
@@ -118,30 +119,45 @@ def _infer_channel(user_id: str) -> str:
     """Infer the delivery channel from the user_id format."""
     if user_id.startswith("D"):
         return "discord"
+    if user_id.startswith("+") or user_id[0:1].isdigit():
+        return "sms"
+    # UUID — check linked identities
+    from prax.services.identity_service import get_identities
+    providers = {i["provider"] for i in get_identities(user_id)}
+    if "discord" in providers:
+        return "discord"
     return "sms"
 
 
 def _resolve_cross_channel(user_id: str) -> tuple[str | None, str | None]:
     """Return (phone, discord_user_id) for a user, resolving across channels.
 
-    Uses the discord_to_phone mapping to find the other identity.
-    Returns None for any channel that can't be resolved.
+    Supports UUID user_ids via identity service, and legacy ``D{id}``/phone
+    formats via the discord_to_phone mapping.
     """
     phone: str | None = None
     discord_id: str | None = None
 
+    # UUID — resolve via identity service
+    if not user_id.startswith("D") and not user_id.startswith("+") and not user_id[0:1].isdigit():
+        from prax.services.identity_service import get_identities
+        for identity in get_identities(user_id):
+            if identity["provider"] == "sms":
+                phone = identity["external_id"]
+            elif identity["provider"] == "discord":
+                discord_id = f"D{identity['external_id']}"
+        return phone, discord_id
+
     if user_id.startswith("D"):
         discord_id = user_id
-        # Look up phone from discord mapping
         try:
             from prax.services.discord_service import _discord_to_phone
-            raw_id = user_id[1:]  # strip "D" prefix
+            raw_id = user_id[1:]
             phone = _discord_to_phone.get(raw_id)
         except Exception:
             pass
     elif user_id.startswith("+") or user_id[0:1].isdigit():
         phone = user_id if user_id.startswith("+") else f"+{user_id}"
-        # Reverse-lookup: find discord ID mapped to this phone
         try:
             from prax.services.discord_service import _discord_to_phone
             for d_id, p in _discord_to_phone.items():

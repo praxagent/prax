@@ -120,7 +120,20 @@ def get_lock(user_id: str) -> threading.Lock:
 
 
 def workspace_root(user_id: str) -> str:
-    """Return the workspace root path for *user_id* (without creating it)."""
+    """Return the workspace root path for *user_id* (without creating it).
+
+    Accepts a UUID (resolved via identity service to ``usr_*`` dir) or a
+    legacy phone number / ``D{discord_id}`` string (falls back to stripping
+    the leading ``+``).
+    """
+    try:
+        from prax.services.identity_service import get_user
+        user = get_user(user_id)
+        if user:
+            return os.path.join(settings.workspace_dir, user.workspace_dir)
+    except Exception:
+        pass
+    # Legacy fallback: phone number or D{discord_id}
     safe_id = user_id.lstrip("+")
     return os.path.join(settings.workspace_dir, safe_id)
 

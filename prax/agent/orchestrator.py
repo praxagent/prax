@@ -248,6 +248,17 @@ class ConversationAgent:
         from prax.plugins.monitored_tool import reset_plugin_call_counts
         reset_plugin_call_counts()
 
+        # Set user message context for smart confirmation gate.
+        from prax.agent.user_context import current_component, current_user_message
+        current_user_message.set(user_input)
+        current_component.set("orchestrator")
+
+        # Initialize tool-call budget for this turn.
+        from prax.agent.autonomy import get_recursion_limit
+        from prax.agent.governed_tool import init_turn_budget
+        effective_limit = get_recursion_limit(settings.agent_max_tool_calls)
+        init_turn_budget(effective_limit)
+
         # Register workspace plugins for the current user.
         uid = current_user_id.get()
         if uid:
@@ -312,7 +323,7 @@ class ConversationAgent:
         turn = self.checkpoint_mgr.start_turn(uid or "anonymous")
         config = {
             **self.checkpoint_mgr.graph_config(turn),
-            "recursion_limit": settings.agent_max_tool_calls,
+            "recursion_limit": effective_limit,
         }
 
         try:

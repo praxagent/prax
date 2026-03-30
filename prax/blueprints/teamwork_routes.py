@@ -27,6 +27,28 @@ def observability_config():
     })
 
 
+@teamwork_routes.route("/teamwork/sync-history", methods=["POST"])
+def sync_history():
+    """Sync historical SMS/Discord conversations to TeamWork channels.
+
+    Reads from conversations.db and bulk-imports into #sms and #discord
+    channels. Skips channels that already have messages (idempotent).
+
+    Pass ``?force=true`` to clear existing messages and re-sync.
+    """
+    try:
+        from prax.services.teamwork_service import get_teamwork_client
+        tw = get_teamwork_client()
+        if not tw.enabled or not tw.project_id:
+            return jsonify({"error": "TeamWork not connected"}), 503
+        force = request.args.get("force", "").lower() in ("true", "1", "yes")
+        result = tw.sync_conversation_history(force=force)
+        return jsonify({"synced": result})
+    except Exception:
+        logger.exception("Failed to sync history")
+        return jsonify({"error": "sync failed"}), 500
+
+
 @teamwork_routes.route("/teamwork/webhook", methods=["POST"])
 def teamwork_webhook():
     """Receive a user message from TeamWork and process it asynchronously."""
@@ -36,13 +58,14 @@ def teamwork_webhook():
     channel_id = data.get("channel_id", "")
     project_id = data.get("project_id", "")
     message_id = data.get("message_id", "")
+    active_view = data.get("active_view", "")
 
     if msg_type != "user_message" or not content:
         return jsonify({"status": "ignored"}), 200
 
     logger.info(
-        "TeamWork webhook: project=%s channel=%s content=%s",
-        project_id, channel_id, content[:80],
+        "TeamWork webhook: project=%s channel=%s view=%s content=%s",
+        project_id, channel_id, active_view, content[:80],
     )
 
     # Process asynchronously so we return 200 quickly.
@@ -52,7 +75,7 @@ def teamwork_webhook():
 
     thread = threading.Thread(
         target=_handle_message,
-        args=(app, project_id, channel_id, content, message_id),
+        args=(app, project_id, channel_id, content, message_id, active_view),
         daemon=True,
     )
     thread.start()
@@ -88,14 +111,33 @@ def _build_trace_metadata() -> dict | None:
 
 
 def _get_teamwork_user_id() -> str:
-    """Return the user identity for TeamWork messages.
+    """Return the UUID user identity for TeamWork messages.
 
-    If TEAMWORK_USER_PHONE is configured, messages share history/workspace
-    with SMS and Discord (same phone number = same conversation).
-    Falls back to a synthetic phone number if not configured.
+    If TEAMWORK_USER_PHONE is configured, resolves via the identity service
+    so the user shares history/workspace with SMS and Discord.
+    Falls back to a default "teamwork" provider identity.
     """
+    from prax.services.identity_service import resolve_user
     from prax.settings import settings
-    return settings.teamwork_user_phone or "+10000000001"
+
+    if settings.teamwork_user_phone:
+        user = resolve_user("sms", settings.teamwork_user_phone)
+    else:
+        user = resolve_user("teamwork", "default", display_name="TeamWork User")
+    return user.id
+
+
+_VIEW_LABELS = {
+    "chat": "the chat tab",
+    "browser": "the browser panel (they can see the live browser)",
+    "terminal": "the terminal tab",
+    "execution_graphs": "the execution graphs tab",
+    "observability": "the observability/tracing tab",
+    "tasks": "the task board",
+    "files": "the file browser",
+    "settings": "the settings page",
+    "progress": "the progress/coaching tab",
+}
 
 
 def _handle_message(
@@ -104,6 +146,7 @@ def _handle_message(
     channel_id: str,
     content: str,
     message_id: str,
+    active_view: str = "",
 ) -> None:
     """Process a TeamWork user message through Prax's conversation service."""
     with app.app_context():
@@ -120,16 +163,32 @@ def _handle_message(
             known_channels = set(tw._channels.values()) if tw._channels else set()
             is_dm = channel_id not in known_channels
 
+            # Build view context — tell the agent which tab the user is on.
+            view_label = _VIEW_LABELS.get(active_view, "")
+            if view_label:
+                view_hint = f"The user is currently viewing {view_label}. "
+            else:
+                view_hint = ""
+
+            # Browser-specific guidance based on what tab the user is on.
+            if active_view == "browser":
+                browser_guidance = (
+                    "They can see the live browser — when they reference what's on screen "
+                    "or ask you to interact with the page, use delegate_browser."
+                )
+            else:
+                browser_guidance = (
+                    "Only use delegate_browser when the user explicitly asks for browser "
+                    "interaction (\"in the browser\", \"open\", \"navigate to\")."
+                )
+
             if is_dm:
                 channel_hint = (
-                    "[via TeamWork web UI — private DM with user. "
-                    "This is a private conversation. Only you and the user can see these messages. "
-                    "Do NOT relay this to public channels.]\n"
+                    f"[via TeamWork web UI — private DM. {view_hint}{browser_guidance}]\n"
                 )
             else:
                 channel_hint = (
-                    "[via TeamWork web UI — public channel. "
-                    "All agents can see messages in public channels.]\n"
+                    f"[via TeamWork web UI — public channel. {view_hint}{browser_guidance}]\n"
                 )
 
             prefixed_content = f"{channel_hint}{content}"

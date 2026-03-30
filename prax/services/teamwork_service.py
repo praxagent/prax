@@ -309,6 +309,251 @@ class TeamWorkClient:
     def add_channel(self, name: str, channel_id: str) -> None:
         self._channels[name] = channel_id
 
+    def ensure_channels(self, channels: list[dict[str, str]]) -> None:
+        """Ensure the listed channels exist, creating any that are missing.
+
+        Called on startup to add channels (like #discord, #sms) that may
+        not have existed when the project was first created.
+        """
+        if not self._project_id:
+            return
+        try:
+            result = self._post(
+                f"/projects/{self._project_id}/ensure-channels",
+                {"channels": channels},
+            )
+            updated = result.get("channels", {})
+            self._channels.update(updated)
+            logger.info("Ensured channels: %s", list(updated.keys()))
+        except Exception:
+            logger.debug("Failed to ensure channels", exc_info=True)
+
+    def get_channel_message_count(self, channel_name: str) -> int:
+        """Get the number of messages in a TeamWork channel."""
+        if not self._project_id:
+            return -1
+        channel_id = self._channels.get(channel_name)
+        if not channel_id:
+            return -1
+        try:
+            result = self._get(
+                f"/projects/{self._project_id}/channels/{channel_id}/message-count"
+            )
+            return result.get("count", 0)
+        except Exception:
+            logger.debug("Failed to get message count for %s", channel_name, exc_info=True)
+            return -1
+
+    def bulk_import_messages(self, messages: list[dict]) -> int:
+        """Bulk import historical messages into TeamWork.
+
+        Each dict should have: channel_id, content, agent_id (optional),
+        message_type (optional, default 'chat'), created_at (optional ISO 8601).
+        """
+        if not self._project_id or not messages:
+            return 0
+        try:
+            # Use a longer timeout for bulk operations (can be hundreds of messages)
+            resp = requests.post(
+                self._url(f"/projects/{self._project_id}/messages/bulk"),
+                json={"messages": messages},
+                headers=self._headers(),
+                timeout=60,
+            )
+            resp.raise_for_status()
+            return resp.json().get("imported", 0)
+        except Exception:
+            logger.warning("Failed to bulk import messages", exc_info=True)
+            return 0
+
+    def clear_channel_messages(self, channel_name: str) -> int:
+        """Delete all messages from a TeamWork channel (for re-sync)."""
+        if not self._project_id:
+            return 0
+        channel_id = self._channels.get(channel_name)
+        if not channel_id:
+            return 0
+        try:
+            resp = requests.delete(
+                self._url(f"/projects/{self._project_id}/channels/{channel_id}/messages"),
+                headers=self._headers(),
+                timeout=30,
+            )
+            resp.raise_for_status()
+            return resp.json().get("deleted", 0)
+        except Exception:
+            logger.warning("Failed to clear channel %s", channel_name, exc_info=True)
+            return 0
+
+    def sync_conversation_history(self, force: bool = False) -> dict[str, int]:
+        """Sync historical SMS and Discord conversations to TeamWork channels.
+
+        Reads from the conversations.db SQLite database and imports messages
+        that haven't been synced yet. Returns a dict of channel_name → count.
+
+        Args:
+            force: If True, clear existing messages before re-syncing.
+        """
+        import json
+        import sqlite3
+
+        if not self._project_id:
+            return {}
+
+        db_path = settings.database_name
+        try:
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, data FROM conversations")
+            rows = cursor.fetchall()
+            conn.close()
+        except Exception:
+            logger.warning("Failed to read conversations.db for sync", exc_info=True)
+            return {}
+
+        # Load Discord display names from settings — these are the ONLY
+        # conversation IDs we'll classify as Discord.  This avoids
+        # misclassifying SHA256-derived TeamWork channel keys.
+        discord_names: dict[str, str] = {}
+        if settings.discord_allowed_users:
+            try:
+                discord_names = json.loads(settings.discord_allowed_users)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # IDs to always skip — the TeamWork synthetic user fallback.
+        # We do NOT skip the user's real phone number — those are real SMS
+        # conversations that should go to #sms.  TeamWork web UI conversations
+        # use SHA256-derived keys so they won't collide.
+        skip_ids: set[int] = {10000000001}
+
+        # Classify conversations by channel
+        sms_conversations: list[tuple[str, list[dict]]] = []
+        discord_conversations: list[tuple[str, list[dict]]] = []
+
+        for row_id, data_json in rows:
+            conv_id = str(row_id)
+
+            # Skip TeamWork synthetic user and the user's own phone
+            # (TeamWork web UI conversations use SHA256-derived keys, not these)
+            if row_id in skip_ids:
+                continue
+
+            messages = json.loads(data_json)
+            if not messages:
+                continue
+
+            if conv_id in discord_names:
+                # Positively identified as a Discord user
+                display = discord_names[conv_id]
+                discord_conversations.append((display, messages))
+            elif 10 <= len(conv_id) <= 15:
+                # Looks like a phone number — SMS conversation
+                phone = f"+{conv_id}"
+                sms_conversations.append((phone, messages))
+            else:
+                # SHA256-derived TeamWork channel key or unknown — skip
+                logger.debug("Skipping conversation %s (not SMS or known Discord)", conv_id)
+
+        result: dict[str, int] = {}
+
+        # Sync SMS conversations to #sms channel
+        sms_channel_id = self._channels.get("sms")
+        if sms_channel_id and sms_conversations:
+            count = self.get_channel_message_count("sms")
+            if force and count > 0:
+                self.clear_channel_messages("sms")
+                count = 0
+            if count <= 0:
+                batch = self._format_conversation_batch(
+                    sms_conversations, sms_channel_id, "SMS"
+                )
+                if batch:
+                    result["sms"] = self.bulk_import_messages(batch)
+
+        # Sync Discord conversations to #discord channel
+        discord_channel_id = self._channels.get("discord")
+        if discord_channel_id and discord_conversations:
+            count = self.get_channel_message_count("discord")
+            if force and count > 0:
+                self.clear_channel_messages("discord")
+                count = 0
+            if count <= 0:
+                batch = self._format_conversation_batch(
+                    discord_conversations, discord_channel_id, "Discord"
+                )
+                if batch:
+                    result["discord"] = self.bulk_import_messages(batch)
+
+        if result:
+            logger.info("Synced conversation history to TeamWork: %s", result)
+        return result
+
+    def _format_conversation_batch(
+        self,
+        conversations: list[tuple[str, list[dict]]],
+        channel_id: str,
+        source: str,
+    ) -> list[dict]:
+        """Format conversation history into bulk import messages."""
+        agent_id = self._agents.get("Prax")
+        batch: list[dict] = []
+
+        for sender_label, messages in conversations:
+            for msg in messages:
+                role = msg.get("role", "")
+                content = msg.get("content", "")
+                date = msg.get("date")
+
+                if role == "system" or not content:
+                    continue
+
+                if role == "user":
+                    item = {
+                        "channel_id": channel_id,
+                        "content": f"**[{sender_label}]** {content}",
+                        "message_type": "chat",
+                    }
+                else:
+                    # Assistant message — attribute to Prax agent
+                    item = {
+                        "channel_id": channel_id,
+                        "agent_id": agent_id,
+                        "content": content,
+                        "message_type": "chat",
+                    }
+
+                if date:
+                    item["created_at"] = date
+
+                batch.append(item)
+
+        # Sort by timestamp to interleave conversations chronologically
+        batch.sort(key=lambda m: m.get("created_at", ""))
+        return batch
+
+    def forward_external_message(
+        self,
+        channel_name: str,
+        sender_label: str,
+        content: str,
+        agent_name: str | None = None,
+    ) -> str | None:
+        """Forward a message from an external channel (Discord, SMS) to TeamWork.
+
+        Posts a formatted message to the #discord or #sms channel so users
+        can see cross-channel conversations in TeamWork.
+        """
+        channel_id = self._channels.get(channel_name)
+        if not channel_id:
+            return None
+        formatted = f"**[{sender_label}]** {content}"
+        return self.send_message(
+            content=formatted,
+            channel_id=channel_id,
+            agent_name=agent_name,
+        )
+
 
 class _TypingContext:
     """Keeps a TeamWork typing indicator alive by re-sending every *interval* seconds."""

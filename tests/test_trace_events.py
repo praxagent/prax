@@ -10,6 +10,7 @@ class TestTraceEventVocabulary:
             "plugin_import", "plugin_activate", "plugin_block",
             "plugin_rollback", "plugin_remove", "plugin_security_warn",
             "tier_choice",
+            "think",
         }
         assert TraceEvent.values() == expected
 
