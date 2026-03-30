@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/praxagent/prax/compare/v0.5.0...v0.6.0) (2026-03-30)
+
+
+### Features
+
+* improved plugin security, integration tests, observability ([#14](https://github.com/praxagent/prax/issues/14)) ([f30bb89](https://github.com/praxagent/prax/commit/f30bb892a21a4f6b0fbaab0be01dad7ad55ea9a0))
+
 ## [0.5.0](https://github.com/praxagent/prax/compare/v0.4.0...v0.5.0) (2026-03-28)
 
 
