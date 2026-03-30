@@ -165,22 +165,99 @@ class ConversationAgent:
             if not incomplete:
                 return ""
             step_list = ", ".join(
-                f"step {s['step']}" for s in incomplete[:5]
+                f"step {s['step']}: {s.get('description', '')[:60]}"
+                for s in incomplete[:5]
             )
             return (
                 f"Your plan for \"{plan.get('goal', '')}\" has {len(incomplete)} "
-                f"incomplete step(s) ({step_list}). Continue working through "
-                "the plan — do NOT respond to the user until the remaining "
-                "steps are done or you've determined they can't be completed."
+                f"incomplete step(s): {step_list}. "
+                "If you already completed any of these steps (via delegation, "
+                "tool calls, or direct work), call agent_step_done(step_number) "
+                "for each one NOW. Do NOT re-delegate or repeat work that "
+                "already returned results. If all steps are actually done, "
+                "call agent_plan_clear() and respond to the user."
             )
         except Exception:
             return ""
 
+    # Tools whose successful return means substantive work was done.
+    _DELEGATION_TOOLS = frozenset({
+        "delegate_task", "delegate_parallel", "delegate_research",
+        "delegate_browser", "delegate_sandbox", "delegate_sysadmin",
+        "delegate_finetune", "delegate_content_editor", "delegate_knowledge",
+        "workspace_save", "workspace_patch", "note_create", "note_update",
+    })
+
+    @staticmethod
+    def _auto_complete_plan_steps(uid: str, messages: list) -> None:
+        """Auto-mark plan steps done when delegation/work tools returned successfully.
+
+        Scans messages for completed delegation tool calls. If the plan has
+        incomplete steps and work was clearly done (delegation returned, files
+        saved), marks ALL incomplete steps as done. This prevents the plan
+        enforcement loop from re-delegating work that already completed.
+        """
+        plan = read_plan(uid)
+        if not plan:
+            return
+
+        incomplete_steps = [s for s in plan.get("steps", []) if not s.get("done")]
+        if not incomplete_steps:
+            return
+
+        # Check if delegation/work tools were called AND returned non-error results
+        from prax.services.workspace_service import complete_plan_step
+
+        work_done = False
+        for msg in messages:
+            if isinstance(msg, ToolMessage) and msg.name in ConversationAgent._DELEGATION_TOOLS:
+                content = (msg.content or "").lower()
+                # Only count as done if the result doesn't look like an error
+                if not any(err in content for err in ("failed", "error:", "sub-agent failed")):
+                    work_done = True
+                    break
+
+        if not work_done:
+            return
+
+        # Auto-mark all incomplete steps as done — the work was completed
+        # but the agent forgot to call agent_step_done().
+        for step in incomplete_steps:
+            try:
+                complete_plan_step(uid, step["step"])
+                logger.info(
+                    "Auto-marked plan step %d done (agent forgot agent_step_done): %s",
+                    step["step"], step.get("description", "")[:60],
+                )
+            except Exception:
+                pass
+
     def run(self, conversation: Iterable[BaseMessage], user_input: str, workspace_context: str = "") -> str:
         """Execute the agent graph and return the final string response."""
+        import time as _time
+
+        from prax.agent.trace import start_span
+
+        _run_deadline = _time.monotonic() + settings.agent_run_timeout
+
+        # Start a root span that wraps the entire orchestrator invocation.
+        # This sets last_root_trace_id so callers can attach it to responses.
+        root_span = start_span("orchestrator", "orchestrator")
+
         # Reset per-plugin call counters for the new message.
         from prax.plugins.monitored_tool import reset_plugin_call_counts
         reset_plugin_call_counts()
+
+        # Set user message context for smart confirmation gate.
+        from prax.agent.user_context import current_component, current_user_message
+        current_user_message.set(user_input)
+        current_component.set("orchestrator")
+
+        # Initialize tool-call budget for this turn.
+        from prax.agent.autonomy import get_recursion_limit
+        from prax.agent.governed_tool import init_turn_budget
+        effective_limit = get_recursion_limit(settings.agent_max_tool_calls)
+        init_turn_budget(effective_limit)
 
         # Register workspace plugins for the current user.
         uid = current_user_id.get()
@@ -193,6 +270,11 @@ class ConversationAgent:
         history: list[BaseMessage] = list(conversation)
         logger.debug("Agent invoked with %d history messages", len(history))
 
+        # Difficulty-driven routing: estimate task difficulty and inject
+        # context so the agent knows how the system classified the request.
+        from prax.agent.difficulty import difficulty_context_for_prompt, estimate_difficulty
+        estimate_difficulty(user_input)
+
         # Complexity hint: if the request looks complex and there's no active
         # plan, nudge the agent to create one.
         complexity_hint = ""
@@ -204,7 +286,24 @@ class ConversationAgent:
                 "multiple steps. Create an agent_plan BEFORE doing any work.]"
             )
 
-        full_prompt = _load_system_prompt() + workspace_context + complexity_hint
+        # Metacognitive injection: if the orchestrator has known failure
+        # patterns from past runs, inject warnings into the prompt.
+        metacognitive_hint = ""
+        try:
+            from prax.agent.metacognitive import get_metacognitive_store
+            metacognitive_hint = get_metacognitive_store().get_prompt_injection("orchestrator")
+        except Exception:
+            pass
+
+        difficulty_hint = "\n\n" + difficulty_context_for_prompt(user_input)
+
+        full_prompt = (
+            _load_system_prompt()
+            + workspace_context
+            + complexity_hint
+            + difficulty_hint
+            + metacognitive_hint
+        )
 
         # Persist instructions so the agent can re-read them mid-conversation.
         if uid:
@@ -224,7 +323,7 @@ class ConversationAgent:
         turn = self.checkpoint_mgr.start_turn(uid or "anonymous")
         config = {
             **self.checkpoint_mgr.graph_config(turn),
-            "recursion_limit": settings.agent_max_tool_calls,
+            "recursion_limit": effective_limit,
         }
 
         try:
@@ -237,12 +336,19 @@ class ConversationAgent:
                 uid
                 and self._has_incomplete_plan(uid)
                 and continuations < _MAX_PLAN_CONTINUATIONS
+                and _time.monotonic() < _run_deadline
             ):
+                # Auto-mark plan steps done if substantial work was completed
+                # (delegation tools returned results) but steps weren't marked.
+                self._auto_complete_plan_steps(uid, result.get("messages", []))
+                if not self._has_incomplete_plan(uid):
+                    break
+
                 continuations += 1
                 nudge = self._plan_status_summary(uid)
                 logger.info(
-                    "Plan enforcement: %d incomplete steps, continuation %d/%d (user=%s)",
-                    nudge.count("step"), continuations, _MAX_PLAN_CONTINUATIONS, uid,
+                    "Plan enforcement: continuation %d/%d (user=%s)",
+                    continuations, _MAX_PLAN_CONTINUATIONS, uid,
                 )
 
                 # Inject a system nudge as a new human message to continue.
@@ -251,6 +357,12 @@ class ConversationAgent:
                 ]
                 result = self.graph.invoke(
                     {"messages": continuation_messages}, config=config,
+                )
+
+            if _time.monotonic() >= _run_deadline:
+                logger.warning(
+                    "Agent run hit wall-clock timeout (%ds) for user %s",
+                    settings.agent_run_timeout, uid,
                 )
 
             self._rebuild_if_needed()
@@ -281,6 +393,7 @@ class ConversationAgent:
         if response:
             response = self._audit_claims(response, result.get("messages", []), uid)
 
+        root_span.end(status="completed", summary=response[:200] if response else "")
         return response
 
     @staticmethod
@@ -321,6 +434,33 @@ class ConversationAgent:
                 logger.warning(
                     "Agent graph failed (user=%s): %s", user_id, exc,
                 )
+
+                # Multi-perspective error analysis for structured recovery
+                try:
+                    from prax.agent.error_recovery import build_recovery_context
+                    turn = self.checkpoint_mgr.get_turn(user_id)
+                    attempt = turn.retries_used + 1 if turn else 1
+                    recovery_ctx = build_recovery_context(
+                        tool_name="orchestrator_graph",
+                        error_message=str(exc),
+                        attempt=attempt,
+                    )
+                    logger.info("Recovery context: %s", recovery_ctx[:200])
+                except Exception:
+                    pass
+
+                # Record failure for metacognitive learning
+                try:
+                    from prax.agent.metacognitive import get_metacognitive_store
+                    error_type = type(exc).__name__
+                    get_metacognitive_store().record_failure(
+                        component="orchestrator",
+                        pattern_id=f"graph_{error_type}",
+                        description=f"Graph invocation failed: {error_type}: {str(exc)[:80]}",
+                        compensating_instruction=f"Previous runs hit {error_type} — verify tool args before calling.",
+                    )
+                except Exception:
+                    pass
 
                 # If this error is from an invalid checkpoint state (dangling
                 # tool_calls), don't count it as a retry — just start fresh.
@@ -465,6 +605,20 @@ class ConversationAgent:
                 "content": (
                     f"[{audit.get('risk', '?').upper()}] {audit.get('tool_name', '?')} "
                     f"args={audit.get('args', '')} result={audit.get('result', '')}"
+                ),
+            })
+
+        # Flush tier choice log into the trace for A/B analysis.
+        from prax.agent.llm_factory import drain_tier_choices
+        tier_entries = drain_tier_choices()
+        for tc in tier_entries:
+            entries.append({
+                "type": TraceEvent.TIER_CHOICE,
+                "content": (
+                    f"tier={tc.get('tier_requested', '?')} "
+                    f"model={tc.get('model', '?')} "
+                    f"provider={tc.get('provider', '?')} "
+                    f"span={tc.get('span_name', '?')}"
                 ),
             })
 

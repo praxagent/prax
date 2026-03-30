@@ -8,12 +8,14 @@ credentials internally, enforces per-tier policy, and logs access.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import subprocess
 import tempfile
 from typing import Any
 
 from prax.plugins.policy import PluginPolicy, get_policy
+from prax.plugins.registry import PluginTrust
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +45,24 @@ class PluginCapabilities:
         self.user_id = user_id
         self.policy: PluginPolicy = get_policy(trust_tier)
         self._http_request_count = 0
+
+    # ------------------------------------------------------------------
+    # Internal — scoped data directory
+    # ------------------------------------------------------------------
+
+    def _plugin_data_root(self) -> str:
+        """Return the scoped data directory for this plugin.
+
+        IMPORTED plugins: ``{workspace}/{user}/plugin_data/{plugin_rel_path}/``
+        BUILTIN/WORKSPACE: ``{workspace}/{user}/active/``
+        """
+        from prax.services.workspace_service import workspace_root
+        if self.user_id is None:
+            raise RuntimeError("No user context — cannot resolve plugin data path.")
+        root = workspace_root(self.user_id)
+        if self.trust_tier == PluginTrust.IMPORTED:
+            return os.path.join(root, "plugin_data", self.plugin_rel_path)
+        return os.path.join(root, "active")
 
     # ------------------------------------------------------------------
     # LLM — plugin never sees API key
@@ -96,22 +116,67 @@ class PluginCapabilities:
     # ------------------------------------------------------------------
 
     def save_file(self, filename: str, content: bytes) -> str:
-        """Save a file to the user's workspace. Returns the saved path."""
-        from prax.services.workspace_service import save_file
+        """Save a file to the plugin's scoped directory. Returns the saved path.
+
+        IMPORTED plugins write to ``plugin_data/{plugin_rel_path}/``.
+        BUILTIN/WORKSPACE plugins write to ``active/`` (existing behaviour).
+        """
         if self.user_id is None:
             raise RuntimeError("No user context — cannot save workspace files.")
         logger.info(
             "Plugin %s saving file %s for user %s",
             self.plugin_rel_path, filename, self.user_id,
         )
-        return save_file(self.user_id, filename, content)
+        if self.trust_tier != PluginTrust.IMPORTED:
+            from prax.services.workspace_service import save_file
+            return save_file(self.user_id, filename, content)
+
+        from prax.services.workspace_service import safe_join
+        data_root = self._plugin_data_root()
+        os.makedirs(data_root, exist_ok=True)
+        filepath = safe_join(data_root, filename)
+        with open(filepath, "wb") as f:
+            f.write(content if isinstance(content, bytes) else content.encode("utf-8"))
+        return filepath
+
+    def read_file(self, filename: str) -> str:
+        """Read a file from the plugin's scoped directory.
+
+        IMPORTED plugins can only read from their own scoped directory.
+        BUILTIN/WORKSPACE plugins read from the user's ``active/`` directory.
+        """
+        if self.user_id is None:
+            raise RuntimeError("No user context — cannot read workspace files.")
+        logger.info(
+            "Plugin %s reading file %s for user %s",
+            self.plugin_rel_path, filename, self.user_id,
+        )
+        if self.trust_tier != PluginTrust.IMPORTED:
+            from prax.services.workspace_service import read_file
+            return read_file(self.user_id, filename)
+
+        from prax.services.workspace_service import safe_join
+        data_root = self._plugin_data_root()
+        filepath = safe_join(data_root, filename)
+        with open(filepath, encoding="utf-8") as f:
+            return f.read()
 
     def workspace_path(self, *parts: str) -> str:
-        """Return an absolute path within the user's workspace."""
-        from prax.services.workspace_service import workspace_root
+        """Return an absolute path within the plugin's scoped directory.
+
+        IMPORTED plugins get a path under ``plugin_data/{plugin_rel_path}/``.
+        BUILTIN/WORKSPACE plugins get the full workspace root.
+        """
         if self.user_id is None:
             raise RuntimeError("No user context — cannot resolve workspace path.")
-        import os
+        if self.trust_tier == PluginTrust.IMPORTED:
+            data_root = self._plugin_data_root()
+            os.makedirs(data_root, exist_ok=True)
+            if parts:
+                from prax.services.workspace_service import safe_join
+                return safe_join(data_root, *parts)
+            return data_root
+        from prax.services.workspace_service import workspace_root
         return os.path.join(workspace_root(self.user_id), *parts)
 
     def get_user_id(self) -> str | None:
@@ -129,13 +194,24 @@ class PluginCapabilities:
         timeout: int = 30,
         cwd: str | None = None,
     ) -> subprocess.CompletedProcess:
-        """Run a shell command. Audited and time-limited."""
+        """Run a shell command. Audited and time-limited.
+
+        IMPORTED plugins have ``cwd`` forced to their scoped directory.
+        Any ``cwd`` they pass is treated as a relative path within it.
+        """
         if not self.policy.can_run_commands:
             raise PermissionError(
                 f"Plugin '{self.plugin_rel_path}' is not permitted to run commands."
             )
+        if self.trust_tier == PluginTrust.IMPORTED and self.user_id:
+            from prax.services.workspace_service import safe_join
+            forced_cwd = self._plugin_data_root()
+            os.makedirs(forced_cwd, exist_ok=True)
+            if cwd is not None:
+                forced_cwd = safe_join(forced_cwd, cwd)
+            cwd = forced_cwd
         logger.info(
-            "Plugin %s running command: %s", self.plugin_rel_path, cmd,
+            "Plugin %s running command: %s (cwd=%s)", self.plugin_rel_path, cmd, cwd,
         )
         return subprocess.run(
             cmd,

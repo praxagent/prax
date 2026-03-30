@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+import random
 import subprocess
 import tempfile
 import threading
@@ -40,6 +41,28 @@ _LOGIN_SIGNALS = [
     "enter your password", "forgot password",
     "authentication required", "single sign-on",
 ]
+
+# Human-like timing ranges (seconds).  Each action picks a random delay
+# from the corresponding (min, max) range before executing.
+_TIMING = {
+    "before_click":   (0.4, 1.5),
+    "after_click":    (0.8, 2.0),
+    "before_fill":    (0.3, 1.0),
+    "keystroke":      (0.03, 0.12),   # per-character typing delay
+    "after_fill":     (0.3, 0.8),
+    "before_key":     (0.2, 0.6),
+    "after_key":      (0.4, 1.2),
+    "before_select":  (0.3, 0.8),
+    "after_select":   (0.3, 0.8),
+    "after_navigate": (1.5, 3.0),
+}
+
+
+def _human_delay(page: Any, action: str) -> None:
+    """Pause for a random human-like interval before/after an action."""
+    lo, hi = _TIMING.get(action, (0.3, 1.0))
+    ms = int(random.uniform(lo, hi) * 1000)
+    page.wait_for_timeout(ms)
 
 
 # ---------------------------------------------------------------------------
@@ -254,8 +277,8 @@ def navigate(user_id: str, url: str) -> dict[str, Any]:
     try:
         session = _get_session(user_id)
         session.page.goto(url, wait_until="domcontentloaded", timeout=settings.browser_timeout)
-        # Wait a bit for JS to render.
-        session.page.wait_for_timeout(2000)
+        # Human-like pause while "reading" the page after it loads.
+        _human_delay(session.page, "after_navigate")
         title = session.page.title()
         # Extract text content, truncated for sanity.
         text = session.page.inner_text("body")
@@ -318,18 +341,26 @@ def click(user_id: str, selector: str) -> dict[str, Any]:
     """Click an element on the current page."""
     try:
         session = _get_session(user_id)
+        _human_delay(session.page, "before_click")
         session.page.click(selector, timeout=10000)
-        session.page.wait_for_timeout(1000)
+        _human_delay(session.page, "after_click")
         return {"status": "clicked", "selector": selector, "url": session.page.url}
     except Exception as e:
         return {"error": f"Click failed on '{selector}': {e}"}
 
 
 def fill(user_id: str, selector: str, value: str) -> dict[str, Any]:
-    """Fill a form field."""
+    """Fill a form field with human-like typing."""
     try:
         session = _get_session(user_id)
-        session.page.fill(selector, value, timeout=10000)
+        _human_delay(session.page, "before_fill")
+        # Clear field first, then type character-by-character.
+        session.page.click(selector, timeout=10000)
+        session.page.fill(selector, "")
+        lo, hi = _TIMING["keystroke"]
+        avg_delay = (lo + hi) / 2 * 1000  # ms
+        session.page.type(selector, value, delay=avg_delay)
+        _human_delay(session.page, "after_fill")
         return {"status": "filled", "selector": selector}
     except Exception as e:
         return {"error": f"Fill failed on '{selector}': {e}"}
@@ -339,8 +370,9 @@ def press_key(user_id: str, key: str) -> dict[str, Any]:
     """Press a keyboard key (e.g. 'Enter', 'Tab', 'Escape')."""
     try:
         session = _get_session(user_id)
+        _human_delay(session.page, "before_key")
         session.page.keyboard.press(key)
-        session.page.wait_for_timeout(500)
+        _human_delay(session.page, "after_key")
         return {"status": "pressed", "key": key}
     except Exception as e:
         return {"error": f"Key press failed: {e}"}
@@ -350,7 +382,9 @@ def select_option(user_id: str, selector: str, value: str) -> dict[str, Any]:
     """Select an option from a dropdown."""
     try:
         session = _get_session(user_id)
+        _human_delay(session.page, "before_select")
         session.page.select_option(selector, value, timeout=10000)
+        _human_delay(session.page, "after_select")
         return {"status": "selected", "selector": selector, "value": value}
     except Exception as e:
         return {"error": f"Select failed: {e}"}
@@ -542,7 +576,7 @@ def check_login_status(user_id: str, domain: str) -> dict[str, Any]:
     try:
         session = _get_session(user_id)
         session.page.goto(f"https://{domain}", wait_until="domcontentloaded", timeout=15000)
-        session.page.wait_for_timeout(2000)
+        _human_delay(session.page, "after_navigate")
         url = session.page.url
         title = session.page.title()
         text = session.page.inner_text("body")[:3000]

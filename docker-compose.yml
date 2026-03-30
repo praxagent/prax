@@ -89,6 +89,8 @@ services:
       - CHROME_CDP_HOST=sandbox
       - CHROME_CDP_PORT=9223
       - CORS_ORIGINS=["http://localhost:3000","http://localhost:5173"]
+      # Prax app URL — required for plugin management proxy.
+      - PRAX_URL=http://app:5001
     volumes:
       - ${WORKSPACE_DIR:-./workspaces}/.teamwork:/app/data
       - ${WORKSPACE_DIR:-./workspaces}:/workspace

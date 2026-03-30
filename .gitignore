@@ -102,6 +102,9 @@ sites.yaml
 # ---- Claude Code ----
 .claude/
 
+# ---- Integration test artifacts ----
+tests/integration/.artifacts/
+
 # ---- Misc ----
 pip-log.txt
 pip-delete-this-directory.txt

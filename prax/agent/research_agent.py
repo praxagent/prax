@@ -108,7 +108,7 @@ def delegate_research(question: str) -> str:
                 SystemMessage(content=system_msg),
                 HumanMessage(content=question),
             ]},
-            config={"recursion_limit": 80},
+            config={"recursion_limit": 30},
         )
     except Exception as exc:
         logger.warning("Research agent failed: %s", exc, exc_info=True)

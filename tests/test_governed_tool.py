@@ -22,6 +22,8 @@ def _reset():
     _gov._audit_buffer.clear()
     _gov._high_risk_seen.clear()
     _gov._high_risk_confirmed = False
+    _gov._tool_call_count = 0
+    _gov._tool_call_budget = 0
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +273,189 @@ class TestEpistemicTagging:
         assert _tag_result(42, SourceReliability.INFORMATIONAL) == 42
         assert _tag_result(None, SourceReliability.INFORMATIONAL) is None
         assert _tag_result(["a", "b"], SourceReliability.VERIFIED) == ["a", "b"]
+
+
+class TestSmartConfirmation:
+    """Smart auto-approve for browser tools when the user explicitly requested the action."""
+
+    def test_browser_click_auto_approved_when_user_said_click(self):
+        from prax.agent.governed_tool import wrap_with_governance
+        from prax.agent.user_context import current_user_message
+        _reset()
+        current_user_message.set("click the login button")
+        inner = _make_tool("browser_click")
+        # browser_click is HIGH risk in the central map
+        inner._risk_level = __import__("prax.agent.action_policy", fromlist=["RiskLevel"]).RiskLevel.HIGH
+        governed = wrap_with_governance(inner)
+        result = governed.invoke({"x": "login"})
+        # Should execute immediately — not blocked
+        assert "executed:login" in result
+
+    def test_browser_fill_auto_approved_when_user_said_fill(self):
+        from prax.agent.action_policy import RiskLevel
+        from prax.agent.governed_tool import wrap_with_governance
+        from prax.agent.user_context import current_user_message
+        _reset()
+        current_user_message.set("fill in my email address")
+        inner = _make_tool("browser_fill")
+        inner._risk_level = RiskLevel.HIGH
+        governed = wrap_with_governance(inner)
+        result = governed.invoke({"x": "test@example.com"})
+        assert "executed:test@example.com" in result
+
+    def test_browser_click_blocked_when_no_user_message(self):
+        from prax.agent.action_policy import RiskLevel
+        from prax.agent.governed_tool import wrap_with_governance
+        from prax.agent.user_context import current_user_message
+        _reset()
+        current_user_message.set("")
+        inner = _make_tool("browser_click")
+        inner._risk_level = RiskLevel.HIGH
+        governed = wrap_with_governance(inner)
+        result = governed.invoke({"x": "something"})
+        assert "HIGH risk" in result
+
+    def test_non_browser_tool_not_auto_approved(self):
+        from prax.agent.action_policy import RiskLevel
+        from prax.agent.governed_tool import wrap_with_governance
+        from prax.agent.user_context import current_user_message
+        _reset()
+        current_user_message.set("click the deploy button")
+        inner = _make_tool("self_improve_deploy")
+        inner._risk_level = RiskLevel.HIGH
+        governed = wrap_with_governance(inner)
+        result = governed.invoke({"x": "code"})
+        # Should still be blocked — self_improve_deploy is not a browser tool
+        assert "HIGH risk" in result
+
+    def test_browser_navigate_auto_approved_when_user_said_go_to(self):
+        from prax.agent.action_policy import RiskLevel
+        from prax.agent.governed_tool import wrap_with_governance
+        from prax.agent.user_context import current_user_message
+        _reset()
+        current_user_message.set("go to twitter.com")
+        inner = _make_tool("browser_click")
+        inner._risk_level = RiskLevel.HIGH
+        governed = wrap_with_governance(inner)
+        result = governed.invoke({"x": "nav"})
+        assert "executed:nav" in result
+
+    def test_auto_approve_unlocks_all_high_risk(self):
+        """Once smart auto-approve fires, all HIGH-risk tools are unlocked for the turn."""
+        from prax.agent.action_policy import RiskLevel
+        from prax.agent.governed_tool import wrap_with_governance
+        from prax.agent.user_context import current_user_message
+        _reset()
+        current_user_message.set("click the button and then deploy")
+        browser = _make_tool("browser_click")
+        browser._risk_level = RiskLevel.HIGH
+        deploy = _make_tool("plugin_write")
+        governed_browser = wrap_with_governance(browser)
+        governed_deploy = wrap_with_governance(deploy)
+        # browser_click auto-approved → sets _high_risk_confirmed
+        result1 = governed_browser.invoke({"x": "btn"})
+        assert "executed:btn" in result1
+        # plugin_write should now also execute immediately
+        result2 = governed_deploy.invoke({"x": "data"})
+        assert "executed:data" in result2
+
+
+class TestBudgetTracking:
+    """Tool call budget — soft limit with agent-initiated escalation."""
+
+    def test_no_budget_means_no_limit(self):
+        from prax.agent.governed_tool import wrap_with_governance
+        _reset()
+        # _tool_call_budget is 0 → no budget enforcement
+        inner = _make_tool("note_list")
+        governed = wrap_with_governance(inner)
+        for i in range(100):
+            result = governed.invoke({"x": str(i)})
+            assert f"executed:{i}" in result
+
+    def test_budget_blocks_after_exhaustion(self):
+        from prax.agent.governed_tool import init_turn_budget, wrap_with_governance
+        _reset()
+        init_turn_budget(3)
+        inner = _make_tool("note_list")
+        governed = wrap_with_governance(inner)
+        # Calls 1-3: execute fine
+        for i in range(3):
+            result = governed.invoke({"x": str(i)})
+            assert f"executed:{i}" in result
+        # Call 4: blocked
+        result = governed.invoke({"x": "overflow"})
+        assert "budget exhausted" in result.lower()
+        assert "request_extended_budget" in result
+
+    def test_request_extended_budget_not_blocked(self):
+        """request_extended_budget itself must never be budget-blocked."""
+        from prax.agent.governed_tool import init_turn_budget, wrap_with_governance
+        _reset()
+        init_turn_budget(1)
+        # Use up the budget
+        inner = _make_tool("note_list")
+        governed = wrap_with_governance(inner)
+        governed.invoke({"x": "1"})  # call 1: OK
+        governed.invoke({"x": "2"})  # call 2: blocked
+
+        # request_extended_budget should still go through
+        budget_tool = _make_tool("request_extended_budget")
+        governed_budget = wrap_with_governance(budget_tool)
+        result = governed_budget.invoke({"x": "need more"})
+        assert "executed:need more" in result
+
+    def test_extend_budget_allows_more_calls(self):
+        from prax.agent.governed_tool import (
+            extend_budget,
+            get_budget_status,
+            init_turn_budget,
+            wrap_with_governance,
+        )
+        _reset()
+        init_turn_budget(2)
+        inner = _make_tool("note_list")
+        governed = wrap_with_governance(inner)
+        governed.invoke({"x": "1"})
+        governed.invoke({"x": "2"})
+        # Budget exhausted
+        result = governed.invoke({"x": "3"})
+        assert "budget exhausted" in result.lower()
+        # Extend by 5
+        extend_budget(5)
+        used, budget = get_budget_status()
+        assert budget == 7  # 2 + 5
+        # Now call 4 should work
+        result = governed.invoke({"x": "4"})
+        assert "executed:4" in result
+
+    def test_drain_resets_budget(self):
+        from prax.agent.governed_tool import (
+            drain_audit_log,
+            get_budget_status,
+            init_turn_budget,
+        )
+        _reset()
+        init_turn_budget(10)
+        _, budget = get_budget_status()
+        assert budget == 10
+        drain_audit_log()
+        _, budget = get_budget_status()
+        assert budget == 0
+
+    def test_budget_blocked_audit_entry(self):
+        from prax.agent.governed_tool import (
+            _audit_buffer,
+            init_turn_budget,
+            wrap_with_governance,
+        )
+        _reset()
+        init_turn_budget(1)
+        inner = _make_tool("note_list")
+        governed = wrap_with_governance(inner)
+        governed.invoke({"x": "1"})  # OK
+        governed.invoke({"x": "2"})  # blocked
+        assert any("budget exhausted" in e.get("result", "").lower() for e in _audit_buffer)
 
 
 class TestToolRegistryIntegration:

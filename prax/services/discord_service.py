@@ -234,9 +234,15 @@ def _build_bot():
         if not text_input and not message.attachments:
             return
 
-        user_id = _user_id_for_service(author_id)
-        display_name = _allowed_users.get(author_id, message.author.display_name)
+        # Resolve unified identity.
+        from prax.services.identity_service import resolve_user
+        discord_display = _allowed_users.get(author_id, message.author.display_name)
+        user_obj = resolve_user("discord", author_id, display_name=discord_display)
+        user_id = user_obj.id
+        display_name = user_obj.display_name
         _user_channels[user_id] = message.channel
+        # Also keep legacy D{id} mapping so send_file can find the channel.
+        _user_channels[f"D{author_id}"] = message.channel
 
         # Handle file attachments — download and include context.
         attachment_context = ""
@@ -253,6 +259,10 @@ def _build_bot():
             text_input = (text_input or "User sent attachments") + attachment_context
 
         logger.info("Discord message from %s (%s): %s", display_name, author_id, text_input[:80])
+
+        # Mirror the incoming message to TeamWork's #discord channel.
+        from prax.services.teamwork_hooks import forward_to_channel
+        forward_to_channel("discord", display_name, text_input)
 
         # Show typing indicator while processing.  The typing indicator is
         # cosmetic — if Discord rate-limits it, we still process the message.
@@ -278,6 +288,9 @@ def _build_bot():
                     await typing_ctx.__aexit__(None, None, None)
                 except Exception:
                     pass
+
+        # Mirror the agent response to TeamWork's #discord channel.
+        forward_to_channel("discord", "Prax", response, agent_name="Prax")
 
         # Render LaTeX math blocks as images, send interleaved with text.
         segments = await asyncio.to_thread(_render_latex_segments, response)
@@ -348,13 +361,22 @@ def start_bot() -> None:
 def send_message(user_id: str, message: str) -> None:
     """Send a DM to a Discord user from outside the event loop.
 
-    ``user_id`` should be in the ``D{discord_id}`` format used internally.
-    Blocks until the message is sent (up to 30 s timeout).
+    ``user_id`` can be a UUID (resolved via identity service) or the legacy
+    ``D{discord_id}`` format.  Blocks until the message is sent (up to 30 s).
     """
     if _loop is None or _client is None:
         raise RuntimeError("Discord bot is not running")
 
-    discord_id = int(user_id[1:])
+    if user_id.startswith("D"):
+        discord_id = int(user_id[1:])
+    else:
+        # UUID — look up the Discord identity.
+        from prax.services.identity_service import get_identities
+        identities = get_identities(user_id)
+        discord_ids = [i["external_id"] for i in identities if i["provider"] == "discord"]
+        if not discord_ids:
+            raise RuntimeError(f"No Discord identity linked to user {user_id}")
+        discord_id = int(discord_ids[0])
 
     async def _send():
         user = await _client.fetch_user(discord_id)

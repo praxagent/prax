@@ -125,3 +125,71 @@ def test_missing_user_id_falls_back(monkeypatch):
 
     module.workspace_list.invoke({})
     assert calls == ["unknown"]
+
+
+class TestThinkTool:
+    def test_think_returns_ok(self, monkeypatch):
+        module = importlib.reload(importlib.import_module('prax.agent.workspace_tools'))
+        ws = importlib.import_module('prax.services.workspace_service')
+        monkeypatch.setattr(ws, 'append_trace', lambda uid, entries: None)
+        current_user_id.set('+10000000000')
+        result = module.think.invoke({"reasoning": "Should I use tool A or B?"})
+        assert result == "OK"
+
+    def test_think_records_to_trace(self, monkeypatch):
+        module = importlib.reload(importlib.import_module('prax.agent.workspace_tools'))
+        ws = importlib.import_module('prax.services.workspace_service')
+        recorded = []
+        monkeypatch.setattr(ws, 'append_trace', lambda uid, entries: recorded.extend(entries))
+        current_user_id.set('+10000000000')
+        module.think.invoke({"reasoning": "Evaluating options"})
+        assert len(recorded) == 1
+        assert recorded[0]["type"] == "think"
+        assert "[THINK]" in recorded[0]["content"]
+        assert "Evaluating options" in recorded[0]["content"]
+
+    def test_think_no_user_id_still_returns_ok(self, monkeypatch):
+        module = importlib.reload(importlib.import_module('prax.agent.workspace_tools'))
+        current_user_id.set(None)
+        result = module.think.invoke({"reasoning": "private reasoning"})
+        assert result == "OK"
+
+    def test_think_trace_error_swallowed(self, monkeypatch):
+        module = importlib.reload(importlib.import_module('prax.agent.workspace_tools'))
+        ws = importlib.import_module('prax.services.workspace_service')
+        monkeypatch.setattr(ws, 'append_trace', lambda uid, entries: (_ for _ in ()).throw(RuntimeError("disk full")))
+        current_user_id.set('+10000000000')
+        result = module.think.invoke({"reasoning": "should not crash"})
+        assert result == "OK"
+
+
+class TestRequestExtendedBudget:
+    def test_extends_budget(self, monkeypatch):
+        module = importlib.reload(importlib.import_module('prax.agent.workspace_tools'))
+        from prax.agent import governed_tool as gov
+        gov._tool_call_count = 10
+        gov._tool_call_budget = 15
+        current_user_id.set('+10000000000')
+        result = module.request_extended_budget.invoke({"reason": "need more", "additional_calls": 20})
+        assert "Budget extended by 20" in result
+        assert gov._tool_call_budget == 35  # 15 + 20
+
+    def test_caps_at_50(self, monkeypatch):
+        module = importlib.reload(importlib.import_module('prax.agent.workspace_tools'))
+        from prax.agent import governed_tool as gov
+        gov._tool_call_count = 0
+        gov._tool_call_budget = 10
+        current_user_id.set('+10000000000')
+        result = module.request_extended_budget.invoke({"reason": "big task", "additional_calls": 100})
+        assert "Budget extended by 50" in result
+        assert gov._tool_call_budget == 60  # 10 + 50
+
+    def test_minimum_is_5(self, monkeypatch):
+        module = importlib.reload(importlib.import_module('prax.agent.workspace_tools'))
+        from prax.agent import governed_tool as gov
+        gov._tool_call_count = 0
+        gov._tool_call_budget = 10
+        current_user_id.set('+10000000000')
+        result = module.request_extended_budget.invoke({"reason": "tiny", "additional_calls": 1})
+        assert "Budget extended by 5" in result
+        assert gov._tool_call_budget == 15  # 10 + 5

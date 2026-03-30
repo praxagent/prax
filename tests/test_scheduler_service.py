@@ -20,6 +20,10 @@ def sched_mod(monkeypatch, tmp_path):
     # Patch settings on the already-loaded module.
     monkeypatch.setattr(module.settings, "workspace_dir", str(tmp_path))
 
+    # workspace_root() is now called by _schedules_path — patch its settings too.
+    import prax.services.workspace_service as ws_mod
+    monkeypatch.setattr(ws_mod.settings, "workspace_dir", str(tmp_path))
+
     # Reset module state.
     module._scheduler = None
     module._user_jobs.clear()

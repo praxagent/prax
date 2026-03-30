@@ -72,15 +72,26 @@ def test_delegate_browser_calls_run_spoke():
         assert "open example.com" in kwargs["task"]
 
 
-def test_subagent_category_browser_uses_spoke_tools():
-    """The generic delegate_task(category='browser') uses spoke tools."""
+def test_subagent_category_browser_falls_back_to_defaults():
+    """delegate_task(category='browser') falls back to default tools.
+
+    Browser-specific tools live in the dedicated spoke (delegate_browser),
+    not in the generic subagent category path.  This is by design — the
+    comment in subagent.py explicitly excludes spoke categories from
+    _CATEGORY_BUILDERS.
+    """
     from prax.agent.subagent import _get_tools_for_category
 
     tools = _get_tools_for_category("browser")
     names = {t.name for t in tools}
 
-    assert "sandbox_browser_read" in names
-    assert "browser_open" in names
+    # Falls back to the default research-oriented tool set
+    assert "background_search_tool" in names
+    assert "fetch_url_content" in names
+
+    # Browser-specific tools should NOT be here — they're on the spoke
+    assert "sandbox_browser_read" not in names
+    assert "browser_open" not in names
 
 
 def test_spoke_runner_handles_no_tools():

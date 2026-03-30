@@ -17,6 +17,7 @@ class AppSettings(BaseSettings):
     log_path: str = Field(default="app.log", alias="LOG_PATH")
     port: int = Field(default=5001, alias="PORT")
     database_name: str = Field(default="conversations.db", alias="DATABASE_NAME")
+    identity_db: str = Field(default="identity.db", alias="IDENTITY_DB")
 
     # Providers / API Keys
     openai_key: str | None = Field(default=None, alias="OPENAI_KEY")
@@ -69,6 +70,12 @@ class AppSettings(BaseSettings):
     sandbox_cpu_limit: int = Field(default=2_000_000_000, alias="SANDBOX_CPU_LIMIT")
     sandbox_max_rounds: int = Field(default=10, alias="SANDBOX_MAX_ROUNDS")
 
+    # Agent autonomy level — controls how constrained the agent is.
+    # guided:    current behavior, all safety gates, prescriptive workflow rules
+    # balanced:  removes prescriptive workflow rules, agent uses judgment
+    # autonomous: also relaxes recursion limits, lets agent self-upgrade tier
+    autonomy: str = Field(default="guided", alias="PRAX_AUTONOMY")
+
     # Agent guardrails
     agent_max_tool_calls: int = Field(
         default=40, alias="AGENT_MAX_TOOL_CALLS",
@@ -76,6 +83,23 @@ class AppSettings(BaseSettings):
             "Maximum number of tool-call steps (recursion limit) the main agent "
             "can take per user message.  Prevents runaway loops.  Sub-agents and "
             "spokes have their own separate limits."
+        ),
+    )
+    agent_max_delegation_depth: int = Field(
+        default=4, alias="AGENT_MAX_DELEGATION_DEPTH",
+        description=(
+            "Maximum nesting depth for agent delegation chains. "
+            "Orchestrator=0, first sub-agent=1, etc.  Prevents infinite "
+            "recursive delegation.  A depth of 4 allows orchestrator → spoke "
+            "→ sub-agent → sub-sub-agent."
+        ),
+    )
+    agent_run_timeout: int = Field(
+        default=300, alias="AGENT_RUN_TIMEOUT",
+        description=(
+            "Hard wall-clock timeout (seconds) for a single agent.run() "
+            "invocation.  If the agent hasn't finished within this time, "
+            "the run is aborted.  Prevents unbounded API spend."
         ),
     )
 
@@ -125,6 +149,10 @@ class AppSettings(BaseSettings):
     def ssh_key_b64(self) -> str | None:
         """Return the SSH key, preferring PRAX_SSH_KEY_B64 over the legacy setting."""
         return self.prax_ssh_key_b64 or self.plugin_repo_ssh_key_b64
+
+    # Observability (OTel tracing, Prometheus metrics, Grafana dashboards)
+    observability_enabled: bool = Field(default=False, alias="OBSERVABILITY_ENABLED")
+    grafana_url: str = Field(default="", alias="GRAFANA_URL")  # e.g. "http://localhost:3001"
 
     # TeamWork integration (web UI)
     teamwork_url: str = Field(default="", alias="TEAMWORK_URL")  # e.g. "http://teamwork:8000"

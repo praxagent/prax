@@ -1,6 +1,6 @@
 import logging
 
-from flask import Blueprint, Response, current_app, make_response, request, send_from_directory, session
+from flask import Blueprint, Response, current_app, jsonify, make_response, request, send_from_directory, session
 
 from prax.blueprints.twilio_auth import validate_twilio_request
 from prax.services.voice_service import VoiceAccessError, voice_service
@@ -28,6 +28,13 @@ def respond():
 def health():
     """Health check endpoint for the watchdog supervisor."""
     return 'ok', 200
+
+
+@main_routes.route('/execution/graphs')
+def execution_graphs():
+    """Return active and recently completed execution graphs for the UI."""
+    from prax.agent.trace import get_active_graphs_json
+    return jsonify({"graphs": get_active_graphs_json()})
 
 
 @main_routes.route('/static/<path:path>')

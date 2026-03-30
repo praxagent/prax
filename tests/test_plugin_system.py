@@ -440,6 +440,67 @@ class TestLLMConfig:
         finally:
             cfg_mod._CONFIG_PATH = orig
 
+    def test_experiment_overrides_take_priority(self, tmp_path):
+        """Experiment overrides supersede YAML config."""
+        import prax.plugins.llm_config as cfg_mod
+        orig = cfg_mod._CONFIG_PATH
+        cfg_mod._CONFIG_PATH = tmp_path / "llm_routing.yaml"
+        try:
+            # Set up YAML config with tier=low for orchestrator
+            cfg_mod.update_component_config("orchestrator", tier="low")
+            cfg = cfg_mod.get_component_config("orchestrator")
+            assert cfg["tier"] == "low"
+
+            # Apply experiment override
+            token = cfg_mod.set_experiment_overrides({
+                "orchestrator": {"tier": "high"},
+            })
+            try:
+                cfg = cfg_mod.get_component_config("orchestrator")
+                assert cfg["tier"] == "high"  # override wins
+
+                # Unaffected component is unchanged
+                cfg2 = cfg_mod.get_component_config("subagent_research")
+                assert cfg2["tier"] is None
+            finally:
+                cfg_mod.clear_experiment_overrides(token)
+
+            # After clearing, back to YAML value
+            cfg = cfg_mod.get_component_config("orchestrator")
+            assert cfg["tier"] == "low"
+        finally:
+            cfg_mod._CONFIG_PATH = orig
+
+    def test_experiment_overrides_partial(self, tmp_path):
+        """Experiment can override just tier, leaving other fields from YAML."""
+        import prax.plugins.llm_config as cfg_mod
+        orig = cfg_mod._CONFIG_PATH
+        cfg_mod._CONFIG_PATH = tmp_path / "llm_routing.yaml"
+        try:
+            cfg_mod.update_component_config(
+                "orchestrator", provider="openai", tier="low", temperature=0.7
+            )
+            token = cfg_mod.set_experiment_overrides({
+                "orchestrator": {"tier": "medium"},  # only override tier
+            })
+            try:
+                cfg = cfg_mod.get_component_config("orchestrator")
+                assert cfg["tier"] == "medium"        # overridden
+                assert cfg["provider"] == "openai"    # from YAML
+                assert cfg["temperature"] == 0.7      # from YAML
+            finally:
+                cfg_mod.clear_experiment_overrides(token)
+        finally:
+            cfg_mod._CONFIG_PATH = orig
+
+    def test_no_experiment_overrides_by_default(self):
+        """Without setting overrides, get_component_config works normally."""
+        import prax.plugins.llm_config as cfg_mod
+        # Just verify it doesn't crash when no experiment is set
+        cfg = cfg_mod.get_component_config("orchestrator")
+        assert isinstance(cfg, dict)
+        assert "tier" in cfg
+
 
 # ---------------------------------------------------------------------------
 # Catalog tests
