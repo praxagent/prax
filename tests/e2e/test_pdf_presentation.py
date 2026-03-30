@@ -163,10 +163,11 @@ class TestPdfToPresentation:
 
     def test_services_are_up(self):
         """Pre-flight: docker-compose services must be healthy."""
-        assert _services_healthy(), (
-            f"App at {APP_URL} is not reachable. "
-            f"Run `docker-compose up` first."
-        )
+        if not _services_healthy():
+            pytest.skip(
+                f"App at {APP_URL} is not reachable. "
+                f"Run `docker-compose up` first."
+            )
 
     def test_pdf_to_presentation_e2e(self):
         """Full pipeline: PDF download → LaTeX → TTS → ffmpeg → MP4 in workspace."""
