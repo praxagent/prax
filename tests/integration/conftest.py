@@ -27,7 +27,6 @@ import time
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock, patch
 from uuid import UUID
 
@@ -374,7 +373,7 @@ def run_prax(tmp_path):
                 and mod is not settings_mod
             ):
                 try:
-                    setattr(mod, "settings", new_settings)
+                    mod.settings = new_settings
                 except Exception:
                     pass
 
@@ -835,15 +834,15 @@ def save_artifacts():
         cost = result.cost
         summary_lines = [
             f"# Integration Test: {name}",
-            f"",
+            "",
             f"**Date:** {time.strftime('%Y-%m-%d %H:%M:%S')}",
             f"**Duration:** {result.duration_seconds:.1f}s",
             f"**Response length:** {len(result.response)} chars",
             f"**Workspace files:** {len(result.workspace_files)}",
             f"**Spans:** {len(result.span_nodes)}",
-            f"",
-            f"## Cost",
-            f"",
+            "",
+            "## Cost",
+            "",
             f"**Total:** ${cost.get('total_cost_usd', 0):.4f}",
             f"**Input tokens:** {cost.get('total_input_tokens', 0):,}",
             f"**Output tokens:** {cost.get('total_output_tokens', 0):,}",
@@ -851,11 +850,11 @@ def save_artifacts():
         ]
         by_model = cost.get("by_model", {})
         if by_model:
-            summary_lines.append(f"")
-            summary_lines.append(f"### By Model")
-            summary_lines.append(f"")
-            summary_lines.append(f"| Model | Calls | In Tokens | Out Tokens | Cost | Time |")
-            summary_lines.append(f"|-------|------:|----------:|-----------:|-----:|-----:|")
+            summary_lines.append("")
+            summary_lines.append("### By Model")
+            summary_lines.append("")
+            summary_lines.append("| Model | Calls | In Tokens | Out Tokens | Cost | Time |")
+            summary_lines.append("|-------|------:|----------:|-----------:|-----:|-----:|")
             for model, stats in by_model.items():
                 summary_lines.append(
                     f"| {model} | {stats['calls']} "
@@ -868,15 +867,15 @@ def save_artifacts():
         if verdict:
             status = "PASSED" if verdict.passed else "FAILED"
             summary_lines.extend([
-                f"",
+                "",
                 f"## Verdict: {status}",
-                f"",
+                "",
                 f"**Flow correct:** {verdict.flow_correct}",
                 f"**Output correct:** {verdict.output_correct}",
                 f"**Reasoning:** {verdict.reasoning}",
             ])
             if verdict.issues:
-                summary_lines.append(f"**Issues:**")
+                summary_lines.append("**Issues:**")
                 for issue in verdict.issues:
                     summary_lines.append(f"  - {issue}")
 

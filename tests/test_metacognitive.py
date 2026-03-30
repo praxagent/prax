@@ -3,14 +3,12 @@ from __future__ import annotations
 
 import time
 
-import pytest
-
 from prax.agent.metacognitive import (
+    _INJECTION_THRESHOLD,
+    _MIN_OCCURRENCES,
     ComponentProfile,
     FailurePattern,
     MetacognitiveStore,
-    _INJECTION_THRESHOLD,
-    _MIN_OCCURRENCES,
 )
 
 

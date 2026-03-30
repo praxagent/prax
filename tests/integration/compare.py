@@ -222,7 +222,7 @@ def build_comparison(
             "passed": b_passed,
             "tier_choices": baseline.tier_choices,
         },
-        "experiment": {
+        "experiment_result": {
             "cost_usd": e_cost,
             "duration_s": experiment.duration_seconds,
             "input_tokens": e_in,

@@ -1,8 +1,6 @@
 """Tests for prax.agent.tier_bandit — Thompson Sampling tier selection."""
 from __future__ import annotations
 
-import json
-
 import pytest
 
 from prax.agent.tier_bandit import BetaPosterior, TierBandit

@@ -144,7 +144,7 @@ def analyze_tool_failure(
         analysis.perspectives.append(PerspectiveAnalysis(
             perspective="general",
             diagnosis="No specific failure pattern recognized.",
-            suggestion=f"Retry with different parameters or try an alternative tool.",
+            suggestion="Retry with different parameters or try an alternative tool.",
             confidence=0.2,
         ))
 

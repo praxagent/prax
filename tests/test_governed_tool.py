@@ -292,9 +292,9 @@ class TestSmartConfirmation:
         assert "executed:login" in result
 
     def test_browser_fill_auto_approved_when_user_said_fill(self):
+        from prax.agent.action_policy import RiskLevel
         from prax.agent.governed_tool import wrap_with_governance
         from prax.agent.user_context import current_user_message
-        from prax.agent.action_policy import RiskLevel
         _reset()
         current_user_message.set("fill in my email address")
         inner = _make_tool("browser_fill")
@@ -304,9 +304,9 @@ class TestSmartConfirmation:
         assert "executed:test@example.com" in result
 
     def test_browser_click_blocked_when_no_user_message(self):
+        from prax.agent.action_policy import RiskLevel
         from prax.agent.governed_tool import wrap_with_governance
         from prax.agent.user_context import current_user_message
-        from prax.agent.action_policy import RiskLevel
         _reset()
         current_user_message.set("")
         inner = _make_tool("browser_click")
@@ -316,9 +316,9 @@ class TestSmartConfirmation:
         assert "HIGH risk" in result
 
     def test_non_browser_tool_not_auto_approved(self):
+        from prax.agent.action_policy import RiskLevel
         from prax.agent.governed_tool import wrap_with_governance
         from prax.agent.user_context import current_user_message
-        from prax.agent.action_policy import RiskLevel
         _reset()
         current_user_message.set("click the deploy button")
         inner = _make_tool("self_improve_deploy")
@@ -329,9 +329,9 @@ class TestSmartConfirmation:
         assert "HIGH risk" in result
 
     def test_browser_navigate_auto_approved_when_user_said_go_to(self):
+        from prax.agent.action_policy import RiskLevel
         from prax.agent.governed_tool import wrap_with_governance
         from prax.agent.user_context import current_user_message
-        from prax.agent.action_policy import RiskLevel
         _reset()
         current_user_message.set("go to twitter.com")
         inner = _make_tool("browser_click")
@@ -342,9 +342,9 @@ class TestSmartConfirmation:
 
     def test_auto_approve_unlocks_all_high_risk(self):
         """Once smart auto-approve fires, all HIGH-risk tools are unlocked for the turn."""
+        from prax.agent.action_policy import RiskLevel
         from prax.agent.governed_tool import wrap_with_governance
         from prax.agent.user_context import current_user_message
-        from prax.agent.action_policy import RiskLevel
         _reset()
         current_user_message.set("click the button and then deploy")
         browser = _make_tool("browser_click")
@@ -407,7 +407,10 @@ class TestBudgetTracking:
 
     def test_extend_budget_allows_more_calls(self):
         from prax.agent.governed_tool import (
-            extend_budget, get_budget_status, init_turn_budget, wrap_with_governance,
+            extend_budget,
+            get_budget_status,
+            init_turn_budget,
+            wrap_with_governance,
         )
         _reset()
         init_turn_budget(2)
@@ -428,7 +431,9 @@ class TestBudgetTracking:
 
     def test_drain_resets_budget(self):
         from prax.agent.governed_tool import (
-            drain_audit_log, get_budget_status, init_turn_budget,
+            drain_audit_log,
+            get_budget_status,
+            init_turn_budget,
         )
         _reset()
         init_turn_budget(10)
@@ -440,7 +445,9 @@ class TestBudgetTracking:
 
     def test_budget_blocked_audit_entry(self):
         from prax.agent.governed_tool import (
-            _audit_buffer, init_turn_budget, wrap_with_governance,
+            _audit_buffer,
+            init_turn_budget,
+            wrap_with_governance,
         )
         _reset()
         init_turn_budget(1)

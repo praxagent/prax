@@ -67,9 +67,9 @@ def run_spoke(
         Injected into the system prompt so the agent knows the starting
         conditions (read-before-act pattern).
     """
-    from prax.agent.trace import build_identity_context, start_span
-
     import time as _time
+
+    from prax.agent.trace import build_identity_context, start_span
 
     label = config_key.replace("subagent_", "")
     span = start_span(label, label)
@@ -88,7 +88,7 @@ def run_spoke(
 
     # TeamWork status + live output
     if role_name:
-        from prax.services.teamwork_hooks import set_role_status, push_live_output
+        from prax.services.teamwork_hooks import push_live_output, set_role_status
         set_role_status(role_name, "working")
         push_live_output(role_name, f"[{label}] Starting: {task[:120]}\n", status="running", append=False)
 
@@ -191,7 +191,7 @@ def _finish(
 ) -> None:
     """Set TeamWork role to idle, post to channel, push final live output, and record metrics."""
     if role_name:
-        from prax.services.teamwork_hooks import set_role_status, push_live_output
+        from prax.services.teamwork_hooks import push_live_output, set_role_status
         set_role_status(role_name, "idle")
         live_status = "completed" if status == "success" else status
         summary = f"\n[{label}] {live_status}"
@@ -206,6 +206,7 @@ def _finish(
     if label:
         try:
             import time as _time
+
             from prax.observability.metrics import SPOKE_CALLS, SPOKE_DURATION
             SPOKE_CALLS.labels(spoke=label, status=status).inc()
             if start_time:

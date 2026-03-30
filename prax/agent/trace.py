@@ -24,7 +24,6 @@ from __future__ import annotations
 import contextvars
 import json
 import logging
-import os
 import threading
 import uuid
 from dataclasses import dataclass, field
@@ -263,7 +262,6 @@ def _rotate_graph_files() -> None:
     """Delete graph files older than _GRAPH_RETENTION_DAYS."""
     try:
         d = _graphs_dir()
-        cutoff = datetime.now(UTC).strftime("%Y-%m-%d")
         from datetime import timedelta
         cutoff_date = datetime.now(UTC) - timedelta(days=_GRAPH_RETENTION_DAYS)
         cutoff_str = cutoff_date.strftime("%Y-%m-%d")
@@ -384,7 +382,7 @@ class SpanHandle:
                 ]
                 # Put back choices for other spans
                 if all_choices and len(tier_choices) < len(all_choices):
-                    from prax.agent.llm_factory import _tier_lock, _tier_choice_log
+                    from prax.agent.llm_factory import _tier_choice_log, _tier_lock
                     others = [c for c in all_choices if c.get("span_id") != self.span_id]
                     with _tier_lock:
                         _tier_choice_log.extend(others)

@@ -3,8 +3,6 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import pytest
-
 
 class TestGetAutonomyLevel:
     def test_default_is_guided(self):

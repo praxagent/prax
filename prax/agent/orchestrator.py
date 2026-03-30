@@ -273,7 +273,7 @@ class ConversationAgent:
         # Difficulty-driven routing: estimate task difficulty and inject
         # context so the agent knows how the system classified the request.
         from prax.agent.difficulty import difficulty_context_for_prompt, estimate_difficulty
-        difficulty = estimate_difficulty(user_input)
+        estimate_difficulty(user_input)
 
         # Complexity hint: if the request looks complex and there's no active
         # plan, nudge the agent to create one.

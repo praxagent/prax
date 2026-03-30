@@ -18,7 +18,6 @@ The test is marked ``e2e_live`` so it can be excluded from CI with::
 """
 from __future__ import annotations
 
-import glob
 import json
 import os
 import subprocess
@@ -215,7 +214,7 @@ class TestPdfToPresentation:
 
         fmt = probe.get("format", {})
         duration = float(fmt.get("duration", 0))
-        format_size = int(fmt.get("size", 0))
+        int(fmt.get("size", 0))  # validate size is parseable
 
         # --- Assertions: the MP4 is not tiny or botched ---
 
@@ -258,7 +257,7 @@ class TestPdfToPresentation:
         )
 
         # Log success details
-        print(f"\n✅ PDF presentation generated successfully:")
+        print("\n✅ PDF presentation generated successfully:")
         print(f"   File: {mp4_path.name}")
         print(f"   Size: {mp4_size / (1024*1024):.1f} MB")
         print(f"   Duration: {duration:.1f}s")
@@ -274,10 +273,10 @@ class TestPdfToPresentation:
         # This test verifies the behavior described in the workspace_send_file
         # fallback path. We don't actually stop ngrok — instead we check that
         # the code path exists by importing and testing the function directly.
-        from prax.agent.workspace_tools import workspace_send_file
-
         # The tool function exists and has the fallback path in its source.
         import inspect
+
+        from prax.agent.workspace_tools import workspace_send_file
         source = inspect.getsource(workspace_send_file.func)
         assert "file browser" in source.lower() or "workspace" in source.lower(), (
             "workspace_send_file should have a fallback path that mentions "

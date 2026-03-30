@@ -11,7 +11,6 @@ Covers the full identity + workspace workflow including:
 from __future__ import annotations
 
 import os
-import sqlite3
 import tempfile
 import zipfile
 
@@ -19,13 +18,11 @@ import pytest
 
 import prax.services.identity_service as ids
 from prax.services.identity_service import (
-    User,
     archive_workspace,
     get_identities,
     get_user,
     get_user_by_identity,
     link_identity,
-    list_users,
     resolve_user,
     update_user,
 )

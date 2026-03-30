@@ -1,8 +1,6 @@
 """Tests for prax.agent.difficulty — task difficulty estimation."""
 from __future__ import annotations
 
-import pytest
-
 from prax.agent.difficulty import (
     EASY,
     HARD,

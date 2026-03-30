@@ -1,12 +1,7 @@
 """Tests for prax.agent.verification — self-verification checks."""
 from __future__ import annotations
 
-import os
-
-import pytest
-
 from prax.agent.verification import (
-    VerificationResult,
     verify_delegation_result,
     verify_workspace_file,
 )

@@ -255,9 +255,7 @@ def plugin_skills(name: str):
     parameter can select a specific plugin.
     """
     import os
-    from pathlib import Path
 
-    from prax.plugins.catalog import _parse_plugin_metadata
 
     user_id = _get_user_id()
     subfolder = request.args.get("subfolder", "")

@@ -242,8 +242,8 @@ def _record_metrics(model: str, input_tokens: int, output_tokens: int, duration:
     try:
         from prax.observability.metrics import (
             LLM_CALLS,
-            LLM_TOKENS,
             LLM_DURATION,
+            LLM_TOKENS,
         )
         LLM_CALLS.labels(model=model, status="success").inc()
         if input_tokens:

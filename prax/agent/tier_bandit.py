@@ -35,7 +35,7 @@ import json
 import logging
 import random
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 logger = logging.getLogger(__name__)

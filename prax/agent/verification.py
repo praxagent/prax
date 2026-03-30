@@ -142,7 +142,7 @@ def verify_delegation_result(
     ]
     result_lower = (result or "").lower()
     if any(indicator in result_lower for indicator in error_indicators):
-        issues.append(f"Delegation result contains error indicator")
+        issues.append("Delegation result contains error indicator")
     else:
         checks_passed += 1
 
@@ -176,7 +176,7 @@ def verify_plan_step_completion(
     checks_passed = 0
 
     try:
-        from prax.services.workspace_service import read_plan, workspace_root
+        from prax.services.workspace_service import read_plan
         plan = read_plan(user_id)
         if not plan:
             return VerificationResult(passed=True, checks_run=0, checks_passed=0)

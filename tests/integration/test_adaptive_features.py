@@ -20,9 +20,7 @@ from __future__ import annotations
 import json
 import time
 
-import pytest
-
-from prax.agent.difficulty import EASY, HARD, MODERATE, estimate_difficulty
+from prax.agent.difficulty import EASY, HARD, estimate_difficulty
 from prax.agent.error_recovery import (
     ErrorAnalysis,
     PerspectiveAnalysis,
@@ -30,18 +28,15 @@ from prax.agent.error_recovery import (
     build_recovery_context,
 )
 from prax.agent.metacognitive import (
-    ComponentProfile,
+    _MIN_OCCURRENCES,
     FailurePattern,
     MetacognitiveStore,
-    _INJECTION_THRESHOLD,
-    _MIN_OCCURRENCES,
 )
-from prax.agent.tier_bandit import BetaPosterior, TierBandit
+from prax.agent.tier_bandit import TierBandit
 from prax.agent.verification import (
     verify_delegation_result,
     verify_workspace_file,
 )
-
 
 # ---------------------------------------------------------------------------
 # 1. Difficulty → Bandit integration
@@ -137,7 +132,7 @@ class TestErrorRecoveryMetacognitiveIntegration:
         store = MetacognitiveStore(profiles_dir=tmp_path)
 
         # Simulate 5 timeout errors from research agent
-        for i in range(_MIN_OCCURRENCES + 2):
+        for _i in range(_MIN_OCCURRENCES + 2):
             analysis = analyze_tool_failure(
                 "delegate_research",
                 "Operation timed out after 30 seconds",
@@ -520,7 +515,7 @@ class TestMetacognitiveBanditInteraction:
         )
 
         # The decay should reduce confidence significantly
-        active = profile.get_active_patterns()
+        profile.get_active_patterns()
 
         # After 30 days at 5% daily decay: 0.9 * 0.95^30 ≈ 0.19
         assert profile.patterns["old_pattern"].confidence < 0.3

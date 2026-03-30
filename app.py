@@ -12,8 +12,8 @@ from prax.blueprints.teamwork_routes import teamwork_routes
 from prax.blueprints.textchat_routes import textchat_routes
 from prax.blueprints.user_routes import user_routes
 from prax.conversation_memory import init_database
-from prax.services.identity_service import init_identity_db, migrate_legacy_users
 from prax.services.discord_service import start_bot as start_discord_bot
+from prax.services.identity_service import init_identity_db, migrate_legacy_users
 from prax.services.scheduler_service import init_scheduler
 from prax.settings import settings
 from prax.token_management import get_encoding_for_model
@@ -46,7 +46,8 @@ def create_app():
         @app.route("/metrics")
         def metrics():
             from flask import Response
-            from prax.observability.metrics import generate_latest, CONTENT_TYPE_LATEST
+
+            from prax.observability.metrics import CONTENT_TYPE_LATEST, generate_latest
             return Response(generate_latest(), mimetype=CONTENT_TYPE_LATEST)
 
 

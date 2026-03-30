@@ -174,7 +174,6 @@ def _run_course_author(task: str) -> str:
         _COURSE_AUTHOR_PROMPT,
         _build_course_author_tools,
     )
-
     from prax.agent.spokes._runner import run_spoke
 
     prompt = _COURSE_AUTHOR_PROMPT.format(agent_name=settings.agent_name)

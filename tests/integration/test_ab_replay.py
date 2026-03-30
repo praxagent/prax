@@ -78,7 +78,7 @@ def test_ab_experiment(
 
     # ---- Save individual artifacts ----
     dir_a = save_artifacts(f"experiments/{exp.name}/baseline", result_a, verdict_a)
-    dir_b = save_artifacts(f"experiments/{exp.name}/experiment", result_b, verdict_b)
+    save_artifacts(f"experiments/{exp.name}/experiment", result_b, verdict_b)
 
     # ---- Compare ----
     report = compare_runs(

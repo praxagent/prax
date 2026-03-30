@@ -1,15 +1,14 @@
 """LangChain tool wrappers for the git-backed workspace."""
 from __future__ import annotations
 
+import logging as _logging
+
 from langchain_core.tools import tool
 
 from prax.agent.action_policy import RiskLevel, risk_tool
 from prax.agent.user_context import current_user_id
 from prax.services import workspace_service
 from prax.trace_events import TraceEvent
-
-
-import logging as _logging
 
 _ws_logger = _logging.getLogger(__name__)
 
@@ -269,7 +268,7 @@ def _deliver_via_teamwork(
         if not tw.enabled:
             return None
 
-        note = message or f"Your file is ready"
+        note = message or "Your file is ready"
         tw.send_message(
             content=(
                 f"📎 **{filename}** ({size_mb:.1f} MB)\n"

@@ -1,8 +1,6 @@
 """Tests for prax.agent.error_recovery — multi-perspective failure analysis."""
 from __future__ import annotations
 
-import pytest
-
 from prax.agent.error_recovery import (
     ErrorAnalysis,
     PerspectiveAnalysis,

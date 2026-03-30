@@ -3,16 +3,11 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import pytest
-
 from prax.agent.earned_trust import (
+    _DOWNGRADE_ELIGIBLE,
+    _HIGH_TRUST_OBS,
     TrustAdjustments,
     get_trust_adjustments,
-    _MIN_OBSERVATIONS,
-    _HIGH_TRUST_OBS,
-    _SUCCESS_THRESHOLD,
-    _HIGH_SUCCESS,
-    _DOWNGRADE_ELIGIBLE,
 )
 
 

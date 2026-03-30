@@ -110,7 +110,7 @@ def _run_subagent(task: str, category: str) -> str:
     # Route engineering-related work to TeamWork.
     _engineering_categories = {"sandbox", "codegen", "workspace"}
     if category in _engineering_categories:
-        from prax.services.teamwork_hooks import set_role_status, push_live_output
+        from prax.services.teamwork_hooks import push_live_output, set_role_status
         set_role_status("Executor", "working")
         push_live_output("Executor", f"[{category}] Starting: {task[:120]}\n", status="running", append=False)
 
@@ -231,7 +231,7 @@ def _run_subagent(task: str, category: str) -> str:
             span.end(status="completed", summary=msg.content[:200], tool_calls=tool_count)
             # Route engineering work to the #engineering channel.
             if category in _engineering_categories:
-                from prax.services.teamwork_hooks import post_to_channel, set_role_status, push_live_output
+                from prax.services.teamwork_hooks import post_to_channel, push_live_output, set_role_status
                 set_role_status("Executor", "idle")
                 post_to_channel("engineering", msg.content[:3000], agent_name="Executor")
                 push_live_output("Executor", f"\n[{category}] completed: {msg.content[:200]}\n", status="completed")
@@ -241,7 +241,7 @@ def _run_subagent(task: str, category: str) -> str:
             return msg.content
 
     if category in _engineering_categories:
-        from prax.services.teamwork_hooks import set_role_status, push_live_output
+        from prax.services.teamwork_hooks import push_live_output, set_role_status
         set_role_status("Executor", "idle")
         push_live_output("Executor", f"\n[{category}] completed (no output)\n", status="completed")
     span.end(status="completed", summary="No output produced", tool_calls=tool_count)

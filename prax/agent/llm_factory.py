@@ -108,7 +108,7 @@ def build_llm(
     except Exception:
         pass
 
-    choice = _record_tier_choice(
+    _record_tier_choice(
         tier_requested=tier,
         tier_resolved=resolved_tier,
         model=model_name,
