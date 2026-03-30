@@ -216,16 +216,23 @@ def save_and_publish(
 
     Returns ``{"slug", "title", "url"}`` on success or ``{"error": ...}``.
     """
-    from prax.utils.ngrok import get_ngrok_url
-
-    base_url = get_ngrok_url()
-    if not base_url:
-        return {"error": "Cannot publish — NGROK_URL is not configured."}
-
     if source_url:
         content = f"**Source:** [{source_url}]({source_url})\n\n---\n\n{content}"
 
     meta = create_note(user_id, title, content, tags or [])
+
+    # Publish if NGROK is available; degrade gracefully if not.
+    from prax.utils.ngrok import get_ngrok_url
+
+    base_url = get_ngrok_url()
+    if not base_url:
+        logger.info("NGROK_URL not configured — note saved locally, skipping publish")
+        return {
+            "slug": meta["slug"],
+            "title": meta["title"],
+            "url": "(saved locally — NGROK_URL not configured for web publishing)",
+        }
+
     result = publish_notes(user_id, base_url, slug=meta["slug"])
     if "error" in result:
         return {"error": f"Note saved but Hugo build failed: {result['error']}"}

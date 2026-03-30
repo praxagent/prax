@@ -65,6 +65,12 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml restart app
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build app
 ```
 
+In dev mode, TeamWork's Python source is bind-mounted and auto-reloads via `uvicorn --reload`. For **frontend** changes, rebuild the bundle locally — no Docker rebuild needed:
+
+```bash
+cd ../teamwork/frontend && npx vite build   # ~2s, output is already mounted
+# Refresh browser — done
+```
 
 ### Local development
 
@@ -116,7 +122,7 @@ Prax is a multi-channel AI assistant powered by a LangGraph ReAct agent. It conn
 
 | Category | Highlights |
 |----------|-----------|
-| **Channels** | [TeamWork](https://github.com/praxagent/teamwork) web UI (Slack-like chat, Kanban, terminal, browser, file browser), Discord bot (free, WebSocket), Twilio voice + SMS (webhooks) |
+| **Channels** | [TeamWork](https://github.com/praxagent/teamwork) web UI (Slack-like chat, Kanban, terminal, browser, file browser, execution graphs, live agent output), Discord bot (free, WebSocket), Twilio voice + SMS (webhooks), cross-channel mirroring (Discord/SMS → TeamWork #discord/#sms channels) |
 | **Agent** | LangGraph ReAct loop, 97+ built-in tools (extensible via plugins), dedicated sub-agents (self-improvement, plugin engineering, content authoring, research, coding), watchdog supervisor, automatic checkpoint & retry on failures |
 | **Memory** | SQLite conversations with auto-summarization, git-backed per-user workspaces, dynamic user notes, link history, to-do lists, task plans |
 | **Notes** | Conversation-to-note publishing (Hugo pages with KaTeX, mermaid, syntax highlighting), iterative updates, searchable index, shareable URLs, bidirectional knowledge graph links |
@@ -137,7 +143,10 @@ Prax is a multi-channel AI assistant powered by a LangGraph ReAct agent. It conn
 **What you get:**
 
 - **Real-time chat** — public channels (#general, #engineering, #research) and private DMs with Prax, with typing indicators and WebSocket updates
+- **Channel mirroring** — Discord and SMS conversations are mirrored to dedicated #discord and #sms channels in TeamWork, so you can follow cross-channel conversations in one place
 - **Kanban board** — task management with drag-and-drop columns (pending / in progress / review / completed). Prax creates, assigns, and completes tasks automatically as it works through plans
+- **Execution graphs** — real-time visualization of agent delegation trees. Watch LangGraph execution as it happens: see which spokes are running, tool call counts, timing, and status. Click any node to inspect its details and live output
+- **Live agent output** — terminal-style view of each agent's real-time execution output (Observability > Live Agents tab). Select any agent to watch its work stream
 - **In-browser terminal** — full PTY shell into the sandbox container, or launch Claude Code directly from the UI
 - **Browser screencast** — live view of the headless Chrome running in the sandbox, with mouse/keyboard passthrough
 - **File browser** — browse and manage workspace files
@@ -183,18 +192,14 @@ graph TB
     subgraph Agent["LangGraph ReAct Agent (Prax)"]
         Orchestrator["ConversationAgent"]
         LLMFactory["LLM Factory"]
-        SubAgent["Sub-Agents\n(delegate_task)"]
 
-        subgraph Tools["Agent Tools (97+)"]
-            BuiltIn["Built-In (7)"]
-            WS["Workspace Tools (19)"]
-            SB["Sandbox Tools (7)"]
-            Sched["Scheduler Tools (9)"]
-            FT["Fine-Tune Tools (8)"]
-            CG["Self-Improve Tools (10)"]
-            BW["Browser Tools (14)"]
-            PL["Plugin Tools (14)"]
-            SA["Sub-Agent (1)"]
+        subgraph Tools["Orchestrator Tools (~24)"]
+            BuiltIn["Core (3)\nsearch, datetime, URL fetch"]
+            WS["Workspace (11)\nfiles, todos, planning"]
+            Sched["Scheduler (9)\ncron, reminders"]
+            Courses["Courses (6)\ntutoring"]
+            Spokes["Spoke Delegates (8)\nbrowser, content, sysadmin,\nsandbox, finetune, knowledge,\nresearch, vision"]
+            SA["Sub-Agent (2)\ndelegate_task, delegate_parallel"]
         end
     end
 
@@ -268,14 +273,14 @@ graph TB
     LLMFactory -->|local| vLLM
     Orchestrator --> Tools
     WS --> Workspace
-    SB --> Container
+    Spokes -->|sandbox| Container
     Container --> OpenCode
     Sched --> ScheduleYAML
-    FT --> Unsloth
-    FT --> vLLM
+    Spokes -->|finetune| Unsloth
+    Spokes -->|finetune| vLLM
     vLLM --> LoRA
-    CG --> Worktree
-    PL --> PluginLoader
+    SA -->|codegen| Worktree
+    Spokes -->|sysadmin| PluginLoader
     PluginLoader --> BuiltInPlugins
     PluginLoader --> CustomPlugins
     PluginLoader --> PluginSandbox
@@ -287,7 +292,7 @@ graph TB
     Orchestrator --> PromptMgr
     PromptMgr --> SysPrompt
     LLMFactory --> LLMConfig
-    BW --> Chromium
+    Spokes -->|browser| Chromium
     Chromium --> SiteCreds
     Chromium --> Profiles
     VNCServer --> Chromium
@@ -544,7 +549,7 @@ Cron field reference (5 fields: `minute hour day month weekday`):
 
 ### Hub-and-Spoke Architecture
 
-Prax uses a hub-and-spoke model: the orchestrator holds only core tools (~10) and delegates domain-specific work to focused sub-agents, each with a curated tool set. This keeps the orchestrator's context lean — [research shows](#9-tool-overload-and-selection-degradation) that tool selection accuracy degrades significantly past 20–50 tools.
+Prax uses a hub-and-spoke model: the orchestrator holds ~24 core tools (workspace, scheduling, courses) and delegates domain-specific work to focused spoke agents.  This keeps the orchestrator's context lean — [research shows](#9-tool-overload-and-selection-degradation) that tool selection accuracy degrades significantly past 20–50 tools.
 
 > **Fallback:** If a delegated agent fails or can't handle the task, Prax can read the full tool catalog from a generated markdown file and call any tool directly. The spoke system is the fast path; direct tool access is the safety net.
 
@@ -552,22 +557,30 @@ Prax uses a hub-and-spoke model: the orchestrator holds only core tools (~10) an
 
 ```mermaid
 graph TB
-    Prax["🧠 Prax\nOrchestrator"]
+    Prax["Prax Orchestrator\n~24 tools"]
 
-    Prax --> Core["Core Tools\nget_current_datetime\nbackground_search\nfetch_url_content\nanalyze_image"]
-    Prax --> Memory["Memory & Planning\nagent_plan / agent_step_done\nnote_create / note_search\nuser_notes_read / user_notes_update\ntodo_add / todo_list / todo_complete"]
-    Prax --> Config["Config & Tiers\nllm_config_read / llm_config_update\nmodel_tiers_info"]
+    Prax --> Core["Core\nsearch, datetime, URL fetch, image analysis"]
+    Prax --> Workspace["Workspace\nfiles, todos, planning"]
+    Prax --> Courses["Courses\ncreate, tutor, publish"]
 
-    Prax -->|"delegate_task\n(category)"| Spokes["Spoke Agents"]
-    Prax -->|"delegate_self_improve"| SI["Self-Improve Agent"]
-    Prax -->|"delegate_plugin_fix"| PF["Plugin Fix Agent"]
-    Prax -->|"delegate_course_author"| CA["Course Author Agent"]
+    Prax -->|delegate_browser| Browser["Browser Spoke"]
+    Prax -->|delegate_content_editor| Content["Content Editor\nsub-hub"]
+    Prax -->|delegate_sysadmin| Sysadmin["Sysadmin\nsub-hub"]
+    Prax -->|delegate_sandbox| Sandbox["Sandbox Spoke"]
+    Prax -->|delegate_finetune| Finetune["Finetune Spoke"]
+    Prax -->|delegate_knowledge| Knowledge["Knowledge Spoke"]
+    Prax -->|delegate_research| Research["Research Spoke"]
+    Prax -->|delegate_task| Generic["Generic Sub-Agent"]
 
     style Prax fill:#4A90D9,color:#fff
-    style Spokes fill:#F5A623,color:#fff
-    style SI fill:#7ED321,color:#fff
-    style PF fill:#7ED321,color:#fff
-    style CA fill:#7ED321,color:#fff
+    style Browser fill:#F5A623,color:#fff
+    style Content fill:#E8543E,color:#fff
+    style Sysadmin fill:#E8543E,color:#fff
+    style Sandbox fill:#F5A623,color:#fff
+    style Finetune fill:#F5A623,color:#fff
+    style Knowledge fill:#F5A623,color:#fff
+    style Research fill:#F5A623,color:#fff
+    style Generic fill:#F5A623,color:#fff
 ```
 
 #### Media Agent
@@ -1108,46 +1121,96 @@ sequenceDiagram
 
 Prax keeps its main conversation loop lean by delegating domain-specific work to focused **spoke agents**.  Each spoke runs its own LangGraph ReAct loop with a specialized system prompt and curated tool set — the orchestrator sees only a single `delegate_*` tool per spoke.
 
-Research shows that LLM tool-selection accuracy degrades past 20–30 tools ([see Research section](#9-tool-overload-and-selection-degradation)).  The hub-and-spoke pattern keeps the orchestrator's tool count low while giving each spoke deep domain capabilities.
+Research shows that LLM tool-selection accuracy degrades past 20--30 tools ([see Research section](#9-tool-overload-and-selection-degradation)).  The hub-and-spoke pattern keeps the orchestrator's tool count low while giving each spoke deep domain capabilities.
+
+Key infrastructure that makes this work:
+
+- **Execution tracing** -- every delegation chain gets a UUID.  Individual agent invocations get span IDs.  The execution graph tracks the full tree: timing, status, tool call counts, and parent/child relationships.  Governing agents see the big picture via the graph summary appended to `delegate_parallel` results.
+- **Read guard** -- spokes can verify preconditions before starting work (inspired by [smux](https://github.com/ShawnPana/smux)'s read-before-act pattern).  If the guard fails, the spoke aborts without wasting an LLM call.
+- **Identity injection** -- each agent receives execution context in its system prompt: trace ID, depth in the delegation tree, who delegated it, and what parallel peers are doing.
+- **Self-diagnostics** -- `prax_doctor` checks LLM configuration, sandbox health, plugin status, spoke availability, workspace integrity, TeamWork connectivity, and scheduler state in one call.
 
 ### Hub-and-Spoke Architecture
 
 ```mermaid
 graph TB
-    User([User]) --> Prax[Prax Orchestrator<br/>~15 core tools]
+    User([User]) --> Prax[Prax Orchestrator<br/>~24 core tools]
 
-    Prax -->|delegate_browser| Browser[Browser Agent<br/>16 tools]
+    Prax -->|delegate_browser| Browser[Browser Agent<br/>16 tools: CDP + Playwright]
+    Prax -->|delegate_content_editor| Content[Content Editor<br/>sub-hub: research → write → review]
+    Prax -->|delegate_sysadmin| Sysadmin[Sysadmin Agent<br/>30+ tools: plugins, config, source]
+    Prax -->|delegate_sandbox| Sandbox[Sandbox Agent<br/>9 tools: Docker + OpenCode]
+    Prax -->|delegate_finetune| Finetune[Finetune Agent<br/>8 tools: LoRA pipeline]
+    Prax -->|delegate_knowledge| Knowledge[Knowledge Agent<br/>13 tools: notes + projects]
     Prax -->|delegate_research| Research[Research Agent<br/>web search + plugins]
-    Prax -->|delegate_self_improve| SelfImprove[Self-Improve Agent<br/>source + sandbox + codegen]
-    Prax -->|delegate_plugin_fix| PluginFix[Plugin Engineer<br/>plugin lifecycle + sandbox]
-    Prax -->|delegate_course_author| CourseAuthor[Course Author<br/>sandbox + course tools]
-    Prax -->|delegate_task| Generic[Generic Sub-Agent<br/>category-routed tools]
+    Prax -->|delegate_task| Generic[Generic Sub-Agent<br/>category-routed]
+
+    Sysadmin -->|delegate_self_improve| SelfImprove[Self-Improve Agent<br/>source + codegen]
+    Sysadmin -->|delegate_plugin_fix| PluginFix[Plugin Engineer<br/>plugin lifecycle + sandbox]
+
+    Content -->|blog mode| BlogPipeline[Research → Write → Review]
+    Content -->|course_module mode| CourseAuthor[Course Author<br/>sandbox + course tools]
+
+    BlogPipeline -->|Phase 1| Researcher[Research Sub-Agent]
+    BlogPipeline -->|Phase 2/4| Writer[Writer Sub-Agent]
+    BlogPipeline -->|Phase 3| Publisher[Publisher]
+    BlogPipeline -->|Phase 4| Reviewer[Reviewer Sub-Agent<br/>cross-provider critique]
 
     Browser -->|CDP fast path| Chrome[Sandbox Chrome]
     Browser -->|Playwright reliable path| Chrome
-    Research --> Web[Web Search + Fetch]
-    Research --> Plugins[Reader Plugins]
-    SelfImprove --> Sandbox[Docker Sandbox]
-    SelfImprove --> Codegen[Codegen / PR Tools]
-    PluginFix --> PluginTools[Plugin Write/Test/Activate]
-    CourseAuthor --> CourseSandbox[Sandbox + Course Tools]
-    Generic --> CategoryTools[Category-Specific Tools]
 ```
 
 ### Spoke Agents
 
-| Spoke | Delegation Tool | Tools | When Prax Uses It |
-|-------|----------------|-------|-------------------|
-| **Browser** | `delegate_browser` | 16 tools: CDP read/act + Playwright navigate/click/fill/find/login/VNC | Web navigation, page reading, login flows, screenshots, form filling |
-| **Research** | `delegate_research` | Web search, URL fetch, datetime, reader plugins | Multi-source research, paper summaries, fact-checking with citations |
-| **Self-Improve** | `delegate_self_improve` | Source read, sandbox, codegen, log reading | Bug fixes and improvements to Prax's own code |
-| **Plugin Engineer** | `delegate_plugin_fix` | Source read, plugin lifecycle, sandbox | Create, fix, test, and activate tool plugins |
-| **Course Author** | `delegate_course_author` | Sandbox, course tools, publishing | Rich markdown content with diagrams, code blocks, LaTeX |
-| **Generic** | `delegate_task(category=...)` | Category-routed (workspace, scheduler, sandbox, codegen, finetune) | Ad-hoc delegation when a specialized spoke doesn't exist |
+| Spoke | Delegation Tool | Tools | Purpose |
+|-------|----------------|-------|---------|
+| **Browser** | `delegate_browser` | 16: CDP read/act + Playwright navigate/click/fill/login/VNC | Web navigation, page reading, login flows, screenshots |
+| **Content Editor** | `delegate_content_editor` | Sub-hub: blog pipeline (research → write → review) or course author mode | Blog posts, publication-quality content, and course module content |
+| **Sysadmin** | `delegate_sysadmin` | 30+: plugin mgmt, prompts, LLM config, source, workspace sync | Plugin install/update, config changes, self-improvement |
+| **Sandbox** | `delegate_sandbox` | 9: session lifecycle, archive, package management | Code execution in isolated Docker containers |
+| **Finetune** | `delegate_finetune` | 8: harvest, train, verify, promote, rollback | LoRA fine-tuning pipeline (requires FINETUNE_ENABLED) |
+| **Knowledge** | `delegate_knowledge` | 13: note CRUD, search, linking, URL/PDF-to-note, project management | Notes, knowledge graph, research projects |
+| **Research** | `delegate_research` | Web search, URL fetch, datetime, reader plugins | Multi-source investigation with citations |
+| **Generic** | `delegate_task(category=...)` | Category-routed (research, workspace, scheduler, codegen) | Ad-hoc delegation for categories without a dedicated spoke |
+
+### Sub-Hubs: Spokes That Spawn Agents
+
+Some spokes are **sub-hubs** — they don't just run a single ReAct loop, they orchestrate multiple sub-agents in a pipeline.  This gives them richer behavior than a flat tool set while keeping the main orchestrator unaware of the internal complexity.
+
+**Content Editor** is the primary example.  It has two modes controlled by a `mode` parameter:
+
+**Blog mode** (default) — a procedural coordinator that runs a multi-phase pipeline:
+
+```mermaid
+flowchart LR
+    A[Research] --> B[Write]
+    B --> C[Publish]
+    C --> D[Review]
+    D -->|APPROVED| E[Done]
+    D -->|REVISE| F[Write\nwith feedback]
+    F --> G[Re-publish]
+    G --> D
+    style E fill:#2d6,stroke:#1a4
+```
+*Max 3 revision cycles.*
+
+Each phase uses a different sub-agent:
+- **Researcher** — generic research sub-agent via `_run_subagent(query, "research")`
+- **Writer** — ReAct agent with search tools; takes research findings + optional revision feedback
+- **Reviewer** — ReAct agent that uses `delegate_browser` to visually inspect the published page; **deliberately uses a different LLM provider** than the writer for adversarial diversity
+- **Publisher** — utility functions wrapping the note/Hugo system
+
+**Course module mode** (`mode="course_module"`) — routes to the Course Author sub-agent for rich, sandbox-based content with Mermaid diagrams, LaTeX equations, code examples, and structured pedagogy.
+
+**Sysadmin** is another sub-hub.  It holds ~30 plugin/config tools directly, but can further delegate to:
+- `delegate_self_improve` — for bug fixes requiring source + sandbox + codegen
+- `delegate_plugin_fix` — for plugin creation/fixes requiring sandbox iteration
+
+This hierarchical pattern means the orchestrator calls one tool (`delegate_sysadmin`), the sysadmin tries to handle it directly, and only escalates to a sub-agent when the task requires code-level changes.
 
 ### Browser Spoke Detail
 
-The browser spoke is the reference implementation for the spoke pattern.  It demonstrates CDP-first routing with Playwright fallback:
+The browser spoke is the reference implementation for the **simple spoke pattern** (single ReAct agent).  It demonstrates CDP-first routing with Playwright fallback:
 
 ```mermaid
 graph LR
@@ -1168,10 +1231,15 @@ The browser agent decides internally:
 
 ### What Stays on the Orchestrator
 
+The orchestrator keeps tools that are **conversational** (require back-and-forth with the user) or **foundational** (used by many workflows):
+
 - **Conversation** — interactive Q&A, pacing, tone
-- **Simple tool calls** — workspace CRUD, notes, todos, scheduling
+- **Workspace** — file CRUD, todos, planning (11 tools)
+- **Courses** — tutoring is conversational; the orchestrator IS the tutor (6 tools)
+- **Scheduling** — cron jobs, reminders (9 tools)
 - **URL handling** — lightweight `fetch_url_content` (no browser needed)
 - **Routing decisions** — choosing which spoke to delegate to
+- **Spoke delegation** — 6 spoke tools + 2 generic sub-agent tools + 1 research delegate + 1 vision tool
 
 ### Adding a New Spoke
 
@@ -1181,22 +1249,34 @@ The spoke system lives in `prax/agent/spokes/` with one folder per spoke:
 prax/agent/spokes/
 ├── __init__.py          # Registry — imports all spokes
 ├── _runner.py           # Shared delegation engine (LLM, invoke, logging, TeamWork)
-├── browser/             # Reference implementation
+├── browser/             # Simple spoke: single ReAct agent (reference implementation)
 │   ├── __init__.py
 │   └── agent.py         # Prompt, tools, delegate function
-├── media/               # (future) PDF, image, audio, YouTube
-│   └── ...
-└── notes/               # (future) note-taking, project management
-    └── ...
+├── content/             # Sub-hub spoke: blog pipeline + course author mode
+│   ├── __init__.py
+│   ├── agent.py          # Pipeline coordinator (blog mode) + course author routing
+│   ├── writer.py         # Writer sub-agent
+│   ├── reviewer.py       # Reviewer sub-agent (cross-provider)
+│   ├── publisher.py      # Hugo publishing utilities
+│   └── prompts.py        # System prompts for sub-agents
+├── finetune/            # Simple spoke: LoRA training pipeline
+├── knowledge/           # Simple spoke: notes + research projects
+├── sandbox/             # Simple spoke: Docker code execution
+└── sysadmin/            # Sub-hub spoke: delegates to self-improve + plugin-fix
 ```
+
+**Two spoke patterns:**
+
+1. **Simple spoke** — single ReAct agent with curated tools.  Use `run_spoke()` from `_runner.py`.  See `browser/agent.py`.
+2. **Sub-hub spoke** — procedural coordinator that spawns sub-agents.  Write your own orchestration logic.  See `content/agent.py`.
 
 To add a new spoke:
 
 1. Create `prax/agent/spokes/<name>/agent.py` with `SYSTEM_PROMPT`, `build_tools()`, `delegate_<name>()`, `build_spoke_tools()`
 2. Register in `prax/agent/spokes/__init__.py`
-3. Remove the spoke's direct tools from `tools.py`
+3. Remove the spoke's direct tools from `tools.py:build_default_tools()`
 
-See `prax/agent/spokes/browser/agent.py` for the reference implementation.
+See `prax/agent/spokes/browser/agent.py` for a simple spoke, or `prax/agent/spokes/content/agent.py` for a sub-hub.
 
 ### Source Code in the Sandbox
 
@@ -1214,12 +1294,148 @@ The app source is mounted in the sandbox container at `/source/` so OpenCode can
 | `prax/agent/spokes/` | Spoke agent directory — one folder per spoke |
 | `prax/agent/spokes/_runner.py` | Shared delegation engine — LLM config, invocation, logging, TeamWork hooks |
 | `prax/agent/spokes/browser/agent.py` | Browser spoke — CDP-first routing, Playwright fallback, login flows |
-| `prax/agent/self_improve_agent.py` | Self-improvement spoke — diagnose, sandbox-patch, deploy |
-| `prax/agent/plugin_fix_agent.py` | Plugin engineering spoke — create, fix, test, activate |
-| `prax/agent/course_author_agent.py` | Course author spoke — rich markdown via iterative sandbox drafting |
-| `prax/agent/research_agent.py` | Research spoke — multi-source investigation with citations |
-| `prax/agent/subagent.py` | Generic delegation (`delegate_task`) with category routing |
+| `prax/agent/spokes/content/agent.py` | Content Editor sub-hub — multi-agent pipeline (research → write → review) |
+| `prax/agent/spokes/sysadmin/agent.py` | Sysadmin sub-hub — plugin/config mgmt, delegates to self-improve + plugin-fix |
+| `prax/agent/spokes/sandbox/agent.py` | Sandbox spoke — Docker code execution sessions |
+| `prax/agent/spokes/finetune/agent.py` | Finetune spoke — LoRA training pipeline |
+| `prax/agent/spokes/knowledge/agent.py` | Knowledge spoke — notes, knowledge graph, research projects |
+| `prax/agent/self_improve_agent.py` | Self-improvement sub-agent (used by sysadmin spoke) |
+| `prax/agent/plugin_fix_agent.py` | Plugin engineering sub-agent (used by sysadmin spoke) |
+| `prax/agent/course_author_agent.py` | Course author sub-agent (used by content editor in course_module mode) |
+| `prax/agent/research_agent.py` | Research delegate — multi-source investigation with citations |
+| `prax/agent/subagent.py` | Generic delegation (`delegate_task`, `delegate_parallel`) with category and spoke routing |
+| `prax/agent/trace.py` | Execution tracing — chain UUIDs, named spans, execution graphs |
+| `prax/agent/doctor.py` | Self-diagnostics (`prax_doctor`) — LLM, sandbox, plugins, spokes, TeamWork |
 | `scripts/watchdog.py` | Supervisor process — health checks, crash rollback, restart |
+
+## Observability
+
+Prax ships with a full observability stack that traces every LLM call, tool invocation, and agent delegation. When `OBSERVABILITY_ENABLED=true` (set automatically in dev mode), all telemetry flows through the Grafana LGTM stack.
+
+### Vision
+
+Observability is not just for debugging — it's the **sensory system** that enables Prax to self-reflect and evolve. Every LLM call, token count, latency measurement, and delegation decision is a potential training signal. The observability pipeline feeds the self-improvement loop: traces and metrics inform LoRA fine-tuning, cost optimization, and architectural decisions.
+
+### Architecture
+
+```mermaid
+graph LR
+    subgraph Prax Application
+        A[Orchestrator] -->|spans| T[OTel Bridge]
+        A -->|metrics| M[Prometheus Client]
+        B[Spoke Agents] -->|spans| T
+        C[LLM Calls] -->|callbacks| T
+        C -->|tokens/latency| M
+    end
+
+    T -->|OTLP/HTTP| Tempo[Tempo :4318]
+    M -->|/metrics scrape| Prom[Prometheus :9090]
+    A -->|stdout| Promtail[Promtail]
+    Promtail --> Loki[Loki :3100]
+
+    Tempo --> Grafana[Grafana :3001]
+    Prom --> Grafana
+    Loki --> Grafana
+
+    style Grafana fill:#f90,stroke:#333,color:#000
+```
+
+### Stack Components
+
+| Component | Role | Port | Image |
+|-----------|------|------|-------|
+| **Tempo** | Distributed trace backend (receives OTLP from Prax) | 3200, 4317, 4318 | `grafana/tempo:2.7.2` |
+| **Loki** | Log aggregation (receives Docker logs via Promtail) | 3100 | `grafana/loki:3.4.2` |
+| **Promtail** | Log collector (Docker service discovery) | 9080 | `grafana/promtail:3.4.2` |
+| **Prometheus** | Metrics (scrapes `/metrics` every 10s) | 9090 | `prom/prometheus:v3.2.1` |
+| **Grafana** | Unified dashboards with pre-provisioned datasources | 3001 | `grafana/grafana:11.5.2` |
+
+### Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `prax_llm_calls_total` | Counter | `model`, `status` | Total LLM API calls |
+| `prax_llm_tokens_total` | Counter | `model`, `type` (input/output) | Total tokens consumed |
+| `prax_llm_duration_seconds` | Histogram | `model` | LLM call latency |
+| `prax_spoke_calls_total` | Counter | `spoke`, `status` | Spoke/sub-agent delegations |
+| `prax_spoke_duration_seconds` | Histogram | `spoke` | Spoke execution duration |
+| `prax_tool_calls_total` | Counter | `tool` | Tool invocations |
+
+### Pre-Provisioned Dashboards
+
+Two dashboards are auto-loaded into Grafana on startup:
+
+- **LLM Performance** (`prax-llm-performance`) — Token usage, call counts by model, p50/p95/p99 latency, error rates, model distribution pie chart, tool invocation rates
+- **Agent Overview** (`prax-agent-overview`) — Spoke delegation rates, duration percentiles, success/failure breakdown, delegation tree traces, top tools, error logs
+
+### Trace Flow
+
+Every user message creates a **root span** in the orchestrator. Tool calls, spoke delegations, and sub-agent invocations create child spans. The full execution tree is visible in Grafana Tempo.
+
+```mermaid
+graph TD
+    R[orchestrator root span] --> S1[delegate_parallel]
+    S1 --> B[browser spoke]
+    S1 --> K[knowledge spoke]
+    S1 --> RES[research sub-agent]
+    RES --> WS[web_search tool]
+    RES --> URL[fetch_url tool]
+    B --> CDP[cdp_navigate tool]
+    B --> SS[cdp_screenshot tool]
+    K --> NC[note_create tool]
+```
+
+### Per-Message Trace Links
+
+When TeamWork is connected and observability is enabled, each agent response message includes a **trace button** (green Activity icon on hover). Clicking it opens the full execution trace in Grafana Tempo, showing:
+
+- Every LLM call with model name, token counts, and latency
+- Every tool invocation with input/output previews
+- The full delegation tree (orchestrator → spokes → sub-agents)
+- Correlated logs from the same trace
+
+### TeamWork Integration
+
+The TeamWork web UI includes an **Observability tab** (Activity icon in the toolbar) with two sub-tabs:
+
+- **Live Agents** — real-time terminal output from each agent. Select any agent in the sidebar to watch its execution stream. Working agents are highlighted and sorted to the top. The panel goes full-width (channel sidebar hidden) for maximum space
+- **Dashboards** — links to pre-provisioned Grafana dashboards (LLM Performance, Agent Overview, Trace Explorer, Log Explorer, Metrics Explorer) and stack component overview
+
+A separate **Execution Graphs** panel (Workflow icon) provides a tree visualization of the current LangGraph delegation chains. Each node shows status (running/completed/failed), spoke category, duration, and tool call count. Click a node to see its live output and summary
+
+### Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OBSERVABILITY_ENABLED` | `false` | Master switch for the observability stack |
+| `GRAFANA_URL` | (empty) | Grafana base URL for deep-links (e.g. `http://localhost:3001`) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://tempo:4318` | OTLP exporter endpoint |
+
+All three are set automatically by `docker-compose.dev.yml`. In production, set `OBSERVABILITY_ENABLED=true` and point to your external Tempo/Prometheus/Loki deployment.
+
+### Enabling in Dev Mode
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+```
+
+This starts the full LGTM stack alongside Prax. Open Grafana at **http://localhost:3001** (default credentials: admin/prax).
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `prax/observability/__init__.py` | Package entry — exports `init_observability`, `get_tracer` |
+| `prax/observability/setup.py` | OTel SDK init with OTLP/HTTP exporter, graceful degradation |
+| `prax/observability/callbacks.py` | LangChain callback handler — OTel spans for LLM calls (GenAI conventions) |
+| `prax/observability/metrics.py` | Prometheus metric definitions with no-op fallback |
+| `prax/agent/trace.py` | Execution tracing — custom spans + OTel bridge |
+| `observability/tempo.yaml` | Tempo config (OTLP gRPC + HTTP receivers) |
+| `observability/prometheus.yaml` | Prometheus scrape config |
+| `observability/promtail.yaml` | Promtail Docker service discovery |
+| `observability/grafana/` | Grafana provisioning (datasources + dashboards) |
+
+---
 
 ## Browser Automation
 
@@ -1231,22 +1447,12 @@ Many websites (Twitter/X, SPAs, pages behind logins) return empty or broken HTML
 
 In Docker, the sandbox container runs a **headless Chromium** with remote debugging enabled (CDP on port 9222, forwarded to 9223 via socat).  **Three consumers share the same Chrome instance:**
 
-```
-                         ┌─────────────────────┐
-                         │   Sandbox Chrome     │
-                         │   (headless, CDP)    │
-                         │   :9222 → :9223      │
-                         └──────┬───────────────┘
-                                │
-               ┌────────────────┼────────────────┐
-               │                │                │
-      ┌────────▼────────┐  ┌───▼────────┐  ┌────▼───────────┐
-      │   Playwright    │  │  Raw CDP   │  │   TeamWork     │
-      │  (browser_*)    │  │  (sandbox  │  │  Screencast    │
-      │  Rich API       │  │  _browser  │  │  (user sees    │
-      │  via connect_   │  │  _read/act)│  │  the browser   │
-      │  over_cdp()     │  │            │  │  live)         │
-      └─────────────────┘  └────────────┘  └────────────────┘
+```mermaid
+flowchart TD
+    Chrome["Sandbox Chrome\n(headless, CDP)\n:9222 → :9223"]
+    Chrome --> PW["Playwright\n(browser_*)\nRich API via\nconnect_over_cdp()"]
+    Chrome --> CDP["Raw CDP\n(sandbox_browser\n_read/_act)"]
+    Chrome --> TW["TeamWork\nScreencast\n(user sees browser live)"]
 ```
 
 - **Playwright** connects via `connect_over_cdp()` — the agent gets ergonomic selectors, auto-waiting, form filling, and file uploads, all operating on the shared Chrome
@@ -1543,24 +1749,17 @@ IMPORTED plugins execute in **isolated subprocesses** — separate OS processes 
 
 #### Architecture
 
-```
-┌─────────────────────────────────┐     JSON-lines     ┌──────────────────────────────┐
-│         Parent Process          │    on stdin/stdout   │     Plugin Subprocess        │
-│                                 │◄───────────────────►│                              │
-│  MonitoredTool                  │                      │  host.py                     │
-│    ├─ call budget (10/msg)      │  ── invoke ──►       │    ├─ import plugin module   │
-│    ├─ governance (HIGH risk)    │  ◄── result ──       │    ├─ call tool.invoke()     │
-│    └─ bridge.invoke()           │                      │    └─ CapsProxy             │
-│                                 │  ◄── caps_call ──    │         ├─ http_get(url)     │
-│  Bridge                         │  ── caps_result ──►  │         ├─ build_llm()       │
-│    ├─ spawn subprocess          │                      │         ├─ save_file()       │
-│    ├─ service caps callbacks    │                      │         └─ get_config()      │
-│    ├─ timeout → SIGKILL         │                      │                              │
-│    └─ PluginCapabilities (real) │                      │  Env: PATH, HOME, LANG only  │
-│         ├─ API keys ✓           │                      │  No API keys. No secrets.    │
-│         ├─ prax.settings ✓      │                      │  No Docker socket.           │
-│         └─ network access ✓     │                      │  No prax.settings.           │
-└─────────────────────────────────┘                      └──────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph Parent["Parent Process"]
+        MT["MonitoredTool\n• call budget (10/msg)\n• governance (HIGH risk)\n• bridge.invoke()"]
+        BR["Bridge\n• spawn subprocess\n• service caps callbacks\n• timeout → SIGKILL\n• PluginCapabilities (real)\n  – API keys ✓\n  – prax.settings ✓\n  – network access ✓"]
+    end
+    subgraph Sub["Plugin Subprocess"]
+        HP["host.py\n• import plugin module\n• call tool.invoke()\n• CapsProxy\n  – http_get(url)\n  – build_llm()\n  – save_file()\n  – get_config()"]
+        ENV["Env: PATH, HOME, LANG only\nNo API keys. No secrets.\nNo Docker socket."]
+    end
+    Parent <-->|"JSON-lines\non stdin/stdout"| Sub
 ```
 
 When a plugin calls `caps.http_get(url)`, the proxy in the subprocess serializes the call as a JSON-RPC message, sends it to the parent over stdout, and blocks. The parent — which holds the real API keys — makes the HTTP request and sends the result back. The plugin experiences a normal synchronous method call but never touches a credential.
@@ -1577,6 +1776,8 @@ When a plugin calls `caps.http_get(url)`, the proxy in the subprocess serializes
 | Infinite loop / memory bomb | `SIGALRM` → `SIGTERM` → `SIGKILL` (uncatchable) |
 | `ctypes` memory writes to bypass audit hooks | Nothing to find — no API keys in process memory |
 | Docker socket access | Not mounted in subprocess environment |
+| Read other plugins' files | Blocked — `save_file`/`read_file`/`workspace_path` scoped to `plugin_data/{plugin}/`; path traversal blocked by `safe_join` |
+| Read user workspace (`active/`) | Blocked — IMPORTED plugins' filesystem ops are confined to their scoped directory |
 
 #### Capabilities proxy
 
@@ -1586,11 +1787,12 @@ Plugins access Prax services through a `PluginCapabilities` proxy. Every method 
 |--------|---------------------|
 | `caps.build_llm(tier)` | Constructs a LangChain LLM with the real API key and returns it (serialized) |
 | `caps.http_get(url)` / `caps.http_post(url)` | Makes the HTTP request with credentials, rate-limited (50/invocation), returns serialized response |
-| `caps.save_file(name, content)` | Writes to the user's workspace via `workspace_service` |
-| `caps.run_command(cmd)` | Executes in the parent with auditing and timeout |
+| `caps.save_file(name, content)` | Writes to the plugin's scoped directory (`plugin_data/{plugin}/`) for IMPORTED; `active/` for BUILTIN/WORKSPACE |
+| `caps.read_file(name)` | Reads from the plugin's scoped directory only — IMPORTED plugins cannot read other plugins' files or user workspace |
+| `caps.run_command(cmd)` | Executes in the parent with auditing and timeout; IMPORTED plugins have `cwd` forced to their scoped directory |
 | `caps.tts_synthesize(text, path)` | Calls OpenAI/ElevenLabs TTS API with the real key |
 | `caps.get_config(key)` | Returns non-secret config values; blocks keys matching `key`, `secret`, `token`, `password`, `credential` |
-| `caps.workspace_path()` / `caps.get_user_id()` / `caps.shared_tempdir()` | Returns strings — no credential exposure |
+| `caps.workspace_path()` / `caps.get_user_id()` / `caps.shared_tempdir()` | IMPORTED plugins get their scoped path (`plugin_data/{plugin}/`), not the full workspace root |
 
 #### Framework-enforced limits
 
@@ -1622,7 +1824,7 @@ The following in-process guards remain active as a secondary defense. They are n
 |---------|-------------|
 | **Python audit hook** (PEP 578) | `sys.addaudithook` blocks `subprocess.Popen`, `os.system`, `ctypes.dlopen`, etc. during IMPORTED execution |
 | **Import blocker** (`sys.meta_path`) | Blocks `subprocess`, `ctypes`, `pickle`, `marshal`, `shutil`, `multiprocessing`, `signal` |
-| **`PluginCapabilities` gateway** | `build_llm()`, `http_get/post()`, `save_file()`, `get_config()` — all without exposing API keys |
+| **`PluginCapabilities` gateway** | `build_llm()`, `http_get/post()`, `save_file()`, `read_file()`, `get_config()` — all without exposing API keys; filesystem scoped to `plugin_data/{plugin}/` |
 | **Per-tier policy** | `PluginPolicy` dataclass controls `can_access_env`, `can_make_http`, `can_use_llm`, `max_http_requests_per_invocation`, etc. |
 
 #### Migration for plugin authors
@@ -1698,7 +1900,7 @@ Prax applies the following mitigations against this class of attack:
 Imported plugins execute in **isolated subprocesses** with a stripped environment (no API keys, no secrets). The OS process boundary prevents credential theft and memory-space attacks. However:
 
 - **Side-channel attacks** (timing, cache) are theoretically possible but impractical over JSON-RPC pipes.
-- **Capability abuse** — a malicious plugin could use `caps.http_get()` to exfiltrate workspace file contents to an external server. The HTTP rate limit (50 requests/invocation) and HIGH-risk confirmation gate mitigate but do not eliminate this.
+- **Capability abuse** — a malicious plugin could use `caps.http_get()` to exfiltrate data from its scoped directory to an external server. The HTTP rate limit (50 requests/invocation), filesystem scoping (plugins can only read/write their own `plugin_data/{plugin}/` directory), and HIGH-risk confirmation gate mitigate but do not eliminate this.
 - **Subprocess escape** — if a kernel vulnerability allows escaping process isolation, the subprocess has access to the host filesystem (though not to env vars). Docker container isolation (future enhancement) would add a second boundary.
 
 **Current controls:** subprocess isolation + static analysis + capabilities gateway + per-tier policy + call budgets + HIGH risk classification + user confirmation gate + audit hooks + import blockers + runtime auto-rollback + blocking security scan.
@@ -1931,6 +2133,9 @@ uv run pytest tests/e2e/ -v
 # With coverage
 uv run coverage run -m pytest
 uv run coverage report
+
+# Run TeamWork UI smoke tests (requires docker-compose stack running)
+cd ../teamwork/frontend && npx playwright test
 ```
 
 Before opening a pull request, run `make ci` to validate everything locally:
@@ -1949,16 +2154,17 @@ The `tests/e2e/` directory contains integration tests that exercise the **full a
 
 **Architecture:**
 
-```
-User message ──▶ ConversationAgent.run() ──▶ LangGraph ReAct loop
-                         │                         │
-                    ScriptedLLM              Real tool execution
-                  (plays back script)        (mocked backends)
-                         │                         │
-                  AIMessage with               Governance wrapper,
-                  tool_calls or text           audit logging, etc.
-                         │                         │
-                         ◀─────── ToolMessage ─────┘
+```mermaid
+flowchart LR
+    A[User message] --> B[ConversationAgent.run]
+    B --> C[LangGraph ReAct loop]
+    C --> D[ScriptedLLM\nplays back script]
+    C --> E[Real tool execution\nmocked backends]
+    D --> F[AIMessage with\ntool_calls or text]
+    E --> G[Governance wrapper\naudit logging]
+    G --> H[ToolMessage]
+    H --> C
+    F --> C
 ```
 
 - **`ScriptedLLM`** — A `BaseChatModel` that returns pre-scripted `AIMessage` responses in sequence. Some responses include `tool_calls` to trigger the real tool execution path; others are plain text (final response).
@@ -1996,6 +2202,194 @@ def test_my_workflow(run_e2e):
     assert "found" in response
     assert llm.call_count == 2
 ```
+
+### Integration Tests (Real LLM + LLM Judge)
+
+The `tests/integration/` directory contains tests that send **real messages through the full Prax pipeline** (real LLM, real tools, real workspace) and then have an LLM judge evaluate whether the result met expectations. These require a real API key.
+
+```bash
+# Run all integration tests
+uv run pytest tests/integration/ -m integration -v -s
+
+# Run a single scenario (useful when developing a new skill)
+uv run pytest tests/integration/test_workflows.py -k create_simple_note -v -s
+
+# Run only research-related scenarios
+uv run pytest tests/integration/test_workflows.py -k research -v -s
+```
+
+**Requirements:**
+- A real API key in `.env` (`OPENAI_KEY` or `ANTHROPIC_KEY`)
+- Docker is NOT required for current scenarios (no sandbox-dependent tests yet)
+- Tests are skipped automatically when no API key is available
+
+**Architecture:**
+
+```mermaid
+flowchart LR
+    A[User message] --> B[ConversationAgent.run]
+    B --> C[Real LLM + Real Tools]
+    C --> D[Real workspace\ntemp directory]
+    B --> E[Cost Tracker\nper-call pricing]
+    D --> F[IntegrationResult]
+    E --> F
+    C --> F
+    F --> G[LLM Judge]
+    G --> H[JudgeVerdict\npass/fail + reasoning]
+```
+
+**Artifacts:** Each test run saves detailed artifacts to `tests/integration/.artifacts/<scenario>/`:
+
+| File | Contents |
+|------|----------|
+| `SUMMARY.md` | Duration, cost breakdown by model, judge verdict |
+| `response.md` | Full agent response text |
+| `cost.json` | Per-call token usage and USD cost |
+| `spans.json` | Structured execution graph spans (includes per-span tier choices) |
+| `tiers.json` | Every tier→model resolution with span context and timestamps |
+| `execution_graph.txt` | Human-readable delegation tree with tier annotations |
+| `verdict.json` | Judge pass/fail, reasoning, issues |
+| `workspace/` | All workspace files created during the run |
+
+**Judging:** Each test uses **3 parallel LLM judges** with majority voting (2/3 must pass). This eliminates flaky verdicts from single-judge hallucination.
+
+**Tier tracking:** Every `build_llm()` call records which tier was requested, which model it resolved to, which provider, and which span (agent/spoke) made the call. This data flows to:
+- `tiers.json` artifact — for offline analysis
+- Execution graph summary — human-readable tier annotations per span
+- Workspace `trace.log` — `[TIER_CHOICE]` entries for production trace analysis
+- OTel spans — `prax.tier` attribute for Grafana queries
+
+**Current scenarios:**
+
+| Scenario | What it tests | Expected cost | Timeout |
+|----------|--------------|---------------|---------|
+| `create_simple_note` | Basic workspace_save | ~$0.004 | 60s |
+| `create_structured_note` | Structured markdown generation | ~$0.003 | 60s |
+| `research_and_note` | Research delegation + workspace save | ~$0.030 | 180s |
+| `factual_question` | Direct response, no tools | ~$0.002 | 45s |
+| `multi_step_plan` | Multi-step planning, two workspace saves | ~$0.005 | 90s |
+| `arxiv_course_creation` | PDF download + course creation (real plugins) | ~$0.080 | 300s |
+| `compare_two_topics` | Multi-source research synthesis | ~$0.040 | 180s |
+| `workspace_read_and_extend` | Simple workspace save | ~$0.003 | 45s |
+| `simple_save_no_delegation` | Verifies simple tasks don't over-delegate | ~$0.003 | 30s |
+| `graceful_missing_capability` | Truthfulness guardrails (real-time data) | ~$0.002 | 45s |
+| `linked_workspace_files` | Three cross-referenced workspace files | ~$0.005 | 90s |
+| `note_without_ngrok` | NGROK graceful degradation | ~$0.012 | 90s |
+
+**Adding a new scenario:**
+
+```python
+# tests/integration/scenarios.py
+Scenario(
+    name="my_new_scenario",
+    message="Ask Prax to do something specific",
+    expected_flow="""\
+Describe what tools/spokes should fire and in what order.
+The judge uses this to evaluate the execution graph.
+""",
+    quality_criteria="""\
+Describe what the output should look like.
+The judge uses this to evaluate workspace files and response.
+""",
+    expected_artifacts=["*pattern*"],  # glob patterns for workspace files
+    max_duration=60,
+    min_tool_calls=1,   # 0 = no minimum check
+    max_tool_calls=15,  # safety valve — anything above is probably a loop
+)
+```
+
+**Cost tracking:** Token usage and USD cost are tracked per LLM call during integration tests. Default pricing is built-in for major models; override via the `PRAX_MODEL_PRICING` env var:
+
+```bash
+# Override pricing for specific models (JSON dict, merged on top of defaults)
+export PRAX_MODEL_PRICING='{"my-custom-model": {"input": 2.0, "output": 8.0}}'
+```
+
+### A/B Testing (Tier Experiments)
+
+Prax includes an A/B replay system for measuring how tier/model changes affect cost, latency, and output quality. Experiments define tier overrides to apply on top of an existing scenario, then run baseline vs experiment side by side.
+
+```bash
+# Run all experiments
+uv run pytest tests/integration/test_ab_replay.py -m ab -v -s
+
+# Run a single experiment
+uv run pytest tests/integration/test_ab_replay.py -k upgrade_research -v -s
+```
+
+**How it works:**
+
+```mermaid
+flowchart LR
+    A[Experiment YAML] --> B[Load scenario +\ntier overrides]
+    B --> C[Run A: Baseline\nno overrides]
+    B --> D[Run B: Experiment\nwith overrides]
+    C --> E[Judge A\n3x majority vote]
+    D --> F[Judge B\n3x majority vote]
+    E --> G[Comparison Report]
+    F --> G
+    G --> H[comparison.md\ncomparison.json]
+```
+
+**Creating an experiment:**
+
+Create a YAML file in `tests/integration/experiments/`:
+
+```yaml
+# tests/integration/experiments/upgrade_research_to_medium.yaml
+name: upgrade-research-to-medium
+description: Does bumping research from low to medium improve output?
+base_scenario: research_and_note
+
+overrides:
+  subagent_research:
+    tier: medium
+```
+
+The `overrides` keys match the component names from `llm_routing.yaml` (`orchestrator`, `subagent_research`, `subagent_browser`, `subagent_codegen`, etc.). You can override `tier`, `model`, `provider`, and `temperature`.
+
+**Included experiments:**
+
+| Experiment | Question | Scenario |
+|------------|----------|----------|
+| `upgrade_research_to_medium` | Does smarter research improve citations? | `research_and_note` |
+| `orchestrator_medium_vs_low` | Does smarter routing reduce over-delegation? | `multi_step_plan` |
+| `all_medium` | What's the ceiling for quality gains from tier upgrades? | `compare_two_topics` |
+
+**Comparison report** (`tests/integration/.artifacts/experiments/<name>/<timestamp>/comparison.md`):
+
+The report includes:
+- Cost delta (baseline vs experiment, percentage change)
+- Timing delta
+- Per-span tier differences (which spokes changed, what they changed to)
+- Judge verdicts for both runs
+- Response previews and execution graphs
+
+**Using experiments as a feedback loop:**
+
+1. Run integration tests to identify quality issues (e.g., shallow research, over-delegation)
+2. Hypothesize a tier change that might fix it (e.g., "research spoke needs medium tier")
+3. Create an experiment YAML
+4. Run the A/B test — compare cost vs quality
+5. If the experiment wins, update `llm_routing.yaml` to make it permanent
+6. If it doesn't, try a different approach (prompt changes, tool improvements)
+
+**Programmatic overrides** (for custom scripts or CI):
+
+```python
+from prax.plugins.llm_config import set_experiment_overrides, clear_experiment_overrides
+
+token = set_experiment_overrides({
+    "subagent_research": {"tier": "medium"},
+    "orchestrator": {"tier": "high"},
+})
+try:
+    result = agent.run(user_input="Research quantum computing")
+finally:
+    clear_experiment_overrides(token)
+```
+
+Overrides use `contextvars.ContextVar` so parallel test runs don't interfere.
 
 ### Releases and Semantic Versioning
 
@@ -2507,6 +2901,81 @@ Several production agent frameworks have converged on similar architectural patt
 
 **Phase 2 implementation:** IMPORTED plugins now run in isolated subprocesses with JSON-RPC communication (see [Plugin security](#plugin-security)). This moves the security boundary from "seven imperfect Python layers" to "OS-level process isolation." Future enhancement: run the subprocess inside the sandbox Docker container for cgroups + seccomp + filesystem isolation on top of process isolation.
 
+### 12. Adaptive Tier Selection via Thompson Sampling
+
+**Finding:** Static model-tier assignment wastes budget (over-provisioning easy tasks) or degrades quality (under-provisioning hard ones). Multi-armed bandit algorithms — especially Thompson Sampling — adaptively learn which tier works best for each component and difficulty level.
+
+- **Thompson (1933)** introduced the probability-matching algorithm: sample from each arm's posterior distribution and pick the arm with the highest draw. This naturally balances exploration and exploitation without a tunable epsilon parameter.
+- **Chapelle & Li (2011)** provided the first large-scale empirical evaluation of Thompson Sampling in a production setting (online advertising), showing it matches or outperforms UCB1 and epsilon-greedy while being simpler to implement.
+- **Russo et al. (2018)** published the definitive tutorial on Thompson Sampling, covering Beta-Bernoulli bandits, contextual bandits, and the theoretical foundations (Bayesian regret bounds).
+
+**Prax implementation:** `TierBandit` (`prax/agent/tier_bandit.py`) maintains a Beta(α, β) posterior for each (component, difficulty, tier) triple. On each run, it samples from all posteriors, divides by a cost weight (low=1×, medium=4×, high=16×, pro=64×), and picks the tier with the highest cost-weighted efficiency. Difficulty constraints penalize mismatches (e.g., high tier on easy tasks gets a 0.3× multiplier). Posteriors persist to `prax/data/tier_bandit_state.json` so learning carries across restarts. The ATLAS project ([itigges22/ATLAS](https://github.com/itigges22/ATLAS)) demonstrated a similar Thompson Sampling router with cost-weighted efficiency and difficulty-binned posteriors in an open-source agentic framework.
+
+**References:**
+- Thompson, W.R., "On the Likelihood that One Unknown Probability Exceeds Another in View of the Evidence of Two Samples," Biometrika, 1933
+- Chapelle & Li, "An Empirical Evaluation of Thompson Sampling," NeurIPS 2011 — [paper](https://proceedings.neurips.cc/paper/2011/hash/e53a0a2978c28872a4505bdb51db06dc-Abstract.html)
+- Agrawal & Goyal, "Analysis of Thompson Sampling for the Multi-armed Bandit Problem," COLT 2012 — [proceedings](https://proceedings.mlr.press/v23/agrawal12.html) — first modern finite-time regret analysis proving logarithmic regret
+- Russo et al., "A Tutorial on Thompson Sampling," Foundations and Trends in ML, 2018 — [arXiv:1707.02038](https://arxiv.org/abs/1707.02038)
+- Chen et al., "FrugalGPT: How to Use Large Language Models While Reducing Cost and Improving Performance," 2023 — [arXiv:2305.05176](https://arxiv.org/abs/2305.05176) — LLM cascade routing for cost optimization
+
+### 13. Difficulty-Driven Routing
+
+**Finding:** Allocating more compute (larger models, longer inference) to harder problems improves efficiency without sacrificing quality on simple tasks. This is analogous to adaptive computation time in neural networks.
+
+- **Graves (2016)** introduced Adaptive Computation Time (ACT) for RNNs — the network learns how many computation steps to perform per input, spending more time on harder examples. This was the first formal treatment of "think longer on harder problems" in deep learning.
+- **Snell et al. (2024)** showed that scaling test-time compute (more tokens, more passes) can be more effective than scaling model parameters for a given inference budget. On math benchmarks, optimally allocating compute at inference time outperformed a 14× larger model with fixed compute.
+
+**Prax implementation:** `estimate_difficulty()` (`prax/agent/difficulty.py`) uses signal fusion — message length, hard/easy keyword patterns, multi-step markers, URL count, question complexity — to classify incoming messages as EASY/MODERATE/HARD. The orchestrator injects difficulty context into the system prompt and uses it to seed the Thompson Sampling bandit. ATLAS ([itigges22/ATLAS](https://github.com/itigges22/ATLAS)) demonstrated a similar signal-fused difficulty estimator integrated with bandit-based tier routing.
+
+**References:**
+- Graves, A., "Adaptive Computation Time for Recurrent Neural Networks," 2016 — [arXiv:1603.08983](https://arxiv.org/abs/1603.08983)
+- Raposo et al., "Mixture-of-Depths: Dynamically Allocating Compute in Transformer-Based Language Models," 2024 — [arXiv:2404.02258](https://arxiv.org/abs/2404.02258) — extends adaptive computation to transformers via top-k routing
+- Snell et al., "Scaling LLM Test-Time Compute Optimally Can Be More Effective Than Scaling Model Parameters," 2024 — [arXiv:2408.03314](https://arxiv.org/abs/2408.03314)
+
+### 14. Multi-Perspective Error Recovery
+
+**Finding:** When a tool call fails, analyzing the failure from multiple perspectives before retrying dramatically outperforms blind retry. This extends chain-of-thought reasoning to error diagnosis.
+
+- **Wei et al. (2022)** established chain-of-thought prompting — breaking reasoning into intermediate steps improves accuracy on arithmetic, commonsense, and symbolic reasoning tasks. The same principle applies to error diagnosis: decomposing "why did this fail?" into multiple angles.
+- **Shinn et al. (2023)** showed that Reflexion — reflecting on failures and storing verbal feedback for retry — improved HumanEval pass rates from 80% to 91% and ALFWorld from 75% to 97%, all without weight updates.
+
+**Prax implementation:** `analyze_tool_failure()` (`prax/agent/error_recovery.py`) examines each failure from four perspectives: (1) logical consistency (was the tool called correctly?), (2) information completeness (was input missing?), (3) assumptions (did the agent assume something false?), and (4) alternative approach (is there a different tool?). Each perspective produces a confidence-scored diagnosis and suggestion. `build_recovery_context()` formats the analysis for injection into the retry prompt. The four-perspective decomposition was inspired by PR-CoT multi-perspective repair as implemented in ATLAS ([itigges22/ATLAS](https://github.com/itigges22/ATLAS)), which reported an 85.7% rescue rate on code generation failures.
+
+**References:**
+- Wei et al., "Chain-of-Thought Prompting Elicits Reasoning in Large Language Models," NeurIPS 2022 — [arXiv:2201.11903](https://arxiv.org/abs/2201.11903)
+- Shinn et al., "Reflexion: Language Agents with Verbal Reinforcement Learning," NeurIPS 2023 — [arXiv:2303.11366](https://arxiv.org/abs/2303.11366)
+
+### 15. Metacognitive Failure Profiles
+
+**Finding:** Agents that maintain explicit models of their own weaknesses — and compensate for them via prompt injection — exhibit more stable long-term behavior than agents that treat each failure independently.
+
+- **Flavell (1979)** coined the term "metacognition" — knowledge about one's own cognitive processes and the ability to monitor and regulate them. In an AI agent context, this translates to tracking recurring failure patterns and proactively adjusting behavior.
+- **Shinn et al. (2023)** demonstrated that episodic failure memories (Reflexion) enable agents to avoid repeating the same mistakes across multiple attempts, without any gradient updates.
+- **Madaan et al. (2023)** showed that iterative self-feedback (Self-Refine) improves outputs by 5–20% across tasks. The key insight: the agent improves more when it has explicit awareness of what went wrong.
+
+**Prax implementation:** `MetacognitiveStore` (`prax/agent/metacognitive.py`) maintains per-component `ComponentProfile`s with `FailurePattern` records. Each pattern has a confidence score, occurrence count, and an optional compensating instruction. When a pattern reaches ≥3 occurrences and ≥40% confidence, it becomes "active" and is injected as a warning into the component's system prompt. Confidence decays over time via an Ebbinghaus-inspired forgetting curve (`conf *= 0.95^days`), naturally pruning stale patterns. ATLAS ([itigges22/ATLAS](https://github.com/itigges22/ATLAS)) implemented a similar metacognitive model with per-category failure tracking and confidence decay.
+
+**References:**
+- Flavell, J.H., "Metacognition and Cognitive Monitoring," American Psychologist, 1979 — [doi:10.1037/0003-066X.34.10.906](https://doi.org/10.1037/0003-066X.34.10.906)
+- Ram & Cox, "Introspective Reasoning Using Meta-Explanations for Multistrategy Learning," Morgan Kaufmann, 1994 — introspective blame assignment for systematic failure diagnosis in AI systems
+- Cox, M.T., "Metacognition in Computation: A Selected Research Review," Artificial Intelligence, 2005 — [doi:10.1016/j.artint.2005.10.007](https://doi.org/10.1016/j.artint.2005.10.007)
+- Shinn et al., "Reflexion," NeurIPS 2023 — [arXiv:2303.11366](https://arxiv.org/abs/2303.11366)
+- Madaan et al., "Self-Refine," NeurIPS 2023 — [arXiv:2303.17651](https://arxiv.org/abs/2303.17651)
+
+### 16. Self-Verification Before Delivery
+
+**Finding:** Agents that verify their own outputs before presenting them to users catch 60–90% of errors that would otherwise reach the user. Verification is far cheaper than re-generation.
+
+- **Wang et al. (2023)** introduced self-consistency: sampling multiple reasoning paths and selecting the most consistent answer. The key insight is that verification (checking answers) is easier and more reliable than generation (producing answers).
+- **Chen et al. (2024)** showed that "self-debugging" — where the model generates test cases for its own code, runs them, and fixes failures — improves code generation accuracy by 2–12% on standard benchmarks, with the biggest gains on harder problems.
+
+**Prax implementation:** `verify_workspace_file()` and `verify_delegation_result()` (`prax/agent/verification.py`) run automated checks after workspace saves and sub-agent delegations: file existence, minimum content length, expected patterns, error indicator detection, and minimum word count. The workspace_save tool integrates verification and appends warnings when checks fail. ATLAS ([itigges22/ATLAS](https://github.com/itigges22/ATLAS)) demonstrated self-test generation for internal verification before presenting results to users.
+
+**References:**
+- Wang et al., "Self-Consistency Improves Chain of Thought Reasoning in Language Models," ICLR 2023 — [arXiv:2203.11171](https://arxiv.org/abs/2203.11171)
+- Chen et al., "Teaching Large Language Models to Self-Debug," ICLR 2024 — [arXiv:2304.05128](https://arxiv.org/abs/2304.05128)
+- Chen et al., "CodeT: Code Generation with Generated Tests," ICLR 2023 — [arXiv:2207.10397](https://arxiv.org/abs/2207.10397) — self-test generation and dual execution agreement for ranking candidates
+
 ### Key Takeaways
 
 1. **Planning is not optional** — it's the single highest-leverage intervention for multi-step tasks.
@@ -2517,6 +2986,8 @@ Several production agent frameworks have converged on similar architectural patt
 6. **Fewer tools, better choices** — tool selection accuracy collapses past 20–50 tools. Use hub-and-spoke delegation or on-demand tool search to keep each agent's tool set focused.
 7. **Diverse reviewers improve quality** — different models/providers in a review loop outperform same-model self-critique by 9+ percentage points.
 8. **Put security boundaries at the OS level** — in-process Python sandboxing is fundamentally fragile (the Glass Sandbox). Use subprocess/process isolation as the primary boundary, keep in-process guards as defence-in-depth, and make the framework enforce limits the plugin code cannot override.
+9. **Let the data choose the model** — Thompson Sampling learns which tier works best per component, replacing guesswork with Bayesian inference.
+10. **Spend compute where it matters** — difficulty-driven routing allocates expensive models to hard tasks and cheap models to easy ones, matching adaptive computation research.
 
 ## Roadmap
 
@@ -2549,6 +3020,11 @@ Several production agent frameworks have converged on similar architectural patt
 - [x] Reader-to-plugin migration (NPR, web summary, PDF, YouTube, arXiv, Deutschlandfunk)
 - [x] Plugin repository support (separate private git repo with SSH deploy key)
 - [x] Subprocess isolation for imported plugins (Phase 2 — JSON-RPC bridge, stripped env, capabilities proxy)
+- [x] Adaptive tier selection via Thompson Sampling bandit
+- [x] Difficulty-driven routing (signal-fused complexity estimation)
+- [x] Multi-perspective error recovery (4-angle failure analysis before retry)
+- [x] Metacognitive failure profiles (per-component pattern learning with confidence decay)
+- [x] Self-verification (workspace file and delegation output checks before delivery)
 - [ ] Apple Silicon support (MLX backend as alternative to vLLM/CUDA)
 - [ ] Sandbox Docker image build + integration test with live OpenCode
 - [ ] Voice-triggered sandbox sessions

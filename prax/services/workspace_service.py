@@ -120,7 +120,20 @@ def get_lock(user_id: str) -> threading.Lock:
 
 
 def workspace_root(user_id: str) -> str:
-    """Return the workspace root path for *user_id* (without creating it)."""
+    """Return the workspace root path for *user_id* (without creating it).
+
+    Accepts a UUID (resolved via identity service to ``usr_*`` dir) or a
+    legacy phone number / ``D{discord_id}`` string (falls back to stripping
+    the leading ``+``).
+    """
+    try:
+        from prax.services.identity_service import get_user
+        user = get_user(user_id)
+        if user:
+            return os.path.join(settings.workspace_dir, user.workspace_dir)
+    except Exception:
+        pass
+    # Legacy fallback: phone number or D{discord_id}
     safe_id = user_id.lstrip("+")
     return os.path.join(settings.workspace_dir, safe_id)
 
@@ -1302,6 +1315,72 @@ def update_plugin_repo(user_id: str, name: str) -> dict:
             "Call acknowledge_warnings() to re-activate."
         )
     return result
+
+
+def check_plugin_updates(user_id: str, name: str) -> dict:
+    """Check if a shared plugin has upstream updates without pulling them.
+
+    Does a ``git fetch`` on the submodule and compares the local HEAD to the
+    remote tracking branch.  Returns commit hashes and whether an update is
+    available.
+    """
+    safe_name = re.sub(r"[^a-zA-Z0-9_-]", "_", name)
+    root = workspace_root(user_id)
+    abs_submodule = os.path.join(root, "plugins", "shared", safe_name)
+
+    if not os.path.isdir(abs_submodule):
+        return {"error": f"Plugin '{safe_name}' not found."}
+
+    # Local HEAD.
+    local = subprocess.run(
+        ["git", "-C", abs_submodule, "rev-parse", "HEAD"],
+        capture_output=True, text=True,
+    ).stdout.strip()
+
+    # Fetch from remote (fast, no merge).
+    subprocess.run(
+        ["git", "-C", abs_submodule, "fetch", "--quiet"],
+        capture_output=True, text=True, timeout=30,
+    )
+
+    # Remote tracking branch HEAD (typically origin/main or origin/master).
+    remote = ""
+    for branch in ("origin/main", "origin/master"):
+        r = subprocess.run(
+            ["git", "-C", abs_submodule, "rev-parse", branch],
+            capture_output=True, text=True,
+        )
+        if r.returncode == 0:
+            remote = r.stdout.strip()
+            break
+
+    if not remote:
+        # Fallback: FETCH_HEAD after the fetch.
+        r = subprocess.run(
+            ["git", "-C", abs_submodule, "rev-parse", "FETCH_HEAD"],
+            capture_output=True, text=True,
+        )
+        remote = r.stdout.strip() if r.returncode == 0 else ""
+
+    update_available = bool(remote) and local != remote
+
+    # Count commits behind if there's a diff.
+    commits_behind = 0
+    if update_available:
+        r = subprocess.run(
+            ["git", "-C", abs_submodule, "rev-list", "--count", f"HEAD..{remote}"],
+            capture_output=True, text=True,
+        )
+        if r.returncode == 0:
+            commits_behind = int(r.stdout.strip())
+
+    return {
+        "name": safe_name,
+        "local_commit": local[:12],
+        "remote_commit": remote[:12] if remote else None,
+        "update_available": update_available,
+        "commits_behind": commits_behind,
+    }
 
 
 def list_shared_plugins(user_id: str) -> list[dict]:

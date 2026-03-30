@@ -1,0 +1,17 @@
+# Experiment: Does a smarter orchestrator make better delegation decisions?
+#
+# The orchestrator runs on tier=low by default, which means it uses the
+# cheapest model for routing and planning.  This experiment upgrades it to
+# medium to see if it makes fewer unnecessary delegations and produces
+# better plans.
+
+name: orchestrator-medium-vs-low
+description: >
+  Upgrade the orchestrator from low to medium tier.  Measures whether a
+  smarter router reduces over-delegation and improves plan quality without
+  excessive cost increase.
+base_scenario: multi_step_plan
+
+overrides:
+  orchestrator:
+    tier: medium

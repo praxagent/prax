@@ -1,0 +1,19 @@
+# Experiment: Does upgrading the research spoke from low to medium improve
+# output quality enough to justify the cost increase?
+#
+# Run:
+#   pytest tests/integration/test_ab_replay.py -k upgrade_research -v -s
+#
+# Or run all experiments:
+#   pytest tests/integration/test_ab_replay.py -m ab -v -s
+
+name: upgrade-research-to-medium
+description: >
+  Research sub-agent defaults to tier=low.  This experiment upgrades it to
+  tier=medium to measure the impact on research quality (citations, depth,
+  factual accuracy) vs cost and latency.
+base_scenario: research_and_note
+
+overrides:
+  subagent_research:
+    tier: medium

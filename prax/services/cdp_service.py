@@ -258,12 +258,31 @@ def get_page_url() -> dict:
 
 
 def navigate(url: str) -> dict:
-    """Navigate to a URL and return page text after loading."""
+    """Navigate to a URL and wait for the page to finish loading.
+
+    Uses DOM readyState polling instead of a fixed sleep so fast pages
+    return immediately and slow pages (HN discussion threads, JS-heavy
+    sites) get enough time to render.
+    """
     with _lock:
         result = _send_cdp("Page.navigate", {"url": url}, timeout=15)
     if "error" in result:
         return result
-    time.sleep(2)
+
+    # Poll readyState until "complete" (max ~8s).
+    deadline = time.time() + 8
+    while time.time() < deadline:
+        time.sleep(0.5)
+        rs = _send_cdp("Runtime.evaluate", {
+            "expression": "document.readyState",
+            "returnByValue": True,
+        })
+        state = rs.get("result", {}).get("value", "")
+        if state == "complete":
+            break
+
+    # Extra settle time for JS-rendered content.
+    time.sleep(1)
     return get_page_text(max_length=5000)
 
 

@@ -58,6 +58,73 @@ def post_to_channel(channel: str, content: str, agent_name: str | None = None) -
         logger.debug("TeamWork hook: post_to_channel(%s) failed", channel, exc_info=True)
 
 
+def push_live_output(
+    agent_name: str,
+    output: str,
+    status: str = "running",
+    append: bool = True,
+    error: str | None = None,
+) -> None:
+    """Push live execution output for an agent to the TeamWork frontend."""
+    try:
+        tw = _tw()
+        if tw:
+            tw.update_live_output(agent_name, output, status=status, append=append, error=error)
+    except Exception:
+        logger.debug("TeamWork hook: push_live_output(%s) failed", agent_name, exc_info=True)
+
+
+def forward_to_channel(
+    channel_name: str,
+    sender_label: str,
+    content: str,
+    agent_name: str | None = None,
+) -> None:
+    """Forward an external-channel message (Discord, SMS) to a TeamWork channel.
+
+    Posts to #discord or #sms so the user can see cross-channel conversations.
+    """
+    try:
+        tw = _tw()
+        if tw:
+            tw.forward_external_message(channel_name, sender_label, content, agent_name=agent_name)
+    except Exception:
+        logger.debug("TeamWork hook: forward_to_channel(%s) failed", channel_name, exc_info=True)
+
+
+def ensure_mirror_channels() -> None:
+    """Ensure #discord and #sms channels exist in TeamWork.
+
+    Called during startup / project initialization to backfill channels
+    for projects created before mirroring was added.
+    """
+    try:
+        tw = _tw()
+        if tw:
+            tw.ensure_channels([
+                {"name": "discord", "description": "Mirrored conversations from Discord"},
+                {"name": "sms", "description": "Mirrored conversations from SMS/Twilio"},
+            ])
+    except Exception:
+        logger.debug("TeamWork hook: ensure_mirror_channels failed", exc_info=True)
+
+
+def sync_conversation_history() -> None:
+    """Sync historical SMS/Discord conversations to TeamWork.
+
+    Called after ensure_mirror_channels on startup. Only imports into
+    channels that have zero messages (safe to call repeatedly).
+    """
+    try:
+        tw = _tw()
+        if tw:
+            result = tw.sync_conversation_history()
+            if result:
+                logger.info("Synced conversation history to TeamWork: %s", result)
+    except Exception:
+        logger.debug("TeamWork hook: sync_conversation_history failed", exc_info=True)
+
+
 def mirror_plan_to_tasks(goal: str, steps: list[dict]) -> list[str]:
     """Create TeamWork tasks mirroring an agent plan. Returns task IDs."""
     task_ids: list[str] = []

@@ -1,11 +1,16 @@
 """LangChain tool wrappers for the git-backed workspace."""
 from __future__ import annotations
 
+import logging as _logging
+
 from langchain_core.tools import tool
 
 from prax.agent.action_policy import RiskLevel, risk_tool
 from prax.agent.user_context import current_user_id
 from prax.services import workspace_service
+from prax.trace_events import TraceEvent
+
+_ws_logger = _logging.getLogger(__name__)
 
 
 def _get_user_id() -> str:
@@ -13,6 +18,32 @@ def _get_user_id() -> str:
     if not uid:
         return "unknown"
     return uid
+
+
+def _auto_advance_plan_step() -> None:
+    """Mark the next incomplete plan step as done after a workspace write.
+
+    Called automatically by workspace_save so the plan enforcement loop
+    doesn't re-trigger work that's already finished.  Sequential: marks
+    the first incomplete step as done.
+    """
+    try:
+        uid = _get_user_id()
+        if uid == "unknown":
+            return
+        plan = workspace_service.read_plan(uid)
+        if not plan:
+            return
+        for step in plan.get("steps", []):
+            if not step.get("done"):
+                workspace_service.complete_plan_step(uid, step["step"])
+                _ws_logger.info(
+                    "Auto-advanced plan step %d after workspace_save: %s",
+                    step["step"], step.get("description", "")[:60],
+                )
+                return
+    except Exception:
+        pass
 
 
 @tool
@@ -46,8 +77,24 @@ def user_notes_read() -> str:
 def workspace_save(filename: str, content: str) -> str:
     """Save a file to the active workspace. Use for markdown notes, extracted content, etc."""
     try:
-        workspace_service.save_file(_get_user_id(), filename, content)
-        return f"Saved {filename} to active workspace."
+        uid = _get_user_id()
+        workspace_service.save_file(uid, filename, content)
+
+        # Self-verification: confirm the file was actually saved
+        verify_msg = ""
+        try:
+            from prax.agent.verification import verify_workspace_file
+            ws_root = workspace_service.workspace_root(uid)
+            result = verify_workspace_file(ws_root, filename)
+            if not result.passed:
+                verify_msg = f" [WARNING: verification failed: {result.summary}]"
+                _ws_logger.warning("workspace_save verification failed for %s: %s", filename, result.summary)
+        except Exception:
+            pass
+
+        # Auto-advance the plan — saving a file is a concrete step completion.
+        _auto_advance_plan_step()
+        return f"Saved {filename} to active workspace.{verify_msg}"
     except Exception as e:
         return f"Failed to save {filename}: {e}"
 
@@ -144,11 +191,13 @@ def latex_compile(filename: str) -> str:
 def workspace_send_file(filename: str, message: str = "") -> str:
     """Send a file from the active workspace to the user via their current channel.
 
-    Tries Discord direct upload first (works for files under ~8 MB).
-    Falls back to an ngrok share link if Discord isn't available or the file
-    is too large.  For SMS/voice users the share link is sent as a text message.
+    Delivery is attempted in order:
+    1. Discord direct upload (files under ~8 MB)
+    2. TeamWork message with workspace path (if the user is on TeamWork)
+    3. ngrok share link (public URL, works for any channel)
+    4. Workspace fallback — tells the user where the file is stored
 
-    Use this to deliver PDFs, images, or other files the user asked for.
+    Use this to deliver PDFs, images, videos, or other files the user asked for.
     """
     import os
 
@@ -167,9 +216,15 @@ def workspace_send_file(filename: str, message: str = "") -> str:
             send_file(uid, file_path, message=message)
             return f"Sent {filename} to the user via Discord ({size_mb:.1f} MB)."
         except RuntimeError:
-            pass  # Discord not running — fall through to share link.
+            pass  # Discord not running — fall through.
         except Exception:
             pass
+
+    # Try TeamWork — if the user is on a TeamWork channel, post a message
+    # with the filename.  TeamWork's file browser has access to the workspace.
+    teamwork_delivered = _deliver_via_teamwork(uid, filename, size_mb, message)
+    if teamwork_delivered:
+        return teamwork_delivered
 
     # Fall back to ngrok share link.
     try:
@@ -182,23 +237,76 @@ def workspace_send_file(filename: str, message: str = "") -> str:
                 f"Shared {filename} via link ({size_mb:.1f} MB): {url}\n"
                 f"Token: `{result['token']}` — use workspace_unshare_file to revoke."
             )
-        share_error = result["error"]
-    except Exception as e:
-        share_error = str(e)
+    except Exception:
+        pass
 
-    # Neither worked.
+    # Final fallback — file is in the workspace, tell the user where.
     return (
-        f"Could not deliver {filename} ({size_mb:.1f} MB).\n"
-        f"Discord upload failed or unavailable, and share link failed: {share_error}\n"
-        f"Tell the user how to enable file delivery (ngrok for share links, Discord for direct upload)."
+        f"File saved to your workspace: **{filename}** ({size_mb:.1f} MB).\n"
+        f"You can access it from the TeamWork file browser or your workspace directory."
     )
+
+
+def _deliver_via_teamwork(
+    user_id: str, filename: str, size_mb: float, message: str,
+) -> str | None:
+    """Try to deliver a file notification via TeamWork.
+
+    TeamWork's file browser has direct access to the workspace, so we just
+    post a message telling the user the file is ready.  Returns the success
+    string, or None if TeamWork is not the active channel.
+    """
+    try:
+        from prax.agent.user_context import current_channel_id
+        from prax.services.teamwork_service import get_teamwork_client
+
+        channel_id = current_channel_id.get(None)
+        if not channel_id:
+            return None
+
+        tw = get_teamwork_client()
+        if not tw.enabled:
+            return None
+
+        note = message or "Your file is ready"
+        tw.send_message(
+            content=(
+                f"📎 **{filename}** ({size_mb:.1f} MB)\n"
+                f"{note}\n"
+                f"Open the file browser to view or download it."
+            ),
+            channel_id=channel_id,
+            agent_name="Prax",
+        )
+        return (
+            f"Delivered {filename} ({size_mb:.1f} MB) via TeamWork. "
+            f"The user can access it from the file browser."
+        )
+    except Exception:
+        return None
 
 
 def _deliver_share_link(user_id: str, url: str, filename: str, message: str) -> None:
     """Best-effort: send the share link to the user via their active channel."""
     text = f"{message}\n{url}" if message else f"Here's your file ({filename}): {url}"
 
-    # Try Discord text message first.
+    # Try TeamWork first (if active channel).
+    try:
+        from prax.agent.user_context import current_channel_id
+        from prax.services.teamwork_service import get_teamwork_client
+
+        channel_id = current_channel_id.get(None)
+        if channel_id:
+            tw = get_teamwork_client()
+            if tw.enabled:
+                tw.send_message(
+                    content=text, channel_id=channel_id, agent_name="Prax",
+                )
+                return
+    except Exception:
+        pass
+
+    # Try Discord text message.
     try:
         from prax.services.discord_service import send_message
         send_message(user_id, text)
@@ -571,6 +679,53 @@ def conversation_search(query: str, max_results: int = 20) -> str:
         return f"Error searching history: {e}"
 
 
+@tool
+def think(reasoning: str) -> str:
+    """Think through a problem privately without showing output to the user.
+
+    Use this to reason about complex decisions, plan tool use sequences,
+    evaluate alternatives, or work through logic before acting. Your
+    reasoning is recorded to the workspace trace for debugging but is
+    not included in the user-facing response.
+
+    Args:
+        reasoning: Your private reasoning, analysis, or planning notes.
+    """
+    uid = _get_user_id()
+    if uid and uid != "unknown":
+        try:
+            workspace_service.append_trace(uid, [{
+                "type": TraceEvent.THINK,
+                "content": f"[THINK] {reasoning}",
+            }])
+        except Exception:
+            pass
+    return "OK"
+
+
+@risk_tool(risk=RiskLevel.HIGH)
+def request_extended_budget(reason: str, additional_calls: int = 20) -> str:
+    """Request additional tool calls beyond the current budget.
+
+    Use this when you are mid-task and running low on tool calls.
+    The request requires user confirmation (HIGH risk gate).
+
+    Args:
+        reason: Why you need more tool calls (shown to the user).
+        additional_calls: How many additional calls to request (default 20, max 50).
+    """
+    from prax.agent.governed_tool import extend_budget, get_budget_status
+
+    capped = min(max(additional_calls, 5), 50)
+    extend_budget(capped)
+
+    used, new_budget = get_budget_status()
+    return (
+        f"Budget extended by {capped} calls. "
+        f"Current usage: {used}/{new_budget} calls."
+    )
+
+
 def build_workspace_tools():
 
     tools = [
@@ -583,6 +738,7 @@ def build_workspace_tools():
         agent_plan, agent_step_done, agent_plan_status, agent_plan_clear,
         conversation_history, conversation_search,
         read_logs, system_status,
+        think, request_extended_budget,
     ]
 
     return tools

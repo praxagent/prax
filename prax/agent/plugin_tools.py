@@ -839,6 +839,34 @@ def plugin_import_remove(name: str) -> str:
 
 
 @tool
+def plugin_check_updates(name: str) -> str:
+    """Check if an imported plugin has upstream updates available.
+
+    Does a quick git fetch and compares commit hashes without pulling.
+    Does NOT apply updates — use plugin_import_update to actually update.
+
+    Args:
+        name: The plugin name (directory name under plugins/shared/).
+    """
+    uid = current_user_id.get()
+    if not uid:
+        return "Error: no active user context."
+    from prax.services.workspace_service import check_plugin_updates
+    result = check_plugin_updates(uid, name)
+    if "error" in result:
+        return f"Error: {result['error']}"
+    if result["update_available"]:
+        behind = result["commits_behind"]
+        return (
+            f"Update available for '{result['name']}': "
+            f"local {result['local_commit']} → remote {result['remote_commit']} "
+            f"({behind} commit{'s' if behind != 1 else ''} behind). "
+            f"Say \"update {result['name']}\" to apply."
+        )
+    return f"Plugin '{result['name']}' is up to date ({result['local_commit']})."
+
+
+@tool
 def plugin_import_update(name: str) -> str:
     """Update an imported shared plugin to its latest version.
 
@@ -914,6 +942,44 @@ def plugin_import_list() -> str:
     return "\n".join(lines)
 
 
+@tool
+def plugin_check_all_updates() -> str:
+    """Check all imported plugins for upstream updates.
+
+    Fetches remote state for every shared plugin and reports which ones
+    have updates available.  Does NOT apply any updates — use
+    plugin_import_update to pull changes for a specific plugin.
+    """
+    uid = current_user_id.get()
+    if not uid:
+        return "Error: no active user context."
+    from prax.services.workspace_service import (
+        check_plugin_updates,
+        list_shared_plugins,
+    )
+    plugins = list_shared_plugins(uid)
+    if not plugins:
+        return "No imported plugins found."
+    lines: list[str] = []
+    has_updates = False
+    for p in plugins:
+        result = check_plugin_updates(uid, p["name"])
+        if "error" in result:
+            lines.append(f"- **{p['name']}**: ⚠ {result['error']}")
+            continue
+        if result["update_available"]:
+            has_updates = True
+            behind = result["commits_behind"]
+            lines.append(
+                f"- **{result['name']}**: {behind} commit{'s' if behind != 1 else ''} behind "
+                f"({result['local_commit']} → {result['remote_commit']})"
+            )
+        else:
+            lines.append(f"- **{result['name']}**: up to date ({result['local_commit']})")
+    summary = "Updates available — run plugin_import_update for each." if has_updates else "All plugins are up to date."
+    return f"{summary}\n\n" + "\n".join(lines)
+
+
 def build_plugin_tools() -> list:
     """Return all agent-facing plugin management tools."""
     return [
@@ -929,6 +995,8 @@ def build_plugin_tools() -> list:
         plugin_import,
         plugin_import_activate,
         plugin_import_update,
+        plugin_check_updates,
+        plugin_check_all_updates,
         plugin_import_remove,
         plugin_import_list,
         prompt_read,

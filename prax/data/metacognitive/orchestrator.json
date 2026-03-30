@@ -1,0 +1,41 @@
+{
+  "component": "orchestrator",
+  "patterns": {
+    "graph_HTTPError": {
+      "pattern_id": "graph_HTTPError",
+      "description": "Graph invocation failed: HTTPError: 429 Client Error: Unknown Error for url: https://export.arxiv.org/api/query?sear",
+      "category": "",
+      "confidence": 0.9869625020133491,
+      "occurrences": 6,
+      "last_seen": 1774842405.42293,
+      "compensating_instruction": "Previous runs hit HTTPError \u2014 verify tool args before calling."
+    },
+    "graph_BadRequestError": {
+      "pattern_id": "graph_BadRequestError",
+      "description": "Graph invocation failed: BadRequestError: Error code: 400 - {'error': {'message': \"An assistant message with 'tool_calls' ",
+      "category": "",
+      "confidence": 0.7408360361469977,
+      "occurrences": 4,
+      "last_seen": 1774842405.8856242,
+      "compensating_instruction": "Previous runs hit BadRequestError \u2014 verify tool args before calling."
+    },
+    "graph_RuntimeError": {
+      "pattern_id": "graph_RuntimeError",
+      "description": "Graph invocation failed: RuntimeError: cannot schedule new futures after shutdown",
+      "category": "",
+      "confidence": 0.5067420958683776,
+      "occurrences": 3,
+      "last_seen": 1774824067.5007553,
+      "compensating_instruction": "Previous runs hit RuntimeError \u2014 verify tool args before calling."
+    },
+    "graph_ReadTimeout": {
+      "pattern_id": "graph_ReadTimeout",
+      "description": "Graph invocation failed: ReadTimeout: HTTPSConnectionPool(host='export.arxiv.org', port=443): Read timed out. (read ti",
+      "category": "",
+      "confidence": 0.5413171229862587,
+      "occurrences": 2,
+      "last_seen": 1774842438.5559812,
+      "compensating_instruction": "Previous runs hit ReadTimeout \u2014 verify tool args before calling."
+    }
+  }
+}

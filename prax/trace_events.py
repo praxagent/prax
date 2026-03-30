@@ -36,6 +36,8 @@ class TraceEvent(StrEnum):
     PLUGIN_ROLLBACK = "plugin_rollback"
     PLUGIN_REMOVE = "plugin_remove"
     PLUGIN_SECURITY_WARN = "plugin_security_warn"
+    TIER_CHOICE = "tier_choice"
+    THINK = "think"
 
     @classmethod
     def values(cls) -> set[str]:

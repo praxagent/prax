@@ -80,6 +80,10 @@ interactions where reliability matters more than speed.
 - If a page fails to load via CDP, try Playwright before reporting failure.
 - Keep your output concise — the orchestrator will relay it to the user.
 - If you take a screenshot, include the file path so the orchestrator can share it.
+- **Pace yourself.** Some sites (Hacker News, Reddit, etc.) rate-limit rapid requests.
+  If a page returns an error or "Sorry" message, wait a moment and retry with
+  ``browser_open`` (Playwright) instead of CDP — it waits for full page load.
+  Don't rapid-fire multiple navigations back-to-back without reading results first.
 """
 
 
@@ -108,8 +112,14 @@ def delegate_browser(task: str) -> str:
     screenshots.  It chooses between fast CDP and reliable Playwright
     automatically based on the task.
 
+    ALWAYS use this when the user says "in this browser", "in the browser",
+    "open/navigate/go to [URL]", "show me", or any phrase implying they
+    want to SEE something in the browser panel.  Do NOT use fetch_url_content
+    or text responses when the user expects browser interaction.
+
     Use this for:
     - "Open this URL and tell me what it says"
+    - "Find me an interesting article on Hacker News" (when via TeamWork)
     - "Log into x.com and read this tweet"
     - "Fill out this form with these values"
     - "Take a screenshot of the current page"
