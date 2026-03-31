@@ -138,10 +138,9 @@ def test_all_capabilities_have_required_keys():
 
 
 def test_governed_wrapper_uses_tool_metadata():
-    from prax.agent.governed_tool import _audit_buffer, _high_risk_seen, wrap_with_governance
+    from prax.agent.governed_tool import _audit_buffer, _high_risk_seen, drain_audit_log, wrap_with_governance
 
-    _audit_buffer.clear()
-    _high_risk_seen.clear()
+    drain_audit_log()  # Reset budget + confirmation state from prior tests
 
     @risk_tool(risk=RiskLevel.HIGH)
     def my_gated_tool(x: str = "") -> str:

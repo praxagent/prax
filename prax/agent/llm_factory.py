@@ -127,7 +127,21 @@ def build_llm(
     if provider_name == "openai":
         if not settings.openai_key:
             raise ValueError("OPENAI_KEY is required for OpenAI provider")
-        return ChatOpenAI(model=model_name, api_key=settings.openai_key, temperature=temp, callbacks=callbacks)
+        # Phase 3: enable logprobs for entropy analysis when provider
+        # supports it.  The LogprobCallbackHandler silently no-ops if
+        # the response doesn't contain logprob data.
+        try:
+            from prax.agent.logprob_analyzer import get_logprob_callback
+            callbacks = list(callbacks) + [get_logprob_callback()]
+        except Exception:
+            pass
+        return ChatOpenAI(
+            model=model_name,
+            api_key=settings.openai_key,
+            temperature=temp,
+            callbacks=callbacks,
+            model_kwargs={"logprobs": True, "top_logprobs": 5},
+        )
 
     if provider_name == "anthropic":
         if not settings.anthropic_key:

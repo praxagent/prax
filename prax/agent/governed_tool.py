@@ -8,6 +8,10 @@ reaching the LangGraph agent.  This is the ONE choke point where:
 3. Confirmation requirement is evaluated (with smart auto-approve)
 4. An audit record is emitted to the workspace trace log
 5. Tool call budget is tracked (with agent-initiated escalation)
+6. Prediction error is computed (Active Inference Phase 1)
+7. Epistemic read-before-write gate is enforced (Phase 2)
+8. Logprob entropy is checked when available (Phase 3)
+9. Semantic entropy gate blocks divergent HIGH-risk calls (Phase 4)
 
 Wired into the agent via ``tool_registry.get_registered_tools()``.
 """
@@ -127,6 +131,28 @@ def wrap_with_governance(tool: BaseTool) -> BaseTool:
     def _governed_run(**kwargs: Any) -> Any:
         global _high_risk_confirmed, _tool_call_count
 
+        # --- Active Inference: extract expected observation (Phase 1) ---
+        expected_observation = kwargs.pop("expected_observation", None)
+
+        # --- Epistemic ledger: read-before-write gate (Phase 2) ---
+        try:
+            from prax.agent.prediction_tracker import (
+                READ_TOOLS,
+                extract_resource_key,
+                get_prediction_tracker,
+            )
+            tracker = get_prediction_tracker()
+            gate_msg = tracker.check_epistemic_gate(tool_name, kwargs)
+            if gate_msg:
+                logger.info("Epistemic gate blocked %s: %s", tool_name, gate_msg)
+                _audit_buffer.append(log_action(
+                    tool_name, static_risk, kwargs,
+                    result=f"BLOCKED — epistemic gate ({gate_msg[:80]})",
+                ))
+                return gate_msg
+        except Exception:
+            tracker = None
+
         # --- Earned trust: dynamic risk adjustment ---
         risk = static_risk
         if risk is RiskLevel.HIGH:
@@ -186,6 +212,21 @@ def wrap_with_governance(tool: BaseTool) -> BaseTool:
                 # User confirmed — unlock all HIGH-risk tools for this turn.
                 _high_risk_confirmed = True
 
+        # --- Semantic entropy gate (Phase 4) ---
+        if risk is RiskLevel.HIGH:
+            try:
+                from prax.agent.semantic_entropy import check_semantic_entropy
+                entropy_warning = check_semantic_entropy(tool_name, kwargs)
+                if entropy_warning:
+                    logger.warning("Semantic entropy blocked %s: %s", tool_name, entropy_warning)
+                    _audit_buffer.append(log_action(
+                        tool_name, risk, kwargs,
+                        result=f"BLOCKED — semantic entropy ({entropy_warning[:80]})",
+                    ))
+                    return entropy_warning
+            except Exception:
+                pass  # Graceful fallback — don't block on gate failure.
+
         # Execute the tool.
         logger.info("Tool %s starting [%s] (args=%s)", tool_name, risk.value, _summarize_args(kwargs))
         from prax.services.teamwork_hooks import set_role_status
@@ -197,6 +238,39 @@ def wrap_with_governance(tool: BaseTool) -> BaseTool:
             result_str = str(result) if result is not None else None
             _audit_buffer.append(log_action(tool_name, risk, kwargs, result=result_str))
             logger.info("Tool %s finished [%s]", tool_name, risk.value)
+
+            # --- Active Inference: record prediction error (Phase 1) ---
+            if expected_observation and tracker:
+                try:
+                    tracker.record_prediction(
+                        tool_name, expected_observation, result_str or "",
+                    )
+                except Exception:
+                    pass
+
+            # --- Epistemic ledger: record reads (Phase 2) ---
+            if tracker and tool_name in READ_TOOLS:
+                try:
+                    resource = extract_resource_key(tool_name, kwargs)
+                    if resource:
+                        tracker.record_read(resource)
+                except Exception:
+                    pass
+
+            # --- Logprob entropy check (Phase 3) ---
+            if tracker and risk in (RiskLevel.MEDIUM, RiskLevel.HIGH):
+                try:
+                    from prax.agent.logprob_analyzer import get_entropy_for_tool
+                    entropy = get_entropy_for_tool(tool_name)
+                    if entropy and entropy.is_uncertain:
+                        logger.warning(
+                            "Logprob entropy HIGH for %s: score=%.3f "
+                            "tokens=%s",
+                            tool_name, entropy.entropy_score,
+                            entropy.high_entropy_tokens[:5],
+                        )
+                except Exception:
+                    pass  # Graceful fallback — logprobs not available.
 
             # Epistemic tagging: prepend source-reliability metadata so the
             # LLM knows how much to trust this result for factual claims.
@@ -210,12 +284,47 @@ def wrap_with_governance(tool: BaseTool) -> BaseTool:
             ))
             raise
 
+    # Augment the tool's args schema with expected_observation so the
+    # LLM can (optionally) declare its prediction for each tool call.
+    augmented_schema = _augment_schema(tool_name, tool.args_schema)
+
     return StructuredTool.from_function(
         func=_governed_run,
         name=tool_name,
         description=tool.description,
-        args_schema=tool.args_schema,
+        args_schema=augmented_schema,
     )
+
+
+def _augment_schema(tool_name: str, original_schema):
+    """Add ``expected_observation`` to a tool's Pydantic args schema.
+
+    Returns the augmented schema, or the original if augmentation fails.
+    The field is optional (default ``None``) so existing tool calls
+    without it continue to work.
+    """
+    if original_schema is None:
+        return None
+    try:
+        from pydantic import Field, create_model
+        return create_model(
+            f"{tool_name}_Governed",
+            __base__=original_schema,
+            expected_observation=(
+                str | None,
+                Field(
+                    None,
+                    description=(
+                        "Optional: your brief prediction of what this tool "
+                        "call will return (e.g. 'file will be saved successfully', "
+                        "'tests will pass'). Used for uncertainty measurement."
+                    ),
+                ),
+            ),
+        )
+    except Exception:
+        logger.debug("Schema augmentation failed for %s", tool_name, exc_info=True)
+        return original_schema
 
 
 _RELIABILITY_TAGS: dict[SourceReliability, str] = {

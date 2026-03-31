@@ -27,6 +27,20 @@ _SECRET_PATTERNS = re.compile(
 )
 
 
+def _resolve_settings_attr(env_key: str) -> str | None:
+    """Map an environment-variable name to the corresponding AppSettings attribute.
+
+    Uses the Pydantic field aliases defined on :class:`~prax.settings.AppSettings`.
+    For example, ``ELEVENLABS_API_KEY`` → ``elevenlabs_api_key``.
+    """
+    from prax.settings import AppSettings
+    for field_name, field_info in AppSettings.model_fields.items():
+        alias = field_info.alias
+        if alias and alias == env_key:
+            return field_name
+    return None
+
+
 class PluginCapabilities:
     """Narrow, audited API surface that plugins use to access Prax services.
 
@@ -39,12 +53,14 @@ class PluginCapabilities:
         plugin_rel_path: str,
         trust_tier: str,
         user_id: str | None = None,
+        approved_secrets: set[str] | None = None,
     ) -> None:
         self.plugin_rel_path = plugin_rel_path
         self.trust_tier = trust_tier
         self.user_id = user_id
         self.policy: PluginPolicy = get_policy(trust_tier)
         self._http_request_count = 0
+        self._approved_secrets: set[str] = approved_secrets or set()
 
     # ------------------------------------------------------------------
     # Internal — scoped data directory
@@ -261,7 +277,7 @@ class PluginCapabilities:
             from prax.settings import settings
             resp = requests.post(
                 f"https://api.elevenlabs.io/v1/text-to-speech/{voice}",
-                headers={"xi-api-key": settings.elevenlabs_key},
+                headers={"xi-api-key": settings.elevenlabs_api_key},
                 json={"text": text, "model_id": "eleven_monolingual_v1"},
                 timeout=60,
             )
@@ -271,6 +287,58 @@ class PluginCapabilities:
         else:
             raise ValueError(f"Unsupported TTS provider: {provider}")
         return output_path
+
+    # ------------------------------------------------------------------
+    # Approved secrets — explicit permission grants
+    # ------------------------------------------------------------------
+
+    def get_approved_secret(self, env_key: str) -> str | None:
+        """Read a secret that the plugin has been explicitly approved to use.
+
+        *env_key* is the environment-variable name (e.g. ``ELEVENLABS_API_KEY``).
+        The method checks:
+          1. BUILTIN plugins — always allowed.
+          2. WORKSPACE plugins — auto-approved.
+          3. IMPORTED plugins — only if *env_key* is in ``_approved_secrets``.
+
+        The secret value is read from :data:`prax.settings.settings` using
+        the Pydantic alias→attribute mapping.  The raw value is never stored
+        in the registry; only the approval flag is persisted.
+        """
+        if self.trust_tier == PluginTrust.BUILTIN:
+            pass  # Always allowed
+        elif self.trust_tier == PluginTrust.WORKSPACE:
+            pass  # Auto-approved
+        else:
+            # IMPORTED — require explicit approval.
+            if env_key not in self._approved_secrets:
+                logger.warning(
+                    "Plugin %s requested unapproved secret '%s' — blocked",
+                    self.plugin_rel_path, env_key,
+                )
+                raise PermissionError(
+                    f"Plugin '{self.plugin_rel_path}' has not been approved "
+                    f"to use secret '{env_key}'. Approve it in plugin settings."
+                )
+
+        # Resolve env var alias → settings attribute name.
+        attr_name = _resolve_settings_attr(env_key)
+        if attr_name is None:
+            logger.warning(
+                "Plugin %s requested unknown secret '%s' — no matching setting",
+                self.plugin_rel_path, env_key,
+            )
+            return None
+
+        from prax.settings import settings
+        val = getattr(settings, attr_name, None)
+        if val is None:
+            return None
+        logger.info(
+            "Plugin %s accessed approved secret '%s'",
+            self.plugin_rel_path, env_key,
+        )
+        return str(val)
 
     # ------------------------------------------------------------------
     # Config — non-secret settings only

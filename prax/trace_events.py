@@ -38,6 +38,10 @@ class TraceEvent(StrEnum):
     PLUGIN_SECURITY_WARN = "plugin_security_warn"
     TIER_CHOICE = "tier_choice"
     THINK = "think"
+    PREDICTION_ERROR = "prediction_error"
+    EPISTEMIC_GATE = "epistemic_gate"
+    LOGPROB_ENTROPY = "logprob_entropy"
+    SEMANTIC_ENTROPY = "semantic_entropy"
 
     @classmethod
     def values(cls) -> set[str]:

@@ -117,6 +117,9 @@ class CapsProxy:
     def get_config(self, key: str) -> str | None:
         return self._call_parent("get_config", key)
 
+    def get_approved_secret(self, env_key: str) -> str | None:
+        return self._call_parent("get_approved_secret", env_key)
+
 
 class _DictResponse:
     """Lightweight response object reconstructed from a serialized dict."""
