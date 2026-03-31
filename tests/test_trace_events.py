@@ -11,6 +11,7 @@ class TestTraceEventVocabulary:
             "plugin_rollback", "plugin_remove", "plugin_security_warn",
             "tier_choice",
             "think",
+            "prediction_error", "epistemic_gate", "logprob_entropy", "semantic_entropy",
         }
         assert TraceEvent.values() == expected
 

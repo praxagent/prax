@@ -125,6 +125,67 @@ class PluginRegistry:
             entry = self._data["plugins"].get(rel_path, {})
             return entry.get("security_warnings_acknowledged", False)
 
+    # ------------------------------------------------------------------
+    # Plugin permissions
+    # ------------------------------------------------------------------
+
+    def set_declared_permissions(self, rel_path: str, permissions: list[dict]) -> None:
+        """Store the permissions a plugin has declared it needs.
+
+        Each entry in *permissions* is ``{"key": "ENV_VAR_NAME", "reason": "..."}``
+        """
+        with self._lock:
+            entry = self._data["plugins"].setdefault(rel_path, {})
+            entry["declared_permissions"] = permissions
+            self._save()
+        logger.info("Stored declared permissions for %s: %s", rel_path, [p["key"] for p in permissions])
+
+    def get_declared_permissions(self, rel_path: str) -> list[dict]:
+        """Return the list of declared permissions for a plugin."""
+        with self._lock:
+            entry = self._data["plugins"].get(rel_path, {})
+            return entry.get("declared_permissions", [])
+
+    def approve_permission(self, rel_path: str, env_key: str) -> None:
+        """Mark a specific secret as approved for a plugin."""
+        with self._lock:
+            entry = self._data["plugins"].setdefault(rel_path, {})
+            approved = set(entry.get("approved_permissions", []))
+            approved.add(env_key)
+            entry["approved_permissions"] = sorted(approved)
+            self._save()
+        logger.info("Approved permission '%s' for plugin %s", env_key, rel_path)
+
+    def revoke_permission(self, rel_path: str, env_key: str) -> None:
+        """Revoke a previously approved secret for a plugin."""
+        with self._lock:
+            entry = self._data["plugins"].get(rel_path, {})
+            approved = set(entry.get("approved_permissions", []))
+            approved.discard(env_key)
+            entry["approved_permissions"] = sorted(approved)
+            self._save()
+        logger.info("Revoked permission '%s' for plugin %s", env_key, rel_path)
+
+    def is_permission_approved(self, rel_path: str, env_key: str) -> bool:
+        """Check whether a secret has been approved for a plugin."""
+        with self._lock:
+            entry = self._data["plugins"].get(rel_path, {})
+            return env_key in entry.get("approved_permissions", [])
+
+    def get_approved_permissions(self, rel_path: str) -> list[str]:
+        """Return the list of approved secret env var names for a plugin."""
+        with self._lock:
+            entry = self._data["plugins"].get(rel_path, {})
+            return list(entry.get("approved_permissions", []))
+
+    def get_pending_permissions(self, rel_path: str) -> list[dict]:
+        """Return declared permissions that have not yet been approved."""
+        with self._lock:
+            entry = self._data["plugins"].get(rel_path, {})
+            declared = entry.get("declared_permissions", [])
+            approved = set(entry.get("approved_permissions", []))
+            return [p for p in declared if p["key"] not in approved]
+
     def record_failure(self, rel_path: str) -> int:
         """Record a tool failure. Returns updated failure count."""
         with self._lock:

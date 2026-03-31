@@ -214,14 +214,25 @@ class PluginLoader:
 
                 # BUILTIN / WORKSPACE — load in-process as before.
                 mod = self._import_plugin(plugin_file, trust_tier=trust_tier)
+
+                # Record declared permissions if present.
+                declared_perms = getattr(mod, "PLUGIN_PERMISSIONS", None)
+                if declared_perms:
+                    self.registry.set_declared_permissions(rel_key, declared_perms)
+                    # BUILTIN/WORKSPACE: auto-approve all declared permissions.
+                    for perm in declared_perms:
+                        self.registry.approve_permission(rel_key, perm["key"])
+
                 if hasattr(mod, "register"):
                     # Pass PluginCapabilities if register() accepts a parameter.
                     reg_fn = mod.register
                     sig = inspect.signature(reg_fn)
                     if sig.parameters:
+                        approved = set(self.registry.get_approved_permissions(rel_key))
                         caps = PluginCapabilities(
                             plugin_rel_path=rel_key,
                             trust_tier=trust_tier,
+                            approved_secrets=approved,
                         )
                         plugin_tools = reg_fn(caps)
                     else:
@@ -290,10 +301,22 @@ class PluginLoader:
         # Shut down any existing bridge for this plugin (e.g., on reload).
         shutdown_bridge(rel_key)
 
+        # Read declared permissions from the plugin module (pre-import scan).
+        try:
+            mod = self._import_plugin(plugin_file, trust_tier=trust_tier)
+            declared_perms = getattr(mod, "PLUGIN_PERMISSIONS", None)
+            if declared_perms:
+                self.registry.set_declared_permissions(rel_key, declared_perms)
+        except Exception:
+            logger.debug("Could not pre-scan permissions for %s", rel_key, exc_info=True)
+
+        approved = set(self.registry.get_approved_permissions(rel_key))
+
         bridge = get_bridge(rel_key)
         caps = PluginCapabilities(
             plugin_rel_path=rel_key,
             trust_tier=trust_tier,
+            approved_secrets=approved,
         )
 
         try:

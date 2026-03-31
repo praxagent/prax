@@ -76,6 +76,13 @@ class AppSettings(BaseSettings):
     # autonomous: also relaxes recursion limits, lets agent self-upgrade tier
     autonomy: str = Field(default="guided", alias="PRAX_AUTONOMY")
 
+    # Active Inference — Semantic Entropy Gate (Phase 4)
+    # When enabled, HIGH-risk tool calls are re-queried k=3 times at T=0.7
+    # to detect divergence.  Expensive (3x LLM cost) — off by default.
+    semantic_entropy_enabled: bool = Field(
+        default=False, alias="ACTIVE_INFERENCE_SEMANTIC_GATE",
+    )
+
     # Agent guardrails
     agent_max_tool_calls: int = Field(
         default=40, alias="AGENT_MAX_TOOL_CALLS",

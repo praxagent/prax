@@ -259,6 +259,13 @@ class ConversationAgent:
         effective_limit = get_recursion_limit(settings.agent_max_tool_calls)
         init_turn_budget(effective_limit)
 
+        # Reset Active Inference prediction tracker for the new turn.
+        try:
+            from prax.agent.prediction_tracker import get_prediction_tracker
+            get_prediction_tracker().reset()
+        except Exception:
+            pass
+
         # Register workspace plugins for the current user.
         uid = current_user_id.get()
         if uid:
@@ -295,6 +302,15 @@ class ConversationAgent:
         except Exception:
             pass
 
+        # Active Inference injection: if prediction errors are accumulating,
+        # inject a warning to steer the agent toward read-only tools.
+        prediction_hint = ""
+        try:
+            from prax.agent.prediction_tracker import get_prediction_tracker
+            prediction_hint = get_prediction_tracker().prompt_injection()
+        except Exception:
+            pass
+
         difficulty_hint = "\n\n" + difficulty_context_for_prompt(user_input)
 
         full_prompt = (
@@ -303,6 +319,7 @@ class ConversationAgent:
             + complexity_hint
             + difficulty_hint
             + metacognitive_hint
+            + prediction_hint
         )
 
         # Persist instructions so the agent can re-read them mid-conversation.
@@ -621,6 +638,52 @@ class ConversationAgent:
                     f"span={tc.get('span_name', '?')}"
                 ),
             })
+
+        # Flush Active Inference prediction records into the trace.
+        try:
+            from prax.agent.prediction_tracker import get_prediction_tracker
+            for pr in get_prediction_tracker().drain_records():
+                entries.append({
+                    "type": TraceEvent.PREDICTION_ERROR,
+                    "content": (
+                        f"tool={pr['tool']} error={pr['error']} "
+                        f"expected={pr['expected']!r} "
+                        f"actual={pr['actual']!r}"
+                    ),
+                })
+        except Exception:
+            pass
+
+        # Flush logprob entropy data into the trace.
+        try:
+            from prax.agent.logprob_analyzer import drain_entropy_buffer
+            for ent in drain_entropy_buffer():
+                entries.append({
+                    "type": TraceEvent.LOGPROB_ENTROPY,
+                    "content": (
+                        f"tool={ent.tool_name} entropy={ent.entropy_score} "
+                        f"mean_lp={ent.mean_logprob} min_lp={ent.min_logprob} "
+                        f"uncertain_tokens={ent.high_entropy_tokens}"
+                    ),
+                })
+        except Exception:
+            pass
+
+        # Flush semantic entropy data into the trace (Phase 4).
+        try:
+            from prax.agent.semantic_entropy import drain_semantic_entropy_buffer
+            for se in drain_semantic_entropy_buffer():
+                entries.append({
+                    "type": TraceEvent.SEMANTIC_ENTROPY,
+                    "content": (
+                        f"tool={se.proposed_tool} "
+                        f"samples={se.sampled_tools} "
+                        f"agreement={se.agreement_ratio} "
+                        f"blocked={se.blocked}"
+                    ),
+                })
+        except Exception:
+            pass
 
         try:
             append_trace(user_id, entries)
