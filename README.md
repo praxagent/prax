@@ -43,10 +43,38 @@ docker compose up --build                 # builds app + sandbox + TeamWork, sta
 
 This brings up Prax, the always-on sandbox (with LaTeX, ffmpeg, poppler, pandoc, headless Chrome), [TeamWork](https://github.com/praxagent/teamwork) web UI, and ngrok — all wired together. Open **http://localhost:3000** to access TeamWork.
 
-For developer mode (bind-mounts source code, Werkzeug auto-reloads on file changes):
+#### With observability (Grafana + Tempo + Prometheus + Loki)
+
+```bash
+docker compose --profile observability up --build
+```
+
+This adds the full observability suite alongside the core services:
+
+| Service | Port | Purpose |
+|---------|------|---------|
+| **Grafana** | [localhost:3001](http://localhost:3001) | Dashboards — traces, logs, metrics (login: admin / prax) |
+| **Tempo** | 4318 | Distributed tracing backend (receives OTLP spans from Prax) |
+| **Prometheus** | [localhost:9090](http://localhost:9090) | Metrics scraping and storage |
+| **Loki** | 3100 | Log aggregation (fed by Promtail) |
+| **Promtail** | — | Ships Docker container logs to Loki |
+
+`OBSERVABILITY_ENABLED=true` is the default in `.env`. If you run without `--profile observability`, Prax detects that Tempo is unreachable at startup and silently disables the OTEL exporter — no retries, no memory accumulation, no OOM risk.
+
+Grafana comes pre-provisioned with Tempo, Loki, and Prometheus datasources plus two dashboards (Agent Overview, LLM Performance). Config lives in `observability/`.
+
+#### Developer mode
+
+Bind-mounts source code so Werkzeug auto-reloads on file changes:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build app
+```
+
+Combine with observability:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile observability up --build
 ```
 
 ### Local development
@@ -123,7 +151,7 @@ Agent delegation (spoke agents, sub-hubs), self-improving fine-tuning (vLLM + Un
 
 ### [Infrastructure](docs/infrastructure/README.md)
 
-Docker sandbox with OpenCode, Playwright browser automation (CDP + Playwright, VNC login, persistent profiles), Grafana observability stack (traces, metrics, logs), and Docker Compose configuration.
+Docker sandbox with OpenCode, Playwright browser automation (CDP + Playwright, VNC login, persistent profiles), Grafana observability stack (Tempo traces, Prometheus metrics, Loki logs — `--profile observability`), and Docker Compose configuration.
 
 ### [Security](docs/security/README.md)
 

@@ -63,6 +63,7 @@ class ExecutionGraph:
         self.trace_id = trace_id
         self._nodes: dict[str, SpanNode] = {}
         self._lock = threading.Lock()
+        self.trigger: str = ""  # User message or cron/event that started this trace
 
     def add_node(self, node: SpanNode) -> None:
         with self._lock:
@@ -130,12 +131,15 @@ class ExecutionGraph:
                 })
             # Sort nodes by started_at so roots come first
             nodes.sort(key=lambda n: n["started_at"])
-            return {
+            result: dict = {
                 "trace_id": self.trace_id,
                 "status": overall_status,
                 "node_count": len(nodes),
                 "nodes": nodes,
             }
+            if self.trigger:
+                result["trigger"] = self.trigger
+            return result
 
     def _format_node(
         self, node: SpanNode, lines: list[str], indent: int

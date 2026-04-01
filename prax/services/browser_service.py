@@ -159,6 +159,10 @@ class BrowserSession:
                 )
                 self.page = self._context.new_page()
 
+            # Listen for popup windows (e.g. Google OAuth "Sign in with Google")
+            # so Playwright can interact with the popup page.
+            self._context.on("page", self._on_popup)
+
             logger.info("Playwright connected to sandbox Chrome via CDP: %s", cdp_url)
             return True
         except Exception as exc:
@@ -219,7 +223,32 @@ class BrowserSession:
             )
             self.page = self._context.new_page()
 
+        self._context.on("page", self._on_popup)
         self.page.set_default_timeout(settings.browser_timeout)
+
+    def _on_popup(self, page: Any) -> None:
+        """Handle popup windows (OAuth flows, etc.).
+
+        When a new page opens (e.g. Google "Sign in with Google" popup),
+        switch Playwright's active page reference to the popup so the agent
+        and human can interact with it.  When the popup closes, switch back
+        to the original page.
+        """
+        logger.info("Popup detected: %s — switching Playwright focus", page.url or "(blank)")
+        original = self.page
+        self.page = page
+        page.set_default_timeout(settings.browser_timeout)
+
+        def _on_close(_page: Any = None) -> None:
+            # Popup closed (OAuth complete or user cancelled) — return to
+            # the original page if it's still open.
+            if original and not original.is_closed():
+                logger.info("Popup closed — returning focus to original page")
+                self.page = original
+            elif self._context and self._context.pages:
+                self.page = self._context.pages[0]
+
+        page.on("close", _on_close)
 
     def close(self) -> None:
         try:

@@ -151,7 +151,7 @@ def _handle_message(
     """Process a TeamWork user message through Prax's conversation service."""
     with app.app_context():
         try:
-            from prax.agent.user_context import current_channel_id
+            from prax.agent.user_context import current_active_view, current_channel_id
             from prax.services.conversation_service import conversation_service
             from prax.services.teamwork_service import get_teamwork_client
 
@@ -173,19 +173,36 @@ def _handle_message(
             # View-specific tool guidance.
             if active_view == "browser":
                 tool_guidance = (
-                    "They can see the live browser — when they reference what's on screen "
-                    "or ask you to interact with the page, use delegate_browser."
+                    "You and the user are PAIRING in a shared live browser — they see "
+                    "everything you navigate to in real time via screencast. RULES: "
+                    "1) ALWAYS use delegate_browser for ANY web task — navigating URLs, "
+                    "reading pages, clicking links, filling forms. The user WATCHES the "
+                    "browser as you control it. "
+                    "2) NEVER use background_search_tool or fetch_url_content when the "
+                    "user asks to visit/open/navigate to a site — those are invisible. "
+                    "Use delegate_browser so they see it happen live. "
+                    "3) ACT, don't ask. If the user says 'go to hacker news', run "
+                    "delegate_browser('navigate to https://news.ycombinator.com'). "
+                    "If they say 'open that link', delegate_browser with the URL. "
+                    "4) You are pair browsing — be proactive, narrate what you see."
                 )
             elif active_view == "terminal":
                 tool_guidance = (
-                    "They can see the live terminal — when they ask you to run code, "
-                    "execute scripts, or do anything computational, prefer delegate_sandbox. "
-                    "The user will watch the execution in real-time."
+                    "You and the user are PAIRING in a shared terminal — they see "
+                    "everything you run in real time. RULES: "
+                    "1) ALWAYS use sandbox_shell — never delegate_sandbox. "
+                    "2) Just RUN commands. Do NOT ask 'what command?' or 'are you sure?' "
+                    "or list options. If the user says 'check disk space', run df -h. "
+                    "If they say 'list files', run ls -la. ACT, don't ask. "
+                    "3) You are an expert pair programmer — infer the right command "
+                    "from context and execute it immediately."
                 )
             else:
                 tool_guidance = (
-                    "Only use delegate_browser when the user explicitly asks for browser "
-                    "interaction (\"in the browser\", \"open\", \"navigate to\")."
+                    "The user is NOT watching the browser right now, but delegate_browser "
+                    "is still available for any task that needs real browser rendering — "
+                    "JS-heavy pages, login flows, form filling, sites where fetch_url_content "
+                    "returns empty/broken content. Use it freely when HTTP tools fail."
                 )
 
             if is_dm:
@@ -197,11 +214,51 @@ def _handle_message(
                     f"[via TeamWork web UI — public channel. {view_hint}{tool_guidance}]\n"
                 )
 
-            prefixed_content = f"{channel_hint}{content}"
+            # When the user is viewing the terminal or browser, fetch context
+            # so Prax can "see" what's on the user's screen.
+            view_context = ""
+            if active_view == "terminal" and tw._project_id:
+                try:
+                    import requests as _req
+                    resp = _req.get(
+                        f"{tw.base_url}/api/terminal/{tw._project_id}/recent",
+                        headers=tw._headers(),
+                        timeout=3,
+                    )
+                    if resp.ok:
+                        lines = resp.json().get("output", "")
+                        if lines:
+                            view_context = (
+                                f"\n[TERMINAL SCREEN — last ~50 lines the user can see right now]\n"
+                                f"```\n{lines}\n```\n"
+                            )
+                except Exception:
+                    pass
+            elif active_view == "browser":
+                try:
+                    import requests as _req
+                    resp = _req.get(
+                        f"{tw.base_url}/api/browser/info",
+                        headers=tw._headers(),
+                        timeout=3,
+                    )
+                    if resp.ok:
+                        info = resp.json()
+                        if info.get("available"):
+                            browser_info = info.get("browser", "Chrome")
+                            view_context = (
+                                f"\n[LIVE BROWSER — the user is watching the screencast right now. "
+                                f"Browser: {browser_info}. Use delegate_browser to control it.]\n"
+                            )
+                except Exception:
+                    pass
+
+            prefixed_content = f"{channel_hint}{view_context}{content}"
 
             # Always set channel context so agent hooks know which channel
             # originated the request (used for response routing).
             current_channel_id.set(channel_id)
+            current_active_view.set(active_view)
 
             # Derive a per-channel conversation key so each TeamWork channel
             # gets its own isolated conversation history.
@@ -211,6 +268,7 @@ def _handle_message(
             with tw.typing(channel_id=channel_id, agent_name="Prax"):
                 response = conversation_service.reply(
                     user_id, prefixed_content, conversation_key=channel_key,
+                    trigger=content,  # raw user message, no system prefixes
                 )
 
             # Attach trace metadata so TeamWork can link to the observability stack.

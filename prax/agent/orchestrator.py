@@ -232,7 +232,7 @@ class ConversationAgent:
             except Exception:
                 pass
 
-    def run(self, conversation: Iterable[BaseMessage], user_input: str, workspace_context: str = "") -> str:
+    def run(self, conversation: Iterable[BaseMessage], user_input: str, workspace_context: str = "", trigger: str = "") -> str:
         """Execute the agent graph and return the final string response."""
         import time as _time
 
@@ -243,6 +243,10 @@ class ConversationAgent:
         # Start a root span that wraps the entire orchestrator invocation.
         # This sets last_root_trace_id so callers can attach it to responses.
         root_span = start_span("orchestrator", "orchestrator")
+
+        # Store the user's raw input as the trace trigger so the execution
+        # graph shows what started it — without system prefixes or tool guidance.
+        root_span.ctx.graph.trigger = trigger or user_input
 
         # Callback handler that adds individual tool calls as child nodes
         # in the execution graph — gives TeamWork full depth visibility.

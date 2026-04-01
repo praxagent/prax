@@ -3,9 +3,13 @@ from __future__ import annotations
 
 from langchain_core.tools import tool
 
+import logging
+
 from prax.agent.action_policy import RiskLevel, risk_tool
 from prax.agent.user_context import current_user_id
 from prax.services import sandbox_service
+
+logger = logging.getLogger(__name__)
 
 
 def _get_user_id() -> str:
@@ -17,19 +21,41 @@ def _get_user_id() -> str:
 
 @tool
 def sandbox_shell(command: str, timeout: int = 60) -> str:
-    """Run a shell command directly in the sandbox container.
+    """Run a shell command in the sandbox container.
 
-    This executes instantly via docker exec — no AI coding agent, no session
-    overhead.  Use for simple commands: ls, pwd, df -h, cat, grep, python -c,
-    du, find, env, etc.
+    When the user is viewing the terminal tab, this runs DIRECTLY in
+    their visible terminal — they see the command and output in real time.
+    This is the ONLY tool for terminal pairing. Use it for ANY shell
+    command: ls, df, git, pytest, pip, apt, curl, etc.
 
-    Do NOT use this for complex multi-step coding tasks — use sandbox_start
-    for those.
+    Do NOT delegate to sandbox_start/delegate_sandbox when in terminal mode.
+    Just call this tool directly with the command.
 
     Args:
-        command: The shell command to run (passed to sh -c).
+        command: The shell command to run.
         timeout: Max seconds to wait (default 60).
     """
+    from prax.agent.user_context import current_active_view
+
+    active_view = current_active_view.get()
+    logger.info("sandbox_shell: active_view=%r, command=%r", active_view, command[:80])
+
+    # If user is watching the terminal, run through the shared PTY
+    if active_view == "terminal":
+        try:
+            from prax.services.teamwork_service import get_teamwork_client
+            tw = get_teamwork_client()
+            logger.info("sandbox_shell: routing through shared terminal (project=%s)", tw._project_id)
+            result = tw.terminal_exec(command, timeout=float(timeout))
+            if result is not None:
+                output = result.get("output", "")
+                logger.info("sandbox_shell: terminal_exec returned %d chars", len(output))
+                return output if output else "(command produced no output)"
+            logger.warning("sandbox_shell: terminal_exec returned None (no active session?)")
+        except Exception:
+            logger.exception("sandbox_shell: terminal_exec failed, falling through to docker exec")
+
+    # Default: run via docker exec and return structured output
     result = sandbox_service.run_shell(command, timeout=timeout)
     if "error" in result:
         return f"Shell error: {result['error']}"
