@@ -35,10 +35,17 @@ isolated Docker containers.
 
 ## Available tools
 
-### Session lifecycle
-- **sandbox_start** — Start a new coding session with a task description.
-  Optionally specify a model (e.g. 'anthropic/claude-sonnet-4-5').
-- **sandbox_message** — Send follow-up instructions to the active session.
+### Direct shell (fast — no AI agent needed)
+- **sandbox_shell** — Run a shell command directly in the sandbox container
+  via docker exec.  Use for simple commands: ls, pwd, df -h, cat, grep,
+  python -c '...', du, find, env, pip list, etc.  Instant results — no
+  session overhead.
+
+### Session lifecycle (for complex coding tasks)
+- **sandbox_start** — Start a new coding session with an AI coding agent.
+  Returns a session_id.  You can run multiple sessions concurrently.
+- **sandbox_message** — Send follow-up instructions to a session.
+  Pass session_id if you have multiple sessions; omit to target the latest.
 - **sandbox_review** — Check session status (elapsed time, files, rounds).
 - **sandbox_finish** — End the session and archive all artifacts to workspace.
 - **sandbox_abort** — Kill the session without archiving (stuck/bad results).
@@ -51,7 +58,16 @@ isolated Docker containers.
 - **sandbox_install** — Install a system package (apt-get) in the container.
 - **sandbox_rebuild** — Rebuild the sandbox Docker image for permanent changes.
 
-## Workflow
+## Choosing the right tool
+
+- **Simple commands** (ls, df, pwd, cat, grep, running a script) →
+  use **sandbox_shell**.  This is instant.
+- **Complex coding tasks** (write a script, generate a document, multi-step
+  development) → use **sandbox_start** + **sandbox_message** to work with
+  the AI coding agent.
+- Do NOT start an OpenCode session just to run shell commands.
+
+## Workflow for coding tasks
 1. **Start** a session with a clear, detailed task description.
 2. **Monitor** with sandbox_review if the orchestrator asks for status.
 3. **Iterate** with sandbox_message — refine the task, request changes, or
@@ -60,7 +76,8 @@ isolated Docker containers.
 5. **Report** back what was created, any files produced, and whether it succeeded.
 
 ## Rules
-- Keep iterations tight — 2-3 sandbox_message calls max.
+- For simple commands, ALWAYS prefer sandbox_shell over sandbox_start.
+- Keep iterations tight — 2-3 sandbox_message calls max per session.
 - If the session times out or errors repeatedly, abort and report honestly.
 - Always finish or abort sessions — don't leave them running.
 - If the task needs a missing package, install it before starting the session.
