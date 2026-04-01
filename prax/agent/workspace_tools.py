@@ -252,11 +252,15 @@ def _deliver_via_teamwork(
 ) -> str | None:
     """Try to deliver a file notification via TeamWork.
 
-    TeamWork's file browser has direct access to the workspace, so we just
-    post a message telling the user the file is ready.  Returns the success
-    string, or None if TeamWork is not the active channel.
+    TeamWork's file browser has direct access to the workspace, so we post
+    a message with attachment metadata.  For media files (audio/video) the
+    chat UI renders an inline player; other files get a download button.
+    Returns the success string, or None if TeamWork is not the active channel.
     """
     try:
+        import mimetypes
+        import uuid
+
         from prax.agent.user_context import current_channel_id
         from prax.services.teamwork_service import get_teamwork_client
 
@@ -268,19 +272,29 @@ def _deliver_via_teamwork(
         if not tw.enabled:
             return None
 
+        project_id = tw.project_id
+        content_type, _ = mimetypes.guess_type(filename)
+        content_type = content_type or "application/octet-stream"
+        download_url = f"/api/workspace/{project_id}/download?path=active/{filename}"
+
         note = message or "Your file is ready"
         tw.send_message(
-            content=(
-                f"📎 **{filename}** ({size_mb:.1f} MB)\n"
-                f"{note}\n"
-                f"Open the file browser to view or download it."
-            ),
+            content=f"{note}",
             channel_id=channel_id,
             agent_name="Prax",
+            extra_data={
+                "attachments": [{
+                    "id": uuid.uuid4().hex[:12],
+                    "name": filename,
+                    "url": download_url,
+                    "content_type": content_type,
+                    "size": int(size_mb * 1024 * 1024),
+                }],
+            },
         )
         return (
             f"Delivered {filename} ({size_mb:.1f} MB) via TeamWork. "
-            f"The user can access it from the file browser."
+            f"The user can play or download it from the chat."
         )
     except Exception:
         return None

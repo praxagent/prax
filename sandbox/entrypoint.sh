@@ -9,6 +9,8 @@ chromium \
   --no-sandbox \
   --disable-gpu \
   --disable-dev-shm-usage \
+  --disable-blink-features=AutomationControlled \
+  --user-agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36" \
   --remote-debugging-port=9222 \
   &>/dev/null &
 

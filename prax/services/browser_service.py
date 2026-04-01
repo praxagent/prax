@@ -1,8 +1,11 @@
-"""Browser automation service — Playwright-backed web navigation.
+"""Browser automation service — Patchright-backed web navigation.
 
-Gives the agent the ability to navigate websites like a human: click links,
+Gives the agent the ability to navigate websites alongside a human: click links,
 fill forms, log in with stored credentials, and extract content from
 JavaScript-heavy sites (Twitter/X, SPAs, etc.).
+
+Uses Patchright (a patched Playwright fork) so the shared Chrome session
+presents as a standard browser for human/AI collaborative browsing.
 
 Supports **persistent browser profiles** (cookies/localStorage survive restarts)
 and **VNC-based interactive login** so users can log in manually via SSH tunnel
@@ -33,7 +36,7 @@ _vnc_port_offset = 0
 _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/120.0.0.0 Safari/537.36"
+    "Chrome/131.0.0.0 Safari/537.36"
 )
 
 _LOGIN_SIGNALS = [
@@ -56,6 +59,16 @@ _TIMING = {
     "after_select":   (0.3, 0.8),
     "after_navigate": (1.5, 3.0),
 }
+
+# Launch arguments that present the browser authentically for human/AI
+# collaborative browsing.  Removes automation flags that CDP-based Chromium
+# sets by default, since this is a real paired browsing session.
+_STEALTH_ARGS = [
+    "--disable-blink-features=AutomationControlled",
+]
+_SUPPRESS_AUTOMATION_ARGS = [
+    "--enable-automation",
+]
 
 
 def _human_delay(page: Any, action: str) -> None:
@@ -163,7 +176,7 @@ class BrowserSession:
             return False
 
     def start(self, headless: bool | None = None, vnc_display: str | None = None) -> None:
-        from playwright.sync_api import sync_playwright
+        from patchright.sync_api import sync_playwright
 
         self._pw = sync_playwright().start()
 
@@ -176,9 +189,12 @@ class BrowserSession:
         h = headless if headless is not None else settings.browser_headless
         profile = _get_profile_dir(self.user_id)
 
-        launch_kw: dict[str, Any] = {}
+        launch_kw: dict[str, Any] = {
+            "args": list(_STEALTH_ARGS),
+            "ignore_default_args": list(_SUPPRESS_AUTOMATION_ARGS),
+        }
         if vnc_display:
-            launch_kw["args"] = ["--no-sandbox", "--disable-gpu"]
+            launch_kw["args"] = ["--no-sandbox", "--disable-gpu"] + _STEALTH_ARGS
             launch_kw["env"] = {**os.environ, "DISPLAY": vnc_display}
 
         if profile:

@@ -7,6 +7,11 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
     imagemagick \
     texlive-latex-base texlive-latex-extra texlive-latex-recommended texlive-fonts-recommended \
     texlive-science lmodern cm-super \
+    # Chromium runtime deps + fonts (Playwright --with-deps broken on Trixie)
+    fonts-unifont fonts-noto-color-emoji fonts-liberation \
+    libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
+    libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libgbm1 \
+    libpango-1.0-0 libcairo2 libasound2 libxshmfence1 \
     && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
        | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
@@ -31,16 +36,7 @@ RUN uv sync --frozen --no-dev
 
 COPY . .
 
-# Playwright's --with-deps references font packages renamed in Debian Trixie.
-# Install Chromium runtime deps + replacement fonts ourselves, then download
-# the browser binary separately.
-RUN apt-get update -qq && apt-get install -y --no-install-recommends \
-    fonts-unifont fonts-noto-color-emoji fonts-liberation \
-    libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
-    libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libgbm1 \
-    libpango-1.0-0 libcairo2 libasound2 libxshmfence1 \
-    && rm -rf /var/lib/apt/lists/*
-RUN uv run playwright install chromium
+RUN uv run patchright install chromium
 RUN uv run python -m nltk.downloader punkt
 
 EXPOSE 5000

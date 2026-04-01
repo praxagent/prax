@@ -246,3 +246,80 @@ class TestScopedFilesystem:
     def test_builtin_run_command_respects_cwd(self, builtin_caps, workspace, tmp_path):
         result = builtin_caps.run_command(["pwd"], cwd=str(tmp_path))
         assert result.stdout.strip() == str(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Loader passes user_id from context to PluginCapabilities
+# ---------------------------------------------------------------------------
+
+class TestLoaderPassesUserContext:
+    """Verify the plugin loader reads current_user_id and passes it to caps.
+
+    This test would have caught the bug where generate_song failed with
+    'No user context — cannot save workspace files' because the loader
+    created PluginCapabilities with user_id=None.
+    """
+
+    def test_loader_passes_user_id_to_capabilities(self, monkeypatch, tmp_path):
+        """When current_user_id is set, the loader should pass it to PluginCapabilities."""
+        from prax.agent.user_context import current_user_id
+
+        # Create a minimal plugin with register(caps)
+        plugin_dir = tmp_path / "test_plugin"
+        plugin_dir.mkdir()
+        (plugin_dir / "plugin.py").write_text(
+            "PLUGIN_VERSION = '1'\n"
+            "def register(caps):\n"
+            "    return []\n"
+        )
+
+        # Capture the user_id passed to PluginCapabilities
+        captured_user_ids = []
+        OrigCaps = PluginCapabilities
+        def capturing_caps(*args, **kwargs):
+            captured_user_ids.append(kwargs.get("user_id"))
+            return OrigCaps(*args, **kwargs)
+        monkeypatch.setattr("prax.plugins.loader.PluginCapabilities", capturing_caps)
+
+        from prax.plugins.loader import PluginLoader
+        loader = PluginLoader()
+        loader.add_workspace_plugins_dir(str(tmp_path))
+
+        token = current_user_id.set("user_42")
+        try:
+            loader.load_all()
+        finally:
+            current_user_id.reset(token)
+
+        assert "user_42" in captured_user_ids
+
+    def test_loader_passes_none_when_no_user_context(self, monkeypatch, tmp_path):
+        """Without current_user_id, caps.user_id should be None (startup case)."""
+        from prax.agent.user_context import current_user_id
+
+        plugin_dir = tmp_path / "test_plugin2"
+        plugin_dir.mkdir()
+        (plugin_dir / "plugin.py").write_text(
+            "PLUGIN_VERSION = '1'\n"
+            "def register(caps):\n"
+            "    return []\n"
+        )
+
+        captured_user_ids = []
+        OrigCaps = PluginCapabilities
+        def capturing_caps(*args, **kwargs):
+            captured_user_ids.append(kwargs.get("user_id"))
+            return OrigCaps(*args, **kwargs)
+        monkeypatch.setattr("prax.plugins.loader.PluginCapabilities", capturing_caps)
+
+        # Explicitly clear any ambient user context so the test is hermetic.
+        token = current_user_id.set(None)
+        try:
+            from prax.plugins.loader import PluginLoader
+            loader = PluginLoader()
+            loader.add_workspace_plugins_dir(str(tmp_path))
+            loader.load_all()
+        finally:
+            current_user_id.reset(token)
+
+        assert None in captured_user_ids

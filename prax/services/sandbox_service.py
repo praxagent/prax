@@ -187,6 +187,15 @@ def _create_opencode_session(session: SandboxSession, task: str) -> tuple[str | 
         return None, str(e)
 
 
+def _push_sandbox_live(session: SandboxSession, text: str) -> None:
+    """Push incremental live output for the sandbox spoke to TeamWork."""
+    try:
+        from prax.services.teamwork_hooks import push_live_output
+        push_live_output("Sandbox Agent", text, status="running", append=True)
+    except Exception:
+        pass  # best-effort — don't break the poll loop
+
+
 def _send_opencode_message(session: SandboxSession, message: str, model: str | None = None) -> dict:
     """Send a message to the OpenCode session (async + poll)."""
     oc_id = session.opencode_session_id
@@ -235,8 +244,11 @@ def _send_opencode_message(session: SandboxSession, message: str, model: str | N
     deadline = time.time() + 300
     poll_errors = 0
     last_poll_error = ""
+    poll_count = 0
+    last_streamed_len = 0  # track how much partial output we've already pushed
     while time.time() < deadline:
         time.sleep(5)
+        poll_count += 1
         try:
             r = requests.get(
                 _api_url(session, f"/session/{oc_id}/message"),
@@ -259,19 +271,31 @@ def _send_opencode_message(session: SandboxSession, message: str, model: str | N
                 continue
             messages = r.json()
             if not isinstance(messages, list) or len(messages) <= before_count:
+                # Push periodic status so live output isn't empty
+                if poll_count % 6 == 0:  # every ~30s
+                    elapsed = int(time.time() - (deadline - 300))
+                    _push_sandbox_live(session, f"  ⏳ Waiting for coding agent ({elapsed}s)...\n")
                 continue
-            # Find the latest assistant message that has completed
+            # Find the latest assistant message
             last = messages[-1]
             info = last.get("info", {})
             if info.get("role") != "assistant":
                 continue
-            if not info.get("time", {}).get("completed"):
-                continue  # still streaming
-            # Extract text from parts
+
+            # Stream partial output as it arrives (before completion)
             parts = last.get("parts", [])
-            text = "\n".join(
+            partial_text = "\n".join(
                 p.get("text", "") for p in parts if p.get("type") == "text"
             )
+            if partial_text and len(partial_text) > last_streamed_len:
+                new_chunk = partial_text[last_streamed_len:]
+                _push_sandbox_live(session, new_chunk)
+                last_streamed_len = len(partial_text)
+
+            if not info.get("time", {}).get("completed"):
+                continue  # still streaming
+            # Extract final text from parts
+            text = partial_text
             return {"response": text or "(no text output)", "raw": last}
         except requests.ConnectionError as e:
             poll_errors += 1

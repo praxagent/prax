@@ -101,7 +101,7 @@ def _run_subagent(task: str, category: str) -> str:
     This is the shared implementation used by both :func:`delegate_task` and
     :func:`delegate_parallel`.
     """
-    from prax.agent.trace import build_identity_context, start_span
+    from prax.agent.trace import GraphCallbackHandler, build_identity_context, start_span
 
     span = start_span(category, category)
 
@@ -156,13 +156,22 @@ def _run_subagent(task: str, category: str) -> str:
     from prax.agent.user_context import current_component
     current_component.set(f"subagent_{category}")
 
+    _graph_cb = GraphCallbackHandler(
+        parent_span_id=span.span_id,
+        graph=span.ctx.graph,
+        trace_id=span.trace_id,
+    )
+
     try:
         result = subgraph.invoke(
             {"messages": [
                 SystemMessage(content=system_msg),
                 HumanMessage(content=task),
             ]},
-            config={"recursion_limit": get_recursion_limit(30)},
+            config={
+                "recursion_limit": get_recursion_limit(30),
+                "callbacks": [_graph_cb],
+            },
         )
     except Exception as exc:
         logger.warning("Sub-agent [%s] failed: %s", category, exc, exc_info=True)

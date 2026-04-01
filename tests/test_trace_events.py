@@ -149,3 +149,129 @@ class TestOrchestratorUsesTraceEvents:
         assert raw_type_strings == [], (
             f"orchestrator.py uses raw type strings instead of TraceEvent: {raw_type_strings}"
         )
+
+
+class TestGraphCallbackHandlerLangChainDispatch:
+    """Exercise GraphCallbackHandler through LangChain's real dispatch path.
+
+    The callback manager checks attributes like ``raise_error`` and
+    ``ignore_chain`` on every handler before dispatching.  If any of those
+    are missing, LangChain raises ``AttributeError`` — which crashes the
+    whole agent loop.  These tests would have caught that.
+    """
+
+    def _make_handler(self):
+        from prax.agent.trace import ExecutionGraph, GraphCallbackHandler
+        graph = ExecutionGraph("test-trace")
+        handler = GraphCallbackHandler(
+            parent_span_id="root-span", graph=graph, trace_id="test-trace",
+        )
+        return handler, graph
+
+    def test_handle_event_chain_start_does_not_crash(self):
+        """LangGraph fires on_chain_start first — must not crash."""
+        from uuid import uuid4
+        from langchain_core.callbacks.manager import handle_event
+
+        handler, _ = self._make_handler()
+        # This is the exact codepath that crashed in production.
+        # handle_event checks handler.ignore_chain and handler.raise_error.
+        handle_event(
+            [handler],
+            "on_chain_start",
+            None,  # ignore_condition_name for chain is "ignore_chain"
+            {"name": "AgentExecutor"},
+            {},
+            run_id=uuid4(),
+        )
+
+    def test_handle_event_tool_start_creates_span_node(self):
+        """Tool events must dispatch through handle_event and create nodes."""
+        from uuid import uuid4
+        from langchain_core.callbacks.manager import handle_event
+
+        handler, graph = self._make_handler()
+        rid = uuid4()
+        handle_event(
+            [handler],
+            "on_tool_start",
+            None,  # tool events have no ignore condition
+            {"name": "web_search"},
+            '{"query": "test"}',
+            run_id=rid,
+        )
+        assert len(graph._nodes) == 1
+        node = list(graph._nodes.values())[0]
+        assert node.name == "web_search"
+        assert node.status == "running"
+
+    def test_handle_event_tool_end_completes_node(self):
+        from uuid import uuid4
+        from langchain_core.callbacks.manager import handle_event
+
+        handler, graph = self._make_handler()
+        rid = uuid4()
+        handle_event(
+            [handler], "on_tool_start", None,
+            {"name": "web_search"}, '{"q": "x"}', run_id=rid,
+        )
+        handle_event(
+            [handler], "on_tool_end", None,
+            "search results here", run_id=rid,
+        )
+        node = list(graph._nodes.values())[0]
+        assert node.status == "completed"
+        assert "search results" in node.summary
+
+    def test_handle_event_tool_error_marks_failed(self):
+        from uuid import uuid4
+        from langchain_core.callbacks.manager import handle_event
+
+        handler, graph = self._make_handler()
+        rid = uuid4()
+        handle_event(
+            [handler], "on_tool_start", None,
+            {"name": "failing_tool"}, "{}", run_id=rid,
+        )
+        handle_event(
+            [handler], "on_tool_error", None,
+            RuntimeError("boom"), run_id=rid,
+        )
+        node = list(graph._nodes.values())[0]
+        assert node.status == "failed"
+        assert "boom" in node.summary
+
+    def test_handle_event_llm_start_ignored_no_crash(self):
+        """LLM events should be silently ignored (ignore_llm=True)."""
+        from uuid import uuid4
+        from langchain_core.callbacks.manager import handle_event
+
+        handler, graph = self._make_handler()
+        handle_event(
+            [handler],
+            "on_llm_start",
+            "ignore_llm",
+            {"name": "ChatOpenAI"},
+            ["hello"],
+            run_id=uuid4(),
+        )
+        # No nodes created — LLM events are ignored.
+        assert len(graph._nodes) == 0
+
+    def test_all_ignore_attributes_present(self):
+        """Ensure all attributes that LangChain's handle_event checks exist."""
+        handler, _ = self._make_handler()
+        required_attrs = [
+            "raise_error",
+            "ignore_llm",
+            "ignore_chain",
+            "ignore_agent",
+            "ignore_retriever",
+            "ignore_retry",
+            "ignore_chat_model",
+        ]
+        for attr in required_attrs:
+            assert hasattr(handler, attr), (
+                f"GraphCallbackHandler missing '{attr}' — LangChain's "
+                f"handle_event will crash with AttributeError"
+            )

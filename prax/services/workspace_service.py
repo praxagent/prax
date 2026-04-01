@@ -256,13 +256,21 @@ def read_links(user_id: str) -> str:
         return f.read()
 
 
-def save_file(user_id: str, filename: str, content: str) -> str:
-    """Save text content to active/{filename}, git commit. Returns the file path."""
+def save_file(user_id: str, filename: str, content: str | bytes) -> str:
+    """Save content to active/{filename}, git commit. Returns the file path.
+
+    Accepts both text (str) and binary (bytes) content — binary is written
+    in ``"wb"`` mode so plugins can save audio, images, etc.
+    """
     with get_lock(user_id):
         root = ensure_workspace(user_id)
         filepath = safe_join(root, "active", filename)
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write(content)
+        if isinstance(content, bytes):
+            with open(filepath, "wb") as f:
+                f.write(content)
+        else:
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(content)
         git_commit(root, f"Save {filename} to active workspace")
         logger.info("Saved %s to workspace for %s", filename, user_id)
         return filepath

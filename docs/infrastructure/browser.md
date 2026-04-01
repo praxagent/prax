@@ -46,6 +46,17 @@ Both APIs talk to the same Chrome instance.  Playwright wraps CDP with a high-le
 
 **In practice:** Prax uses Playwright for most browser tasks (navigation, login flows, form filling, content extraction).  Raw CDP is available for edge cases that need low-level protocol access (performance profiling, network interception, direct input dispatch).
 
+### Authentic Browser Presentation
+
+Prax uses **Patchright** (a patched fork of Playwright) so the shared Chrome session presents itself as a standard browser — not as automation tooling. This is appropriate because Prax's browser is a **human/AI collaborative session**: a real person pairs with the agent to browse the web together, with the user able to take over at any time (e.g. to solve CAPTCHAs or complete MFA).
+
+What Patchright changes vs stock Playwright:
+- Removes `Runtime.enable` CDP command that anti-bot scripts detect
+- Sets `navigator.webdriver = false` (removes `--enable-automation` flag)
+- Uses `--disable-blink-features=AutomationControlled` to suppress automation markers
+
+The sandbox Chrome also launches with `--disable-blink-features=AutomationControlled` so the same presentation applies whether Playwright connects via CDP or the user views the screencast.
+
 ### Configuration
 
 ```bash

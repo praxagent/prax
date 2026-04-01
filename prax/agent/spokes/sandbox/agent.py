@@ -8,6 +8,7 @@ and manages package installation.
 from __future__ import annotations
 
 import logging
+import threading
 
 from langchain_core.tools import tool
 
@@ -15,6 +16,13 @@ from prax.agent.spokes._runner import run_spoke
 from prax.settings import settings
 
 logger = logging.getLogger(__name__)
+
+# Track active delegation tasks per user to deduplicate identical parallel
+# calls.  LLMs sometimes emit the same delegate_sandbox tool call twice in
+# one response; LangGraph runs them concurrently.  We let the first through
+# and short-circuit the duplicate.  Genuinely different tasks are allowed.
+_active_tasks: dict[str, str] = {}  # uid -> normalised task text
+_active_tasks_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
 # System prompt
@@ -95,17 +103,37 @@ def delegate_sandbox(task: str) -> str:
         task: A clear, self-contained description of the coding task.
               Include any specific requirements, file formats, or constraints.
     """
-    prompt = SYSTEM_PROMPT.format(agent_name=settings.agent_name)
-    return run_spoke(
-        task=task,
-        system_prompt=prompt,
-        tools=build_tools(),
-        config_key="subagent_sandbox",
-        default_tier="low",
-        role_name="Sandbox Agent",
-        channel="engineering",
-        recursion_limit=80,
-    )
+    from prax.agent.user_context import current_user_id
+    uid = current_user_id.get() or "unknown"
+
+    # Deduplicate identical parallel calls (LLM emits the same tool call
+    # twice in one response).  Different tasks are allowed through.
+    normalised = task.strip().lower()[:200]
+    with _active_tasks_lock:
+        existing = _active_tasks.get(uid)
+        if existing == normalised:
+            logger.info("Duplicate delegate_sandbox call for user %s — same task, skipping", uid)
+            return (
+                "An identical sandbox delegation is already running. "
+                "Wait for it to complete — no need to call this twice."
+            )
+        _active_tasks[uid] = normalised
+
+    try:
+        prompt = SYSTEM_PROMPT.format(agent_name=settings.agent_name)
+        return run_spoke(
+            task=task,
+            system_prompt=prompt,
+            tools=build_tools(),
+            config_key="subagent_sandbox",
+            default_tier="low",
+            role_name="Sandbox Agent",
+            channel="engineering",
+            recursion_limit=80,
+        )
+    finally:
+        with _active_tasks_lock:
+            _active_tasks.pop(uid, None)
 
 
 # ---------------------------------------------------------------------------

@@ -170,25 +170,31 @@ def _handle_message(
             else:
                 view_hint = ""
 
-            # Browser-specific guidance based on what tab the user is on.
+            # View-specific tool guidance.
             if active_view == "browser":
-                browser_guidance = (
+                tool_guidance = (
                     "They can see the live browser — when they reference what's on screen "
                     "or ask you to interact with the page, use delegate_browser."
                 )
+            elif active_view == "terminal":
+                tool_guidance = (
+                    "They can see the live terminal — when they ask you to run code, "
+                    "execute scripts, or do anything computational, prefer delegate_sandbox. "
+                    "The user will watch the execution in real-time."
+                )
             else:
-                browser_guidance = (
+                tool_guidance = (
                     "Only use delegate_browser when the user explicitly asks for browser "
                     "interaction (\"in the browser\", \"open\", \"navigate to\")."
                 )
 
             if is_dm:
                 channel_hint = (
-                    f"[via TeamWork web UI — private DM. {view_hint}{browser_guidance}]\n"
+                    f"[via TeamWork web UI — private DM. {view_hint}{tool_guidance}]\n"
                 )
             else:
                 channel_hint = (
-                    f"[via TeamWork web UI — public channel. {view_hint}{browser_guidance}]\n"
+                    f"[via TeamWork web UI — public channel. {view_hint}{tool_guidance}]\n"
                 )
 
             prefixed_content = f"{channel_hint}{content}"
