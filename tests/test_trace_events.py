@@ -171,6 +171,7 @@ class TestGraphCallbackHandlerLangChainDispatch:
     def test_handle_event_chain_start_does_not_crash(self):
         """LangGraph fires on_chain_start first — must not crash."""
         from uuid import uuid4
+
         from langchain_core.callbacks.manager import handle_event
 
         handler, _ = self._make_handler()
@@ -188,6 +189,7 @@ class TestGraphCallbackHandlerLangChainDispatch:
     def test_handle_event_tool_start_creates_span_node(self):
         """Tool events must dispatch through handle_event and create nodes."""
         from uuid import uuid4
+
         from langchain_core.callbacks.manager import handle_event
 
         handler, graph = self._make_handler()
@@ -207,6 +209,7 @@ class TestGraphCallbackHandlerLangChainDispatch:
 
     def test_handle_event_tool_end_completes_node(self):
         from uuid import uuid4
+
         from langchain_core.callbacks.manager import handle_event
 
         handler, graph = self._make_handler()
@@ -225,6 +228,7 @@ class TestGraphCallbackHandlerLangChainDispatch:
 
     def test_handle_event_tool_error_marks_failed(self):
         from uuid import uuid4
+
         from langchain_core.callbacks.manager import handle_event
 
         handler, graph = self._make_handler()
@@ -244,6 +248,7 @@ class TestGraphCallbackHandlerLangChainDispatch:
     def test_handle_event_llm_start_ignored_no_crash(self):
         """LLM events should be silently ignored (ignore_llm=True)."""
         from uuid import uuid4
+
         from langchain_core.callbacks.manager import handle_event
 
         handler, graph = self._make_handler()

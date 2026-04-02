@@ -11,7 +11,6 @@ from unittest.mock import patch
 
 from tests.e2e.conftest import ai, ai_tools, make_async_return, tc
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -264,7 +263,12 @@ def test_semantic_entropy_gate_disabled_by_default(run_e2e):
 def test_semantic_entropy_buffer_recorded(run_e2e):
     """Semantic entropy results (when gate is enabled) are recorded in
     the module buffer for trace integration."""
-    from prax.agent.semantic_entropy import SemanticEntropyResult, _entropy_results, _entropy_lock, drain_semantic_entropy_buffer
+    from prax.agent.semantic_entropy import (
+        SemanticEntropyResult,
+        _entropy_lock,
+        _entropy_results,
+        drain_semantic_entropy_buffer,
+    )
 
     # Clear any leftover state.
     drain_semantic_entropy_buffer()
