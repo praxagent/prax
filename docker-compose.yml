@@ -37,6 +37,10 @@ services:
       - ./static:/app/static
       - ./logs:/app/logs
       - ${WORKSPACE_DIR:-./workspaces}:/app/workspaces
+      # Dev: mount source for live reload without rebuilding the image.
+      - ./prax:/app/prax
+      - ./app.py:/app/app.py
+      - ./config.py:/app/config.py:ro
       # Required for sandbox package installation (docker exec).
       # SECURITY: grants host Docker access — use only in trusted environments.
       - /var/run/docker.sock:/var/run/docker.sock

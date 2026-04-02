@@ -459,19 +459,24 @@ weight: {num}
 
 
 def run_hugo(site: str) -> dict | None:
-    """Run Hugo to build the site. Returns error dict or None on success."""
-    try:
-        from prax.utils.shell import run_command
-    except ImportError:
-        import subprocess
-        def run_command(cmd, **kw):
-            kw.setdefault("capture_output", True)
-            kw.setdefault("text", True)
-            return subprocess.run(cmd, **kw)
+    """Run Hugo to build the site. Returns error dict or None on success.
 
-    result = run_command(
+    Hugo runs locally (not routed through the sandbox) because
+    ensure_hugo_site writes files directly to the local filesystem.
+    Routing through the sandbox caused cross-container filesystem issues.
+    """
+    import shutil
+    import subprocess as _sp
+
+    if not shutil.which("hugo"):
+        return {"error": "Hugo is not installed — notes are saved but the web page was not rebuilt."}
+
+    if not os.path.isdir(site):
+        return {"error": f"Hugo site directory not found: {site}"}
+
+    result = _sp.run(
         ["hugo", "--source", site, "--destination", os.path.join(site, "public")],
-        timeout=60,
+        capture_output=True, text=True, timeout=60,
     )
     if result.returncode != 0:
         return {"error": f"Hugo build failed: {result.stderr[:500]}"}

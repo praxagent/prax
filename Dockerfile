@@ -3,7 +3,7 @@
 FROM python:3.13-slim@sha256:739e7213785e88c0f702dcdc12c0973afcbd606dbf021a589cab77d6b00b579d
 
 RUN apt-get update -qq && apt-get install -y --no-install-recommends \
-    git ffmpeg default-jre-headless curl \
+    git ffmpeg default-jre-headless curl hugo \
     imagemagick \
     texlive-latex-base texlive-latex-extra texlive-latex-recommended texlive-fonts-recommended \
     texlive-science lmodern cm-super \

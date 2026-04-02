@@ -378,7 +378,13 @@ def save_and_publish(
 
     result = publish_notes(user_id, base_url, slug=meta["slug"])
     if "error" in result:
-        return {"error": f"Note saved but Hugo build failed: {result['error']}"}
+        # Note is saved — Hugo publish is best-effort for the web page URL.
+        logger.warning("Hugo publish failed for %s: %s", meta["slug"], result["error"])
+        return {
+            "slug": meta["slug"],
+            "title": meta["title"],
+            "url": f"(saved — web page not rebuilt: {result['error']})",
+        }
     return {
         "slug": meta["slug"],
         "title": meta["title"],

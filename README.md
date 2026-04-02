@@ -65,16 +65,38 @@ Grafana comes pre-provisioned with Tempo, Loki, and Prometheus datasources plus 
 
 #### Developer mode
 
-Bind-mounts source code so Werkzeug auto-reloads on file changes:
+The default `docker-compose.yml` volume-mounts `./prax`, `./app.py`, and `./config.py` into the app container. Python/prompt changes take effect with a container restart — no image rebuild needed:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build app
+# Edit prax/ or prompts locally, then:
+docker compose restart app
 ```
 
-Combine with observability:
+For **frontend (TeamWork)** changes, run the Vite dev server locally instead of rebuilding the TeamWork image:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile observability up --build
+cd ../teamwork/frontend   # or wherever your teamwork repo lives
+npm run dev                # starts Vite on :5173 with hot reload
+```
+
+Open `http://localhost:5173` instead of `:3000`. Vite proxies API calls (`/api/*`, `/ws/*`) to the TeamWork backend at `localhost:8000`, which is already exposed by Docker Compose. The architecture:
+
+```
+Browser → Vite :5173 (HMR, serves React)
+  ↓ /api/*, /ws/*
+TeamWork :8000 (exposed to host via Docker)
+  ↓ internal webhook
+Prax app :5001 (Docker-internal)
+```
+
+The frontend never talks to Prax directly — TeamWork is the middleman. So Vite works with the full Docker stack with no extra config.
+
+**When you need a full rebuild** (dependency changes in `pyproject.toml` or `package.json`):
+
+```bash
+docker compose up --build app        # Prax only
+docker compose up --build teamwork   # TeamWork only
+docker compose up --build            # everything
 ```
 
 ### Local development

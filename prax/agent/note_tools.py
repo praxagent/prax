@@ -92,7 +92,13 @@ def note_update(note_id: str, content: str, title: str = "", tags: str = "") -> 
             )
         result = note_service.publish_notes(uid, base_url, slug=meta["slug"])
         if "error" in result:
-            return f"Note updated but Hugo build failed: {result['error']}"
+            # Note is saved — Hugo publish is best-effort for the web page.
+            import logging
+            logging.getLogger(__name__).warning("Hugo publish failed: %s", result["error"])
+            return (
+                f"Note updated: **{meta['title']}** (`{meta['slug']}`)\n"
+                f"(web page rebuild skipped — {result['error']})"
+            )
         return (
             f"Note updated: **{meta['title']}**\n"
             f"URL: {result['url']}"
