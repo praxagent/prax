@@ -29,15 +29,24 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up
 
 This bind-mounts `prax/`, `app.py`, `config.py`, and `scripts/` into the container and sets `DEBUG=true`, which enables Flask's Werkzeug reloader. Edit code locally, save, and the app restarts automatically. You still need `--build` if you change the Dockerfile, `pyproject.toml`, or system-level dependencies.
 
-This starts three services:
+This starts four core services:
 
 | Service | Description |
 |---------|-------------|
 | **app** | Flask app (port 5001), `.env` injected, Docker socket for sandbox management |
-| **sandbox** | Always-on OpenCode sandbox with Python, LaTeX, ffmpeg, poppler, pandoc. Shares `./workspaces` volume. Restarts automatically. |
+| **sandbox** | Always-on OpenCode sandbox with Python, LaTeX, ffmpeg, poppler, pandoc, headless Chrome. Shares `./workspaces` volume. |
+| **teamwork** | Web UI (port 3000) — Slack-like chat, Kanban board, terminal, browser screencast, execution graphs |
 | **ngrok** | Tunnel to app:5001. Prax can serve files via public URLs. |
 
-The app waits for the sandbox health check before starting. Environment detection is automatic — `RUNNING_IN_DOCKER=true` and `SANDBOX_HOST=sandbox` are set by compose.
+The app waits for the sandbox and TeamWork health checks before starting. Environment detection is automatic — `RUNNING_IN_DOCKER=true` and `SANDBOX_HOST=sandbox` are set by compose.
+
+**With observability** — add `--profile observability` to start Tempo, Loki, Prometheus, Promtail, and Grafana alongside the core services:
+
+```bash
+docker compose --profile observability up --build
+```
+
+This adds five services (Tempo :4318, Loki :3100, Promtail, Prometheus :9090, Grafana :3001). See [Observability](observability.md) for details. Safe to leave `OBSERVABILITY_ENABLED=true` in `.env` — Prax probes Tempo at startup and silently disables tracing if it's unreachable.
 
 **Runtime capabilities in Docker mode:**
 - `sandbox_install("package")` — apt-get install inside the running sandbox

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import contextvars
 import logging
 
 from langchain.agents import create_agent as create_react_agent
@@ -375,10 +376,15 @@ def delegate_parallel(tasks: list[dict]) -> str:
 
     results: list[str] = [""] * len(tasks)
 
+    # Copy the current context (ContextVars: user_id, channel_id, active_view, etc.)
+    # so worker threads inherit them.  Without this, ContextVars default to None in
+    # thread-pool workers, breaking user resolution and browser session lookup.
+    ctx = contextvars.copy_context()
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks)) as pool:
         future_to_idx: dict[concurrent.futures.Future, int] = {}
         for idx, spec in enumerate(tasks):
-            future = pool.submit(_run_spoke_or_subagent, spec)
+            future = pool.submit(ctx.run, _run_spoke_or_subagent, spec)
             future_to_idx[future] = idx
 
         done, not_done = concurrent.futures.wait(

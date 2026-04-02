@@ -32,6 +32,11 @@ _lock = threading.Lock()
 _sessions: dict[str, BrowserSession] = {}
 _vnc_sessions: dict[str, dict] = {}  # user_id -> {display, port, xvfb, vnc}
 _vnc_port_offset = 0
+# Thread-local storage for per-thread Playwright connections.  Playwright's
+# sync API binds objects to the creating thread — a session created in thread A
+# cannot be used from thread B.  Spoke agents (delegate_browser) may run in
+# ThreadPoolExecutor workers, so each thread needs its own connection.
+_thread_local = threading.local()
 
 _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -277,12 +282,22 @@ class BrowserSession:
 # ---------------------------------------------------------------------------
 
 def _get_session(user_id: str) -> BrowserSession:
-    with _lock:
-        if user_id not in _sessions or _sessions[user_id].page is None:
-            session = BrowserSession(user_id)
-            session.start()
-            _sessions[user_id] = session
-        return _sessions[user_id]
+    """Return a BrowserSession for the calling thread.
+
+    Playwright sync objects are bound to the thread that created them.
+    Spoke agents (delegate_browser) may run in ThreadPoolExecutor workers,
+    so we keep per-thread sessions.  For CDP mode this is cheap — each
+    thread just opens a WebSocket to the same sandbox Chrome.
+    """
+    if not hasattr(_thread_local, "sessions"):
+        _thread_local.sessions = {}
+
+    sessions: dict[str, BrowserSession] = _thread_local.sessions
+    if user_id not in sessions or sessions[user_id].page is None:
+        session = BrowserSession(user_id)
+        session.start()
+        sessions[user_id] = session
+    return sessions[user_id]
 
 
 # ---------------------------------------------------------------------------
@@ -672,12 +687,17 @@ def close_session(user_id: str) -> dict[str, Any]:
     with _lock:
         vnc_info = _vnc_sessions.pop(user_id, None)
         session = _sessions.pop(user_id, None)
+    # Also clean up any thread-local session for the calling thread.
+    tl_sessions: dict = getattr(_thread_local, "sessions", {})
+    tl_session = tl_sessions.pop(user_id, None)
     if vnc_info:
         _stop_vnc_server(vnc_info.get("xvfb"), vnc_info.get("vnc"))
-    if session:
-        session.close()
-        return {"status": "closed"}
-    return {"status": "no_session"}
+    closed = False
+    for s in (session, tl_session):
+        if s:
+            s.close()
+            closed = True
+    return {"status": "closed"} if closed else {"status": "no_session"}
 
 
 def close_all_sessions() -> None:
