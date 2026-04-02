@@ -725,6 +725,10 @@ class GraphCallbackHandler(BaseCallbackHandler):
         self._graph = graph
         self._trace_id = trace_id
         self._active: dict[str, str] = {}  # run_id → span_id
+        self._ctx_tokens: dict[str, object] = {}  # run_id → ContextVar token
+        # Track active tool names for deduplication (LangGraph fires
+        # on_tool_start at both ToolNode and individual invocation levels).
+        self._active_names: dict[str, str] = {}  # tool_name → span_id
 
     def on_tool_start(
         self, serialized: dict, input_str: str, *, run_id, **kwargs
@@ -734,6 +738,15 @@ class GraphCallbackHandler(BaseCallbackHandler):
         if rid in self._active:
             return
         tool_name = serialized.get("name") or "unknown_tool"
+
+        # Dedup: LangGraph fires on_tool_start at multiple levels for the
+        # same tool call (ToolNode processor + individual invocation).
+        # If we already have an active span with the same name, map this
+        # run_id to the existing span instead of creating a duplicate.
+        if tool_name in self._active_names:
+            self._active[rid] = self._active_names[tool_name]
+            return
+
         span_id = uuid.uuid4().hex[:12]
         node = SpanNode(
             span_id=span_id,
@@ -745,16 +758,49 @@ class GraphCallbackHandler(BaseCallbackHandler):
         )
         self._graph.add_node(node)
         self._active[rid] = span_id
+        self._active_names[tool_name] = span_id
+
+        # For delegation tools (delegate_*), update the trace context so
+        # that run_spoke's start_span() nests under this tool span instead
+        # of the parent agent span.
+        if tool_name.startswith("delegate_"):
+            parent_ctx = _current_trace.get()
+            if parent_ctx:
+                tool_ctx = TraceContext(
+                    trace_id=self._trace_id,
+                    span_id=span_id,
+                    parent_id=self._parent_span_id,
+                    origin=tool_name,
+                    depth=parent_ctx.depth + 1,
+                    graph=self._graph,
+                )
+                self._ctx_tokens[rid] = _current_trace.set(tool_ctx)
 
     def on_tool_end(self, output, *, run_id, **kwargs) -> None:
-        span_id = self._active.pop(str(run_id), None)
+        rid = str(run_id)
+        # Restore trace context if we modified it for a delegation tool.
+        token = self._ctx_tokens.pop(rid, None)
+        if token:
+            _current_trace.reset(token)
+        span_id = self._active.pop(rid, None)
         if span_id:
+            # Remove from active names dedup tracker.
+            self._active_names = {
+                k: v for k, v in self._active_names.items() if v != span_id
+            }
             preview = str(output)[:2000] if output else ""
             self._graph.complete_node(span_id, status="completed", summary=preview)
 
     def on_tool_error(self, error, *, run_id, **kwargs) -> None:
-        span_id = self._active.pop(str(run_id), None)
+        rid = str(run_id)
+        token = self._ctx_tokens.pop(rid, None)
+        if token:
+            _current_trace.reset(token)
+        span_id = self._active.pop(rid, None)
         if span_id:
+            self._active_names = {
+                k: v for k, v in self._active_names.items() if v != span_id
+            }
             self._graph.complete_node(
                 span_id, status="failed", summary=str(error)[:2000]
             )
