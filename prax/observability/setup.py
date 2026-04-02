@@ -44,8 +44,8 @@ def init_observability(service_name: str = "prax") -> None:
     # Probe the endpoint before committing to the exporter.  If Tempo isn't
     # running (e.g. observability profile not active), skip initialization so
     # the BatchSpanProcessor doesn't queue spans to a dead host and OOM.
-    import urllib.request
     import urllib.error
+    import urllib.request
     try:
         probe_url = endpoint.rstrip("/")
         urllib.request.urlopen(f"{probe_url}/v1/traces", timeout=3)

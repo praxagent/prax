@@ -151,8 +151,8 @@ def list_content():
     """Return all notes, courses, and news for the current user."""
     try:
         user_id = _get_teamwork_user_id()
-        from prax.services.note_service import list_notes, list_news
         from prax.services.course_service import list_courses
+        from prax.services.note_service import list_news, list_notes
 
         return jsonify({
             "notes": list_notes(user_id),
@@ -177,9 +177,10 @@ def get_content_item(category: str, slug: str):
             from prax.services.course_service import get_course
             return jsonify(get_course(user_id, slug))
         elif category == "news":
-            from prax.services.note_service import _parse_note, _news_dir
-            from prax.services.workspace_service import ensure_workspace, get_lock
             import os
+
+            from prax.services.note_service import _news_dir, _parse_note
+            from prax.services.workspace_service import ensure_workspace, get_lock
             with get_lock(user_id):
                 root = ensure_workspace(user_id)
                 news_root = _news_dir(root)
@@ -205,8 +206,8 @@ def search_content():
 
     try:
         user_id = _get_teamwork_user_id()
-        from prax.services.note_service import search_notes, search_news
         from prax.services.course_service import list_courses
+        from prax.services.note_service import search_news, search_notes
 
         # Courses don't have a search function — filter client-side.
         query_lower = query.lower()
