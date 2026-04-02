@@ -251,9 +251,9 @@ class TestSchemaAugmentation:
     def test_tool_schema_includes_expected_observation(self):
         """The governed tool wrapper should add expected_observation to
         every tool's argument schema."""
-        from prax.agent.tool_registry import get_registered_tools
-        from prax.plugins.loader import get_plugin_loader
         from unittest.mock import MagicMock
+
+        from prax.agent.tool_registry import get_registered_tools
 
         # Use a mock plugin loader to avoid side effects
         mock_loader = MagicMock()

@@ -29,6 +29,7 @@ Notes are markdown documents published as web pages (Hugo).  They support
 LaTeX math, mermaid diagrams, code blocks, and tables.
 
 - **note_create** — Create a new note and publish it.  Returns a shareable URL.
+- **note_read** — Read the full content of a note by slug.
 - **note_update** — Update an existing note (pass full content, not a diff).
 - **note_list** — List all notes with slugs and tags.
 - **note_search** — Search notes by title, tags, or content.

@@ -70,6 +70,93 @@ sequenceDiagram
     DS->>U: Send Discord message (chunked if >2000 chars)
 ```
 
+### Request Flow — TeamWork Web UI
+
+TeamWork is a full web UI with chat channels, file browser, terminal, browser screencast, and content panel. Messages flow through a webhook with rich view context so Prax knows exactly what the user is looking at.
+
+```mermaid
+sequenceDiagram
+    participant U as User (Browser)
+    participant TW as TeamWork (FastAPI)
+    participant WH as Prax /teamwork/webhook
+    participant C as ConversationService
+    participant A as ReAct Agent
+    participant DB as SQLite
+
+    U->>TW: Send message (chat, side chat, or DM)
+    Note over U: Message includes:<br/>content, channel_id,<br/>active_view, extra_data
+
+    TW->>TW: Persist message to DB
+    TW->>TW: Broadcast via WebSocket
+    TW->>WH: POST webhook (content, channel_id,<br/>active_view, extra_data)
+
+    WH->>WH: Build view context
+    Note over WH: View-specific behavior:<br/>browser → "PAIRING in shared browser"<br/>terminal → "PAIRING in shared terminal"<br/>content → "browsing Prax's Space"<br/>+ fetch screen state if applicable
+
+    alt active_view = "browser"
+        WH->>TW: GET /api/browser/info
+        TW-->>WH: Browser screencast status
+        Note over WH: Prepend: "[LIVE BROWSER — user watching]"
+    else active_view = "terminal"
+        WH->>TW: GET /api/terminal/{project}/recent
+        TW-->>WH: Last ~50 terminal lines
+        Note over WH: Prepend: "[TERMINAL SCREEN — last 50 lines]"
+    else active_view = "content"
+        Note over WH: Extract extra_data.content_context<br/>{category, slug, title}
+        WH->>WH: note_service.get_note(slug)
+        Note over WH: Prepend: "[CONTENT PANEL — viewing this note]<br/>Title + full markdown content"
+    end
+
+    WH->>WH: Set ContextVars (channel_id, active_view)
+    WH->>C: reply(user_id, prefixed_content)
+    C->>DB: Retrieve conversation history
+    C->>A: Invoke agent (history + input + view context)
+    A->>A: ReAct loop (reason → act → observe)
+    A->>C: Final response
+    C->>DB: Save messages
+    WH->>TW: POST /api/external/reply (response + trace metadata)
+    TW->>U: WebSocket broadcast → message appears in UI
+```
+
+#### View Context System
+
+Every message from TeamWork includes an `active_view` field indicating which panel the user is on. Prax uses this to tailor both the system prompt and its behavior:
+
+| `active_view` | What Prax Sees | Behavior |
+|---------------|---------------|----------|
+| `"browser"` | Live browser info + screencast status | Uses `delegate_browser` exclusively — user watches the browser in real-time |
+| `"terminal"` | Last ~50 terminal output lines | Uses `sandbox_shell` — executes commands immediately, no confirmation |
+| `"content"` | Full note content injected (like terminal output) + item metadata | Discusses content immediately — no tool call needed to see what user sees |
+| `"chat"` | No special context | Default behavior with all tools available |
+| other | No special context | View label shown but no behavior change |
+
+#### Content Context Tracking
+
+When the user is viewing a specific item in Prax's Space (content panel), the frontend passes the selected item's metadata through the full stack:
+
+```
+ContentPanel.onContentSelect({ category, slug, title })
+  → ProjectWorkspace (holds state)
+  → BrowserChatSidebar (contentContext prop)
+  → POST /api/messages { extra_data: { content_context: {...} } }
+  → TeamWork forwards extra_data in webhook payload
+  → Prax extracts content_context, injects into tool_guidance:
+      "The user is currently viewing: notes/eigenvalues — 'Eigenvalues'"
+```
+
+This means when the user says "tell me about this page" or "update this note", Prax knows which item they're referring to without the user needing to name it.
+
+When the viewed item is a note, Prax also fetches the full note content via `note_service.get_note()` and injects it into the message context — exactly like terminal output is injected for terminal view. This means Prax can immediately discuss the note content without calling any tools. For very long notes (>6000 chars), content is truncated with a hint to use `note_read` for the full version.
+
+#### Edit Notifications
+
+When the user edits or restores a note directly in the content panel, a notification message is auto-sent in the DM channel:
+
+- **Edit**: `[I just edited the note "Eigenvalues" directly. Please use the updated version going forward.]`
+- **Restore**: `[I restored the note "Eigenvalues" to an older version (a1b2c3d4). Please use the restored version going forward.]`
+
+Prax's content view tool guidance tells the agent to acknowledge these as completed actions rather than instructions.
+
 ### Sandbox Code Execution Flow
 
 ```mermaid

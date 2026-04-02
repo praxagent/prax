@@ -18,6 +18,12 @@ workspaces/{user_id}/          ← phone number or Discord user ID
 ├── notes/                 ← markdown notes with YAML frontmatter
 │   ├── eigenvalues.md
 │   └── bayesian-prob.md
+├── news/                  ← daily briefings with YAML frontmatter
+│   └── tech-news-2026-04-01.md
+├── courses/               ← structured learning content
+│   └── {course-id}/
+│       ├── course.yaml    ← course metadata, lessons, progress
+│       └── _site/         ← Hugo-generated static site
 ├── projects/              ← research projects (notes + links + sources)
 │   └── {project-slug}/
 │       ├── project.yaml

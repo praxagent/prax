@@ -1,11 +1,15 @@
 """LangChain tool wrappers for sandbox code execution."""
 from __future__ import annotations
 
+import logging
+
 from langchain_core.tools import tool
 
 from prax.agent.action_policy import RiskLevel, risk_tool
 from prax.agent.user_context import current_user_id
 from prax.services import sandbox_service
+
+logger = logging.getLogger(__name__)
 
 
 def _get_user_id() -> str:
@@ -15,6 +19,55 @@ def _get_user_id() -> str:
     return uid
 
 
+@tool
+def sandbox_shell(command: str, timeout: int = 60) -> str:
+    """Run a shell command in the sandbox container.
+
+    When the user is viewing the terminal tab, this runs DIRECTLY in
+    their visible terminal — they see the command and output in real time.
+    This is the ONLY tool for terminal pairing. Use it for ANY shell
+    command: ls, df, git, pytest, pip, apt, curl, etc.
+
+    Do NOT delegate to sandbox_start/delegate_sandbox when in terminal mode.
+    Just call this tool directly with the command.
+
+    Args:
+        command: The shell command to run.
+        timeout: Max seconds to wait (default 60).
+    """
+    from prax.agent.user_context import current_active_view
+
+    active_view = current_active_view.get()
+    logger.info("sandbox_shell: active_view=%r, command=%r", active_view, command[:80])
+
+    # If user is watching the terminal, run through the shared PTY
+    if active_view == "terminal":
+        try:
+            from prax.services.teamwork_service import get_teamwork_client
+            tw = get_teamwork_client()
+            logger.info("sandbox_shell: routing through shared terminal (project=%s)", tw._project_id)
+            result = tw.terminal_exec(command, timeout=float(timeout))
+            if result is not None:
+                output = result.get("output", "")
+                logger.info("sandbox_shell: terminal_exec returned %d chars", len(output))
+                return output if output else "(command produced no output)"
+            logger.warning("sandbox_shell: terminal_exec returned None (no active session?)")
+        except Exception:
+            logger.exception("sandbox_shell: terminal_exec failed, falling through to docker exec")
+
+    # Default: run via docker exec and return structured output
+    result = sandbox_service.run_shell(command, timeout=timeout)
+    if "error" in result:
+        return f"Shell error: {result['error']}"
+    parts = []
+    if result.get("stdout"):
+        parts.append(result["stdout"])
+    if result.get("stderr"):
+        parts.append(f"STDERR:\n{result['stderr']}")
+    parts.append(f"(exit code: {result['exit_code']})")
+    return "\n".join(parts)
+
+
 @risk_tool(risk=RiskLevel.MEDIUM)
 def sandbox_start(task_description: str, model: str | None = None) -> str:
     """Start a sandboxed coding session with an AI coding agent.
@@ -22,6 +75,9 @@ def sandbox_start(task_description: str, model: str | None = None) -> str:
     The coding agent can write and execute code (Python, LaTeX, ffmpeg, etc.)
     inside an isolated container. Provide a clear description of the task.
     Optionally specify the model (e.g. 'anthropic/claude-sonnet-4-5' or 'openai/gpt-5.4').
+
+    Returns the session_id — pass it to sandbox_message/review/finish/abort
+    if you have multiple sessions running.
     """
     result = sandbox_service.start_session(_get_user_id(), task_description, model=model)
     if "error" in result:
@@ -34,14 +90,16 @@ def sandbox_start(task_description: str, model: str | None = None) -> str:
 
 
 @risk_tool(risk=RiskLevel.MEDIUM)
-def sandbox_message(message: str, model: str | None = None) -> str:
-    """Send a follow-up message or instruction to the active sandbox coding session.
+def sandbox_message(message: str, model: str | None = None, session_id: str | None = None) -> str:
+    """Send a follow-up message or instruction to a sandbox coding session.
 
     Use this to refine the task, request changes, or ask the coding agent to try
     a different approach. Optionally switch to a different model if the current one
     isn't producing good results.
+
+    If session_id is omitted, targets the most recently created session.
     """
-    result = sandbox_service.send_message(_get_user_id(), message, model=model)
+    result = sandbox_service.send_message(_get_user_id(), message, model=model, session_id=session_id)
     if result.get("auto_aborted"):
         return (
             f"⚠️ Sandbox AUTO-ABORTED: {result['error']}. "
@@ -63,12 +121,13 @@ def sandbox_message(message: str, model: str | None = None) -> str:
 
 
 @tool
-def sandbox_review() -> str:
-    """Review the current status of the active sandbox session.
+def sandbox_review(session_id: str | None = None) -> str:
+    """Review the current status of a sandbox session.
 
     Shows elapsed time, files created/modified, and conversation state.
+    If session_id is omitted, shows the most recent session.
     """
-    result = sandbox_service.review_session(_get_user_id())
+    result = sandbox_service.review_session(_get_user_id(), session_id=session_id)
     if "error" in result:
         return f"Sandbox error: {result['error']}"
     files = result.get("files", [])
@@ -88,13 +147,14 @@ def sandbox_review() -> str:
 
 
 @tool
-def sandbox_finish(summary: str = "") -> str:
-    """Finish the active sandbox session and archive all artifacts.
+def sandbox_finish(summary: str = "", session_id: str | None = None) -> str:
+    """Finish a sandbox session and archive all artifacts.
 
     Code, SOLUTION.md, and the full session log are saved to the workspace
     archive for future reference. Provide a brief summary of what was accomplished.
+    If session_id is omitted, finishes the most recent session.
     """
-    result = sandbox_service.finish_session(_get_user_id(), summary=summary)
+    result = sandbox_service.finish_session(_get_user_id(), summary=summary, session_id=session_id)
     if "error" in result:
         return f"Sandbox error: {result['error']}"
     path = result.get("archived_path", "unknown")
@@ -105,13 +165,14 @@ def sandbox_finish(summary: str = "") -> str:
 
 
 @tool
-def sandbox_abort() -> str:
-    """Abort the active sandbox session immediately.
+def sandbox_abort(session_id: str | None = None) -> str:
+    """Abort a sandbox session immediately.
 
     Destroys the container without archiving artifacts. Use only if the session
     is stuck or producing unwanted results.
+    If session_id is omitted, aborts the most recent session.
     """
-    result = sandbox_service.abort_session(_get_user_id())
+    result = sandbox_service.abort_session(_get_user_id(), session_id=session_id)
     if "error" in result:
         return f"Sandbox error: {result['error']}"
     elapsed = result.get("elapsed_seconds", "?")
@@ -197,7 +258,7 @@ def sandbox_rebuild(dockerfile_content: str | None = None) -> str:
 
 def build_sandbox_tools() -> list:
     return [
-        sandbox_start, sandbox_message, sandbox_review,
+        sandbox_shell, sandbox_start, sandbox_message, sandbox_review,
         sandbox_finish, sandbox_abort, sandbox_search, sandbox_execute,
         sandbox_install, sandbox_rebuild,
     ]

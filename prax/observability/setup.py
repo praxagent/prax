@@ -41,9 +41,32 @@ def init_observability(service_name: str = "prax") -> None:
         "service.version": os.environ.get("PRAX_VERSION", "dev"),
     })
 
+    # Probe the endpoint before committing to the exporter.  If Tempo isn't
+    # running (e.g. observability profile not active), skip initialization so
+    # the BatchSpanProcessor doesn't queue spans to a dead host and OOM.
+    import urllib.error
+    import urllib.request
+    try:
+        probe_url = endpoint.rstrip("/")
+        urllib.request.urlopen(f"{probe_url}/v1/traces", timeout=3)
+    except urllib.error.HTTPError:
+        pass  # 4xx/5xx means the endpoint is up — just rejecting empty POSTs
+    except Exception:
+        logger.warning(
+            "Tempo endpoint unreachable at %s — tracing disabled. "
+            "Start the observability profile: docker compose --profile observability up",
+            endpoint,
+        )
+        return
+
     provider = TracerProvider(resource=resource)
     exporter = OTLPSpanExporter(endpoint=f"{endpoint}/v1/traces")
-    provider.add_span_processor(BatchSpanProcessor(exporter))
+    # Cap the queue so a slow/dead exporter can't accumulate unbounded memory.
+    provider.add_span_processor(BatchSpanProcessor(
+        exporter,
+        max_queue_size=2048,
+        max_export_batch_size=512,
+    ))
 
     trace.set_tracer_provider(provider)
     _tracer = trace.get_tracer(service_name)

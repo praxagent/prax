@@ -30,6 +30,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+from langchain_core.callbacks import BaseCallbackHandler
+
 logger = logging.getLogger(__name__)
 
 
@@ -61,6 +63,7 @@ class ExecutionGraph:
         self.trace_id = trace_id
         self._nodes: dict[str, SpanNode] = {}
         self._lock = threading.Lock()
+        self.trigger: str = ""  # User message or cron/event that started this trace
 
     def add_node(self, node: SpanNode) -> None:
         with self._lock:
@@ -80,7 +83,7 @@ class ExecutionGraph:
             if node:
                 node.status = status
                 node.finished_at = datetime.now(UTC)
-                node.summary = summary[:200]
+                node.summary = summary[:2000]
                 if tool_calls:
                     node.tool_calls = tool_calls
                 if tier_choices:
@@ -128,12 +131,15 @@ class ExecutionGraph:
                 })
             # Sort nodes by started_at so roots come first
             nodes.sort(key=lambda n: n["started_at"])
-            return {
+            result: dict = {
                 "trace_id": self.trace_id,
                 "status": overall_status,
                 "node_count": len(nodes),
                 "nodes": nodes,
             }
+            if self.trigger:
+                result["trigger"] = self.trigger
+            return result
 
     def _format_node(
         self, node: SpanNode, lines: list[str], indent: int
@@ -223,7 +229,7 @@ _last_completed_graph: ExecutionGraph | None = None
 
 _active_graphs: dict[str, ExecutionGraph] = {}
 _active_graphs_lock = threading.Lock()
-_COMPLETED_MAX = 20  # keep at most this many completed graphs in memory
+_COMPLETED_MAX = 100  # keep at most this many completed graphs in memory
 _GRAPH_RETENTION_DAYS = 7  # keep graph files for this many days
 _graphs_loaded = False
 
@@ -234,10 +240,15 @@ _graphs_loaded = False
 
 
 def _graphs_dir() -> Path:
-    """Return the directory for persisted graph JSONL files."""
+    """Return the directory for persisted graph JSONL files.
+
+    Stored INSIDE workspace_dir (not its parent) so Docker volume mounts
+    that map workspace_dir to a host path also persist graphs across
+    container restarts.
+    """
     try:
         from prax.settings import settings
-        base = Path(settings.workspace_dir).resolve().parent
+        base = Path(settings.workspace_dir).resolve()
     except Exception:
         base = Path(".")
     d = base / ".prax" / "graphs"
@@ -255,7 +266,7 @@ def _persist_graph(graph: ExecutionGraph) -> None:
         with open(filepath, "a") as f:
             f.write(line + "\n")
     except Exception:
-        logger.debug("Failed to persist execution graph %s", graph.trace_id, exc_info=True)
+        logger.warning("Failed to persist execution graph %s", graph.trace_id, exc_info=True)
 
 
 def _rotate_graph_files() -> None:
@@ -287,14 +298,17 @@ def _load_persisted_graphs() -> None:
         if not d.exists():
             return
 
-        # Load files from most recent first, up to _COMPLETED_MAX total
+        # Load files from most recent first, up to _COMPLETED_MAX total.
+        # Within each file, lines are in chronological order — read in
+        # reverse so that the most recent graphs are loaded first.
         files = sorted(d.glob("graphs-*.jsonl"), reverse=True)
         loaded = 0
         for filepath in files:
             if loaded >= _COMPLETED_MAX:
                 break
             try:
-                for line in filepath.read_text().strip().splitlines():
+                lines = filepath.read_text().strip().splitlines()
+                for line in reversed(lines):
                     if loaded >= _COMPLETED_MAX:
                         break
                     data = json.loads(line)
@@ -303,7 +317,7 @@ def _load_persisted_graphs() -> None:
                         _active_graphs[graph.trace_id] = graph
                         loaded += 1
             except Exception:
-                logger.debug("Failed to load graph file %s", filepath.name, exc_info=True)
+                logger.warning("Failed to load graph file %s", filepath.name, exc_info=True)
 
         if loaded:
             logger.info("Loaded %d persisted execution graphs", loaded)
@@ -311,7 +325,7 @@ def _load_persisted_graphs() -> None:
         # Rotate old files in the background
         _rotate_graph_files()
     except Exception:
-        logger.debug("Failed to load persisted graphs", exc_info=True)
+        logger.warning("Failed to load persisted graphs", exc_info=True)
 
 
 def _graph_from_dict(data: dict) -> ExecutionGraph | None:
@@ -620,6 +634,25 @@ def get_active_graphs_json() -> list[dict]:
     return running + done
 
 
+def delete_graph(trace_id: str) -> bool:
+    """Remove a graph from memory and scrub it from persisted JSONL files."""
+    with _active_graphs_lock:
+        removed = _active_graphs.pop(trace_id, None)
+
+    # Also remove from persisted files so it doesn't reload on restart.
+    try:
+        d = _graphs_dir()
+        for filepath in d.glob("graphs-*.jsonl"):
+            lines = filepath.read_text().strip().splitlines()
+            kept = [ln for ln in lines if f'"trace_id": "{trace_id}"' not in ln]
+            if len(kept) < len(lines):
+                filepath.write_text("\n".join(kept) + "\n" if kept else "")
+    except Exception:
+        logger.warning("Failed to scrub graph %s from disk", trace_id, exc_info=True)
+
+    return removed is not None
+
+
 def build_identity_context(name: str) -> str:
     """Build a context string for injection into agent system prompts.
 
@@ -654,3 +687,74 @@ def build_identity_context(name: str) -> str:
         parts.append(f"Parallel peers: {sibling_parts}.")
 
     return " ".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# LangChain callback handler — real-time tool call nodes in the graph
+# ---------------------------------------------------------------------------
+
+
+class GraphCallbackHandler(BaseCallbackHandler):
+    """LangChain callback handler that creates child SpanNodes for tool calls.
+
+    Attach to ``graph.invoke(config={"callbacks": [handler]})`` so that
+    every tool invocation appears as a real-time node in the execution graph.
+
+    Must inherit from ``BaseCallbackHandler`` so LangChain's
+    ``CallbackManager`` recognises it during event dispatch.
+    """
+
+    # Tell LangChain to skip non-tool events.
+    raise_error: bool = False
+    ignore_llm: bool = True
+    ignore_chain: bool = True
+    # NOTE: ignore_agent MUST be False — LangChain's CallbackManager.on_tool_start
+    # uses "ignore_agent" as the ignore condition, so setting it True silently
+    # drops all tool events.  We don't implement on_agent_* methods, so leaving
+    # it False has no side effects.
+    ignore_agent: bool = False
+    ignore_retriever: bool = True
+    ignore_retry: bool = True
+    ignore_chat_model: bool = True
+
+    def __init__(
+        self, *, parent_span_id: str, graph: ExecutionGraph, trace_id: str
+    ):
+        super().__init__()
+        self._parent_span_id = parent_span_id
+        self._graph = graph
+        self._trace_id = trace_id
+        self._active: dict[str, str] = {}  # run_id → span_id
+
+    def on_tool_start(
+        self, serialized: dict, input_str: str, *, run_id, **kwargs
+    ) -> None:
+        rid = str(run_id)
+        # Dedup guard: if this run_id already has a node, skip.
+        if rid in self._active:
+            return
+        tool_name = serialized.get("name") or "unknown_tool"
+        span_id = uuid.uuid4().hex[:12]
+        node = SpanNode(
+            span_id=span_id,
+            name=tool_name,
+            parent_id=self._parent_span_id,
+            trace_id=self._trace_id,
+            spoke_or_category="tool",
+            summary=str(input_str)[:500],
+        )
+        self._graph.add_node(node)
+        self._active[rid] = span_id
+
+    def on_tool_end(self, output, *, run_id, **kwargs) -> None:
+        span_id = self._active.pop(str(run_id), None)
+        if span_id:
+            preview = str(output)[:2000] if output else ""
+            self._graph.complete_node(span_id, status="completed", summary=preview)
+
+    def on_tool_error(self, error, *, run_id, **kwargs) -> None:
+        span_id = self._active.pop(str(run_id), None)
+        if span_id:
+            self._graph.complete_node(
+                span_id, status="failed", summary=str(error)[:2000]
+            )

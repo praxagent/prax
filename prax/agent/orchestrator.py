@@ -232,17 +232,29 @@ class ConversationAgent:
             except Exception:
                 pass
 
-    def run(self, conversation: Iterable[BaseMessage], user_input: str, workspace_context: str = "") -> str:
+    def run(self, conversation: Iterable[BaseMessage], user_input: str, workspace_context: str = "", trigger: str = "") -> str:
         """Execute the agent graph and return the final string response."""
         import time as _time
 
-        from prax.agent.trace import start_span
+        from prax.agent.trace import GraphCallbackHandler, start_span
 
         _run_deadline = _time.monotonic() + settings.agent_run_timeout
 
         # Start a root span that wraps the entire orchestrator invocation.
         # This sets last_root_trace_id so callers can attach it to responses.
         root_span = start_span("orchestrator", "orchestrator")
+
+        # Store the user's raw input as the trace trigger so the execution
+        # graph shows what started it — without system prefixes or tool guidance.
+        root_span.ctx.graph.trigger = trigger or user_input
+
+        # Callback handler that adds individual tool calls as child nodes
+        # in the execution graph — gives TeamWork full depth visibility.
+        _graph_cb = GraphCallbackHandler(
+            parent_span_id=root_span.span_id,
+            graph=root_span.ctx.graph,
+            trace_id=root_span.trace_id,
+        )
 
         # Reset per-plugin call counters for the new message.
         from prax.plugins.monitored_tool import reset_plugin_call_counts
@@ -341,6 +353,7 @@ class ConversationAgent:
         config = {
             **self.checkpoint_mgr.graph_config(turn),
             "recursion_limit": effective_limit,
+            "callbacks": [_graph_cb],
         }
 
         try:
@@ -442,6 +455,9 @@ class ConversationAgent:
         without ToolMessage responses), we fall back to a fresh start instead
         of consuming another retry attempt.
         """
+        # Preserve callbacks through config rebuilds so tool call graph nodes
+        # continue to be emitted on retries.
+        _callbacks = config.get("callbacks", [])
         fresh_restarts = 0  # Guard against infinite fresh-start loops.
 
         while True:
@@ -496,6 +512,7 @@ class ConversationAgent:
                     config = {
                         **self.checkpoint_mgr.graph_config(turn),
                         "recursion_limit": settings.agent_max_tool_calls,
+                        "callbacks": _callbacks,
                     }
                     continue
 
@@ -521,6 +538,7 @@ class ConversationAgent:
                             self.checkpoint_mgr.get_turn(user_id),  # type: ignore[arg-type]
                         ),
                         "recursion_limit": settings.agent_max_tool_calls,
+                        "callbacks": _callbacks,
                     }
                     continue
 
@@ -531,7 +549,7 @@ class ConversationAgent:
                 )
                 # Resume from the rollback checkpoint — LangGraph will continue
                 # from the saved state, so we pass None for messages.
-                config = rollback_cfg
+                config = {**rollback_cfg, "callbacks": _callbacks}
 
     @staticmethod
     def _audit_claims(response: str, messages: list, user_id: str | None) -> str:

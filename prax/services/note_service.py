@@ -142,6 +142,97 @@ def get_note(user_id: str, slug: str) -> dict:
         return _parse_note(path)
 
 
+def delete_note(user_id: str, slug: str) -> dict:
+    """Delete a note by slug. Returns metadata of the deleted note."""
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
+        path = _note_path(root, slug)
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"Note not found: {slug}")
+        meta = _parse_note(path)
+        os.remove(path)
+        git_commit(root, f"Delete note: {meta['title']}")
+        return {"slug": slug, "title": meta["title"], "deleted": True}
+
+
+def note_versions(user_id: str, slug: str, limit: int = 5) -> list[dict]:
+    """Return up to *limit* recent versions of a note from git history."""
+    import subprocess
+
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
+        rel_path = os.path.join("notes", f"{slug}.md")
+        abs_path = os.path.join(root, rel_path)
+
+        # If the file doesn't exist at all, check if it ever existed.
+        result = subprocess.run(
+            ["git", "log", f"-{limit}", "--pretty=format:%H\t%ai\t%s", "--follow", "--", rel_path],
+            cwd=root, capture_output=True, text=True,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            if not os.path.isfile(abs_path):
+                raise FileNotFoundError(f"Note not found: {slug}")
+            return []
+
+        versions = []
+        for line in result.stdout.strip().splitlines():
+            parts = line.split("\t", 2)
+            if len(parts) < 3:
+                continue
+            versions.append({
+                "commit": parts[0],
+                "date": parts[1],
+                "message": parts[2],
+            })
+        return versions
+
+
+def get_note_version(user_id: str, slug: str, commit: str) -> dict:
+    """Retrieve the content of a note at a specific git commit."""
+    import subprocess
+
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
+        rel_path = os.path.join("notes", f"{slug}.md")
+
+        result = subprocess.run(
+            ["git", "show", f"{commit}:{rel_path}"],
+            cwd=root, capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            raise FileNotFoundError(
+                f"Version not found: {slug} at {commit[:8]}"
+            )
+
+        # Parse the old version's content.
+        raw = result.stdout
+        meta: dict = {}
+        content = raw
+        if raw.startswith("---"):
+            parts = raw.split("---", 2)
+            if len(parts) >= 3:
+                meta = yaml.safe_load(parts[1]) or {}
+                content = parts[2].strip()
+
+        meta.setdefault("slug", slug)
+        meta.setdefault("title", slug)
+        meta["content"] = content
+        meta["commit"] = commit
+        return meta
+
+
+def restore_note_version(user_id: str, slug: str, commit: str) -> dict:
+    """Restore a note to a specific git version."""
+    old_version = get_note_version(user_id, slug, commit)
+    return update_note(
+        user_id, slug,
+        content=old_version.get("content", ""),
+        title=old_version.get("title"),
+        tags=old_version.get("tags"),
+        related=old_version.get("related"),
+    )
+
+
 def list_notes(user_id: str) -> list[dict]:
     """List all notes with metadata (no content)."""
     with get_lock(user_id):
@@ -194,6 +285,58 @@ def search_notes(user_id: str, query: str) -> list[dict]:
                         "slug": meta["slug"],
                         "title": meta["title"],
                         "tags": meta["tags"],
+                        "snippet": snippet,
+                    })
+            except Exception:
+                continue
+        return results
+
+
+def list_news(user_id: str) -> list[dict]:
+    """List all news briefings with metadata (no content)."""
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
+        news_root = _news_dir(root)
+        results = []
+        for fname in sorted(os.listdir(news_root)):
+            if not fname.endswith(".md"):
+                continue
+            try:
+                meta = _parse_note(os.path.join(news_root, fname))
+                results.append({
+                    "slug": meta["slug"],
+                    "title": meta["title"],
+                    "created_at": meta.get("created_at", ""),
+                    "updated_at": meta.get("updated_at", ""),
+                })
+            except Exception:
+                continue
+        return results
+
+
+def search_news(user_id: str, query: str) -> list[dict]:
+    """Search news briefings by title and content."""
+    with get_lock(user_id):
+        root = ensure_workspace(user_id)
+        news_root = _news_dir(root)
+        query_lower = query.lower()
+        results = []
+        for fname in sorted(os.listdir(news_root)):
+            if not fname.endswith(".md"):
+                continue
+            try:
+                meta = _parse_note(os.path.join(news_root, fname))
+                searchable = meta["title"].lower() + " " + meta["content"].lower()
+                if query_lower in searchable:
+                    idx = meta["content"].lower().find(query_lower)
+                    snippet = ""
+                    if idx >= 0:
+                        start = max(0, idx - 80)
+                        end = min(len(meta["content"]), idx + len(query) + 80)
+                        snippet = "…" + meta["content"][start:end].strip() + "…"
+                    results.append({
+                        "slug": meta["slug"],
+                        "title": meta["title"],
                         "snippet": snippet,
                     })
             except Exception:

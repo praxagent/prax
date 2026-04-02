@@ -116,12 +116,14 @@ class TestStartSession:
         assert run["image"] == "test-sandbox:latest"
         assert "ANTHROPIC_API_KEY" in run["environment"]
 
-    def test_rejects_second_session(self, mock_opencode):
+    def test_allows_multiple_sessions_per_user(self, mock_opencode):
         mod = mock_opencode
-        mod.start_session("+10000000000", "Task 1")
-        result = mod.start_session("+10000000000", "Task 2")
-        assert "error" in result
-        assert "already have" in result["error"]
+        r1 = mod.start_session("+10000000000", "Task 1")
+        r2 = mod.start_session("+10000000000", "Task 2")
+        assert r1["status"] == "running"
+        assert r2["status"] == "running"
+        assert r1["session_id"] != r2["session_id"]
+        assert len(mod._user_sessions["+10000000000"]) == 2
 
     def test_different_users_can_have_sessions(self, mock_opencode):
         mod = mock_opencode
@@ -274,8 +276,8 @@ class TestSendMessage:
         assert result["rounds_used"] == 1  # Only successful round counted
 
         # Session should have consecutive_failures reset to 0
-        session_id = mod._user_sessions["+10000000000"]
-        session = mod._sessions[session_id]
+        session_ids = mod._user_sessions["+10000000000"]
+        session = mod._sessions[session_ids[-1]]
         assert session.consecutive_failures == 0
 
 
@@ -315,7 +317,7 @@ class TestFinishSession:
         result = mod.finish_session("+10000000000", summary="Built a calculator")
         assert result["status"] == "finished"
         assert session_id not in mod._sessions
-        assert "+10000000000" not in mod._user_sessions
+        assert not mod._user_sessions.get("+10000000000")
 
     def test_no_session(self, mock_opencode):
         result = mock_opencode.finish_session("+10000000000")
@@ -331,7 +333,7 @@ class TestAbortSession:
         result = mod.abort_session("+10000000000")
         assert result["status"] == "aborted"
         assert session_id not in mod._sessions
-        assert "+10000000000" not in mod._user_sessions
+        assert not mod._user_sessions.get("+10000000000")
 
     def test_no_session(self, mock_opencode):
         result = mock_opencode.abort_session("+10000000000")

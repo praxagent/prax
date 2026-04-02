@@ -7,7 +7,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-03-23T06:19:06.449742Z"
+exclude-newer = "2026-03-24T22:31:39.651712Z"
 exclude-newer-span = "P7D"
 
 [[package]]
@@ -2147,6 +2147,24 @@ wheels = [
 ]
 
 [[package]]
+name = "patchright"
+version = "1.51.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "greenlet" },
+    { name = "pyee" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/16/ee/41d12534aedaf502f5a7daa791ef08709652c6ee92570fd5089f71631f3c/patchright-1.51.3-py3-none-macosx_10_13_x86_64.whl", hash = "sha256:a363d0fbe426e8934f9d27276777d072f102bb990e10f976a320360c5b20214f", size = 39616849, upload-time = "2025-04-04T19:43:58.892Z" },
+    { url = "https://files.pythonhosted.org/packages/55/20/4df3f817c28938e22ee7c7c4b28d8b3a212e5a111c3bd9633bc410267daa/patchright-1.51.3-py3-none-macosx_11_0_arm64.whl", hash = "sha256:6db73035997b39b5696bc888a5822b2ee1e63078d23a693861be2087e8b81d79", size = 37968580, upload-time = "2025-04-04T19:44:02.111Z" },
+    { url = "https://files.pythonhosted.org/packages/1a/55/d62c85fff36e9e9e515ee92407b02acb556e6832d4fbcc8624b638cf70bb/patchright-1.51.3-py3-none-macosx_11_0_universal2.whl", hash = "sha256:8b9ab3a9a83bd1a0dd47cc2de74f2064bac25e689b106e6d852951d588fa5c82", size = 39616848, upload-time = "2025-04-04T19:44:05.189Z" },
+    { url = "https://files.pythonhosted.org/packages/70/cb/e7cd2f6161e30a4009cf38dd00024b1303197afcd4297081b0ccd21016a8/patchright-1.51.3-py3-none-manylinux1_x86_64.whl", hash = "sha256:6a5259077e9b0b5c8668fe26c9c50725a2691739f2d5d761bc9ff96b8d3e03f5", size = 45146939, upload-time = "2025-04-04T19:44:08.615Z" },
+    { url = "https://files.pythonhosted.org/packages/81/09/e6126d32175f96ea963616debbb8e380e7c987ca913efeb59bf7e7f39438/patchright-1.51.3-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:33d9ec53bdc0c88e869b88beefca5e2a3576693370c4db0235c733b184d7df92", size = 44546233, upload-time = "2025-04-04T19:44:11.932Z" },
+    { url = "https://files.pythonhosted.org/packages/e9/c6/09c37de986bc883f9c9cefec1b9f92857b5db7bfe3915f3cbbcb45d0ef66/patchright-1.51.3-py3-none-win32.whl", hash = "sha256:b0e21d719df80656cfa9066de73b2e4ab4cfddc634829bfa2f6d6c82bc05f3f3", size = 34844759, upload-time = "2025-04-04T19:44:16.35Z" },
+    { url = "https://files.pythonhosted.org/packages/6e/fd/97e3e26893904bdeff36d54e6ea5fe5f81a245a96c1b73ebe37e956ce11d/patchright-1.51.3-py3-none-win_amd64.whl", hash = "sha256:a64c5c05f724e6097b227142e56cf2e46ce6cd549cdf8f7708c074024b486761", size = 34844765, upload-time = "2025-04-04T19:44:19.353Z" },
+]
+
+[[package]]
 name = "pillow"
 version = "12.1.1"
 source = { registry = "https://pypi.org/simple" }
@@ -2233,7 +2251,7 @@ wheels = [
 
 [[package]]
 name = "prax"
-version = "0.6.0"
+version = "0.7.0"
 source = { editable = "." }
 dependencies = [
     { name = "apscheduler" },
@@ -2264,6 +2282,7 @@ dependencies = [
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
     { name = "opentelemetry-sdk" },
+    { name = "patchright" },
     { name = "pillow" },
     { name = "playwright" },
     { name = "prometheus-client" },
@@ -2324,6 +2343,7 @@ requires-dist = [
     { name = "opentelemetry-api", specifier = ">=1.40.0" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.40.0" },
     { name = "opentelemetry-sdk", specifier = ">=1.40.0" },
+    { name = "patchright", specifier = ">=1.51.3" },
     { name = "pillow", specifier = ">=12.1.1" },
     { name = "playwright", specifier = "==1.51.0" },
     { name = "prometheus-client", specifier = ">=0.24.1" },

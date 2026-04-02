@@ -79,12 +79,9 @@ graph TD
 
 ### Per-Message Trace Links
 
-When TeamWork is connected and observability is enabled, each agent response message includes a **trace button** (green Activity icon on hover). Clicking it opens the full execution trace in Grafana Tempo, showing:
+When TeamWork is connected, each agent response message includes a **trace button** (green Activity icon on hover). Clicking it navigates to the **Execution Graphs** panel in TeamWork with the specific trace auto-selected — showing the delegation tree, tool calls, timing, and status. If Grafana is running, traces can also be viewed in Tempo for deeper analysis (LLM calls, token counts, latency, correlated logs).
 
-- Every LLM call with model name, token counts, and latency
-- Every tool invocation with input/output previews
-- The full delegation tree (orchestrator → spokes → sub-agents)
-- Correlated logs from the same trace
+Each execution graph also displays the **trigger** — the raw user message (or cron/event) that started the trace — so you can see what prompted each agent run.
 
 ### TeamWork Integration
 
@@ -99,19 +96,29 @@ A separate **Execution Graphs** panel (Workflow icon) provides a tree visualizat
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OBSERVABILITY_ENABLED` | `false` | Master switch for the observability stack |
+| `OBSERVABILITY_ENABLED` | `true` | Master switch — probes Tempo at startup, silently disables if unreachable |
 | `GRAFANA_URL` | (empty) | Grafana base URL for deep-links (e.g. `http://localhost:3001`) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://tempo:4318` | OTLP exporter endpoint |
 
-All three are set automatically by `docker-compose.dev.yml`. In production, set `OBSERVABILITY_ENABLED=true` and point to your external Tempo/Prometheus/Loki deployment.
+### Enabling the Observability Stack
 
-### Enabling in Dev Mode
+The observability services (Tempo, Loki, Promtail, Prometheus, Grafana) are defined in the main `docker-compose.yml` behind a **Compose profile**. Start them with:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+# Full stack with observability:
+docker compose --profile observability up --build
+
+# Dev mode with observability:
+docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile observability up --build
 ```
 
-This starts the full LGTM stack alongside Prax. Open Grafana at **http://localhost:3001** (default credentials: admin/prax).
+Open Grafana at **http://localhost:3001** (default credentials: admin/prax).
+
+### Safe Degradation
+
+`OBSERVABILITY_ENABLED=true` is the default in `.env`. If you run without `--profile observability` (i.e., Tempo isn't running), the OTEL exporter **probes Tempo at startup** and silently disables itself if unreachable — no retries, no memory accumulation, no OOM risk. The `BatchSpanProcessor` queue is also capped at 2048 spans as a safety net.
+
+This means you can always leave `OBSERVABILITY_ENABLED=true` in `.env` and simply control whether the stack runs via the Compose profile.
 
 ### Key Files
 
