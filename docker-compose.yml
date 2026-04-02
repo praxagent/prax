@@ -29,6 +29,11 @@ services:
       - TEAMWORK_URL=http://teamwork:8000
       - TEAMWORK_API_KEY=${TEAMWORK_API_KEY:-}
       - TEAMWORK_USER_PHONE=${TEAMWORK_USER_PHONE:-}
+      # Memory infrastructure — overrides .env when running in Docker.
+      - QDRANT_URL=http://qdrant:6333
+      - NEO4J_URI=bolt://neo4j:7687
+      # Ollama — when EMBEDDING_PROVIDER=ollama, embeddings use this endpoint.
+      - OLLAMA_BASE_URL=http://ollama:11434
       # OTel exporter — sends traces to Tempo when observability is enabled.
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4318
       - GRAFANA_URL=${GRAFANA_URL:-http://localhost:3001}
@@ -109,6 +114,49 @@ services:
       retries: 3
       start_period: 10s
 
+  # ---- Memory Infrastructure ----
+  # Start with: docker compose --profile memory up
+  # Provides Qdrant (vector store) and Neo4j (graph DB) for LTM.
+  # Set MEMORY_ENABLED=true in .env to activate.
+
+  qdrant:
+    image: qdrant/qdrant:v1.13.2
+    profiles: ["memory"]
+    restart: unless-stopped
+    ports:
+      - "6333:6333"   # HTTP API
+      - "6334:6334"   # gRPC
+    volumes:
+      - qdrant-data:/qdrant/storage
+
+  neo4j:
+    image: neo4j:5-community
+    profiles: ["memory"]
+    restart: unless-stopped
+    environment:
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:-prax-memory}
+      - NEO4J_PLUGINS=["apoc"]
+    ports:
+      - "7474:7474"   # Browser UI
+      - "7687:7687"   # Bolt protocol
+    volumes:
+      - neo4j-data:/data
+
+  # ---- Ollama (local embeddings + LLM) ----
+  # Start with: docker compose --profile ollama up
+  # Use when EMBEDDING_PROVIDER=ollama in .env.
+  # Pull an embedding model after first start:
+  #   docker compose exec ollama ollama pull nomic-embed-text
+
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ollama"]
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+
   # ---- Observability Stack ----
   # Start with: COMPOSE_PROFILES=observability docker compose up
   # Or: docker compose --profile observability up
@@ -182,6 +230,9 @@ services:
       - prometheus
 
 volumes:
+  ollama-data:
+  qdrant-data:
+  neo4j-data:
   tempo-data:
   loki-data:
   prometheus-data:

@@ -51,6 +51,8 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-http>=1.40.0",
     "prometheus-client>=0.24.1",
     "patchright>=1.51.3",
+    "qdrant-client>=1.13.0",
+    "neo4j>=5.0.0",
 ]
 
 [project.optional-dependencies]

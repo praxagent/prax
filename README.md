@@ -63,6 +63,38 @@ This adds the full observability suite alongside the core services:
 
 Grafana comes pre-provisioned with Tempo, Loki, and Prometheus datasources plus two dashboards (Agent Overview, LLM Performance). Config lives in `observability/`.
 
+#### With memory (Qdrant + Neo4j)
+
+```bash
+docker compose --profile memory up --build
+```
+
+This adds the long-term memory infrastructure:
+
+| Service | Port | Purpose |
+|---------|------|---------|
+| **Qdrant** | [localhost:6333](http://localhost:6333) | Vector store for semantic memory retrieval (dense + sparse) |
+| **Neo4j** | [localhost:7474](http://localhost:7474) | Knowledge graph for entity/relation memory (login: neo4j / prax-memory) |
+
+Set `MEMORY_ENABLED=true` in `.env` to activate.  If you run without `--profile memory`, Prax silently degrades — STM (scratchpad) still works, but LTM (semantic recall, graph queries, consolidation) is unavailable. See [Memory System](#memory-system) for details.
+
+#### With local embeddings (Ollama)
+
+If you don't want memory data sent to OpenAI, add the Ollama profile:
+
+```bash
+docker compose --profile memory --profile ollama up --build
+docker compose exec ollama ollama pull nomic-embed-text  # one-time
+```
+
+Then set in `.env`:
+```env
+EMBEDDING_PROVIDER=ollama
+EMBEDDING_MODEL=nomic-embed-text
+```
+
+See [Embedding Providers](docs/infrastructure/memory.md#embedding-providers) for a comparison of OpenAI vs Ollama vs local options.
+
 #### Developer mode
 
 The default `docker-compose.yml` volume-mounts `./prax`, `./app.py`, and `./config.py` into the app container. Python/prompt changes take effect with a container restart — no image rebuild needed:
@@ -125,7 +157,7 @@ Prax is a multi-channel AI assistant powered by a LangGraph ReAct agent. It conn
 |----------|-----------|
 | **Channels** | [TeamWork](https://github.com/praxagent/teamwork) web UI (Slack-like chat, Kanban, terminal, browser, file browser, execution graphs, live agent output), Discord bot (free, WebSocket), Twilio voice + SMS (webhooks), cross-channel mirroring (Discord/SMS → TeamWork #discord/#sms channels) |
 | **Agent** | LangGraph ReAct loop, 97+ built-in tools (extensible via plugins), dedicated sub-agents (self-improvement, plugin engineering, content authoring, research, coding), watchdog supervisor, automatic checkpoint & retry on failures |
-| **Memory** | SQLite conversations with auto-summarization, git-backed per-user workspaces, dynamic user notes, link history, to-do lists, task plans |
+| **Memory** | Two-layer human-like memory: STM scratchpad + LTM with Qdrant vector store (semantic recall) and Neo4j knowledge graph (entity relations, multi-hop reasoning). Hybrid retrieval via RRF fusion, Ebbinghaus-inspired forgetting curve, automatic consolidation. Plus: SQLite conversations, git-backed workspaces, user notes, to-do lists |
 | **Notes** | Conversation-to-note publishing (Hugo pages with KaTeX, mermaid, syntax highlighting), iterative updates, searchable index, shareable URLs, bidirectional knowledge graph links |
 | **Documents** | PDF extraction (arXiv, URLs, attachments), web page summaries, YouTube transcripts, LaTeX compilation, URL-to-note / PDF-to-note / arXiv-to-note pipelines |
 | **Research** | Research projects (group notes, links, sources), RSS/Atom feed subscriptions, conversation history search across sessions |
@@ -173,7 +205,7 @@ Agent delegation (spoke agents, sub-hubs), self-improving fine-tuning (vLLM + Un
 
 ### [Infrastructure](docs/infrastructure/README.md)
 
-Docker sandbox with OpenCode, Playwright browser automation (CDP + Playwright, VNC login, persistent profiles), Grafana observability stack (Tempo traces, Prometheus metrics, Loki logs — `--profile observability`), and Docker Compose configuration.
+Docker sandbox with OpenCode, Playwright browser automation (CDP + Playwright, VNC login, persistent profiles), Grafana observability stack (Tempo traces, Prometheus metrics, Loki logs — `--profile observability`), two-layer memory system (STM + LTM with Qdrant, Neo4j, hybrid retrieval), and Docker Compose configuration.
 
 ### [Security](docs/security/README.md)
 
@@ -186,6 +218,22 @@ Setup and prerequisites, extending the agent (plugin system, manual tool registr
 ### [Research](docs/research/README.md)
 
 Academic foundations for agentic workflow design — 19 sections covering planning, reflexion, orchestration, anti-hallucination, tool overload, content pipelines, plugin sandboxing, Thompson Sampling, Active Inference, and external benchmarking. Each finding is empirically validated and mapped to Prax's implementation.
+
+---
+
+## Memory System
+
+Prax has a two-layer, research-grounded memory system inspired by human cognition: a fast **short-term memory** (STM) for immediate context, and a scalable **long-term memory** (LTM) for durable recall across conversations.
+
+- **STM** — per-user JSON scratchpad, always available (no infra needed), auto-injected into context
+- **LTM** — Qdrant vector store (dense + sparse embeddings) + Neo4j knowledge graph (entities, relations, multi-hop traversal), fused via Reciprocal Rank Fusion
+- **Consolidation** — scheduled pipeline extracts entities/relations/facts from conversations, scores importance, applies Ebbinghaus forgetting curve decay
+- **Embedding providers** — OpenAI (default), Ollama (local/offline), or fastembed (in-process) — no data leaves your machine if you don't want it to
+- **10 agent tools** — STM read/write/delete, LTM remember/recall/forget, entity lookup, graph query, consolidation, stats
+
+Enable with `docker compose --profile memory up` and `MEMORY_ENABLED=true`. Without the memory profile, STM still works — LTM degrades silently.
+
+[Full documentation →](docs/infrastructure/memory.md)
 
 ---
 
@@ -225,6 +273,7 @@ Academic foundations for agentic workflow design — 19 sections covering planni
 - [x] Multi-perspective error recovery (4-angle failure analysis before retry)
 - [x] Metacognitive failure profiles (per-component pattern learning with confidence decay)
 - [x] Self-verification (workspace file and delegation output checks before delivery)
+- [x] Two-layer memory system (STM scratchpad + LTM with Qdrant vectors, Neo4j graph, RRF fusion, Ebbinghaus decay, consolidation pipeline)
 - [ ] Apple Silicon support (MLX backend as alternative to vLLM/CUDA)
 - [ ] Sandbox Docker image build + integration test with live OpenCode
 - [ ] Voice-triggered sandbox sessions

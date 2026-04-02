@@ -7,6 +7,7 @@ Prax is organized in five layers with a clear direction of dependency: **bluepri
 - [Hub-and-Spoke Architecture](hub-and-spoke.md) — Orchestrator, spoke agents, sub-hubs, and delegation patterns
 - [Request Flows](request-flows.md) — SMS, Discord, TeamWork, sandbox, and scheduling flows
 - [Workspace](workspace.md) — Per-user git-backed file layout, TeamWork integration, Dropbox sync
+- [Memory System](#memory-system) — STM scratchpad, LTM vector + graph, hybrid retrieval, consolidation
 
 ## High-Level System Overview
 
@@ -48,7 +49,7 @@ graph TB
             WS["Workspace (11)\nfiles, todos, planning"]
             Sched["Scheduler (9)\ncron, reminders"]
             Courses["Courses (6)\ntutoring"]
-            Spokes["Spoke Delegates (8)\nbrowser, content, sysadmin,\nsandbox, finetune, knowledge,\nresearch, vision"]
+            Spokes["Spoke Delegates (9)\nbrowser, content, sysadmin,\nsandbox, finetune, knowledge,\nresearch, vision, memory"]
             SA["Sub-Agent (2)\ndelegate_task, delegate_parallel"]
         end
     end
@@ -80,6 +81,13 @@ graph TB
         Links["links.md\n(link history)"]
         Instructions["instructions.md\n(prompt reference)"]
         AgentPlan["agent_plan.json\n(task decomposition)"]
+    end
+
+    subgraph Memory["Memory System (optional)"]
+        STM["STM Scratchpad\n(workspace JSON)"]
+        Qdrant["Qdrant\n(dense + sparse vectors)"]
+        Neo4j["Neo4j\n(entity graph)"]
+        Embedder["Embedder\n(OpenAI / Ollama / local)"]
     end
 
     subgraph Sandbox["Docker Sandbox"]
@@ -151,6 +159,11 @@ graph TB
     Scheduler -->|fires| ConvoSvc
     ConvoSvc -->|SMS / Discord reply| User
     Worktree -->|PR| Workspace
+    Orchestrator -->|context inject| STM
+    Spokes -->|memory spoke| Qdrant
+    Spokes -->|memory spoke| Neo4j
+    Embedder --> Qdrant
+    STM --> Workspace
 ```
 
 ## Concepts — What Lives Where
@@ -185,3 +198,45 @@ User ──▸ Twilio/Discord
 - **Need a new capability** (e.g., email sending)? Add a service, then wrap it with a tool builder in `agent/` or a plugin in `plugins/tools/`.
 - **Need a new tool the agent can call?** If it's a core, always-on tool, add it to an `agent/*_tools.py` builder. If it's optional, content-focused, or user-modifiable, make it a plugin.
 - **Need to change the system prompt?** Edit `plugins/prompts/system_prompt.md` (or let the agent do it at runtime via `prompt_write`).
+
+## Memory System
+
+Prax has a two-layer memory system inspired by human cognition, implemented across three data stores:
+
+```
+┌─────────────────────────────────────────────────────┐
+│                  Orchestrator                        │
+│  (injects STM + LTM context into system prompt)     │
+└────────────┬────────────────────────┬───────────────┘
+             │                        │
+     ┌───────▼───────┐       ┌───────▼───────────┐
+     │  STM (fast)   │       │  LTM (durable)    │
+     │  Workspace    │       │  ┌─────────────┐  │
+     │  JSON file    │       │  │ Qdrant      │  │
+     │  (always on)  │       │  │ dense+sparse│  │
+     │               │       │  └──────┬──────┘  │
+     │  key → value  │       │         │ RRF     │
+     │  + importance │       │  ┌──────┴──────┐  │
+     │  + tags       │       │  │ Neo4j       │  │
+     │               │       │  │ entity graph│  │
+     └───────────────┘       │  └─────────────┘  │
+                             └───────────────────┘
+                                      │
+                             ┌────────▼────────┐
+                             │ Consolidation   │
+                             │ (scheduled)     │
+                             │ traces → LLM    │
+                             │ → graph + vector│
+                             │ → decay + prune │
+                             └─────────────────┘
+```
+
+**Short-term memory (STM)** is a per-user JSON scratchpad stored in the workspace (`{workspace}/memory/stm.json`). It requires no infrastructure — works even without the memory Docker profile. The orchestrator injects STM entries into the system prompt on every turn.
+
+**Long-term memory (LTM)** requires Qdrant (vector store) and Neo4j (knowledge graph), started via `--profile memory`. Memories are stored as both dense embeddings (semantic similarity) and sparse TF-IDF vectors (keyword matching) in Qdrant, plus entities and typed relations in Neo4j. At query time, all three retrieval arms (dense, sparse, graph neighbourhood) run in parallel and results are fused via Reciprocal Rank Fusion (RRF).
+
+**Consolidation** converts conversation traces into durable memories: LLM extraction of entities/relations/facts → graph upsert → vector upsert → Ebbinghaus decay → daily summaries.
+
+**Embedding providers** are pluggable: OpenAI (default, cloud), Ollama (local, no data leaves your machine), or fastembed (in-process, zero dependencies). The system gracefully degrades — if Qdrant or Neo4j are unreachable, LTM returns empty results without errors. STM always works.
+
+The memory spoke agent exposes 10 tools for explicit memory operations (remember, recall, forget, entity lookup, graph query, etc.). See [Memory deep-dive](../infrastructure/memory.md) for full documentation.

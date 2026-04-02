@@ -157,6 +157,31 @@ class AppSettings(BaseSettings):
         """Return the SSH key, preferring PRAX_SSH_KEY_B64 over the legacy setting."""
         return self.prax_ssh_key_b64 or self.plugin_repo_ssh_key_b64
 
+    # Memory system (vector store + knowledge graph)
+    memory_enabled: bool = Field(default=False, alias="MEMORY_ENABLED")
+    qdrant_url: str = Field(default="http://localhost:6333", alias="QDRANT_URL")
+    neo4j_uri: str = Field(default="bolt://localhost:7687", alias="NEO4J_URI")
+    neo4j_user: str = Field(default="neo4j", alias="NEO4J_USER")
+    neo4j_password: str = Field(default="prax-memory", alias="NEO4J_PASSWORD")
+    embedding_model: str = Field(default="text-embedding-3-small", alias="EMBEDDING_MODEL")
+    embedding_provider: str = Field(default="openai", alias="EMBEDDING_PROVIDER")
+    ollama_base_url: str = Field(
+        default="http://localhost:11434", alias="OLLAMA_BASE_URL",
+        description="Ollama endpoint for local embeddings (when EMBEDDING_PROVIDER=ollama).",
+    )
+    memory_consolidation_interval: int = Field(
+        default=3600, alias="MEMORY_CONSOLIDATION_INTERVAL",
+        description="Seconds between automatic consolidation runs.",
+    )
+    memory_stm_max_entries: int = Field(
+        default=50, alias="MEMORY_STM_MAX_ENTRIES",
+        description="Max scratchpad entries before LLM compaction kicks in.",
+    )
+    memory_decay_halflife_days: float = Field(
+        default=7.0, alias="MEMORY_DECAY_HALFLIFE_DAYS",
+        description="Half-life in days for Ebbinghaus-style memory importance decay.",
+    )
+
     # Observability (OTel tracing, Prometheus metrics, Grafana dashboards)
     observability_enabled: bool = Field(default=False, alias="OBSERVABILITY_ENABLED")
     grafana_url: str = Field(default="", alias="GRAFANA_URL")  # e.g. "http://localhost:3001"
