@@ -36,7 +36,7 @@ def test_sandbox_message(monkeypatch):
 
     monkeypatch.setattr(
         svc, "send_message",
-        lambda uid, msg, model=None: {"session_id": "abc", "model": "anthropic/test", "response": {"content": "Done"}},
+        lambda uid, msg, model=None, session_id=None: {"session_id": "abc", "model": "anthropic/test", "response": {"content": "Done"}},
     )
     current_user_id.set("+10000000000")
 
@@ -50,7 +50,7 @@ def test_sandbox_message_with_model_switch(monkeypatch):
 
     monkeypatch.setattr(
         svc, "send_message",
-        lambda uid, msg, model=None: {"session_id": "abc", "model": model or "default", "response": "switched"},
+        lambda uid, msg, model=None, session_id=None: {"session_id": "abc", "model": model or "default", "response": "switched"},
     )
     current_user_id.set("+10000000000")
 
@@ -64,7 +64,7 @@ def test_sandbox_review(monkeypatch):
 
     monkeypatch.setattr(
         svc, "review_session",
-        lambda uid: {
+        lambda uid, session_id=None: {
             "session_id": "abc-123-456",
             "status": "running",
             "model": "anthropic/test",
@@ -87,7 +87,7 @@ def test_sandbox_finish(monkeypatch):
 
     monkeypatch.setattr(
         svc, "finish_session",
-        lambda uid, summary="": {"session_id": "abc", "status": "finished", "archived_path": "/archive/code/abc"},
+        lambda uid, summary="", session_id=None: {"session_id": "abc", "status": "finished", "archived_path": "/archive/code/abc"},
     )
     current_user_id.set("+10000000000")
 
@@ -99,7 +99,7 @@ def test_sandbox_abort(monkeypatch):
     module = importlib.reload(importlib.import_module("prax.agent.sandbox_tools"))
     svc = importlib.import_module("prax.services.sandbox_service")
 
-    monkeypatch.setattr(svc, "abort_session", lambda uid: {"session_id": "abc", "status": "aborted"})
+    monkeypatch.setattr(svc, "abort_session", lambda uid, session_id=None: {"session_id": "abc", "status": "aborted"})
     current_user_id.set("+10000000000")
 
     result = module.sandbox_abort.invoke({})
