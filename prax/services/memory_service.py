@@ -288,6 +288,21 @@ class MemoryService:
     # Context injection — for orchestrator prompt assembly
     # ------------------------------------------------------------------
 
+    def track_interaction(self, user_id: str) -> int:
+        """Increment the interaction epoch for a user.
+
+        Called once per user message by the orchestrator to advance the
+        interaction counter used by interaction-based decay.
+        Returns the new epoch value.
+        """
+        if not self._available:
+            return 0
+        try:
+            from prax.services.memory.vector_store import increment_interaction_epoch
+            return increment_interaction_epoch(user_id)
+        except Exception:
+            return 0
+
     def build_memory_context(self, user_id: str, user_input: str, max_tokens: int = 500) -> str:
         """Retrieve relevant memories and format as system prompt context.
 

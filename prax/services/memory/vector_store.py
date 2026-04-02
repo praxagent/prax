@@ -4,12 +4,18 @@ Stores memory chunks as dense (text-embedding-3-small, 1536-dim) and sparse
 (TF-IDF) vectors with rich payload metadata.  All queries are scoped by
 user_id for isolation.
 
+Decay uses both wall-clock time AND interaction count (how many conversations
+have happened since the memory was last accessed), taking the maximum of both
+decay signals.  This handles both "gone for a week" and "100 conversations but
+never mentioned X" scenarios.
+
 Gracefully degrades: if Qdrant is unreachable, operations return empty
 results and log warnings (no crashes).
 
 References:
   - Lewis et al., "Retrieval-Augmented Generation" (2020): RAG foundation.
   - Karpukhin et al., "Dense Passage Retrieval" (2020): dense retrieval evidence.
+  - FOREVER (2026): interaction-based decay outperforms pure wall-clock decay.
 """
 from __future__ import annotations
 
@@ -113,6 +119,7 @@ def upsert_memory(
                 "created_at": now,
                 "last_accessed": now,
                 "access_count": 0,
+                "interaction_epoch": 0,  # global interaction count when stored
                 "tags": tags or [],
                 "entity_ids": entity_ids or [],
                 "summary_level": summary_level,
@@ -193,32 +200,88 @@ def search_sparse(
         return []
 
 
-def reinforce_memory(memory_id: str) -> None:
-    """Bump access_count and last_accessed for a retrieved memory.
+def reinforce_memory(memory_id: str, interaction_epoch: int = 0) -> None:
+    """Bump access_count, last_accessed, and interaction_epoch for a retrieved memory.
 
     Implements the "strengthen on recall" pattern from MemoryBank
-    (Zhong et al., 2023).
+    (Zhong et al., 2023), extended with interaction-based tracking
+    (FOREVER, 2026).
     """
     try:
         client = _get_client()
         now = datetime.now(timezone.utc).isoformat()
-        from qdrant_client.models import SetPayloadOperation
 
         # Qdrant doesn't support atomic increment, so we read-modify-write
         points = client.retrieve(collection_name=COLLECTION, ids=[memory_id], with_payload=True)
         if not points:
             return
         payload = points[0].payload or {}
+        update: dict = {
+            "access_count": payload.get("access_count", 0) + 1,
+            "last_accessed": now,
+        }
+        if interaction_epoch > 0:
+            update["interaction_epoch"] = interaction_epoch
         client.set_payload(
             collection_name=COLLECTION,
-            payload={
-                "access_count": payload.get("access_count", 0) + 1,
-                "last_accessed": now,
-            },
+            payload=update,
             points=[memory_id],
         )
     except Exception:
         logger.debug("Memory reinforcement failed for %s", memory_id, exc_info=True)
+
+
+def get_interaction_epoch(user_id: str) -> int:
+    """Return the current interaction epoch (message count) for a user.
+
+    Stored in the first memory point's metadata or via a dedicated counter.
+    Falls back to 0 if no data is available.
+    """
+    try:
+        client = _get_client()
+        from qdrant_client.models import FieldCondition, Filter, MatchValue
+
+        # Use a sentinel point to store the counter
+        points = client.retrieve(
+            collection_name=COLLECTION,
+            ids=[f"epoch_{user_id}"],
+            with_payload=True,
+        )
+        if points:
+            return points[0].payload.get("epoch", 0)
+        return 0
+    except Exception:
+        return 0
+
+
+def increment_interaction_epoch(user_id: str) -> int:
+    """Increment and return the interaction epoch for a user.
+
+    Called once per user message to advance the epoch counter.
+    """
+    try:
+        client = _get_client()
+        _ensure_collection(client)
+        from qdrant_client.models import PointStruct
+
+        current = get_interaction_epoch(user_id)
+        new_epoch = current + 1
+        # Store as a sentinel point with a zero vector
+        point = PointStruct(
+            id=f"epoch_{user_id}",
+            vector={"dense": [0.0] * DENSE_DIM},
+            payload={
+                "user_id": f"_system_{user_id}",
+                "content": "",
+                "epoch": new_epoch,
+                "source": "_epoch_counter",
+            },
+        )
+        client.upsert(collection_name=COLLECTION, points=[point])
+        return new_epoch
+    except Exception:
+        logger.debug("Failed to increment interaction epoch for %s", user_id)
+        return 0
 
 
 def delete_memory(memory_id: str) -> bool:
@@ -249,11 +312,21 @@ def get_user_memory_count(user_id: str) -> int:
         return 0
 
 
-def decay_memories(user_id: str, halflife_days: float = 7.0, prune_threshold: float = 0.02) -> int:
-    """Apply Ebbinghaus-inspired exponential decay to all user memories.
+def decay_memories(
+    user_id: str,
+    halflife_days: float = 7.0,
+    halflife_interactions: int = 100,
+    prune_threshold: float = 0.02,
+) -> int:
+    """Apply dual decay to all user memories: time-based AND interaction-based.
 
-    importance *= exp(-lambda * days_since_last_access)
-    where lambda = ln(2) / halflife_days
+    Decay signals:
+      time_decay   = exp(-λ_t × days_since_last_access)
+      interaction_decay = exp(-λ_i × interactions_since_last_access)
+
+    The effective decay is the minimum of both (strongest decay wins).
+    This handles both "gone for a week" and "100 conversations but never
+    mentioned X" scenarios.
 
     Memories below prune_threshold are deleted.
     Returns the number of memories pruned.
@@ -261,11 +334,14 @@ def decay_memories(user_id: str, halflife_days: float = 7.0, prune_threshold: fl
     References:
       - Zhong et al., "MemoryBank" (2023): forgetting curve integration.
       - Park et al., "Generative Agents" (2023): exponential recency decay.
+      - FOREVER (2026): interaction-based decay outperforms wall-clock decay.
     """
     import math
 
-    lambda_ = math.log(2) / halflife_days
+    lambda_t = math.log(2) / halflife_days
+    lambda_i = math.log(2) / halflife_interactions if halflife_interactions > 0 else 0.0
     now = datetime.now(timezone.utc)
+    current_epoch = get_interaction_epoch(user_id)
     pruned = 0
 
     try:
@@ -292,6 +368,10 @@ def decay_memories(user_id: str, halflife_days: float = 7.0, prune_threshold: fl
 
             for r in records:
                 payload = r.payload or {}
+                # Skip sentinel points (epoch counters)
+                if payload.get("source") == "_epoch_counter":
+                    continue
+
                 last_accessed = payload.get("last_accessed", payload.get("created_at", ""))
                 if not last_accessed:
                     continue
@@ -301,9 +381,20 @@ def decay_memories(user_id: str, halflife_days: float = 7.0, prune_threshold: fl
                 except (ValueError, AttributeError):
                     continue
 
-                days_elapsed = (now - last_dt).total_seconds() / 86400
                 current_imp = payload.get("importance", 0.5)
-                new_imp = current_imp * math.exp(-lambda_ * days_elapsed)
+
+                # Time-based decay
+                days_elapsed = (now - last_dt).total_seconds() / 86400
+                time_factor = math.exp(-lambda_t * days_elapsed)
+
+                # Interaction-based decay
+                mem_epoch = payload.get("interaction_epoch", 0)
+                interaction_gap = max(0, current_epoch - mem_epoch)
+                interaction_factor = math.exp(-lambda_i * interaction_gap) if lambda_i > 0 else 1.0
+
+                # Use the stronger decay signal (minimum factor)
+                decay_factor = min(time_factor, interaction_factor)
+                new_imp = current_imp * decay_factor
 
                 if new_imp < prune_threshold:
                     ids_to_delete.append(r.id)

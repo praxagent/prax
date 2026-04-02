@@ -230,9 +230,11 @@ Qdrant stores memory chunks with both dense and sparse embeddings, enabling hybr
 
 Neo4j stores entities and typed relations for structured memory.
 
-**Graph model:**
+**Multi-graph model** (three orthogonal layers, inspired by MAGMA, Jiang et al. 2026):
 
 ```
+── Entity Graph (who/what) ──
+
 (:Entity {
   id: UUID,
   user_id: string,        ← mandatory, all queries scoped
@@ -251,14 +253,48 @@ Neo4j stores entities and typed relations for structured memory.
   weight: float,          ← accumulates on each mention
   first_seen: datetime,
   last_seen: datetime,
-  evidence: string        ← brief reason, semicolon-separated
+  evidence: string,       ← brief reason, semicolon-separated
+  valid_from: datetime,   ← bi-temporal: when the fact became true
+  valid_until: datetime   ← bi-temporal: when superseded (null = currently valid)
 }]->
+
+── Temporal Graph (when) ──
+
+(:TemporalEvent {
+  id: UUID,
+  user_id: string,
+  description: string,
+  occurred_at: datetime,
+  importance: float,
+  created_at: datetime
+})
+
+(:Entity)-[:PARTICIPATED_IN]->(:TemporalEvent)
+
+── Causal Graph (why) ──
+
+(:CausalLink {
+  id: UUID,
+  user_id: string,
+  cause: string,
+  effect: string,
+  importance: float,
+  created_at: datetime
+})
+
+(:Entity)-[:CAUSED_BY {direction: 'cause'}]->(:CausalLink)
+(:CausalLink)-[:CAUSED_BY {direction: 'effect'}]->(:Entity)
 ```
+
+**Bi-temporal edges** (inspired by Rasmussen et al., "Zep" 2025): Every RELATES_TO edge carries `valid_from` (when the fact became true) and `valid_until` (when it was superseded). `valid_until = null` means "currently valid". When consolidation detects a contradiction (e.g., "user now prefers light mode"), the old "prefers dark mode" edge gets `valid_until` set rather than deleted — preserving history while keeping retrieval current.
 
 **Operations:**
 - `merge_entity` — upsert with MERGE semantics (increment mention_count on match)
-- `add_relation` — create or strengthen a typed edge (weight accumulates)
-- `get_entity` — look up entity + all its relations
+- `add_relation` — create or strengthen a typed edge (weight accumulates, bi-temporal)
+- `supersede_relation` — mark an edge as no longer current (sets `valid_until`)
+- `merge_temporal_event` — create a TemporalEvent and link participating entities
+- `add_causal_link` — create a CausalLink connecting cause and effect entities
+- `get_entity` — look up entity + all its current relations (filter superseded by default)
 - `get_neighbours` — k-hop traversal for associative recall
 - `search_entities` — substring search on entity names
 - `decay_graph` — apply exponential decay to importance/weight, prune weak nodes/edges
@@ -267,11 +303,24 @@ Neo4j stores entities and typed relations for structured memory.
 
 At query time, three retrieval arms run and their results are fused:
 
-**Step 1: Generate query representations**
+**Step 1: Classify query intent**
+
+A lightweight heuristic (no LLM call) classifies the query to determine retrieval arm weights:
+
+| Signal | Example | Dense | Sparse | Graph |
+|--------|---------|-------|--------|-------|
+| Quoted phrases / identifiers | `"error E-4012"` | 0.8× | 1.5× | 1.3× |
+| Named entities (capitalised) | `How are Alice and Bob related?` | 1.0× | 1.2× | 1.4× |
+| Open-ended / semantic | `How do you feel about the approach?` | 1.4× | 0.9× | 1.0× |
+| Neutral | `memory test` | 1.0× | 1.0× | 1.0× |
+
+Inspired by type-specific weighted RRF (arXiv:2511.18194) — different query types benefit from different retrieval strategies.
+
+**Step 2: Generate query representations**
 - Dense: embed query with same model used for storage
 - Sparse: TF-IDF encode query
 
-**Step 2: Parallel retrieval**
+**Step 3: Parallel retrieval**
 - Dense vector search (Qdrant, top 2k)
 - Sparse keyword search (Qdrant, top 2k)
 - Graph neighbourhood search:
@@ -280,23 +329,23 @@ At query time, three retrieval arms run and their results are fused:
   3. Traverse 1-2 hops to find related entities
   4. Fetch associated memories from vector store via `entity_ids`
 
-**Step 3: Reciprocal Rank Fusion (RRF)**
+**Step 4: Weighted Reciprocal Rank Fusion (RRF)**
 
 For each candidate appearing in any list:
 
 ```
-rrf_score = Σ 1/(k + rank_i)  for each list where candidate appears
+rrf_score = Σ weight_i / (k + rank_i)  for each list where candidate appears
 ```
 
-where `k = 60` (standard constant from Cormack et al., 2009). This is robust and requires no learned weights — each retriever contributes independently.
+where `k = 60` (standard constant from Cormack et al., 2009) and `weight_i` comes from query classification (Step 1). Equal weights reduce to standard RRF.
 
-**Step 4: Post-processing**
+**Step 5: Post-processing**
 - **Time decay:** `score *= exp(-λ × days_old)` where `λ = ln(2) / halflife`
 - **Importance boost:** `score *= (0.5 + importance)` — higher importance gets up to 1.5× boost
 - **Re-sort** and take top-k
 
-**Step 5: Reinforcement**
-- Returned memories get their `access_count` incremented and `last_accessed` updated
+**Step 6: Reinforcement**
+- Returned memories get their `access_count` and `interaction_epoch` updated
 - This implements the "strengthen on recall" pattern (MemoryBank, Zhong et al., 2023)
 
 ---
@@ -315,33 +364,48 @@ Converts episodic conversation traces into durable memories.
 ### Pipeline steps
 
 ```
-1. Read unconsolidated trace entries from {workspace}/trace.log
-   └── Track position in {workspace}/memory/consolidation_state.json
+ 1. Read unconsolidated trace entries from {workspace}/trace.log
+    └── Track position in {workspace}/memory/consolidation_state.json
 
-2. LLM extraction (tier: low, temp: 0.2)
-   ├── Entities: {name, type, display_name, importance}
-   ├── Relations: {source, type, target, weight, evidence}
-   └── Facts: {content, importance}
+ 2. LLM extraction (tier: low, temp: 0.2)
+    ├── Entities: {name, type, display_name, importance, confidence}
+    ├── Relations: {source, type, target, weight, evidence, confidence, valid_from, supersedes}
+    ├── Facts: {content, importance, confidence}
+    ├── Temporal events: {description, occurred_at, importance, participants}
+    └── Causal links: {cause, effect, cause_entities, effect_entities, importance}
 
-3. Graph upsert
-   ├── MERGE entities (increment mention_count on match)
-   └── MERGE relations (accumulate weight on match)
+ 3. Validation gate (confidence ≥ 0.6)
+    ├── High-confidence → proceed to LTM upsert
+    └── Low-confidence → STM "pending_review" queue (human validation)
 
-4. Vector upsert
-   ├── Chunk facts into memory units
-   ├── Generate dense + sparse embeddings
-   └── Store with entity cross-references
+ 4. Entity graph upsert
+    ├── MERGE entities (increment mention_count on match)
+    └── MERGE relations (accumulate weight, bi-temporal edges)
+        └── If supersedes: set valid_until on old edge
 
-5. Decay pass
-   ├── Vector: importance *= exp(-λ × days_since_access)
-   ├── Graph: importance/weight *= exp(-λ × days_since_access)
-   └── Prune memories below threshold (0.02)
+ 5. Temporal + causal graph upsert
+    ├── Create TemporalEvent nodes, link participants
+    └── Create CausalLink nodes, link cause/effect entities
 
-6. Daily summary (if new day boundary)
-   ├── Summarise today's memories (3-5 sentences)
-   └── Store summary as a "daily" level memory
+ 6. Vector upsert (high-confidence facts only)
+    ├── Chunk facts into memory units
+    ├── Generate dense + sparse embeddings
+    └── Store with entity cross-references + interaction_epoch
 
-7. Update consolidation state
+ 7. Dual decay pass
+    ├── Time decay: importance *= exp(-λ_t × days_since_access)
+    ├── Interaction decay: importance *= exp(-λ_i × interactions_since_access)
+    ├── Effective decay = min(time_factor, interaction_factor)
+    ├── Graph: importance/weight *= exp(-λ × days_since_access)
+    └── Prune memories below threshold (0.02)
+
+ 8. Daily summary (if new day boundary)
+    ├── Summarise today's memories (3-5 sentences)
+    └── Store summary as a "daily" level memory
+
+ 9. Low-confidence items → STM pending review
+
+10. Update consolidation state
 ```
 
 ### Importance scoring
@@ -356,25 +420,44 @@ The LLM rates each extracted fact on a 0-1 scale:
 
 ---
 
-## Memory Decay (Ebbinghaus Forgetting Curve)
+## Memory Decay (Dual: Time + Interaction)
 
-Memory importance decays exponentially over time, inspired by the Ebbinghaus forgetting curve and implemented following MemoryBank (Zhong et al., 2023):
+Memory importance decays via **two independent signals**, taking the stronger one. This is inspired by the Ebbinghaus forgetting curve (MemoryBank, Zhong et al. 2023) extended with interaction-based decay (FOREVER, arXiv:2601.03938).
+
+### Time-based decay (Ebbinghaus)
 
 ```
-importance(t) = importance(t₀) × exp(-λ × Δt)
-
-where:
-  λ = ln(2) / MEMORY_DECAY_HALFLIFE_DAYS
-  Δt = days since last access
+time_factor = exp(-λ_t × days_since_last_access)
+where λ_t = ln(2) / MEMORY_DECAY_HALFLIFE_DAYS
 ```
 
 With the default half-life of 7 days:
 - After 7 days without access: importance halves (0.8 → 0.4)
 - After 14 days: quarters (0.8 → 0.2)
 - After 21 days: eighths (0.8 → 0.1)
-- Below 0.02: memory is pruned
 
-**Reinforcement:** Accessing a memory resets its `last_accessed` timestamp, effectively restarting the decay clock. Frequently recalled memories persist; unused ones fade — just like human memory.
+### Interaction-based decay
+
+```
+interaction_factor = exp(-λ_i × interactions_since_last_access)
+where λ_i = ln(2) / HALFLIFE_INTERACTIONS  (default: 100 interactions)
+```
+
+A user who chats daily and one who chats weekly should have different effective decay rates. Interaction-based decay measures "how much has happened since this memory was last relevant?" rather than just clock time.
+
+### Effective decay
+
+```
+effective_importance = importance × min(time_factor, interaction_factor)
+```
+
+The stronger decay signal wins. This handles both:
+- **"Gone for a week"** — time-based decay kicks in even with zero interactions
+- **"100 conversations but never mentioned X"** — interaction-based decay catches memories that are technically recent but irrelevant
+
+Below 0.02: memory is pruned.
+
+**Reinforcement:** Accessing a memory resets both its `last_accessed` timestamp and `interaction_epoch`, restarting both decay clocks. Frequently recalled memories persist; unused ones fade — just like human memory.
 
 **Graph decay** uses a 2× longer half-life (14 days default) since entity relationships are more stable than episodic memories.
 

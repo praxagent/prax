@@ -1,22 +1,24 @@
 """Hybrid retrieval engine — combines vector, sparse, and graph retrieval.
 
-Uses Reciprocal Rank Fusion (RRF) to merge ranked lists from multiple
-retrieval sources into a single ranking.  Post-processes with time decay
-and importance boosting.
+Uses *weighted* Reciprocal Rank Fusion (RRF) to merge ranked lists from
+multiple retrieval sources.  Weights are adaptive: factual/entity queries
+boost sparse + graph; semantic/open-ended queries boost dense.
 
 Pipeline:
-  1. Dense vector search (Qdrant) → ranked list
-  2. Sparse BM25-style search (Qdrant) → ranked list
-  3. Graph neighbourhood search (Neo4j) → ranked list
-  4. RRF fusion of all lists
-  5. Time decay modifier
-  6. Importance boost
-  7. Access reinforcement for returned results
+  1. Classify query intent (factual vs semantic)
+  2. Dense vector search (Qdrant) → ranked list
+  3. Sparse BM25-style search (Qdrant) → ranked list
+  4. Graph neighbourhood search (Neo4j) → ranked list
+  5. Weighted RRF fusion (weights from step 1)
+  6. Time decay modifier
+  7. Importance boost
+  8. Access reinforcement for returned results
 
 References:
   - Cormack et al., "Reciprocal Rank Fusion" (SIGIR 2009): robust rank fusion.
   - Park et al., "Generative Agents" (2023): relevance + recency + importance.
   - He et al., "HippoRAG" (2024): graph neighbourhood retrieval.
+  - KG-retrieval (2025, arXiv:2511.18194): type-specific weighted RRF.
 """
 from __future__ import annotations
 
@@ -44,10 +46,14 @@ def hybrid_search(
     """Run hybrid retrieval across all memory stores and return fused results.
 
     Combines dense vector search, sparse keyword search, and graph
-    neighbourhood expansion, then fuses via RRF with time/importance
-    adjustments.
+    neighbourhood expansion, then fuses via *weighted* RRF with
+    time/importance adjustments.  Weights are adaptive: factual queries
+    boost sparse + graph; semantic queries boost dense.
     """
     from prax.services.memory import embedder, graph_store, vector_store
+
+    # 0. Classify query to determine retrieval weights
+    weights = _classify_query_weights(query)
 
     # 1. Generate query embeddings
     query_dense = embedder.embed_text(query)
@@ -60,9 +66,9 @@ def hybrid_search(
     sparse_results = vector_store.search_sparse(user_id, query_sparse, top_k=top_k * 2)
     graph_results = _graph_neighbourhood_search(user_id, query, top_k=top_k)
 
-    # 3. RRF fusion
+    # 3. Weighted RRF fusion
     ranked_lists = [dense_results, sparse_results, graph_results]
-    fused = rrf_fuse(ranked_lists)
+    fused = rrf_fuse(ranked_lists, weights=weights)
 
     # 4. Apply time decay modifier
     if time_decay:
@@ -96,21 +102,31 @@ def hybrid_search(
     return final
 
 
-def rrf_fuse(ranked_lists: list[list[MemoryResult]]) -> list[MemoryResult]:
-    """Reciprocal Rank Fusion across multiple ranked result lists.
+def rrf_fuse(
+    ranked_lists: list[list[MemoryResult]],
+    weights: list[float] | None = None,
+) -> list[MemoryResult]:
+    """Weighted Reciprocal Rank Fusion across multiple ranked result lists.
 
     For each candidate appearing in any list:
-        rrf_score = sum(1 / (k + rank_i)) for each list where it appears
+        rrf_score = sum(weight_i / (k + rank_i)) for each list where it appears
 
     where k = 60 (standard constant from Cormack et al., 2009).
+    When weights=None, all lists are weighted equally (weight=1.0).
+
+    Inspired by type-specific weighted RRF (arXiv:2511.18194).
     """
+    if weights is None:
+        weights = [1.0] * len(ranked_lists)
+
     scores: dict[str, float] = {}
     best_result: dict[str, MemoryResult] = {}
 
-    for ranked_list in ranked_lists:
+    for list_idx, ranked_list in enumerate(ranked_lists):
+        w = weights[list_idx] if list_idx < len(weights) else 1.0
         for rank, result in enumerate(ranked_list):
             mid = result.memory_id
-            scores[mid] = scores.get(mid, 0) + 1.0 / (RRF_K + rank + 1)
+            scores[mid] = scores.get(mid, 0) + w / (RRF_K + rank + 1)
             # Keep the result with the highest original score for metadata
             if mid not in best_result or result.score > best_result[mid].score:
                 best_result[mid] = result
@@ -133,6 +149,51 @@ def rrf_fuse(ranked_lists: list[list[MemoryResult]]) -> list[MemoryResult]:
         )
 
     return fused
+
+
+def _classify_query_weights(query: str) -> list[float]:
+    """Classify query intent and return [dense_weight, sparse_weight, graph_weight].
+
+    Factual/entity queries (names, codes, specific lookups) boost sparse + graph.
+    Semantic/open-ended queries (feelings, preferences, general topics) boost dense.
+
+    Heuristics (fast, no LLM call):
+      - Quoted phrases / ALL-CAPS / identifiers → factual → boost sparse
+      - Named entities (capitalised words) → entity → boost graph
+      - Open-ended question words without specific terms → semantic → boost dense
+
+    Default weights: [1.0, 1.0, 1.0] (equal, standard RRF).
+    """
+    # Defaults — equal weighting
+    dense_w, sparse_w, graph_w = 1.0, 1.0, 1.0
+
+    has_quotes = '"' in query
+    has_identifier = bool(re.search(r"[A-Z]{2,}[-_]?\d+|[A-Z0-9]{4,}", query))
+    capitalised_words = re.findall(r"\b[A-Z][a-z]{2,}\b", query)
+    has_entities = len(capitalised_words) >= 2
+
+    # Factual signals → boost sparse + graph
+    if has_quotes or has_identifier:
+        sparse_w = 1.5
+        graph_w = 1.3
+        dense_w = 0.8
+
+    # Entity signals → boost graph
+    if has_entities:
+        graph_w = max(graph_w, 1.4)
+        sparse_w = max(sparse_w, 1.2)
+
+    # Semantic/open-ended signals → boost dense
+    open_ended_patterns = [
+        r"\b(how|why|what do you|tell me about|describe|explain)\b",
+        r"\b(feel|prefer|think|opinion|style|approach)\b",
+    ]
+    if any(re.search(p, query, re.IGNORECASE) for p in open_ended_patterns):
+        if not has_quotes and not has_identifier:
+            dense_w = max(dense_w, 1.4)
+            sparse_w = min(sparse_w, 0.9)
+
+    return [dense_w, sparse_w, graph_w]
 
 
 def _graph_neighbourhood_search(

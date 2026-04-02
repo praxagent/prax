@@ -2,13 +2,16 @@
 
 Pipeline:
   1. Read unconsolidated conversation entries from the trace log
-  2. LLM extraction of entities, relations, and key facts
-  3. Score importance
-  4. Upsert entities/relations to graph (merge semantics)
-  5. Chunk and embed text into vector store
-  6. Apply decay to old memories
-  7. Build/update daily summary
-  8. Mark entries as consolidated
+  2. LLM extraction of entities, relations, key facts, temporal events, causal links
+  3. Validation gate: filter by extraction confidence (≥0.6 threshold)
+  4. Score importance
+  5. Upsert entities/relations to graph (merge semantics, bi-temporal edges)
+  6. Upsert temporal events and causal links (multi-graph layers)
+  7. Chunk and embed text into vector store
+  8. Apply dual decay (time + interaction) to old memories
+  9. Build/update daily summary
+  10. Low-confidence facts → STM pending review
+  11. Mark entries as consolidated
 
 Triggered by:
   - Scheduled job (hourly by default)
@@ -19,6 +22,8 @@ References:
   - Park et al., "Generative Agents" (2023): reflection + importance scoring.
   - Zhong et al., "MemoryBank" (2023): daily summaries + forgetting curve.
   - Anthropic (2025): compaction and structured note-taking.
+  - Harvard et al. (2025, arXiv:2505.16067): error propagation from bad memories.
+  - Jiang et al., "MAGMA" (2026): multi-graph temporal + causal layers.
 """
 from __future__ import annotations
 
@@ -31,6 +36,11 @@ from prax.services.memory.models import ConsolidationResult
 from prax.settings import settings
 
 logger = logging.getLogger(__name__)
+
+# Minimum confidence for LLM-extracted facts/entities to be committed to LTM.
+# Below this threshold, facts go to STM as "pending_review" for human validation.
+# Protects against error propagation (Harvard et al., 2025, arXiv:2505.16067).
+CONFIDENCE_THRESHOLD = 0.6
 
 
 def _consolidation_state_path(user_id: str) -> str:
@@ -95,18 +105,43 @@ def consolidate_user(user_id: str) -> ConsolidationResult:
     batch = lines[:max_batch]
     text_blob = "\n".join(batch)
 
-    # 2. Extract entities, relations, and facts via LLM
+    # 2. Extract entities, relations, facts, temporal events, causal links via LLM
     extraction = _extract_entities_relations(text_blob)
 
-    # 3. Score importance
+    # 3. Validation gate — split by confidence
     facts = extraction.get("facts", [])
     entities = extraction.get("entities", [])
     relations = extraction.get("relations", [])
+    temporal_events = extraction.get("temporal_events", [])
+    causal_links = extraction.get("causal_links", [])
 
-    # 4. Upsert entities to graph
+    # Filter entities by confidence
+    high_conf_entities = [
+        e for e in entities
+        if e.get("confidence", 1.0) >= CONFIDENCE_THRESHOLD
+    ]
+    low_conf_entities = [
+        e for e in entities
+        if e.get("confidence", 1.0) < CONFIDENCE_THRESHOLD
+    ]
+
+    # Filter facts by confidence
+    high_conf_facts = []
+    low_conf_facts = []
+    for fact in facts:
+        if isinstance(fact, str):
+            high_conf_facts.append(fact)
+            continue
+        conf = fact.get("confidence", 1.0)
+        if conf >= CONFIDENCE_THRESHOLD:
+            high_conf_facts.append(fact)
+        else:
+            low_conf_facts.append(fact)
+
+    # 4. Upsert high-confidence entities to graph
     from prax.services.memory import graph_store
 
-    for ent in entities:
+    for ent in high_conf_entities:
         try:
             graph_store.merge_entity(
                 user_id=user_id,
@@ -119,8 +154,12 @@ def consolidate_user(user_id: str) -> ConsolidationResult:
         except Exception:
             logger.debug("Failed to upsert entity: %s", ent, exc_info=True)
 
-    # 5. Upsert relations to graph
+    # 5. Upsert relations to graph (bi-temporal edges)
     for rel in relations:
+        # Only upsert if both endpoints were high-confidence
+        conf = rel.get("confidence", 1.0)
+        if conf < CONFIDENCE_THRESHOLD:
+            continue
         try:
             graph_store.add_relation(
                 user_id=user_id,
@@ -129,15 +168,53 @@ def consolidate_user(user_id: str) -> ConsolidationResult:
                 target_name=rel.get("target", ""),
                 weight=rel.get("weight", 1.0),
                 evidence=rel.get("evidence", ""),
+                valid_from=rel.get("valid_from"),
             )
             result.relations_upserted += 1
+
+            # Handle supersession: if this relation contradicts an existing one
+            supersedes = rel.get("supersedes")
+            if supersedes:
+                graph_store.supersede_relation(
+                    user_id=user_id,
+                    source_name=supersedes.get("source", rel.get("source", "")),
+                    relation_type=supersedes.get("type", rel.get("type", "")),
+                    target_name=supersedes.get("target", rel.get("target", "")),
+                )
         except Exception:
             logger.debug("Failed to upsert relation: %s", rel, exc_info=True)
 
-    # 6. Chunk facts and embed into vector store
+    # 6. Upsert temporal events (multi-graph: temporal layer)
+    for evt in temporal_events:
+        try:
+            graph_store.merge_temporal_event(
+                user_id=user_id,
+                description=evt.get("description", ""),
+                occurred_at=evt.get("occurred_at"),
+                importance=evt.get("importance", 0.5),
+                participant_names=evt.get("participants", []),
+            )
+        except Exception:
+            logger.debug("Failed to upsert temporal event: %s", evt, exc_info=True)
+
+    # 7. Upsert causal links (multi-graph: causal layer)
+    for cl in causal_links:
+        try:
+            graph_store.add_causal_link(
+                user_id=user_id,
+                cause_description=cl.get("cause", ""),
+                effect_description=cl.get("effect", ""),
+                cause_entity_names=cl.get("cause_entities", []),
+                effect_entity_names=cl.get("effect_entities", []),
+                importance=cl.get("importance", 0.5),
+            )
+        except Exception:
+            logger.debug("Failed to upsert causal link: %s", cl, exc_info=True)
+
+    # 8. Chunk high-confidence facts and embed into vector store
     from prax.services.memory import embedder, vector_store
 
-    for fact in facts:
+    for fact in high_conf_facts:
         try:
             content = fact if isinstance(fact, str) else fact.get("content", "")
             importance = 0.5 if isinstance(fact, str) else fact.get("importance", 0.5)
@@ -148,7 +225,7 @@ def consolidate_user(user_id: str) -> ConsolidationResult:
             sparse_vec = embedder.sparse_encode(content)
 
             # Link to extracted entities
-            entity_names = [e.get("name", "").lower() for e in entities]
+            entity_names = [e.get("name", "").lower() for e in high_conf_entities]
             linked = [n for n in entity_names if n in content.lower()]
 
             vector_store.upsert_memory(
@@ -164,7 +241,33 @@ def consolidate_user(user_id: str) -> ConsolidationResult:
         except Exception:
             logger.debug("Failed to store fact: %s", fact, exc_info=True)
 
-    # 7. Apply decay
+    # 9. Low-confidence facts → STM as pending review
+    if low_conf_facts or low_conf_entities:
+        try:
+            from prax.services.memory.stm import stm_write
+
+            for fact in low_conf_facts:
+                content = fact if isinstance(fact, str) else fact.get("content", "")
+                if content and len(content) >= 10:
+                    stm_write(
+                        user_id,
+                        f"pending_review_{hash(content) % 10000}",
+                        content,
+                        tags=["pending_review", "low_confidence"],
+                        importance=0.3,
+                    )
+            for ent in low_conf_entities:
+                stm_write(
+                    user_id,
+                    f"pending_entity_{ent.get('name', 'unknown')}",
+                    f"Low-confidence entity: {ent.get('display_name', ent.get('name', ''))} ({ent.get('type', '?')})",
+                    tags=["pending_review", "low_confidence"],
+                    importance=0.2,
+                )
+        except Exception:
+            logger.debug("Failed to write low-confidence items to STM", exc_info=True)
+
+    # 10. Apply dual decay (time + interaction)
     halflife = getattr(settings, "memory_decay_halflife_days", 7.0)
     try:
         result.memories_decayed = vector_store.decay_memories(user_id, halflife_days=halflife)
@@ -172,7 +275,7 @@ def consolidate_user(user_id: str) -> ConsolidationResult:
     except Exception:
         logger.debug("Decay pass failed", exc_info=True)
 
-    # 8. Build daily summary
+    # 11. Build daily summary
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     if state.get("last_daily_summary") != today:
         try:
@@ -196,18 +299,19 @@ def consolidate_user(user_id: str) -> ConsolidationResult:
         except Exception:
             logger.debug("Daily summary failed", exc_info=True)
 
-    # 9. Update state
+    # 12. Update state
     state["last_consolidated_line"] = state.get("last_consolidated_line", 0) + len(batch)
     state["last_decay_run"] = datetime.now(timezone.utc).isoformat()
     _save_state(user_id, state)
 
     logger.info(
-        "Consolidated for %s: %d memories, %d entities, %d relations, %d decayed",
+        "Consolidated for %s: %d memories, %d entities, %d relations, %d decayed, %d low-conf→STM",
         user_id,
         result.memories_created,
         result.entities_upserted,
         result.relations_upserted,
         result.memories_decayed,
+        len(low_conf_facts) + len(low_conf_entities),
     )
     return result
 
@@ -231,18 +335,26 @@ You are a memory extraction assistant. Given conversation traces, extract:
 1. **entities** — people, topics, projects, tools, URLs, concepts, organisations
 2. **relations** — connections between entities (who works on what, what relates to what)
 3. **facts** — important statements worth remembering (preferences, decisions, insights)
+4. **temporal_events** — discrete events that happened at a specific time
+5. **causal_links** — cause-and-effect relationships ("X happened because Y")
 
 Return JSON with this exact structure:
 ```json
 {
   "entities": [
-    {"name": "...", "display_name": "...", "type": "person|topic|project|tool|url|concept|organization", "importance": 0.0-1.0}
+    {"name": "...", "display_name": "...", "type": "person|topic|project|tool|url|concept|organization", "importance": 0.0-1.0, "confidence": 0.0-1.0}
   ],
   "relations": [
-    {"source": "entity_name", "type": "works_on|interested_in|prefers|related_to|part_of|caused_by|mentioned_with", "target": "entity_name", "weight": 1.0, "evidence": "brief reason"}
+    {"source": "entity_name", "type": "works_on|interested_in|prefers|related_to|part_of|caused_by|mentioned_with", "target": "entity_name", "weight": 1.0, "evidence": "brief reason", "confidence": 0.0-1.0, "valid_from": "ISO date or null", "supersedes": null}
   ],
   "facts": [
-    {"content": "The important fact or preference to remember", "importance": 0.0-1.0}
+    {"content": "The important fact or preference to remember", "importance": 0.0-1.0, "confidence": 0.0-1.0}
+  ],
+  "temporal_events": [
+    {"description": "What happened", "occurred_at": "ISO date or null", "importance": 0.0-1.0, "participants": ["entity_name"]}
+  ],
+  "causal_links": [
+    {"cause": "Why it happened", "effect": "What resulted", "cause_entities": ["entity_name"], "effect_entities": ["entity_name"], "importance": 0.0-1.0}
   ]
 }
 ```
@@ -253,7 +365,10 @@ Rules:
 - Importance 0.8-1.0: core preferences, key decisions, critical facts
 - Importance 0.4-0.7: useful context, recurring topics
 - Importance 0.1-0.3: minor mentions, tangential info
+- **confidence** is how certain you are this extraction is correct (1.0=certain, 0.5=unsure)
+- If a new relation contradicts an existing one (e.g., preference change), set "supersedes": {"source": "...", "type": "...", "target": "..."} on the new relation
 - Entity names should be canonical (lowercase, no articles)
+- temporal_events and causal_links can be empty arrays if none are present
 - Return ONLY valid JSON, no commentary"""
             ),
             HumanMessage(content=f"Extract entities, relations, and facts from:\n\n{text[:4000]}"),

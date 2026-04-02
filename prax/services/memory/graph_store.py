@@ -7,15 +7,34 @@ multi-hop traversal and Personalized PageRank-style neighbourhood queries.
 Gracefully degrades: if Neo4j is unreachable, operations return empty
 results and log warnings.
 
-Graph model:
+Graph model (three node types):
   (:Entity {id, user_id, name, display_name, type, importance,
             first_seen, last_seen, mention_count, properties})
-  -[:RELATES_TO {type, weight, first_seen, last_seen, evidence}]->
+  (:TemporalEvent {id, user_id, description, occurred_at, importance})
+  (:CausalLink   {id, user_id, description, importance})
+
+Edge types:
+  -[:RELATES_TO  {type, weight, first_seen, last_seen, evidence,
+                  valid_from, valid_until}]->           (entity ↔ entity)
+  -[:PARTICIPATED_IN]->   (entity → temporal event)
+  -[:CAUSED_BY]->         (entity/event → causal link → entity/event)
+
+Bi-temporal edges:
+  Edges carry valid_from (when the fact became true) and valid_until
+  (when it was superseded).  valid_until=null means "currently valid".
+  Inspired by Rasmussen et al., "Zep" (2025): bi-temporal KG.
+
+Multi-graph layers (MAGMA-inspired):
+  Entity graph:  standard entities + RELATES_TO
+  Temporal graph: TemporalEvent nodes + PARTICIPATED_IN
+  Causal graph:  CausalLink nodes + CAUSED_BY
+  Jiang et al., "MAGMA" (2026): orthogonal graph layers.
 
 References:
   - He et al., "HippoRAG" (2024): KG + Personalized PageRank for retrieval.
   - Edge et al., "GraphRAG" (2024): entity graph + community summaries.
-  - Angles & Gutierrez (2008): property graph formalism.
+  - Rasmussen et al., "Zep" (2025): bi-temporal KG architecture.
+  - Jiang et al., "MAGMA" (2026): multi-graph agentic memory.
 """
 from __future__ import annotations
 
@@ -51,6 +70,8 @@ def _ensure_indexes(session) -> None:
         "CREATE INDEX entity_user_name IF NOT EXISTS FOR (e:Entity) ON (e.user_id, e.name)",
         "CREATE INDEX entity_user_type IF NOT EXISTS FOR (e:Entity) ON (e.user_id, e.type)",
         "CREATE INDEX entity_id IF NOT EXISTS FOR (e:Entity) ON (e.id)",
+        "CREATE INDEX temporal_user IF NOT EXISTS FOR (t:TemporalEvent) ON (t.user_id)",
+        "CREATE INDEX causal_user IF NOT EXISTS FOR (c:CausalLink) ON (c.user_id)",
     ]
     for idx in indexes:
         try:
@@ -136,15 +157,21 @@ def add_relation(
     target_name: str,
     weight: float = 1.0,
     evidence: str = "",
+    valid_from: str | None = None,
 ) -> bool:
     """Create or strengthen a relation between two entities.
 
     Both entities must already exist (matched by user_id + name).
     If the relation exists, its weight is incremented and last_seen is updated.
+
+    Bi-temporal: valid_from records when the fact became true (defaults to now).
+    valid_until is null (currently valid) on creation.  Use supersede_relation()
+    to mark an edge as no longer current.
     """
     src = source_name.strip().lower()
     tgt = target_name.strip().lower()
     now = datetime.now(timezone.utc).isoformat()
+    vf = valid_from or now
 
     try:
         with _session() as session:
@@ -157,7 +184,9 @@ def add_relation(
                     r.weight = $weight,
                     r.first_seen = $now,
                     r.last_seen = $now,
-                    r.evidence = $evidence
+                    r.evidence = $evidence,
+                    r.valid_from = $vf,
+                    r.valid_until = null
                 ON MATCH SET
                     r.weight = r.weight + $weight,
                     r.last_seen = $now,
@@ -170,6 +199,7 @@ def add_relation(
                 weight=weight,
                 now=now,
                 evidence=evidence,
+                vf=vf,
             )
             return True
     except Exception:
@@ -183,22 +213,71 @@ def add_relation(
         return False
 
 
-def get_entity(user_id: str, name: str) -> Entity | None:
-    """Look up an entity by name, including its relations."""
-    canonical = name.strip().lower()
+def supersede_relation(
+    user_id: str,
+    source_name: str,
+    relation_type: str,
+    target_name: str,
+) -> bool:
+    """Mark a relation as no longer current by setting valid_until = now.
+
+    Used when consolidation detects a contradicting fact (e.g., user now prefers
+    light mode → supersede the old "prefers dark mode" edge).
+
+    Inspired by Rasmussen et al., "Zep" (2025): bi-temporal supersession.
+    """
+    src = source_name.strip().lower()
+    tgt = target_name.strip().lower()
+    now = datetime.now(timezone.utc).isoformat()
+
     try:
         with _session() as session:
             result = session.run(
                 """
-                MATCH (e:Entity {user_id: $uid, name: $name})
+                MATCH (s:Entity {user_id: $uid, name: $src})
+                      -[r:RELATES_TO {type: $rtype}]->
+                      (t:Entity {user_id: $uid, name: $tgt})
+                WHERE r.valid_until IS NULL
+                SET r.valid_until = $now
+                RETURN count(r) AS updated
+                """,
+                uid=user_id,
+                src=src,
+                tgt=tgt,
+                rtype=relation_type,
+                now=now,
+            )
+            record = result.single()
+            return bool(record and record["updated"] > 0)
+    except Exception:
+        logger.exception("Failed to supersede relation %s -[%s]-> %s", source_name, relation_type, target_name)
+        return False
+
+
+def get_entity(user_id: str, name: str, include_superseded: bool = False) -> Entity | None:
+    """Look up an entity by name, including its relations.
+
+    By default only returns currently-valid relations (valid_until IS NULL).
+    Set include_superseded=True to also see historical/superseded edges.
+    """
+    canonical = name.strip().lower()
+    validity_filter = "" if include_superseded else "AND (r.valid_until IS NULL OR r.valid_until IS NULL)"
+    try:
+        with _session() as session:
+            result = session.run(
+                f"""
+                MATCH (e:Entity {{user_id: $uid, name: $name}})
                 OPTIONAL MATCH (e)-[r:RELATES_TO]-(other:Entity)
-                RETURN e, collect({
+                WHERE r IS NULL OR r.valid_until IS NULL {'OR true' if include_superseded else ''}
+                RETURN e, collect({{
                     type: r.type,
                     weight: r.weight,
                     direction: CASE WHEN startNode(r) = e THEN 'outgoing' ELSE 'incoming' END,
                     other_name: other.display_name,
-                    other_type: other.type
-                }) AS relations
+                    other_type: other.type,
+                    valid_from: r.valid_from,
+                    valid_until: r.valid_until
+                }}) AS relations
                 """,
                 uid=user_id,
                 name=canonical,
@@ -404,16 +483,151 @@ def decay_graph(user_id: str, halflife_days: float = 14.0, prune_threshold: floa
     return pruned
 
 
+def merge_temporal_event(
+    user_id: str,
+    description: str,
+    occurred_at: str | None = None,
+    importance: float = 0.5,
+    participant_names: list[str] | None = None,
+) -> str:
+    """Create a TemporalEvent node and link participating entities.
+
+    TemporalEvent nodes form the temporal graph layer — they represent
+    discrete events with a timestamp.  Entities are linked via
+    PARTICIPATED_IN edges.
+
+    Inspired by MAGMA (Jiang et al., 2026): orthogonal temporal graph.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    eid = str(uuid.uuid4())
+    ts = occurred_at or now
+
+    try:
+        with _session() as session:
+            session.run(
+                """
+                CREATE (t:TemporalEvent {
+                    id: $eid,
+                    user_id: $uid,
+                    description: $desc,
+                    occurred_at: $ts,
+                    importance: $importance,
+                    created_at: $now
+                })
+                """,
+                eid=eid,
+                uid=user_id,
+                desc=description[:500],
+                ts=ts,
+                importance=importance,
+                now=now,
+            )
+            # Link participating entities
+            for name in (participant_names or []):
+                canonical = name.strip().lower()
+                session.run(
+                    """
+                    MATCH (e:Entity {user_id: $uid, name: $name})
+                    MATCH (t:TemporalEvent {id: $eid})
+                    MERGE (e)-[:PARTICIPATED_IN]->(t)
+                    """,
+                    uid=user_id,
+                    name=canonical,
+                    eid=eid,
+                )
+            return eid
+    except Exception:
+        logger.exception("Failed to merge temporal event for user %s", user_id)
+        return eid
+
+
+def add_causal_link(
+    user_id: str,
+    cause_description: str,
+    effect_description: str,
+    cause_entity_names: list[str] | None = None,
+    effect_entity_names: list[str] | None = None,
+    importance: float = 0.5,
+) -> str:
+    """Create a CausalLink node connecting cause and effect entities.
+
+    CausalLink nodes form the causal graph layer — they represent
+    why-relationships between entities/events.
+
+    Inspired by MAGMA (Jiang et al., 2026): orthogonal causal graph.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    cid = str(uuid.uuid4())
+
+    try:
+        with _session() as session:
+            session.run(
+                """
+                CREATE (c:CausalLink {
+                    id: $cid,
+                    user_id: $uid,
+                    cause: $cause,
+                    effect: $effect,
+                    importance: $importance,
+                    created_at: $now
+                })
+                """,
+                cid=cid,
+                uid=user_id,
+                cause=cause_description[:500],
+                effect=effect_description[:500],
+                importance=importance,
+                now=now,
+            )
+            # Link cause entities
+            for name in (cause_entity_names or []):
+                canonical = name.strip().lower()
+                session.run(
+                    """
+                    MATCH (e:Entity {user_id: $uid, name: $name})
+                    MATCH (c:CausalLink {id: $cid})
+                    MERGE (e)-[:CAUSED_BY {direction: 'cause'}]->(c)
+                    """,
+                    uid=user_id,
+                    name=canonical,
+                    cid=cid,
+                )
+            # Link effect entities
+            for name in (effect_entity_names or []):
+                canonical = name.strip().lower()
+                session.run(
+                    """
+                    MATCH (e:Entity {user_id: $uid, name: $name})
+                    MATCH (c:CausalLink {id: $cid})
+                    MERGE (c)-[:CAUSED_BY {direction: 'effect'}]->(e)
+                    """,
+                    uid=user_id,
+                    name=canonical,
+                    cid=cid,
+                )
+            return cid
+    except Exception:
+        logger.exception("Failed to add causal link for user %s", user_id)
+        return cid
+
+
 def get_stats(user_id: str) -> dict:
     """Return summary stats for a user's graph."""
     try:
         with _session() as session:
             result = session.run(
                 """
-                MATCH (e:Entity {user_id: $uid})
-                OPTIONAL MATCH (e)-[r:RELATES_TO]-()
-                RETURN count(DISTINCT e) AS entities,
-                       count(DISTINCT r) AS relations
+                OPTIONAL MATCH (e:Entity {user_id: $uid})
+                WITH count(DISTINCT e) AS ent_count
+                OPTIONAL MATCH (:Entity {user_id: $uid})-[r:RELATES_TO]-()
+                WITH ent_count, count(DISTINCT r) AS rel_count
+                OPTIONAL MATCH (t:TemporalEvent {user_id: $uid})
+                WITH ent_count, rel_count, count(DISTINCT t) AS evt_count
+                OPTIONAL MATCH (c:CausalLink {user_id: $uid})
+                RETURN ent_count AS entities,
+                       rel_count AS relations,
+                       evt_count AS temporal_events,
+                       count(DISTINCT c) AS causal_links
                 """,
                 uid=user_id,
             )
@@ -421,9 +635,11 @@ def get_stats(user_id: str) -> dict:
             return {
                 "entities": record["entities"] if record else 0,
                 "relations": record["relations"] if record else 0,
+                "temporal_events": record["temporal_events"] if record else 0,
+                "causal_links": record["causal_links"] if record else 0,
             }
     except Exception:
-        return {"entities": 0, "relations": 0}
+        return {"entities": 0, "relations": 0, "temporal_events": 0, "causal_links": 0}
 
 
 def close() -> None:
