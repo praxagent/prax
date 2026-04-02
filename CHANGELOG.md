@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/praxagent/prax/compare/v0.7.0...v0.8.0) (2026-04-02)
+
+
+### Features
+
+* enhance trace display, add Prax space ([#17](https://github.com/praxagent/prax/issues/17)) ([4c5d8d9](https://github.com/praxagent/prax/commit/4c5d8d97a34fb2659d89c7602942f86f7064627b))
+
 ## [0.7.0](https://github.com/praxagent/prax/compare/v0.6.0...v0.7.0) (2026-03-31)
 
 
