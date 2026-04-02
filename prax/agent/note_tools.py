@@ -104,6 +104,37 @@ def note_update(note_id: str, content: str, title: str = "", tags: str = "") -> 
 
 
 @tool
+def note_read(note_id: str) -> str:
+    """Read the full content of a note by its slug.
+
+    Use this when the user asks about a specific note, wants to review it,
+    or when you need the content for editing or discussion.
+
+    Args:
+        note_id: The note slug (returned by note_create, note_list, or note_search).
+    """
+    uid = _get_user_id()
+    try:
+        note = note_service.get_note(uid, note_id)
+        title = note.get("title", note_id)
+        tags = note.get("tags", [])
+        content = note.get("content", "")
+        related = note.get("related", [])
+
+        header = f"**{title}** (`{note_id}`)"
+        if tags:
+            header += f"\nTags: {', '.join(tags)}"
+        if related:
+            header += f"\nRelated: {', '.join(related)}"
+
+        return f"{header}\n\n{content}"
+    except FileNotFoundError:
+        return f"Note `{note_id}` not found. Use note_list to see available notes."
+    except Exception as e:
+        return f"Error reading note: {e}"
+
+
+@tool
 def note_list() -> str:
     """List all saved notes with their slugs, titles, and tags.
 
@@ -286,6 +317,6 @@ def note_link(from_slug: str, to_slug: str) -> str:
 def build_note_tools() -> list:
     """Return the list of note tools to register with the main agent."""
     return [
-        note_create, note_update, note_list, note_search,
+        note_create, note_read, note_update, note_list, note_search,
         url_to_note, pdf_to_note, note_link,
     ]

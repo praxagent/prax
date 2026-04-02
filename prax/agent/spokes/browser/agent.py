@@ -9,6 +9,7 @@ This is the reference spoke implementation.  Copy this folder to create a new sp
 from __future__ import annotations
 
 import logging
+import threading
 
 from langchain_core.tools import tool
 
@@ -16,6 +17,10 @@ from prax.agent.spokes._runner import run_spoke
 from prax.settings import settings
 
 logger = logging.getLogger(__name__)
+
+# Dedup identical parallel browser delegations (same pattern as sandbox).
+_active_tasks: dict[str, str] = {}
+_active_tasks_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
 # System prompt — the browser agent's role and routing logic
@@ -131,17 +136,35 @@ def delegate_browser(task: str) -> str:
               Include URLs, search terms, and any context the agent needs —
               it cannot see your conversation history.
     """
-    prompt = SYSTEM_PROMPT.format(agent_name=settings.agent_name)
-    return run_spoke(
-        task=task,
-        system_prompt=prompt,
-        tools=build_tools(),
-        config_key="subagent_browser",
-        default_tier="low",
-        role_name="Browser Agent",
-        channel="browser",
-        recursion_limit=60,
-    )
+    from prax.agent.user_context import current_user_id
+    uid = current_user_id.get() or "unknown"
+
+    normalised = task.strip().lower()[:200]
+    with _active_tasks_lock:
+        existing = _active_tasks.get(uid)
+        if existing == normalised:
+            logger.info("Duplicate delegate_browser call for user %s — same task, skipping", uid)
+            return (
+                "An identical browser delegation is already running. "
+                "Wait for it to complete — no need to call this twice."
+            )
+        _active_tasks[uid] = normalised
+
+    try:
+        prompt = SYSTEM_PROMPT.format(agent_name=settings.agent_name)
+        return run_spoke(
+            task=task,
+            system_prompt=prompt,
+            tools=build_tools(),
+            config_key="subagent_browser",
+            default_tier="low",
+            role_name="Browser Agent",
+            channel="browser",
+            recursion_limit=60,
+        )
+    finally:
+        with _active_tasks_lock:
+            _active_tasks.pop(uid, None)
 
 
 # ---------------------------------------------------------------------------

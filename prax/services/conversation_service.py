@@ -65,15 +65,24 @@ class ConversationService:
             for entry in conversation
         ]
 
-    def reply(self, user_id: str, text: str, *, conversation_key: int | None = None) -> str:
+    def reply(
+        self,
+        user_id: str,
+        text: str,
+        *,
+        conversation_key: int | None = None,
+        trigger: str | None = None,
+    ) -> str:
         """Process a user message and return the agent's response.
 
         Args:
             user_id: User UUID (preferred) or legacy phone number / ``D{id}``.
-            text: The user's message.
+            text: The user's message (may include system prefixes/context).
             conversation_key: Override the DB key for conversation history.
                 When provided (e.g. per-channel key for TeamWork), history is
                 isolated under this key instead of the default user-derived one.
+            trigger: The raw user message for display in execution graphs.
+                When ``None``, falls back to ``text``.
         """
         # Set user context so workspace tools know which user to operate on.
         current_user_id.set(user_id)
@@ -116,6 +125,7 @@ class ConversationService:
             conversation=lc_history,
             user_input=text,
             workspace_context=workspace_ctx,
+            trigger=trigger or text,
         )
         logger.info("Agent response for %s: %s", user_id, response[:80])
 

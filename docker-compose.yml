@@ -29,6 +29,9 @@ services:
       - TEAMWORK_URL=http://teamwork:8000
       - TEAMWORK_API_KEY=${TEAMWORK_API_KEY:-}
       - TEAMWORK_USER_PHONE=${TEAMWORK_USER_PHONE:-}
+      # OTel exporter — sends traces to Tempo when observability is enabled.
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4318
+      - GRAFANA_URL=${GRAFANA_URL:-http://localhost:3001}
     volumes:
       - ./conversations.db:/app/conversations.db
       - ./static:/app/static
@@ -101,3 +104,81 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  # ---- Observability Stack ----
+  # Start with: COMPOSE_PROFILES=observability docker compose up
+  # Or: docker compose --profile observability up
+
+  # Tempo — distributed tracing backend (receives OTLP spans from Prax)
+  tempo:
+    image: grafana/tempo:2.7.2
+    profiles: ["observability"]
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./observability/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "3200:3200"   # Tempo query API
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+
+  # Loki — log aggregation (receives logs from Promtail)
+  loki:
+    image: grafana/loki:3.4.2
+    profiles: ["observability"]
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    ports:
+      - "3100:3100"
+    volumes:
+      - loki-data:/loki
+
+  # Promtail — ships Docker container logs to Loki
+  promtail:
+    image: grafana/promtail:3.4.2
+    profiles: ["observability"]
+    command: ["-config.file=/etc/promtail/config.yaml"]
+    volumes:
+      - ./observability/promtail.yaml:/etc/promtail/config.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+
+  # Prometheus — metrics (scrapes /metrics from Prax)
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    profiles: ["observability"]
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+    volumes:
+      - ./observability/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+
+  # Grafana — unified dashboards (traces + logs + metrics)
+  # Port 3001 since TeamWork already uses 3000.
+  grafana:
+    image: grafana/grafana:11.5.2
+    profiles: ["observability"]
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=prax
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3001:3000"
+    depends_on:
+      - tempo
+      - loki
+      - prometheus
+
+volumes:
+  tempo-data:
+  loki-data:
+  prometheus-data:
+  grafana-data:

@@ -1,14 +1,12 @@
 """Tests for Active Inference Phase 1 (prediction error) and Phase 2 (epistemic ledger)."""
-import pytest
 
 from prax.agent.prediction_tracker import (
+    READ_TOOLS,
+    WRITE_TOOLS,
     PredictionTracker,
     compute_prediction_error,
     extract_resource_key,
-    READ_TOOLS,
-    WRITE_TOOLS,
 )
-
 
 # ---------------------------------------------------------------------------
 # Phase 1 — Prediction error computation

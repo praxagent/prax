@@ -168,8 +168,10 @@ def fetch_url_content(url: str) -> str:
 
 
 def build_default_tools():
+    from prax.agent.sandbox_tools import sandbox_shell
+
     return (
-        [background_search_tool, get_current_datetime, fetch_url_content]
+        [background_search_tool, get_current_datetime, fetch_url_content, sandbox_shell]
         + build_workspace_tools()
         + build_scheduler_tools()
         + build_codegen_tools_for_main_agent()

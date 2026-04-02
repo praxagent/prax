@@ -228,10 +228,12 @@ class PluginLoader:
                     reg_fn = mod.register
                     sig = inspect.signature(reg_fn)
                     if sig.parameters:
+                        from prax.agent.user_context import current_user_id
                         approved = set(self.registry.get_approved_permissions(rel_key))
                         caps = PluginCapabilities(
                             plugin_rel_path=rel_key,
                             trust_tier=trust_tier,
+                            user_id=current_user_id.get(),
                             approved_secrets=approved,
                         )
                         plugin_tools = reg_fn(caps)
@@ -312,10 +314,12 @@ class PluginLoader:
 
         approved = set(self.registry.get_approved_permissions(rel_key))
 
+        from prax.agent.user_context import current_user_id
         bridge = get_bridge(rel_key)
         caps = PluginCapabilities(
             plugin_rel_path=rel_key,
             trust_tier=trust_tier,
+            user_id=current_user_id.get(),
             approved_secrets=approved,
         )
 

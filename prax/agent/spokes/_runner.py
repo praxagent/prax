@@ -69,7 +69,7 @@ def run_spoke(
     """
     import time as _time
 
-    from prax.agent.trace import build_identity_context, start_span
+    from prax.agent.trace import GraphCallbackHandler, build_identity_context, start_span
 
     label = config_key.replace("subagent_", "")
     span = start_span(label, label)
@@ -123,13 +123,19 @@ def run_spoke(
     current_component.set(label)
     effective_limit = get_recursion_limit(recursion_limit)
 
+    _graph_cb = GraphCallbackHandler(
+        parent_span_id=span.span_id,
+        graph=span.ctx.graph,
+        trace_id=span.trace_id,
+    )
+
     try:
         result = graph.invoke(
             {"messages": [
                 SystemMessage(content=enhanced_prompt),
                 HumanMessage(content=task),
             ]},
-            config={"recursion_limit": effective_limit},
+            config={"recursion_limit": effective_limit, "callbacks": [_graph_cb]},
         )
     except Exception as exc:
         logger.warning("Spoke [%s] failed: %s", label, exc, exc_info=True)

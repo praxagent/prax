@@ -32,9 +32,27 @@ def health():
 
 @main_routes.route('/execution/graphs')
 def execution_graphs():
-    """Return active and recently completed execution graphs for the UI."""
+    """Return active and recently completed execution graphs for the UI.
+
+    Query params:
+        limit: max number of graphs to return (default 100)
+    """
+    from flask import request
+
     from prax.agent.trace import get_active_graphs_json
-    return jsonify({"graphs": get_active_graphs_json()})
+    limit = request.args.get("limit", 100, type=int)
+    graphs = get_active_graphs_json()
+    return jsonify({"graphs": graphs[:limit], "total": len(graphs)})
+
+
+@main_routes.route('/execution/graphs/<trace_id>', methods=['DELETE'])
+def delete_execution_graph(trace_id):
+    """Delete a single execution graph by trace_id."""
+    from prax.agent.trace import delete_graph
+    deleted = delete_graph(trace_id)
+    if deleted:
+        return jsonify({"ok": True})
+    return jsonify({"error": "not found"}), 404
 
 
 @main_routes.route('/static/<path:path>')

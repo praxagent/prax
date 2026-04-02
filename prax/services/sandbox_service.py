@@ -72,8 +72,42 @@ class SandboxSession:
 
 
 _sessions: dict[str, SandboxSession] = {}
-_user_sessions: dict[str, str] = {}  # user_id -> active session_id
+_user_sessions: dict[str, list[str]] = {}  # user_id -> list of active session_ids (newest last)
 _lock = threading.Lock()
+
+
+def _resolve_session(user_id: str, session_id: str | None = None) -> tuple[SandboxSession | None, str]:
+    """Find a session by explicit ID or fall back to the user's most recent.
+
+    Returns (session, error_message).  If session is None, error_message
+    explains why.
+    """
+    with _lock:
+        if session_id:
+            session = _sessions.get(session_id)
+            if not session:
+                return None, f"Session {session_id[:12]} not found."
+            return session, ""
+        ids = _user_sessions.get(user_id, [])
+        if not ids:
+            return None, "No active sandbox session."
+        # Most recent is last
+        for sid in reversed(ids):
+            s = _sessions.get(sid)
+            if s and s.status == "running":
+                return s, ""
+        return None, "No running sandbox session."
+
+
+def _remove_user_session(user_id: str, session_id: str) -> None:
+    """Remove a session from the per-user list and the global map."""
+    _sessions.pop(session_id, None)
+    ids = _user_sessions.get(user_id, [])
+    if session_id in ids:
+        ids.remove(session_id)
+    if not ids:
+        _user_sessions.pop(user_id, None)
+
 
 # ---------------------------------------------------------------------------
 # OpenCode config helpers
@@ -187,6 +221,15 @@ def _create_opencode_session(session: SandboxSession, task: str) -> tuple[str | 
         return None, str(e)
 
 
+def _push_sandbox_live(session: SandboxSession, text: str) -> None:
+    """Push incremental live output for the sandbox spoke to TeamWork."""
+    try:
+        from prax.services.teamwork_hooks import push_live_output
+        push_live_output("Sandbox Agent", text, status="running", append=True)
+    except Exception:
+        pass  # best-effort — don't break the poll loop
+
+
 def _send_opencode_message(session: SandboxSession, message: str, model: str | None = None) -> dict:
     """Send a message to the OpenCode session (async + poll)."""
     oc_id = session.opencode_session_id
@@ -235,8 +278,11 @@ def _send_opencode_message(session: SandboxSession, message: str, model: str | N
     deadline = time.time() + 300
     poll_errors = 0
     last_poll_error = ""
+    poll_count = 0
+    last_streamed_len = 0  # track how much partial output we've already pushed
     while time.time() < deadline:
         time.sleep(5)
+        poll_count += 1
         try:
             r = requests.get(
                 _api_url(session, f"/session/{oc_id}/message"),
@@ -259,19 +305,31 @@ def _send_opencode_message(session: SandboxSession, message: str, model: str | N
                 continue
             messages = r.json()
             if not isinstance(messages, list) or len(messages) <= before_count:
+                # Push periodic status so live output isn't empty
+                if poll_count % 6 == 0:  # every ~30s
+                    elapsed = int(time.time() - (deadline - 300))
+                    _push_sandbox_live(session, f"  ⏳ Waiting for coding agent ({elapsed}s)...\n")
                 continue
-            # Find the latest assistant message that has completed
+            # Find the latest assistant message
             last = messages[-1]
             info = last.get("info", {})
             if info.get("role") != "assistant":
                 continue
-            if not info.get("time", {}).get("completed"):
-                continue  # still streaming
-            # Extract text from parts
+
+            # Stream partial output as it arrives (before completion)
             parts = last.get("parts", [])
-            text = "\n".join(
+            partial_text = "\n".join(
                 p.get("text", "") for p in parts if p.get("type") == "text"
             )
+            if partial_text and len(partial_text) > last_streamed_len:
+                new_chunk = partial_text[last_streamed_len:]
+                _push_sandbox_live(session, new_chunk)
+                last_streamed_len = len(partial_text)
+
+            if not info.get("time", {}).get("completed"):
+                continue  # still streaming
+            # Extract final text from parts
+            text = partial_text
             return {"response": text or "(no text output)", "raw": last}
         except requests.ConnectionError as e:
             poll_errors += 1
@@ -438,8 +496,7 @@ def _on_timeout(session_id: str) -> None:
             )
             session.status = "timed_out"
             _teardown_container(session)
-            _user_sessions.pop(session.user_id, None)
-            _sessions.pop(session_id, None)
+            _remove_user_session(session.user_id, session_id)
 
 
 # ---------------------------------------------------------------------------
@@ -489,6 +546,30 @@ def install_package(package_name: str) -> dict:
         return {"error": str(e)}
 
 
+def run_shell(command: str, timeout: int = 60) -> dict:
+    """Run a shell command directly in the sandbox container.
+
+    This bypasses OpenCode entirely — no AI coding agent, no session, no
+    polling.  Use for simple commands like ``ls``, ``df -h``, ``pwd``,
+    ``cat file.txt``, etc.
+
+    Returns dict with ``stdout``, ``stderr``, ``exit_code``.
+    """
+    from prax.utils.shell import run_command
+    try:
+        result = run_command(
+            ["sh", "-c", command],
+            timeout=timeout,
+        )
+        return {
+            "stdout": (result.stdout or "")[:10000],
+            "stderr": (result.stderr or "")[:5000],
+            "exit_code": result.returncode,
+        }
+    except Exception as e:
+        return {"error": str(e), "exit_code": -1}
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -505,8 +586,6 @@ def start_session(
     model = model or settings.sandbox_default_model
 
     with _lock:
-        if user_id in _user_sessions:
-            return {"error": "You already have an active sandbox session. Finish or abort it first."}
         if len(_sessions) >= settings.sandbox_max_concurrent:
             return {"error": "Maximum concurrent sandbox sessions reached. Try again later."}
 
@@ -544,7 +623,7 @@ def start_session(
 
         with _lock:
             _sessions[session_id] = session
-            _user_sessions[user_id] = session_id
+            _user_sessions.setdefault(user_id, []).append(session_id)
 
         logger.info("Started persistent sandbox session %s for %s (model=%s)", session_id[:12], user_id, model)
         return {"session_id": session_id, "status": "running", "model": model}
@@ -625,7 +704,7 @@ def start_session(
 
     with _lock:
         _sessions[session_id] = session
-        _user_sessions[user_id] = session_id
+        _user_sessions.setdefault(user_id, []).append(session_id)
 
     logger.info("Started sandbox %s for %s (model=%s, port=%d)", session_id[:12], user_id, model, host_port)
     return {
@@ -635,15 +714,12 @@ def start_session(
     }
 
 
-def send_message(user_id: str, message: str, model: str | None = None) -> dict:
-    """Send a message to the user's active sandbox session."""
-    with _lock:
-        session_id = _user_sessions.get(user_id)
-        if not session_id:
-            return {"error": "No active sandbox session."}
-        session = _sessions.get(session_id)
-        if not session or session.status != "running":
-            return {"error": "Sandbox session is not running."}
+def send_message(user_id: str, message: str, model: str | None = None, session_id: str | None = None) -> dict:
+    """Send a message to a sandbox session (defaults to most recent)."""
+    session, err = _resolve_session(user_id, session_id)
+    if not session:
+        return {"error": err}
+    session_id = session.session_id
 
     if session.rounds_used >= session.max_rounds:
         remaining_action = "Use sandbox_finish to save what you have, or sandbox_abort to discard."
@@ -697,15 +773,12 @@ def send_message(user_id: str, message: str, model: str | None = None) -> dict:
     }
 
 
-def review_session(user_id: str) -> dict:
-    """Get status and details of the user's active sandbox session."""
-    with _lock:
-        session_id = _user_sessions.get(user_id)
-        if not session_id:
-            return {"error": "No active sandbox session."}
-        session = _sessions.get(session_id)
-        if not session:
-            return {"error": "Session not found."}
+def review_session(user_id: str, session_id: str | None = None) -> dict:
+    """Get status and details of a sandbox session (defaults to most recent)."""
+    session, err = _resolve_session(user_id, session_id)
+    if not session:
+        return {"error": err}
+    session_id = session.session_id
 
     elapsed = int(time.time() - session.created_at)
     oc_state = _get_opencode_session(session)
@@ -732,15 +805,12 @@ def review_session(user_id: str) -> dict:
     }
 
 
-def finish_session(user_id: str, summary: str = "") -> dict:
-    """Finish the active sandbox session, archiving artifacts to the workspace."""
-    with _lock:
-        session_id = _user_sessions.get(user_id)
-        if not session_id:
-            return {"error": "No active sandbox session."}
-        session = _sessions.get(session_id)
-        if not session:
-            return {"error": "Session not found."}
+def finish_session(user_id: str, summary: str = "", session_id: str | None = None) -> dict:
+    """Finish a sandbox session, archiving artifacts to the workspace."""
+    session, err = _resolve_session(user_id, session_id)
+    if not session:
+        return {"error": err}
+    session_id = session.session_id
 
     # Cancel timeout
     if session.timeout_timer:
@@ -757,8 +827,7 @@ def finish_session(user_id: str, summary: str = "") -> dict:
     _teardown_container(session)
 
     with _lock:
-        _sessions.pop(session_id, None)
-        _user_sessions.pop(user_id, None)
+        _remove_user_session(user_id, session_id)
 
     logger.info("Finished sandbox %s for %s", session_id[:12], user_id)
     return {
@@ -768,15 +837,12 @@ def finish_session(user_id: str, summary: str = "") -> dict:
     }
 
 
-def abort_session(user_id: str) -> dict:
-    """Abort the active sandbox session without archiving."""
-    with _lock:
-        session_id = _user_sessions.get(user_id)
-        if not session_id:
-            return {"error": "No active sandbox session."}
-        session = _sessions.get(session_id)
-        if not session:
-            return {"error": "Session not found."}
+def abort_session(user_id: str, session_id: str | None = None) -> dict:
+    """Abort a sandbox session without archiving (defaults to most recent)."""
+    session, err = _resolve_session(user_id, session_id)
+    if not session:
+        return {"error": err}
+    session_id = session.session_id
 
     if session.timeout_timer:
         session.timeout_timer.cancel()
@@ -786,8 +852,7 @@ def abort_session(user_id: str) -> dict:
     _teardown_container(session)
 
     with _lock:
-        _sessions.pop(session_id, None)
-        _user_sessions.pop(user_id, None)
+        _remove_user_session(user_id, session_id)
 
     logger.warning(
         "Aborted sandbox %s for %s after %ds (%d/%d rounds used, model=%s)",
@@ -905,12 +970,21 @@ def cleanup_stale_sessions() -> int:
 
 
 def get_active_session(user_id: str) -> SandboxSession | None:
-    """Return the user's active session or None."""
+    """Return the user's most recent active session, or None."""
     with _lock:
-        session_id = _user_sessions.get(user_id)
-        if session_id:
-            return _sessions.get(session_id)
+        ids = _user_sessions.get(user_id, [])
+        for sid in reversed(ids):
+            s = _sessions.get(sid)
+            if s and s.status == "running":
+                return s
     return None
+
+
+def get_active_sessions(user_id: str) -> list[SandboxSession]:
+    """Return all active sessions for a user."""
+    with _lock:
+        ids = _user_sessions.get(user_id, [])
+        return [_sessions[sid] for sid in ids if sid in _sessions]
 
 
 def get_runtime_mode() -> str:

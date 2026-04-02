@@ -15,6 +15,7 @@ Several production agent frameworks have converged on similar architectural patt
 | Scratchpad / working memory files | SWE-Agent, Voyager | Workspace notes + instruction persistence |
 | Bounded retry with rollback | OpenHands, LangGraph | `CheckpointManager` + `_invoke_with_retry` |
 | Complexity-triggered planning | ADaPT | `_classify_complexity` + orchestrator hints |
+| Deterministic workflow graphs with structured step boundaries | [acpx](https://github.com/openclaw/acpx/tree/main) | Content Editor pipeline (research → write → publish → review) |
 
 ### 9. Tool Overload and Selection Degradation
 
@@ -60,6 +61,8 @@ Several production agent frameworks have converged on similar architectural patt
 | Evaluator-Optimizer Loop | Writer → Reviewer → Writer (until threshold) | Iterative refinement |
 | Parallel Fan-Out/Gather | Multiple agents in parallel, then merge | Research-heavy tasks |
 | Generator-Critic | One creates, another tears it apart | Quality assurance |
+
+**Sequential prompting beats monolithic prompting (priming effect):** A related insight from production workflow systems: putting all steps in a single prompt at the start of context generally gives suboptimal results compared to revealing intent step by step. LLMs are subject to *priming* — a front-loaded mega-prompt causes the model to latch onto the most salient instructions while diluting later steps (consistent with the Lost in the Middle finding, §5). Sequential prompting within the same session gives each step a fresh "attention budget" while preserving accumulated context from prior stages. This is the same principle behind Prax's spoke delegation — each agent gets exactly the context it needs for its stage, nothing more. [**acpx**](https://github.com/openclaw/acpx/tree/main) demonstrates this pattern in production: its "Agentic Graphs" feature drives coding agents through deterministic node-based workflows on top of the Agent Client Protocol (ACP), with structured JSON boundaries between steps that provide observability, checkpointing, and type-safe contracts. The acpx PR triage workflow (extract intent → cluster → assess quality → review → refactor → resolve conflicts) processes 300–500 PRs/day on the OpenClaw repo, with each step emitting structured data for dashboard monitoring — a concrete validation of sequential pipeline orchestration at scale.
 
 **Optimal revision cycles:** 2-3 rounds.  Self-Refine showed most gains in passes 1-2.  Multi-agent debate peaks at round 3, can degrade at rounds 4-5.
 

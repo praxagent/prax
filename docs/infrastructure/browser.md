@@ -46,6 +46,31 @@ Both APIs talk to the same Chrome instance.  Playwright wraps CDP with a high-le
 
 **In practice:** Prax uses Playwright for most browser tasks (navigation, login flows, form filling, content extraction).  Raw CDP is available for edge cases that need low-level protocol access (performance profiling, network interception, direct input dispatch).
 
+### Authentic Browser Presentation
+
+Prax uses **Patchright** (a patched fork of Playwright) so the shared Chrome session presents itself as a standard browser — not as automation tooling. This is appropriate because Prax's browser is a **human/AI collaborative session**: a real person pairs with the agent to browse the web together, with the user able to take over at any time (e.g. to solve CAPTCHAs or complete MFA).
+
+What Patchright changes vs stock Playwright:
+- Removes `Runtime.enable` CDP command that anti-bot scripts detect
+- Sets `navigator.webdriver = false` (removes `--enable-automation` flag)
+- Uses `--disable-blink-features=AutomationControlled` to suppress automation markers
+
+The sandbox Chrome also launches with `--disable-blink-features=AutomationControlled` so the same presentation applies whether Playwright connects via CDP or the user views the screencast.
+
+### Thread Safety & Spoke Agents
+
+Playwright's sync API binds page/context objects to the thread that created them. This matters because `delegate_parallel` runs spoke agents in a `ThreadPoolExecutor` — the browser spoke may execute in a different thread than the one that originally created the Playwright session.
+
+**Solution:** `browser_service.py` uses `threading.local()` for per-thread session storage. Each thread gets its own Playwright CDP connection to the same sandbox Chrome. This is cheap (just a WebSocket) and avoids cross-thread violations.
+
+Additionally, `delegate_parallel` copies the parent thread's `ContextVars` (user ID, channel ID, active view) to worker threads via `contextvars.copy_context()`, ensuring browser tools can resolve the correct user session.
+
+### OAuth Popups (Google Sign-In, etc.)
+
+Google Sign-In and similar OAuth flows use `window.open()` to spawn a popup. The sandbox Chrome launches with `--disable-popup-blocking` and `--disable-features=BlockThirdPartyCookies` to allow these flows.
+
+On the Playwright side, `BrowserSession` registers a `context.on("page", ...)` listener that auto-switches the active page reference to the popup when it opens, and switches back when the popup closes. TeamWork's tab watcher (polling `/json` every 2 seconds) also detects new tabs and reconnects the screencast to the popup so the user can see and interact with the OAuth flow.
+
 ### Configuration
 
 ```bash

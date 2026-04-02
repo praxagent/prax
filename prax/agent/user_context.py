@@ -24,3 +24,7 @@ current_user_message: ContextVar[str] = ContextVar("current_user_message", defau
 # The currently executing component (e.g., "orchestrator", "research", "browser")
 # — used by earned trust to look up per-component reliability.
 current_component: ContextVar[str] = ContextVar("current_component", default="orchestrator")
+
+# The TeamWork active_view for this request (e.g., "terminal", "browser", "chat").
+# When "terminal", tools should execute in the shared terminal the user is watching.
+current_active_view: ContextVar[str] = ContextVar("current_active_view", default="")

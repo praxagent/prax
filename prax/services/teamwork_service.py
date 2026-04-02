@@ -532,6 +532,33 @@ class TeamWorkClient:
         batch.sort(key=lambda m: m.get("created_at", ""))
         return batch
 
+    # ----- Terminal (shared PTY) -----
+
+    def terminal_exec(self, command: str, timeout: float = 5.0) -> dict | None:
+        """Execute a command in the user's shared terminal.
+
+        Writes the command to the active PTY session so the user sees it,
+        waits for output to settle, and returns the captured output.
+        Returns None if no terminal session is active.
+        """
+        if not self._project_id:
+            return None
+        url = f"{self.base_url}/api/terminal/{self._project_id}/exec"
+        try:
+            resp = requests.post(
+                url,
+                json={"command": command, "timeout": timeout},
+                headers=self._headers(),
+                timeout=timeout + 5,
+            )
+            if resp.status_code == 404:
+                return None  # No active terminal session
+            resp.raise_for_status()
+            return resp.json()
+        except Exception:
+            logger.debug("terminal_exec failed", exc_info=True)
+            return None
+
     def forward_external_message(
         self,
         channel_name: str,

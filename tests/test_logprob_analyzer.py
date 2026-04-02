@@ -1,5 +1,4 @@
 """Tests for Active Inference Phase 3 (conditional logprob entropy analysis)."""
-import pytest
 
 from prax.agent.logprob_analyzer import (
     LogprobCallbackHandler,

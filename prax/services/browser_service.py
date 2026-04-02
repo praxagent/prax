@@ -1,8 +1,11 @@
-"""Browser automation service — Playwright-backed web navigation.
+"""Browser automation service — Patchright-backed web navigation.
 
-Gives the agent the ability to navigate websites like a human: click links,
+Gives the agent the ability to navigate websites alongside a human: click links,
 fill forms, log in with stored credentials, and extract content from
 JavaScript-heavy sites (Twitter/X, SPAs, etc.).
+
+Uses Patchright (a patched Playwright fork) so the shared Chrome session
+presents as a standard browser for human/AI collaborative browsing.
 
 Supports **persistent browser profiles** (cookies/localStorage survive restarts)
 and **VNC-based interactive login** so users can log in manually via SSH tunnel
@@ -29,11 +32,16 @@ _lock = threading.Lock()
 _sessions: dict[str, BrowserSession] = {}
 _vnc_sessions: dict[str, dict] = {}  # user_id -> {display, port, xvfb, vnc}
 _vnc_port_offset = 0
+# Thread-local storage for per-thread Playwright connections.  Playwright's
+# sync API binds objects to the creating thread — a session created in thread A
+# cannot be used from thread B.  Spoke agents (delegate_browser) may run in
+# ThreadPoolExecutor workers, so each thread needs its own connection.
+_thread_local = threading.local()
 
 _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/120.0.0.0 Safari/537.36"
+    "Chrome/131.0.0.0 Safari/537.36"
 )
 
 _LOGIN_SIGNALS = [
@@ -56,6 +64,16 @@ _TIMING = {
     "after_select":   (0.3, 0.8),
     "after_navigate": (1.5, 3.0),
 }
+
+# Launch arguments that present the browser authentically for human/AI
+# collaborative browsing.  Removes automation flags that CDP-based Chromium
+# sets by default, since this is a real paired browsing session.
+_STEALTH_ARGS = [
+    "--disable-blink-features=AutomationControlled",
+]
+_SUPPRESS_AUTOMATION_ARGS = [
+    "--enable-automation",
+]
 
 
 def _human_delay(page: Any, action: str) -> None:
@@ -146,6 +164,10 @@ class BrowserSession:
                 )
                 self.page = self._context.new_page()
 
+            # Listen for popup windows (e.g. Google OAuth "Sign in with Google")
+            # so Playwright can interact with the popup page.
+            self._context.on("page", self._on_popup)
+
             logger.info("Playwright connected to sandbox Chrome via CDP: %s", cdp_url)
             return True
         except Exception as exc:
@@ -163,7 +185,7 @@ class BrowserSession:
             return False
 
     def start(self, headless: bool | None = None, vnc_display: str | None = None) -> None:
-        from playwright.sync_api import sync_playwright
+        from patchright.sync_api import sync_playwright
 
         self._pw = sync_playwright().start()
 
@@ -176,9 +198,12 @@ class BrowserSession:
         h = headless if headless is not None else settings.browser_headless
         profile = _get_profile_dir(self.user_id)
 
-        launch_kw: dict[str, Any] = {}
+        launch_kw: dict[str, Any] = {
+            "args": list(_STEALTH_ARGS),
+            "ignore_default_args": list(_SUPPRESS_AUTOMATION_ARGS),
+        }
         if vnc_display:
-            launch_kw["args"] = ["--no-sandbox", "--disable-gpu"]
+            launch_kw["args"] = ["--no-sandbox", "--disable-gpu"] + _STEALTH_ARGS
             launch_kw["env"] = {**os.environ, "DISPLAY": vnc_display}
 
         if profile:
@@ -203,7 +228,32 @@ class BrowserSession:
             )
             self.page = self._context.new_page()
 
+        self._context.on("page", self._on_popup)
         self.page.set_default_timeout(settings.browser_timeout)
+
+    def _on_popup(self, page: Any) -> None:
+        """Handle popup windows (OAuth flows, etc.).
+
+        When a new page opens (e.g. Google "Sign in with Google" popup),
+        switch Playwright's active page reference to the popup so the agent
+        and human can interact with it.  When the popup closes, switch back
+        to the original page.
+        """
+        logger.info("Popup detected: %s — switching Playwright focus", page.url or "(blank)")
+        original = self.page
+        self.page = page
+        page.set_default_timeout(settings.browser_timeout)
+
+        def _on_close(_page: Any = None) -> None:
+            # Popup closed (OAuth complete or user cancelled) — return to
+            # the original page if it's still open.
+            if original and not original.is_closed():
+                logger.info("Popup closed — returning focus to original page")
+                self.page = original
+            elif self._context and self._context.pages:
+                self.page = self._context.pages[0]
+
+        page.on("close", _on_close)
 
     def close(self) -> None:
         try:
@@ -232,12 +282,22 @@ class BrowserSession:
 # ---------------------------------------------------------------------------
 
 def _get_session(user_id: str) -> BrowserSession:
-    with _lock:
-        if user_id not in _sessions or _sessions[user_id].page is None:
-            session = BrowserSession(user_id)
-            session.start()
-            _sessions[user_id] = session
-        return _sessions[user_id]
+    """Return a BrowserSession for the calling thread.
+
+    Playwright sync objects are bound to the thread that created them.
+    Spoke agents (delegate_browser) may run in ThreadPoolExecutor workers,
+    so we keep per-thread sessions.  For CDP mode this is cheap — each
+    thread just opens a WebSocket to the same sandbox Chrome.
+    """
+    if not hasattr(_thread_local, "sessions"):
+        _thread_local.sessions = {}
+
+    sessions: dict[str, BrowserSession] = _thread_local.sessions
+    if user_id not in sessions or sessions[user_id].page is None:
+        session = BrowserSession(user_id)
+        session.start()
+        sessions[user_id] = session
+    return sessions[user_id]
 
 
 # ---------------------------------------------------------------------------
@@ -627,12 +687,17 @@ def close_session(user_id: str) -> dict[str, Any]:
     with _lock:
         vnc_info = _vnc_sessions.pop(user_id, None)
         session = _sessions.pop(user_id, None)
+    # Also clean up any thread-local session for the calling thread.
+    tl_sessions: dict = getattr(_thread_local, "sessions", {})
+    tl_session = tl_sessions.pop(user_id, None)
     if vnc_info:
         _stop_vnc_server(vnc_info.get("xvfb"), vnc_info.get("vnc"))
-    if session:
-        session.close()
-        return {"status": "closed"}
-    return {"status": "no_session"}
+    closed = False
+    for s in (session, tl_session):
+        if s:
+            s.close()
+            closed = True
+    return {"status": "closed"} if closed else {"status": "no_session"}
 
 
 def close_all_sessions() -> None:

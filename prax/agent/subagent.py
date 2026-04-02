@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import contextvars
 import logging
 
 from langchain.agents import create_agent as create_react_agent
@@ -101,7 +102,7 @@ def _run_subagent(task: str, category: str) -> str:
     This is the shared implementation used by both :func:`delegate_task` and
     :func:`delegate_parallel`.
     """
-    from prax.agent.trace import build_identity_context, start_span
+    from prax.agent.trace import GraphCallbackHandler, build_identity_context, start_span
 
     span = start_span(category, category)
 
@@ -156,13 +157,22 @@ def _run_subagent(task: str, category: str) -> str:
     from prax.agent.user_context import current_component
     current_component.set(f"subagent_{category}")
 
+    _graph_cb = GraphCallbackHandler(
+        parent_span_id=span.span_id,
+        graph=span.ctx.graph,
+        trace_id=span.trace_id,
+    )
+
     try:
         result = subgraph.invoke(
             {"messages": [
                 SystemMessage(content=system_msg),
                 HumanMessage(content=task),
             ]},
-            config={"recursion_limit": get_recursion_limit(30)},
+            config={
+                "recursion_limit": get_recursion_limit(30),
+                "callbacks": [_graph_cb],
+            },
         )
     except Exception as exc:
         logger.warning("Sub-agent [%s] failed: %s", category, exc, exc_info=True)
@@ -366,10 +376,15 @@ def delegate_parallel(tasks: list[dict]) -> str:
 
     results: list[str] = [""] * len(tasks)
 
+    # Copy the current context (ContextVars: user_id, channel_id, active_view, etc.)
+    # so worker threads inherit them.  Without this, ContextVars default to None in
+    # thread-pool workers, breaking user resolution and browser session lookup.
+    ctx = contextvars.copy_context()
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks)) as pool:
         future_to_idx: dict[concurrent.futures.Future, int] = {}
         for idx, spec in enumerate(tasks):
-            future = pool.submit(_run_spoke_or_subagent, spec)
+            future = pool.submit(ctx.run, _run_spoke_or_subagent, spec)
             future_to_idx[future] = idx
 
         done, not_done = concurrent.futures.wait(

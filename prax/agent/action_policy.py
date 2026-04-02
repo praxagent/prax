@@ -161,9 +161,18 @@ _MEDIUM: set[str] = {
     "project_add_source",
 }
 
+_LOW: set[str] = {
+    # sandbox_shell runs inside the sandbox container — the container IS the
+    # safety boundary, so the tool itself is low-risk.
+    "sandbox_shell",
+    # read-only utilities
+    "get_current_datetime",
+}
+
 TOOL_RISK_MAP: dict[str, RiskLevel] = {
     name: RiskLevel.HIGH for name in _HIGH
-} | {name: RiskLevel.MEDIUM for name in _MEDIUM}
+} | {name: RiskLevel.MEDIUM for name in _MEDIUM
+} | {name: RiskLevel.LOW for name in _LOW}
 
 
 # ── public helpers ───────────────────────────────────────────────────

@@ -7,7 +7,7 @@ class StubAgent:
     def __init__(self):
         self.calls = []
 
-    def run(self, conversation, user_input, workspace_context=""):
+    def run(self, conversation, user_input, workspace_context="", **kwargs):
         self.calls.append((conversation, user_input, workspace_context))
         return "stub-response"
 
