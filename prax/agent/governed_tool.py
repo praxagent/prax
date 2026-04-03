@@ -134,7 +134,8 @@ def wrap_with_governance(tool: BaseTool) -> BaseTool:
         # --- Active Inference: extract expected observation (Phase 1) ---
         expected_observation = kwargs.pop("expected_observation", None)
 
-        # --- Epistemic ledger: read-before-write gate (Phase 2) ---
+        # --- Prediction tracker init ---
+        tracker = None
         try:
             from prax.agent.prediction_tracker import (
                 READ_TOOLS,
@@ -142,16 +143,22 @@ def wrap_with_governance(tool: BaseTool) -> BaseTool:
                 get_prediction_tracker,
             )
             tracker = get_prediction_tracker()
-            gate_msg = tracker.check_epistemic_gate(tool_name, kwargs)
-            if gate_msg:
-                logger.info("Epistemic gate blocked %s: %s", tool_name, gate_msg)
-                _audit_buffer.append(log_action(
-                    tool_name, static_risk, kwargs,
-                    result=f"BLOCKED — epistemic gate ({gate_msg[:80]})",
-                ))
-                return gate_msg
         except Exception:
-            tracker = None
+            pass  # tracker stays None — all tracker-dependent gates degrade gracefully
+
+        # --- Epistemic ledger: read-before-write gate (Phase 2) ---
+        if tracker is not None:
+            try:
+                gate_msg = tracker.check_epistemic_gate(tool_name, kwargs)
+                if gate_msg:
+                    logger.info("Epistemic gate blocked %s: %s", tool_name, gate_msg)
+                    _audit_buffer.append(log_action(
+                        tool_name, static_risk, kwargs,
+                        result=f"BLOCKED — epistemic gate ({gate_msg[:80]})",
+                    ))
+                    return gate_msg
+            except Exception:
+                pass  # Gate failure must not disable tracker for later phases
 
         # --- Earned trust: dynamic risk adjustment ---
         risk = static_risk
