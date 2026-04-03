@@ -21,9 +21,6 @@ Run with:
 from __future__ import annotations
 
 import os
-import shutil
-import tempfile
-import time
 import uuid
 
 import pytest
@@ -212,7 +209,6 @@ class TestLTM:
     def test_store_and_recall_single_memory(self, test_user):
         """Store a fact, recall it by semantic search."""
         from prax.services.memory.vector_store import (
-            delete_memory,
             search_dense,
             upsert_memory,
         )
@@ -293,7 +289,7 @@ class TestLTM:
         # Query by error code — sparse search should help
         query = 'What causes error "E-4012"?'
         hybrid_results = hybrid_search(test_user, query, top_k=3)
-        dense_results = search_dense(test_user, _embed(query), top_k=3)
+        search_dense(test_user, _embed(query), top_k=3)
 
         # Both should find it, but hybrid should score it higher
         assert len(hybrid_results) >= 1
@@ -360,7 +356,7 @@ class TestGraphStore:
 
         # By default, superseded relations are hidden
         alice = get_entity(test_user, "alice")
-        active_rels = [r for r in alice.relations if r.get("valid_until") is None]
+        _ = [r for r in alice.relations if r.get("valid_until") is None]
         # After supersession, the relation should have valid_until set
         # (The get_entity with include_superseded=True should show it)
         alice_full = get_entity(test_user, "alice", include_superseded=True)
@@ -605,7 +601,7 @@ class TestFullPipeline:
         Turn 2: User asks about pandas vs polars — agent notes preference.
         Turn 3: Agent recalls user context to give personalized answer.
         """
-        from prax.services.memory.graph_store import get_entity, merge_entity, add_relation
+        from prax.services.memory.graph_store import add_relation, get_entity, merge_entity
         from prax.services.memory.stm import stm_read, stm_write
         from prax.services.memory_service import MemoryService
 

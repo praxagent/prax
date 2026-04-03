@@ -74,7 +74,7 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
             vectors = [[0.0] * dim for _ in uncached_texts]
 
     # Populate cache
-    for idx, vec in zip(uncached_indices, vectors):
+    for idx, vec in zip(uncached_indices, vectors, strict=False):
         h = hashes[idx]
         if len(_embed_cache) < _MAX_CACHE:
             _embed_cache[h] = vec

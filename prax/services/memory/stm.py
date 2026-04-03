@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from prax.services.memory.models import STMEntry
 from prax.settings import settings
@@ -63,7 +63,7 @@ def stm_write(
     access_count is incremented (reinforcement).
     """
     entries = _load(user_id)
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     tags = tags or []
 
     # Upsert by key
@@ -153,7 +153,7 @@ def stm_compact(user_id: str) -> str:
         logger.exception("LLM compaction failed — falling back to concatenation")
         summary_text = text_blob[:2000]
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     summary_entry = {
         "key": "_compacted_summary",
         "content": summary_text,

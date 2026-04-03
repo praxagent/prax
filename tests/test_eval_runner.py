@@ -3,12 +3,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-import pytest
-
-from prax.eval.runner import EvalResult, _results_file, load_results, run_eval
-
+from prax.eval.runner import EvalResult, run_eval
 
 # ---------------------------------------------------------------------------
 # EvalResult

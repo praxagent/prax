@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import pytest
 
-from prax.services.memory.models import ConsolidationResult, MemoryResult, STMEntry
+from prax.services.memory.models import MemoryResult, STMEntry
 
 
 @pytest.fixture

@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from prax.services.memory.models import MemoryResult
 from prax.settings import settings
@@ -52,7 +52,6 @@ def _ensure_collection(client) -> None:
     """Create the memories collection if it doesn't exist."""
     from qdrant_client.models import (
         Distance,
-        NamedSparseVector,
         SparseIndexParams,
         SparseVectorParams,
         VectorParams,
@@ -98,13 +97,13 @@ def upsert_memory(
     Returns the memory_id (UUID).
     """
     mid = memory_id or str(uuid.uuid4())
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
 
     try:
         client = _get_client()
         _ensure_collection(client)
 
-        from qdrant_client.models import NamedSparseVector, NamedVector, PointStruct, SparseVector
+        from qdrant_client.models import PointStruct, SparseVector
 
         vectors: dict = {"dense": dense_vector}
         sparse_vectors = {}
@@ -216,7 +215,7 @@ def reinforce_memory(memory_id: str, interaction_epoch: int = 0) -> None:
     """
     try:
         client = _get_client()
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         # Qdrant doesn't support atomic increment, so we read-modify-write
         points = client.retrieve(collection_name=COLLECTION, ids=[memory_id], with_payload=True)
@@ -351,7 +350,7 @@ def decay_memories(
 
     lambda_t = math.log(2) / halflife_days
     lambda_i = math.log(2) / halflife_interactions if halflife_interactions > 0 else 0.0
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     current_epoch = get_interaction_epoch(user_id)
     pruned = 0
 

@@ -5,14 +5,10 @@ separation, query-adaptive retrieval weights, and interaction-based decay.
 """
 import json
 import os
-import tempfile
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import patch
 
 from prax.services.memory.models import MemoryResult
 from prax.services.memory.retrieval import _classify_query_weights, rrf_fuse
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -38,15 +34,17 @@ class TestBitemporalEdges:
 
     def test_add_relation_signature_accepts_valid_from(self):
         """add_relation should accept valid_from parameter."""
-        from prax.services.memory.graph_store import add_relation
         import inspect
+
+        from prax.services.memory.graph_store import add_relation
         sig = inspect.signature(add_relation)
         assert "valid_from" in sig.parameters
 
     def test_supersede_relation_exists(self):
         """supersede_relation function should be importable."""
-        from prax.services.memory.graph_store import supersede_relation
         import inspect
+
+        from prax.services.memory.graph_store import supersede_relation
         sig = inspect.signature(supersede_relation)
         assert "user_id" in sig.parameters
         assert "source_name" in sig.parameters
@@ -55,8 +53,9 @@ class TestBitemporalEdges:
 
     def test_get_entity_accepts_include_superseded(self):
         """get_entity should accept include_superseded parameter."""
-        from prax.services.memory.graph_store import get_entity
         import inspect
+
+        from prax.services.memory.graph_store import get_entity
         sig = inspect.signature(get_entity)
         assert "include_superseded" in sig.parameters
 
@@ -130,16 +129,18 @@ class TestConsolidationValidationGate:
 
 class TestMultiGraphSeparation:
     def test_merge_temporal_event_exists(self):
-        from prax.services.memory.graph_store import merge_temporal_event
         import inspect
+
+        from prax.services.memory.graph_store import merge_temporal_event
         sig = inspect.signature(merge_temporal_event)
         assert "description" in sig.parameters
         assert "occurred_at" in sig.parameters
         assert "participant_names" in sig.parameters
 
     def test_add_causal_link_exists(self):
-        from prax.services.memory.graph_store import add_causal_link
         import inspect
+
+        from prax.services.memory.graph_store import add_causal_link
         sig = inspect.signature(add_causal_link)
         assert "cause_description" in sig.parameters
         assert "effect_description" in sig.parameters
@@ -218,11 +219,11 @@ class TestQueryAdaptiveWeights:
 
         # Equal weights
         equal = rrf_fuse([list1, list2, list3])
-        equal_order = [r.memory_id for r in equal]
+        _ = [r.memory_id for r in equal]
 
         # Heavy sparse + graph weight (factual query)
         factual = rrf_fuse([list1, list2, list3], weights=[0.8, 1.5, 1.3])
-        factual_order = [r.memory_id for r in factual]
+        _ = [r.memory_id for r in factual]
 
         # The rankings should differ (b+c boosted in factual)
         # At minimum, the scores should be different
@@ -254,8 +255,9 @@ class TestQueryAdaptiveWeights:
 class TestInteractionBasedDecay:
     def test_upsert_includes_interaction_epoch(self):
         """upsert_memory should include interaction_epoch in payload."""
-        from prax.services.memory.vector_store import upsert_memory
         import inspect
+
+        from prax.services.memory.vector_store import upsert_memory
         # The function should work — we just verify the payload structure
         # by checking the source code includes interaction_epoch
         src = inspect.getsource(upsert_memory)
@@ -263,25 +265,28 @@ class TestInteractionBasedDecay:
 
     def test_reinforce_accepts_interaction_epoch(self):
         """reinforce_memory should accept interaction_epoch parameter."""
-        from prax.services.memory.vector_store import reinforce_memory
         import inspect
+
+        from prax.services.memory.vector_store import reinforce_memory
         sig = inspect.signature(reinforce_memory)
         assert "interaction_epoch" in sig.parameters
 
     def test_interaction_epoch_functions_exist(self):
         """get_interaction_epoch and increment_interaction_epoch should be importable."""
+        import inspect
+
         from prax.services.memory.vector_store import (
             get_interaction_epoch,
             increment_interaction_epoch,
         )
-        import inspect
         assert "user_id" in inspect.signature(get_interaction_epoch).parameters
         assert "user_id" in inspect.signature(increment_interaction_epoch).parameters
 
     def test_decay_memories_accepts_halflife_interactions(self):
         """decay_memories should accept halflife_interactions parameter."""
-        from prax.services.memory.vector_store import decay_memories
         import inspect
+
+        from prax.services.memory.vector_store import decay_memories
         sig = inspect.signature(decay_memories)
         assert "halflife_interactions" in sig.parameters
 
@@ -292,7 +297,6 @@ class TestInteractionBasedDecay:
 
     def test_dual_decay_takes_stronger_signal(self):
         """The decay function should use min(time_factor, interaction_factor)."""
-        import math
         from prax.services.memory.vector_store import decay_memories
         src = __import__("inspect").getsource(decay_memories)
         # Verify the min() pattern is present

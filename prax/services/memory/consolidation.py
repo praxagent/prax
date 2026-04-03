@@ -30,7 +30,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from prax.services.memory.models import ConsolidationResult
 from prax.settings import settings
@@ -276,7 +276,7 @@ def consolidate_user(user_id: str) -> ConsolidationResult:
         logger.debug("Decay pass failed", exc_info=True)
 
     # 11. Build daily summary
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
     if state.get("last_daily_summary") != today:
         try:
             summary = _build_daily_summary(text_blob)
@@ -301,7 +301,7 @@ def consolidate_user(user_id: str) -> ConsolidationResult:
 
     # 12. Update state
     state["last_consolidated_line"] = state.get("last_consolidated_line", 0) + len(batch)
-    state["last_decay_run"] = datetime.now(timezone.utc).isoformat()
+    state["last_decay_run"] = datetime.now(UTC).isoformat()
     _save_state(user_id, state)
 
     logger.info(
@@ -322,8 +322,9 @@ def _extract_entities_relations(text: str) -> dict:
     Returns: {"entities": [...], "relations": [...], "facts": [...]}
     """
     try:
-        from prax.agent.llm_factory import build_llm
         from langchain_core.messages import HumanMessage, SystemMessage
+
+        from prax.agent.llm_factory import build_llm
 
         llm = build_llm(config_key="memory_consolidation", default_tier="low")
 
@@ -398,8 +399,9 @@ Rules:
 def _build_daily_summary(text: str) -> str:
     """Summarise a day's activity into a concise memory."""
     try:
-        from prax.agent.llm_factory import build_llm
         from langchain_core.messages import HumanMessage, SystemMessage
+
+        from prax.agent.llm_factory import build_llm
 
         llm = build_llm(config_key="memory_consolidation", default_tier="low")
         msgs = [

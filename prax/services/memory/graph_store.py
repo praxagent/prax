@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from prax.services.memory.models import Entity
 from prax.settings import settings
@@ -109,7 +109,7 @@ def merge_entity(
     """
     canonical = name.strip().lower()
     display = display_name or name
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     eid = str(uuid.uuid4())
     props = properties or {}
 
@@ -170,7 +170,7 @@ def add_relation(
     """
     src = source_name.strip().lower()
     tgt = target_name.strip().lower()
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     vf = valid_from or now
 
     try:
@@ -228,7 +228,7 @@ def supersede_relation(
     """
     src = source_name.strip().lower()
     tgt = target_name.strip().lower()
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
 
     try:
         with _session() as session:
@@ -261,7 +261,6 @@ def get_entity(user_id: str, name: str, include_superseded: bool = False) -> Ent
     Set include_superseded=True to also see historical/superseded edges.
     """
     canonical = name.strip().lower()
-    validity_filter = "" if include_superseded else "AND (r.valid_until IS NULL OR r.valid_until IS NULL)"
     try:
         with _session() as session:
             result = session.run(
@@ -416,7 +415,7 @@ def decay_graph(user_id: str, halflife_days: float = 14.0, prune_threshold: floa
     import math
 
     lambda_ = math.log(2) / halflife_days
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     pruned = 0
 
     try:
@@ -498,7 +497,7 @@ def merge_temporal_event(
 
     Inspired by MAGMA (Jiang et al., 2026): orthogonal temporal graph.
     """
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     eid = str(uuid.uuid4())
     ts = occurred_at or now
 
@@ -556,7 +555,7 @@ def add_causal_link(
 
     Inspired by MAGMA (Jiang et al., 2026): orthogonal causal graph.
     """
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     cid = str(uuid.uuid4())
 
     try:

@@ -1,20 +1,15 @@
 """Tests for the declarative permissions.md system."""
 from __future__ import annotations
 
-import os
-from unittest.mock import MagicMock, patch
-
 import pytest
 
 from prax.plugins.permissions import (
-    KNOWN_CAPABILITIES,
     NONE,
     UNRESTRICTED,
     PluginPermissions,
     load_permissions,
     parse_permissions_md,
 )
-
 
 # ---------------------------------------------------------------------------
 # Parser tests
@@ -227,7 +222,7 @@ class TestLoadPermissions:
         perms_file = tmp_path / "permissions.md"
         perms_file.write_bytes(b"\x00\x01\x02")  # binary garbage
         # Should not raise — returns None
-        perms = load_permissions(tmp_path)
+        load_permissions(tmp_path)
         # May or may not be None depending on whether the parser handles it
 
 

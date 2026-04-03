@@ -1,18 +1,13 @@
 """Tests for short-term memory (scratchpad) store."""
-import json
 import os
-import tempfile
 from unittest.mock import patch
 
 import pytest
-
-from prax.services.memory.models import STMEntry
 
 
 @pytest.fixture(autouse=True)
 def _mock_workspace(tmp_path):
     """Point workspace_root to per-user temp directories."""
-    import os
 
     def _user_root(user_id: str) -> str:
         path = os.path.join(str(tmp_path), user_id)

@@ -204,7 +204,7 @@ class MemoryService:
         if not self._available:
             return "Memory system not available."
         try:
-            from prax.services.memory.graph_store import search_entities, get_entity
+            from prax.services.memory.graph_store import get_entity, search_entities
 
             # Extract key terms and search for matching entities
             from prax.services.memory.retrieval import _extract_key_terms

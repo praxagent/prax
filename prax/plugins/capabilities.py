@@ -11,9 +11,9 @@ import logging
 import os
 import re
 import subprocess
-import tempfile
 from typing import Any
 
+from prax.plugins.permissions import PluginPermissions
 from prax.plugins.policy import PluginPolicy, get_policy
 from prax.plugins.registry import PluginTrust
 
@@ -54,7 +54,7 @@ class PluginCapabilities:
         trust_tier: str,
         user_id: str | None = None,
         approved_secrets: set[str] | None = None,
-        permissions: "PluginPermissions | None" = None,
+        permissions: PluginPermissions | None = None,
     ) -> None:
         self.plugin_rel_path = plugin_rel_path
         self.trust_tier = trust_tier
@@ -64,7 +64,6 @@ class PluginCapabilities:
         self._approved_secrets: set[str] = approved_secrets or set()
 
         # Declarative permissions from permissions.md — authoritative ceiling.
-        from prax.plugins.permissions import PluginPermissions
         self._permissions: PluginPermissions | None = permissions
 
     # ------------------------------------------------------------------

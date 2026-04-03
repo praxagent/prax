@@ -139,7 +139,7 @@ def _update_local(case_id: str, updates: dict) -> bool:
 def _store_neo4j(case: FailureCase) -> None:
     """Store failure case as a Neo4j node with tool relationships."""
     try:
-        from prax.services.memory.graph_store import _session, _ensure_indexes
+        from prax.services.memory.graph_store import _session
 
         with _session() as session:
             # Ensure FailureCase index exists

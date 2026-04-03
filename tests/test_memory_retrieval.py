@@ -1,5 +1,4 @@
 """Tests for hybrid retrieval engine (RRF fusion)."""
-import pytest
 
 from prax.services.memory.models import MemoryResult
 from prax.services.memory.retrieval import _extract_key_terms, rrf_fuse

@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 import math
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from prax.services.memory.models import MemoryResult
 
@@ -50,7 +50,7 @@ def hybrid_search(
     time/importance adjustments.  Weights are adaptive: factual queries
     boost sparse + graph; semantic queries boost dense.
     """
-    from prax.services.memory import embedder, graph_store, vector_store
+    from prax.services.memory import embedder, vector_store
 
     # 0. Classify query to determine retrieval weights
     weights = _classify_query_weights(query)
@@ -73,7 +73,7 @@ def hybrid_search(
     # 4. Apply time decay modifier
     if time_decay:
         lambda_ = math.log(2) / halflife_days
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         for r in fused:
             if r.created_at:
                 try:

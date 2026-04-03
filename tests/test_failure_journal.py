@@ -1,10 +1,6 @@
 """Tests for the failure journal."""
 from __future__ import annotations
 
-import json
-
-import pytest
-
 from prax.services.memory.failure_journal import (
     FailureCase,
     _auto_classify,
@@ -13,7 +9,6 @@ from prax.services.memory.failure_journal import (
     record_failure,
     resolve_failure,
 )
-
 
 # ---------------------------------------------------------------------------
 # FailureCase dataclass

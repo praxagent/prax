@@ -211,6 +211,7 @@ class TestPost:
 
     def test_timeout(self):
         import requests as _req
+
         from prax.agent.claude_code_tools import _post
 
         with (
@@ -222,6 +223,7 @@ class TestPost:
 
     def test_connection_error_resets_cache(self):
         import requests as _req
+
         from prax.agent.claude_code_tools import _post
 
         with (

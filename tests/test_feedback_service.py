@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -12,7 +12,6 @@ from prax.services.feedback_service import (
     get_feedback_stats,
     submit_feedback,
 )
-
 
 # ---------------------------------------------------------------------------
 # FeedbackEntry
