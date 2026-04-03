@@ -34,10 +34,6 @@ services:
       - NEO4J_URI=bolt://neo4j:7687
       # Ollama — when EMBEDDING_PROVIDER=ollama, embeddings use this endpoint.
       - OLLAMA_BASE_URL=http://ollama:11434
-      # Claude Code bridge — Prax connects to the bridge on the host for
-      # multi-turn collaboration sessions with Claude Code.
-      - CLAUDE_BRIDGE_URL=${CLAUDE_BRIDGE_URL:-http://host.docker.internal:9819}
-      - CLAUDE_BRIDGE_SECRET=${CLAUDE_BRIDGE_SECRET:-}
       # OTel exporter — sends traces to Tempo when observability is enabled.
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4318
       - GRAFANA_URL=${GRAFANA_URL:-http://localhost:3001}
@@ -50,6 +46,9 @@ services:
       - ./prax:/app/prax
       - ./app.py:/app/app.py
       - ./config.py:/app/config.py:ro
+      # Git repo — required for self-improve worktree isolation.
+      - ./.git:/app/.git:ro
+      - ./tests:/app/tests:ro
       # Required for sandbox package installation (docker exec).
       # SECURITY: grants host Docker access — use only in trusted environments.
       - /var/run/docker.sock:/var/run/docker.sock
@@ -76,12 +75,20 @@ services:
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_KEY}
       - OPENAI_API_KEY=${OPENAI_KEY}
+      - CLAUDE_CODE_DISABLE_NONINTERACTIVE_CHECK=1
     volumes:
       - ${WORKSPACE_DIR:-./workspaces}:/workspaces
-      - ./prax:/source/prax:ro
-      - ./app.py:/source/app.py:ro
-      - ./config.py:/source/config.py:ro
-      - ./tests:/source/tests:ro
+      # Full repo mount — coding agents (Claude Code, Codex, OpenCode) need
+      # read-write access to the codebase for self-improvement tasks.
+      # .env is NOT included: secrets are passed via environment vars above.
+      - .:/source
+      # Mask .env inside /source so coding agents can't read raw secrets.
+      # The empty volume overlay hides the host .env file.
+      - /source/.env
+      # Coding agent configs — persist auth and settings across restarts.
+      - claude-code-config:/root/.claude
+      - codex-config:/root/.codex
+      - opencode-config:/root/.config/opencode
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:4096/global/health"]
       interval: 5s
@@ -149,6 +156,7 @@ services:
     environment:
       - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:-prax-memory}
       - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_dbms_usage__report_enabled=false
     ports:
       - "7474:7474"   # Browser UI
       - "7687:7687"   # Bolt protocol
@@ -175,7 +183,7 @@ services:
     volumes:
       - ollama-data:/root/.ollama
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/"]
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/11434'"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -270,6 +278,9 @@ services:
       - prometheus
 
 volumes:
+  claude-code-config:
+  codex-config:
+  opencode-config:
   ollama-data:
   qdrant-data:
   neo4j-data:

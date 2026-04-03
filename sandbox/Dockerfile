@@ -13,7 +13,7 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
     chromium socat \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g opencode-ai
+RUN npm install -g opencode-ai @anthropic-ai/claude-code @openai/codex
 
 WORKDIR /workspace
 

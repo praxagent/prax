@@ -76,95 +76,56 @@ def get_current_datetime(timezone_name: str = "UTC") -> str:
 
 @tool
 def fetch_url_content(url: str) -> str:
-    """Fetch the text content of a URL without launching a full browser.
+    """Fetch the text content of a URL as clean, LLM-friendly markdown.
 
-    Use this as the FIRST approach when a user shares a URL.  It is fast and
-    lightweight.  Supports x.com/twitter.com links via the oEmbed API.
-    For JavaScript-heavy sites that return empty content, fall back to
-    delegate_browser.
+    Uses a reader service to extract the main content from web pages —
+    strips navigation, ads, sidebars, and boilerplate automatically.
+    Returns clean markdown suitable for summarisation or analysis.
+
+    Use this as the FIRST approach when a user shares a URL.  It is fast
+    (~1-2s) and produces high-quality output for articles, docs, and blogs.
+
+    If the result seems incomplete — e.g. only a snippet is returned,
+    threaded content is truncated, or the page requires authentication —
+    fall back to delegate_browser which uses a full browser with JS
+    rendering and persistent login sessions.
     """
-    import re
-
     import requests as _requests
 
-    # x.com / twitter.com — use oEmbed API for tweet text.
-    if any(d in url for d in ("x.com/", "twitter.com/")):
-        try:
-            resp = _requests.get(
-                "https://publish.twitter.com/oembed",
-                params={"url": url, "omit_script": "true"},
-                timeout=10,
-            )
-            if resp.ok:
-                data = resp.json()
-                html = data.get("html", "")
-
-                # Extract URLs from <a href="..."> BEFORE stripping tags.
-                raw_urls = re.findall(r'href="(https?://[^"]+)"', html)
-
-                # Resolve t.co redirects to get actual destination URLs.
-                embedded_links: list[str] = []
-                for link in raw_urls:
-                    # Skip twitter/x internal links (profile, tweet permalink).
-                    if any(d in link for d in ("twitter.com/", "x.com/", "pic.twitter.com")):
-                        continue
-                    if "t.co/" in link:
-                        try:
-                            r = _requests.head(link, allow_redirects=True, timeout=5)
-                            embedded_links.append(r.url)
-                        except Exception:
-                            embedded_links.append(link)
-                    else:
-                        embedded_links.append(link)
-
-                text = re.sub(r"<[^>]+>", "", html).strip()
-                author = data.get("author_name", "Unknown")
-                result = f"Tweet by {author}:\n{text}"
-                if embedded_links:
-                    result += "\n\nLinks in tweet:\n" + "\n".join(f"  - {lnk}" for lnk in embedded_links)
-                result += f"\n\nSource: {url}"
-                return result
-        except Exception:
-            pass
-        return f"Could not fetch tweet. The URL may require authentication: {url}"
-
-    # General URLs — simple HTTP fetch + basic text extraction.
+    # Route through reader service for clean markdown extraction.
+    # The request originates from the reader's infrastructure, not ours.
     try:
         resp = _requests.get(
-            url,
+            f"https://r.jina.ai/{url}",
             headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                ),
+                "Accept": "text/markdown",
+                "X-No-Cache": "true",
             },
-            timeout=15,
+            timeout=20,
             allow_redirects=True,
         )
         resp.raise_for_status()
 
-        content_type = resp.headers.get("content-type", "")
-        if "html" not in content_type and "text" not in content_type:
-            return f"URL returned non-text content ({content_type}). Try browser_open instead."
+        text = resp.text.strip()
 
-        html = resp.text
+        # If the reader returned very little content, the page likely
+        # needs JS rendering or authentication — signal to use browser.
+        if len(text) < 50:
+            return (
+                f"Reader returned minimal content for {url} — the page may "
+                "require JavaScript or authentication. Use delegate_browser "
+                "to load it in a full browser."
+            )
 
-        # Extract title before stripping tags.
-        title_match = re.search(r"<title[^>]*>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
-        title = title_match.group(1).strip() if title_match else "Untitled"
+        if len(text) > 15000:
+            text = text[:15000] + "\n\n[Content truncated]"
 
-        # Remove script/style blocks, then strip tags.
-        html = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", html, flags=re.DOTALL | re.IGNORECASE)
-        text = re.sub(r"<[^>]+>", " ", html)
-        text = re.sub(r"\s+", " ", text).strip()
-
-        if len(text) > 10000:
-            text = text[:10000] + "\n\n[Content truncated]"
-
-        return f"Title: {title}\n\n{text}\n\nSource: {url}"
+        return f"{text}\n\nSource: {url}"
     except Exception as e:
-        return f"Failed to fetch URL: {e}. Try browser_open for JavaScript-heavy sites."
+        return (
+            f"Failed to fetch URL via reader: {e}. "
+            "Use delegate_browser for full browser rendering."
+        )
 
 
 def build_default_tools():

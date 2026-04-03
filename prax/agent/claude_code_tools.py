@@ -1,237 +1,246 @@
-"""Claude Code collaboration tools — multi-turn sessions with Claude Code.
+"""Coding agent tools — runs Claude Code, Codex, or OpenCode in the sandbox.
 
-Gives Prax the ability to have back-and-forth conversations with Claude Code
-(running on the host via the bridge service) for complex codebase tasks like
-bug fixing, refactoring, and feature development.
+Gives Prax the ability to run a coding agent inside the sandbox container
+for complex codebase tasks like bug fixing, refactoring, and feature
+development.  The coding agent has full read-write access to the codebase
+at /source/ and can read, edit, run tests, and use git.
 
-The bridge must be running on the host (``./scripts/start_claude_bridge.sh``).
-If the bridge is down, these tools report that clearly and are excluded from
-the agent's tool set.
+Which agent is used is controlled by the SELF_IMPROVE_AGENT setting:
+    claude-code  — Anthropic Claude Code (default)
+    codex        — OpenAI Codex CLI
+    opencode     — OpenCode (multi-provider)
 
-Environment:
-    CLAUDE_BRIDGE_URL    — bridge endpoint (default: http://host.docker.internal:9819)
-    CLAUDE_BRIDGE_SECRET — shared auth secret (must match the bridge)
+Requires:
+    SELF_IMPROVE_ENABLED=true  (global self-improvement gate)
+    The chosen CLI installed in sandbox (all three are in the Dockerfile)
+    Appropriate API key set in sandbox environment
 """
 from __future__ import annotations
 
+import json
 import logging
 
-import requests
 from langchain_core.tools import tool
 
 from prax.agent.action_policy import RiskLevel, risk_tool
+from prax.services import sandbox_service
 
 logger = logging.getLogger(__name__)
 
-# Cache the availability check for the lifetime of this import
-_bridge_available: bool | None = None
+# Track the last conversation ID for multi-turn sessions
+_last_conversation_id: str | None = None
 
 
-def _bridge_url() -> str:
-    from prax.settings import settings
-    return getattr(settings, "claude_bridge_url", "") or ""
+def _get_agent() -> str:
+    """Return the configured coding agent name."""
+    from prax.settings import settings as _s
+    return getattr(_s, "self_improve_agent", "claude-code")
 
 
-def _bridge_secret() -> str:
-    from prax.settings import settings
-    return getattr(settings, "claude_bridge_secret", "") or ""
+def _build_command(prompt: str, resume_id: str | None = None) -> str:
+    """Build the CLI command for the configured coding agent."""
+    agent = _get_agent()
+    escaped = _shell_escape(prompt)
+
+    if agent == "codex":
+        # Codex CLI: codex -q --json "prompt"
+        parts = ["codex"]
+        if resume_id:
+            parts.extend(["--resume", resume_id])
+        parts.extend(["-q", "--full-auto", escaped])
+        return " ".join(parts)
+
+    if agent == "opencode":
+        # OpenCode doesn't have a -p flag — use the API server already running.
+        # Fall back to a one-shot command via stdin.
+        return f"echo {escaped} | opencode chat"
+
+    # Default: claude-code
+    parts = ["claude"]
+    if resume_id:
+        parts.extend(["--resume", resume_id])
+    parts.extend([
+        "-p", escaped,
+        "--output-format", "json",
+        "--max-turns", "50",
+        "--permission-mode", "bypassPermissions",
+    ])
+    return " ".join(parts)
 
 
-def _headers() -> dict:
-    h: dict[str, str] = {"Content-Type": "application/json"}
-    secret = _bridge_secret()
-    if secret:
-        h["Authorization"] = f"Bearer {secret}"
-    return h
+def _parse_response(stdout: str, stderr: str, exit_code: int) -> dict:
+    """Parse the CLI output into a structured response dict."""
+    agent = _get_agent()
+
+    if exit_code != 0 and not stdout:
+        return {
+            "response": f"[ERROR] {agent} exited with code {exit_code}. {stderr[:500]}",
+            "exit_code": exit_code,
+        }
+
+    # Try JSON parse (claude-code and codex output JSON)
+    try:
+        data = json.loads(stdout)
+    except json.JSONDecodeError:
+        # Plain text output (opencode or fallback)
+        return {"response": stdout, "exit_code": exit_code}
+
+    conv_id = data.get("session_id") or data.get("conversation_id")
+
+    response_text = ""
+    if isinstance(data.get("result"), str):
+        response_text = data["result"]
+    elif isinstance(data.get("result"), list):
+        for block in data["result"]:
+            if isinstance(block, dict) and block.get("type") == "text":
+                response_text += block.get("text", "")
+    elif "result" not in data:
+        response_text = stdout
+
+    return {
+        "response": response_text,
+        "conversation_id": conv_id,
+        "exit_code": exit_code,
+        "cost": data.get("cost_usd"),
+    }
 
 
-def is_bridge_available() -> bool:
-    """Check if the Claude Code bridge is reachable.
+def _run_coding_agent(prompt: str, resume_id: str | None = None, timeout: int = 300) -> dict:
+    """Run the configured coding agent CLI in the sandbox.
 
-    Result is cached — call ``reset_bridge_cache()`` to re-check.
+    Returns dict with 'response', 'conversation_id', 'cost', 'exit_code'.
     """
-    global _bridge_available
-    if _bridge_available is not None:
-        return _bridge_available
+    cmd = _build_command(prompt, resume_id)
 
-    url = _bridge_url()
-    if not url:
-        _bridge_available = False
-        return False
+    result = sandbox_service.run_shell(
+        f"cd /source && {cmd}",
+        timeout=timeout,
+    )
 
+    if "error" in result:
+        return {"response": f"[ERROR] {result['error']}", "exit_code": -1}
+
+    return _parse_response(
+        result.get("stdout", "").strip(),
+        result.get("stderr", ""),
+        result.get("exit_code", -1),
+    )
+
+
+def _shell_escape(s: str) -> str:
+    """Escape a string for use in a shell command."""
+    return "'" + s.replace("'", "'\\''") + "'"
+
+
+def _agent_channel() -> str:
+    """Return the TeamWork channel name for the active coding agent."""
+    return _get_agent()  # "claude-code", "codex", or "opencode"
+
+
+def _mirror(prax_message: str | None = None, claude_response: str | None = None, meta: str = "") -> None:
+    """Fire-and-forget mirror to the agent's TeamWork channel.
+
+    The channel (#claude-code, #codex, or #opencode) is created lazily
+    on first use — it only appears when the tool is actually invoked.
+    """
     try:
-        resp = requests.get(f"{url}/health", timeout=3)
-        _bridge_available = resp.ok
-        if _bridge_available:
-            data = resp.json()
-            logger.info(
-                "Claude Code bridge available (version=%s, repo=%s)",
-                data.get("claude_version", "?"),
-                data.get("repo_path", "?"),
-            )
-        return _bridge_available
-    except Exception:
-        _bridge_available = False
-        return False
-
-
-def reset_bridge_cache() -> None:
-    """Reset the bridge availability cache so the next call re-probes."""
-    global _bridge_available
-    _bridge_available = None
-
-
-def _post(path: str, body: dict, timeout: int = 300) -> dict:
-    """Make a POST request to the bridge."""
-    url = _bridge_url()
-    if not url:
-        return {"error": "CLAUDE_BRIDGE_URL not configured"}
-
-    try:
-        resp = requests.post(
-            f"{url}{path}",
-            json=body,
-            headers=_headers(),
-            timeout=timeout + 10,  # slightly longer than Claude Code's own timeout
+        from prax.services.teamwork_hooks import mirror_coding_agent_turn
+        mirror_coding_agent_turn(
+            _agent_channel(), prax_message, claude_response, meta=meta,
         )
-        if resp.status_code == 401:
-            return {"error": "Bridge auth failed — check CLAUDE_BRIDGE_SECRET"}
-        return resp.json()
-    except requests.Timeout:
-        return {"error": "Bridge request timed out"}
-    except requests.ConnectionError:
-        reset_bridge_cache()
-        return {"error": "Claude Code bridge is not running. Ask the user to start it: ./scripts/start_claude_bridge.sh"}
-    except Exception as e:
-        return {"error": f"Bridge error: {e}"}
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
-# Session-based tools (multi-turn conversations)
+# Tools
 # ---------------------------------------------------------------------------
 
 @risk_tool(risk=RiskLevel.MEDIUM)
 def claude_code_start_session(context: str = "") -> str:
-    """Start a multi-turn collaboration session with Claude Code.
+    """Start a multi-turn collaboration session with the coding agent in the sandbox.
 
-    Claude Code is a powerful coding agent running on the host machine with
-    full access to the codebase, terminal, and git. Use this when you need
-    to collaborate on complex tasks — bug fixes, refactors, new features.
-
-    Unlike one-shot prompts, sessions maintain context across turns, allowing
-    iterative refinement — just like a pair programming conversation.
+    The coding agent (Claude Code, Codex, or OpenCode — set by SELF_IMPROVE_AGENT)
+    has full read-write access to the codebase at /source/. Use this for complex
+    tasks that benefit from iterative back-and-forth: bug fixes, refactors, features.
 
     Provide initial context about what you want to accomplish. Be specific:
-    include the failure cases, relevant files, and what the fix should achieve.
+    include failure cases, relevant files, and what the fix should achieve.
 
     Returns a session_id to use with claude_code_message.
 
     Args:
         context: Initial context for the session — what you want to work on.
-                 Include failure cases, relevant source files, eval criteria.
     """
-    if not is_bridge_available():
-        return (
-            "Claude Code bridge is not running. "
-            "The user needs to start it on the host: ./scripts/start_claude_bridge.sh"
-        )
+    global _last_conversation_id
 
-    result = _post("/session/start", {"context": context})
-    if "error" in result:
-        return f"Error: {result['error']}"
+    if not context:
+        return "Error: provide context for the session."
 
-    session_id = result.get("session_id", "")
-    response = result.get("response", "")
+    agent = _get_agent()
+    result = _run_coding_agent(context, timeout=300)
+    conv_id = result.get("conversation_id")
+    _last_conversation_id = conv_id
+    response = result.get("response", "(no response)")
 
-    msg = f"Session started: {session_id}\n\n"
-    if response:
-        msg += f"Claude Code: {response}"
-    else:
-        msg += "Ready for your first message. Use claude_code_message to continue."
+    _mirror(
+        prax_message=context,
+        claude_response=response,
+        meta=f"Session started ({agent}): `{conv_id or 'unknown'}`",
+    )
+
+    msg = f"Session started ({agent}): {conv_id or 'unknown'}\n\n{response}"
+    if result.get("cost"):
+        msg += f"\n(cost: ${result['cost']:.4f})"
     return msg
 
 
 @tool
 def claude_code_message(session_id: str, message: str, timeout: int = 300) -> str:
-    """Send a message in an active Claude Code session.
+    """Send a message in an active coding agent session.
 
-    This is the core collaboration tool — use it to have back-and-forth
-    conversations with Claude Code. Claude Code can read files, edit code,
-    run tests, use git, and more.
-
-    Tips for effective collaboration:
-    - Be specific about what you want changed and why
-    - Ask Claude Code to explain its approach before making changes
-    - Request diffs before committing
-    - Ask it to run the relevant tests after changes
-    - Iterate: if the first attempt isn't right, explain what's wrong
+    Continues a multi-turn conversation using --resume. The coding agent
+    can read files, edit code, run tests, use git, and more.
 
     Args:
-        session_id: The session ID from claude_code_start_session.
-        message: Your message to Claude Code. Be specific and directive.
-        timeout: Max seconds to wait for a response (default: 300).
+        session_id: The session/conversation ID from claude_code_start_session.
+        message: Your message to the coding agent. Be specific and directive.
+        timeout: Max seconds to wait (default: 300).
     """
     if not session_id or not message:
         return "Error: session_id and message are required"
 
-    result = _post("/session/message", {
-        "session_id": session_id,
-        "message": message,
-        "timeout": timeout,
-    }, timeout=timeout)
-
-    if "error" in result:
-        return f"Error: {result['error']}"
-
+    result = _run_coding_agent(message, resume_id=session_id, timeout=timeout)
     response = result.get("response", "(no response)")
-    turn = result.get("turn", "?")
-    cost = result.get("cost")
 
-    msg = f"[Turn {turn}] {response}"
-    if cost:
-        msg += f"\n(cost: ${cost:.4f})"
+    global _last_conversation_id
+    if result.get("conversation_id"):
+        _last_conversation_id = result["conversation_id"]
+
+    _mirror(prax_message=message, claude_response=response)
+
+    msg = response
+    if result.get("cost"):
+        msg += f"\n(cost: ${result['cost']:.4f})"
     return msg
 
 
 @tool
-def claude_code_end_session(session_id: str) -> str:
-    """End a Claude Code collaboration session.
-
-    Call this when the collaboration is complete. The session context
-    is released and cannot be resumed.
-
-    Args:
-        session_id: The session to end.
-    """
-    result = _post("/session/end", {"session_id": session_id})
-    if "error" in result:
-        return f"Error: {result['error']}"
-    turns = result.get("turns", 0)
-    return f"Session {session_id} ended after {turns} turns."
-
-
-@tool
 def claude_code_ask(prompt: str, timeout: int = 300) -> str:
-    """Ask Claude Code a one-shot question (no session).
+    """Ask the coding agent a one-shot question (no session).
 
     Use this for quick, self-contained questions that don't need
-    iterative refinement. For complex tasks, use claude_code_start_session
-    instead for multi-turn collaboration.
+    iterative refinement. For complex tasks, use claude_code_start_session.
 
     Args:
-        prompt: The question or task for Claude Code.
+        prompt: The question or task for the coding agent.
         timeout: Max seconds to wait (default: 300).
     """
-    if not is_bridge_available():
-        return (
-            "Claude Code bridge is not running. "
-            "The user needs to start it on the host: ./scripts/start_claude_bridge.sh"
-        )
-
-    result = _post("/ask", {"prompt": prompt, "timeout": timeout}, timeout=timeout)
-    if "error" in result:
-        return f"Error: {result['error']}"
-    return result.get("response", "(no response)")
+    result = _run_coding_agent(prompt, timeout=timeout)
+    response = result.get("response", "(no response)")
+    agent = _get_agent()
+    _mirror(prax_message=prompt, claude_response=response, meta=f"One-shot question ({agent})")
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -239,18 +248,19 @@ def claude_code_ask(prompt: str, timeout: int = 300) -> str:
 # ---------------------------------------------------------------------------
 
 def build_claude_code_tools() -> list:
-    """Return Claude Code tools if the bridge is configured and reachable.
+    """Return coding agent tools if self-improvement is enabled.
 
-    Returns an empty list if CLAUDE_BRIDGE_URL is not set or the bridge
-    is not responding — Prax won't even see these tools if they can't work.
+    Returns an empty list if SELF_IMPROVE_ENABLED is false.
+    The specific coding agent (claude-code/codex/opencode) is selected
+    at runtime via SELF_IMPROVE_AGENT.
     """
-    if not is_bridge_available():
-        logger.debug("Claude Code bridge not available — tools disabled")
+    from prax.settings import settings as _settings
+    if not _settings.self_improve_enabled:
+        logger.debug("Coding agent tools disabled — SELF_IMPROVE_ENABLED=false")
         return []
 
     return [
         claude_code_start_session,
         claude_code_message,
-        claude_code_end_session,
         claude_code_ask,
     ]

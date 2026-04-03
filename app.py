@@ -129,6 +129,8 @@ def create_app():
             from prax.services.teamwork_hooks import ensure_mirror_channels, sync_conversation_history
             ensure_mirror_channels()
             sync_conversation_history()
+            # Coding agent channels (#claude-code, #codex, #opencode) are
+            # created lazily on first tool invocation — no startup setup needed.
         except Exception:
             logger.warning("TeamWork integration failed to initialize", exc_info=True)
 

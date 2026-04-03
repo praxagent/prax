@@ -140,20 +140,17 @@ class AppSettings(BaseSettings):
     # Self-improvement (code modification via PRs)
     self_improve_enabled: bool = Field(default=False, alias="SELF_IMPROVE_ENABLED")
     self_improve_repo_path: str | None = Field(default=None, alias="SELF_IMPROVE_REPO_PATH")
+    self_improve_agent: str = Field(
+        default="claude-code", alias="SELF_IMPROVE_AGENT",
+        description=(
+            "Preferred coding agent for self-improvement tasks in the sandbox. "
+            "Options: claude-code (Anthropic), codex (OpenAI), opencode (multi-provider). "
+            "All three are installed in the sandbox and use provider API tokens — "
+            "monitor your API spend when self-improvement is enabled."
+        ),
+    )
     git_author_email: str = Field(default="prax@localhost", alias="GIT_AUTHOR_EMAIL")
     git_author_name: str = Field(default="Prax", alias="GIT_AUTHOR_NAME")
-
-    # Claude Code Bridge — multi-turn collaboration with Claude Code on the host.
-    # Start the bridge manually: ./scripts/start_claude_bridge.sh
-    # Prax detects whether the bridge is running and disables tools if it's down.
-    claude_bridge_url: str = Field(
-        default="", alias="CLAUDE_BRIDGE_URL",
-        description="Claude Code bridge endpoint (e.g. http://host.docker.internal:9819).",
-    )
-    claude_bridge_secret: str = Field(
-        default="", alias="CLAUDE_BRIDGE_SECRET",
-        description="Shared secret for bridge auth. Must match the bridge's CLAUDE_BRIDGE_SECRET.",
-    )
 
     # Prax SSH key — base64-encoded private key for pushing workspaces
     prax_ssh_key_b64: str | None = Field(default=None, alias="PRAX_SSH_KEY_B64")
