@@ -123,6 +123,68 @@ def sync_conversation_history() -> None:
         logger.debug("TeamWork hook: sync_conversation_history failed", exc_info=True)
 
 
+def ensure_claude_code_channel() -> None:
+    """Ensure #claude-code channel exists in TeamWork.
+
+    Called during startup when CLAUDE_BRIDGE_URL is configured.
+    Also registers a "Claude Code" agent identity for message attribution.
+    """
+    try:
+        tw = _tw()
+        if tw:
+            tw.ensure_channels([
+                {"name": "claude-code", "description": "Live transcript of Prax ↔ Claude Code collaboration sessions"},
+            ])
+            tw.create_agent(
+                name="Claude Code",
+                role="developer",
+                soul="Claude Code — AI coding agent on the host machine",
+            )
+    except Exception:
+        logger.debug("TeamWork hook: ensure_claude_code_channel failed", exc_info=True)
+
+
+def mirror_claude_code_turn(
+    prax_message: str | None,
+    claude_response: str | None,
+    meta: str = "",
+) -> None:
+    """Mirror a Prax ↔ Claude Code exchange to the #claude-code channel.
+
+    Args:
+        prax_message: What Prax sent to Claude Code (None to skip).
+        claude_response: What Claude Code replied (None to skip).
+        meta: Optional context line (e.g. "Session started: abc123").
+    """
+    try:
+        tw = _tw()
+        if not tw:
+            return
+
+        if meta:
+            tw.send_message(
+                content=meta,
+                channel="claude-code",
+                agent_name="Prax",
+            )
+
+        if prax_message:
+            tw.send_message(
+                content=prax_message,
+                channel="claude-code",
+                agent_name="Prax",
+            )
+
+        if claude_response:
+            tw.send_message(
+                content=claude_response,
+                channel="claude-code",
+                agent_name="Claude Code",
+            )
+    except Exception:
+        logger.debug("TeamWork hook: mirror_claude_code_turn failed", exc_info=True)
+
+
 def mirror_plan_to_tasks(goal: str, steps: list[dict]) -> list[str]:
     """Create TeamWork tasks mirroring an agent plan. Returns task IDs."""
     task_ids: list[str] = []

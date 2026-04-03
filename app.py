@@ -129,6 +129,10 @@ def create_app():
             from prax.services.teamwork_hooks import ensure_mirror_channels, sync_conversation_history
             ensure_mirror_channels()
             sync_conversation_history()
+            # Ensure #claude-code channel if the bridge is configured.
+            if settings.claude_bridge_url:
+                from prax.services.teamwork_hooks import ensure_claude_code_channel
+                ensure_claude_code_channel()
         except Exception:
             logger.warning("TeamWork integration failed to initialize", exc_info=True)
 

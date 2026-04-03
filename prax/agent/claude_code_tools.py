@@ -110,6 +110,15 @@ def _post(path: str, body: dict, timeout: int = 300) -> dict:
 # Session-based tools (multi-turn conversations)
 # ---------------------------------------------------------------------------
 
+def _mirror(prax_message: str | None = None, claude_response: str | None = None, meta: str = "") -> None:
+    """Fire-and-forget mirror to the #claude-code TeamWork channel."""
+    try:
+        from prax.services.teamwork_hooks import mirror_claude_code_turn
+        mirror_claude_code_turn(prax_message, claude_response, meta=meta)
+    except Exception:
+        pass
+
+
 @risk_tool(risk=RiskLevel.MEDIUM)
 def claude_code_start_session(context: str = "") -> str:
     """Start a multi-turn collaboration session with Claude Code.
@@ -142,6 +151,12 @@ def claude_code_start_session(context: str = "") -> str:
 
     session_id = result.get("session_id", "")
     response = result.get("response", "")
+
+    _mirror(
+        prax_message=context if context else None,
+        claude_response=response if response else None,
+        meta=f"Session started: `{session_id}`",
+    )
 
     msg = f"Session started: {session_id}\n\n"
     if response:
@@ -187,6 +202,8 @@ def claude_code_message(session_id: str, message: str, timeout: int = 300) -> st
     turn = result.get("turn", "?")
     cost = result.get("cost")
 
+    _mirror(prax_message=message, claude_response=response)
+
     msg = f"[Turn {turn}] {response}"
     if cost:
         msg += f"\n(cost: ${cost:.4f})"
@@ -207,6 +224,7 @@ def claude_code_end_session(session_id: str) -> str:
     if "error" in result:
         return f"Error: {result['error']}"
     turns = result.get("turns", 0)
+    _mirror(meta=f"Session `{session_id}` ended after {turns} turns.")
     return f"Session {session_id} ended after {turns} turns."
 
 
@@ -231,7 +249,9 @@ def claude_code_ask(prompt: str, timeout: int = 300) -> str:
     result = _post("/ask", {"prompt": prompt, "timeout": timeout}, timeout=timeout)
     if "error" in result:
         return f"Error: {result['error']}"
-    return result.get("response", "(no response)")
+    response = result.get("response", "(no response)")
+    _mirror(prax_message=prompt, claude_response=response, meta="One-shot question")
+    return response
 
 
 # ---------------------------------------------------------------------------

@@ -307,6 +307,82 @@ def restore_note_to_version(slug: str, commit: str):
         return jsonify({"error": "Failed to restore note version"}), 500
 
 
+def _handle_claude_code_interjection(tw, content: str, channel_id: str) -> None:
+    """Handle a human message posted in #claude-code.
+
+    The message is forwarded to the active Claude Code session via Prax.
+    Prax acts as mediator — it receives the human's direction and relays
+    it to Claude Code, then posts Claude Code's response back to the channel.
+    """
+    from prax.agent.claude_code_tools import _post, is_bridge_available
+
+    if not is_bridge_available():
+        tw.send_message(
+            content="Claude Code bridge is not running — cannot forward your message.",
+            channel="claude-code",
+            agent_name="Prax",
+        )
+        return
+
+    # Find the active session by querying the bridge.
+    try:
+        import requests as _req
+
+        from prax.agent.claude_code_tools import _bridge_url
+        from prax.agent.claude_code_tools import _headers as _bridge_headers
+
+        resp = _req.get(
+            f"{_bridge_url()}/sessions",
+            headers=_bridge_headers(),
+            timeout=5,
+        )
+        sessions = resp.json().get("sessions", []) if resp.ok else []
+    except Exception:
+        sessions = []
+
+    if not sessions:
+        tw.send_message(
+            content=(
+                "No active Claude Code session. Your message has been noted — "
+                "Prax will see it when he starts the next session."
+            ),
+            channel="claude-code",
+            agent_name="Prax",
+        )
+        return
+
+    # Use the most recently active session.
+    session_id = sessions[0]["session_id"]
+
+    # Post the human's message to the channel for the transcript.
+    tw.send_message(
+        content=f"**[Human override]** {content}",
+        channel="claude-code",
+    )
+
+    # Forward to Claude Code via the bridge.
+    result = _post("/session/message", {
+        "session_id": session_id,
+        "message": f"[HUMAN OVERRIDE from the project owner]: {content}",
+        "timeout": 300,
+    }, timeout=300)
+
+    if "error" in result:
+        tw.send_message(
+            content=f"Failed to relay to Claude Code: {result['error']}",
+            channel="claude-code",
+            agent_name="Prax",
+        )
+        return
+
+    response = result.get("response", "(no response)")
+    tw.send_message(
+        content=response,
+        channel="claude-code",
+        agent_name="Claude Code",
+    )
+
+
 def _handle_message(
     app: Flask,
     project_id: str,
@@ -326,6 +402,13 @@ def _handle_message(
             tw = get_teamwork_client()
 
             user_id = _get_teamwork_user_id()
+
+            # #claude-code channel — human interjection into an active session.
+            # Route through Prax as mediator rather than the normal conversation flow.
+            claude_code_channel_id = tw.get_channel_id("claude-code")
+            if claude_code_channel_id and channel_id == claude_code_channel_id:
+                _handle_claude_code_interjection(tw, content, channel_id)
+                return
 
             # Determine if this is a DM or a public channel.
             known_channels = set(tw._channels.values()) if tw._channels else set()
