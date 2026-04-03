@@ -34,6 +34,10 @@ services:
       - NEO4J_URI=bolt://neo4j:7687
       # Ollama — when EMBEDDING_PROVIDER=ollama, embeddings use this endpoint.
       - OLLAMA_BASE_URL=http://ollama:11434
+      # Claude Code bridge — Prax connects to the bridge on the host for
+      # multi-turn collaboration sessions with Claude Code.
+      - CLAUDE_BRIDGE_URL=${CLAUDE_BRIDGE_URL:-http://host.docker.internal:9819}
+      - CLAUDE_BRIDGE_SECRET=${CLAUDE_BRIDGE_SECRET:-}
       # OTel exporter — sends traces to Tempo when observability is enabled.
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4318
       - GRAFANA_URL=${GRAFANA_URL:-http://localhost:3001}
@@ -55,6 +59,12 @@ services:
       sandbox:
         condition: service_healthy
       teamwork:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      neo4j:
+        condition: service_started
+      ollama:
         condition: service_healthy
 
   sandbox:
@@ -115,23 +125,26 @@ services:
       start_period: 10s
 
   # ---- Memory Infrastructure ----
-  # Start with: docker compose --profile memory up
-  # Provides Qdrant (vector store) and Neo4j (graph DB) for LTM.
-  # Set MEMORY_ENABLED=true in .env to activate.
+  # Qdrant (vector store) and Neo4j (graph DB) for long-term memory.
+  # Always on — Prax is nothing without his memory.
 
   qdrant:
     image: qdrant/qdrant:v1.13.2
-    profiles: ["memory"]
     restart: unless-stopped
     ports:
       - "6333:6333"   # HTTP API
       - "6334:6334"   # gRPC
     volumes:
       - qdrant-data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:6333/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
 
   neo4j:
     image: neo4j:5-community
-    profiles: ["memory"]
     restart: unless-stopped
     environment:
       - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:-prax-memory}
@@ -141,21 +154,48 @@ services:
       - "7687:7687"   # Bolt protocol
     volumes:
       - neo4j-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:7474/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   # ---- Ollama (local embeddings + LLM) ----
-  # Start with: docker compose --profile ollama up
-  # Use when EMBEDDING_PROVIDER=ollama in .env.
-  # Pull an embedding model after first start:
-  #   docker compose exec ollama ollama pull nomic-embed-text
+  # Local inference — embeddings and/or chat models without sending data
+  # to external APIs. Set LLM_PROVIDER=ollama to use for chat,
+  # EMBEDDING_PROVIDER=ollama to use for embeddings.
+  # The configured model is auto-pulled on first start.
 
   ollama:
     image: ollama/ollama:latest
-    profiles: ["ollama"]
     restart: unless-stopped
     ports:
       - "11434:11434"
     volumes:
       - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Sidecar that waits for Ollama to be healthy, then pulls the
+  # configured embedding model so users don't have to do it manually.
+  ollama-init:
+    image: curlimages/curl:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Pulling embedding model: ${EMBEDDING_MODEL:-nomic-embed-text}..."
+        curl -s http://ollama:11434/api/pull -d "{\"model\": \"${EMBEDDING_MODEL:-nomic-embed-text}\"}"
+        echo ""
+        echo "Model pull complete."
 
   # ---- Observability Stack ----
   # Start with: COMPOSE_PROFILES=observability docker compose up

@@ -205,7 +205,16 @@ def workspace_send_file(filename: str, message: str = "") -> str:
     root = workspace_service._workspace_root(uid)
     file_path = os.path.join(root, "active", filename)
     if not os.path.isfile(file_path):
-        return f"File {filename} not found in active workspace."
+        # Search plugin_data directories — IMPORTED plugins save output here.
+        # The agent has full access; plugins stay sandboxed in their own dirs.
+        plugin_data = os.path.join(root, "plugin_data")
+        if os.path.isdir(plugin_data):
+            for dirpath, _, filenames in os.walk(plugin_data):
+                if filename in filenames:
+                    file_path = os.path.join(dirpath, filename)
+                    break
+        if not os.path.isfile(file_path):
+            return f"File {filename} not found in active workspace."
 
     size_mb = os.path.getsize(file_path) / (1024 * 1024)
 

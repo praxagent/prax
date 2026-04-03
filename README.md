@@ -63,37 +63,25 @@ This adds the full observability suite alongside the core services:
 
 Grafana comes pre-provisioned with Tempo, Loki, and Prometheus datasources plus two dashboards (Agent Overview, LLM Performance). Config lives in `observability/`.
 
-#### With memory (Qdrant + Neo4j)
+#### Memory, Ollama, and core services
 
-```bash
-docker compose --profile memory up --build
-```
-
-This adds the long-term memory infrastructure:
+Memory infrastructure (Qdrant, Neo4j) and Ollama run as first-class services — always on with `docker compose up`. Prax is nothing without his memory.
 
 | Service | Port | Purpose |
 |---------|------|---------|
 | **Qdrant** | [localhost:6333](http://localhost:6333) | Vector store for semantic memory retrieval (dense + sparse) |
 | **Neo4j** | [localhost:7474](http://localhost:7474) | Knowledge graph for entity/relation memory (login: neo4j / prax-memory) |
+| **Ollama** | [localhost:11434](http://localhost:11434) | Local LLM and embedding inference (model auto-pulled on first start) |
 
-Set `MEMORY_ENABLED=true` in `.env` to activate.  If you run without `--profile memory`, Prax silently degrades — STM (scratchpad) still works, but LTM (semantic recall, graph queries, consolidation) is unavailable. See [Memory System](#memory-system) for details.
+`MEMORY_ENABLED=true` is the default. Set to `false` to disable memory even when the services are running. See [Memory System](#memory-system) for details.
 
-#### With local embeddings (Ollama)
-
-If you don't want memory data sent to OpenAI, add the Ollama profile:
-
-```bash
-docker compose --profile memory --profile ollama up --build
-docker compose exec ollama ollama pull nomic-embed-text  # one-time
-```
-
-Then set in `.env`:
+For local embeddings (no data sent to OpenAI), set in `.env`:
 ```env
 EMBEDDING_PROVIDER=ollama
 EMBEDDING_MODEL=nomic-embed-text
 ```
 
-See [Embedding Providers](docs/infrastructure/memory.md#embedding-providers) for a comparison of OpenAI vs Ollama vs local options.
+The configured embedding model is auto-pulled when the Ollama container starts. See [Embedding Providers](docs/infrastructure/memory.md#embedding-providers) for a comparison of OpenAI vs Ollama vs local options.
 
 #### Developer mode
 
@@ -226,14 +214,69 @@ Academic foundations for agentic workflow design — 19 sections covering planni
 Prax has a two-layer, research-grounded memory system inspired by human cognition: a fast **short-term memory** (STM) for immediate context, and a scalable **long-term memory** (LTM) for durable recall across conversations.
 
 - **STM** — per-user JSON scratchpad, always available (no infra needed), auto-injected into context
-- **LTM** — Qdrant vector store (dense + sparse embeddings) + Neo4j knowledge graph (entities, relations, multi-hop traversal), fused via Reciprocal Rank Fusion
-- **Consolidation** — scheduled pipeline extracts entities/relations/facts from conversations, scores importance, applies Ebbinghaus forgetting curve decay
+- **LTM** — Qdrant vector store (dense + sparse embeddings) + Neo4j knowledge graph (entities, relations, temporal events, causal links), fused via query-adaptive weighted RRF
+- **Consolidation** — scheduled pipeline extracts entities/relations/facts via LLM, validates with confidence gate (≥0.6 → LTM, below → STM pending review), applies dual decay (Ebbinghaus time + interaction-based)
 - **Embedding providers** — OpenAI (default), Ollama (local/offline), or fastembed (in-process) — no data leaves your machine if you don't want it to
 - **10 agent tools** — STM read/write/delete, LTM remember/recall/forget, entity lookup, graph query, consolidation, stats
 
-Enable with `docker compose --profile memory up` and `MEMORY_ENABLED=true`. Without the memory profile, STM still works — LTM degrades silently.
+`MEMORY_ENABLED=true` is the default. Memory infrastructure (Qdrant, Neo4j) runs as first-class services. Set `MEMORY_ENABLED=false` to disable. Without memory, STM still works — LTM degrades silently.
 
 [Full documentation →](docs/infrastructure/memory.md)
+
+---
+
+## Agent Improvement Loop
+
+Prax implements a trace-centered feedback loop that turns production failures into permanent regression guards:
+
+```
+feedback → failure journal → eval runner → verified fix
+```
+
+- **Feedback capture** — Users rate agent messages (thumbs up/down) via TeamWork. Negative feedback automatically creates a failure journal entry with the full execution trajectory.
+- **Failure journal** — Stores observed failures in JSONL (always available) + Neo4j (graph queries, tool relationships) + Qdrant (semantic similarity search). Auto-classifies failures: wrong tool, hallucination, incomplete, too slow, asked instead of acting.
+- **Eval runner** — Replays failure cases through the current agent and uses an LLM judge to score whether the failure has been fixed. Produces pass/fail verdicts with 0.0–1.0 scores.
+- **Self-improve integration** — The self-improve agent reads the failure journal, proposes targeted fixes, and runs the eval suite to verify before deploying.
+
+Resolved failures stay as permanent regression guards — every fix adds a test case.
+
+[Full documentation →](docs/guides/feedback-loop.md)
+
+---
+
+## Claude Code Bridge
+
+Prax can collaborate with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) in multi-turn sessions — like pair programming with another AI developer. The bridge runs on the **host** (not in Docker) and gives Prax conversational access to Claude Code working on the live codebase.
+
+### Setup
+
+1. Install Claude Code on the host: `npm install -g @anthropic-ai/claude-code`
+2. (Optional) Set a shared secret in `.env`:
+   ```env
+   CLAUDE_BRIDGE_SECRET=your-secret-here
+   ```
+3. Start the bridge:
+   ```bash
+   ./scripts/start_claude_bridge.sh
+   ```
+4. The bridge listens on port 9819. In docker-compose, `CLAUDE_BRIDGE_URL` defaults to `http://host.docker.internal:9819` — no extra config needed.
+
+### How it works
+
+Prax detects whether the bridge is running at startup. If it's up, the `claude_code_*` tools appear in the agent's toolset. If it's down, the tools are hidden — Prax won't try to use them.
+
+Inside a session, Prax and Claude Code have back-and-forth conversations. Claude Code can read files, edit code, run tests, use git, and more. The self-improvement agent uses this for complex bug fixes that benefit from iterative refinement.
+
+```
+Prax (Docker) → HTTP bridge (host:9819) → Claude Code CLI → codebase
+```
+
+Environment variables:
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CLAUDE_BRIDGE_URL` | `http://host.docker.internal:9819` | Bridge endpoint |
+| `CLAUDE_BRIDGE_SECRET` | *(empty)* | Shared auth secret (recommended for production) |
+| `CLAUDE_BRIDGE_PORT` | `9819` | Port the bridge listens on (set when starting the bridge) |
 
 ---
 
@@ -273,7 +316,7 @@ Enable with `docker compose --profile memory up` and `MEMORY_ENABLED=true`. With
 - [x] Multi-perspective error recovery (4-angle failure analysis before retry)
 - [x] Metacognitive failure profiles (per-component pattern learning with confidence decay)
 - [x] Self-verification (workspace file and delegation output checks before delivery)
-- [x] Two-layer memory system (STM scratchpad + LTM with Qdrant vectors, Neo4j graph, RRF fusion, Ebbinghaus decay, consolidation pipeline)
+- [x] Two-layer memory system (STM scratchpad + LTM with Qdrant vectors, Neo4j graph, weighted RRF, dual decay, validation gate, multi-graph, bi-temporal edges)
 - [ ] Apple Silicon support (MLX backend as alternative to vLLM/CUDA)
 - [ ] Sandbox Docker image build + integration test with live OpenCode
 - [ ] Voice-triggered sandbox sessions

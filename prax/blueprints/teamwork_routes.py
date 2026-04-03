@@ -136,6 +136,7 @@ _VIEW_LABELS = {
     "observability": "the observability/tracing tab",
     "tasks": "the task board",
     "files": "the file browser",
+    "memory": "the memory panel (they can inspect and edit short-term and long-term memory)",
     "settings": "the settings page",
     "progress": "the progress/coaching tab",
     "content": "Prax's Space — browsing notes, courses, and news",
@@ -505,3 +506,506 @@ def _handle_message(
                 )
             except Exception:
                 pass
+
+
+# ---------------------------------------------------------------------------
+# Memory API — STM, LTM, Graph, and stats
+# ---------------------------------------------------------------------------
+
+def _memory_service():
+    """Return the singleton MemoryService, importing lazily."""
+    from prax.services.memory_service import get_memory_service
+    return get_memory_service()
+
+
+def _memory_disabled_response():
+    """Standard JSON error when memory is not enabled."""
+    return jsonify({"error": "Memory system is not enabled"}), 503
+
+
+# ---------------------------------------------------------------------------
+# Feedback API — thumbs up/down on agent messages
+# ---------------------------------------------------------------------------
+
+@teamwork_routes.route("/teamwork/feedback", methods=["POST"])
+def submit_feedback():
+    """Record user feedback (thumbs up/down) on an agent message.
+
+    JSON body: {rating, trace_id?, message_content?, comment?}
+    rating: "positive" or "negative"
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        rating = data.get("rating", "").strip()
+        if rating not in ("positive", "negative"):
+            return jsonify({"error": "rating must be 'positive' or 'negative'"}), 400
+
+        user_id = _get_teamwork_user_id()
+        from prax.services.feedback_service import submit_feedback as _submit
+
+        entry = _submit(
+            user_id=user_id,
+            rating=rating,
+            trace_id=data.get("trace_id", ""),
+            message_content=data.get("message_content", ""),
+            comment=data.get("comment", ""),
+        )
+        return jsonify({
+            "id": entry.id,
+            "rating": entry.rating,
+            "trace_id": entry.trace_id,
+            "created_at": entry.created_at,
+        }), 201
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception:
+        logger.exception("Failed to submit feedback")
+        return jsonify({"error": "Failed to submit feedback"}), 500
+
+
+@teamwork_routes.route("/teamwork/feedback", methods=["GET"])
+def list_feedback():
+    """Return recent feedback entries.
+
+    Query params: rating=positive|negative, limit=50
+    """
+    try:
+        user_id = _get_teamwork_user_id()
+        from prax.services.feedback_service import get_feedback
+
+        rating = request.args.get("rating")
+        limit = int(request.args.get("limit", "50"))
+        entries = get_feedback(user_id=user_id, rating_filter=rating, limit=limit)
+        return jsonify({
+            "entries": [
+                {
+                    "id": e.id,
+                    "rating": e.rating,
+                    "trace_id": e.trace_id,
+                    "message_content": e.message_content[:200],
+                    "comment": e.comment,
+                    "created_at": e.created_at,
+                }
+                for e in entries
+            ],
+        })
+    except Exception:
+        logger.exception("Failed to list feedback")
+        return jsonify({"error": "Failed to list feedback"}), 500
+
+
+@teamwork_routes.route("/teamwork/feedback/stats", methods=["GET"])
+def feedback_stats():
+    """Return feedback statistics."""
+    try:
+        user_id = _get_teamwork_user_id()
+        from prax.services.feedback_service import get_feedback_stats
+
+        return jsonify(get_feedback_stats(user_id=user_id))
+    except Exception:
+        logger.exception("Failed to get feedback stats")
+        return jsonify({"error": "Failed to get feedback stats"}), 500
+
+
+# ---------------------------------------------------------------------------
+# Failure Journal & Eval API
+# ---------------------------------------------------------------------------
+
+@teamwork_routes.route("/teamwork/failures", methods=["GET"])
+def list_failures():
+    """Return failure journal entries.
+
+    Query params: resolved=true|false, category=..., limit=50
+    """
+    try:
+        user_id = _get_teamwork_user_id()
+        from prax.services.memory.failure_journal import get_failures
+
+        resolved_param = request.args.get("resolved")
+        resolved = None
+        if resolved_param == "true":
+            resolved = True
+        elif resolved_param == "false":
+            resolved = False
+
+        category = request.args.get("category")
+        limit = int(request.args.get("limit", "50"))
+
+        cases = get_failures(
+            user_id=user_id, resolved=resolved,
+            category=category, limit=limit,
+        )
+        return jsonify({
+            "cases": [
+                {
+                    "id": c.id,
+                    "trace_id": c.trace_id,
+                    "user_input": c.user_input[:200],
+                    "agent_output": c.agent_output[:200],
+                    "feedback_comment": c.feedback_comment,
+                    "failure_category": c.failure_category,
+                    "tools_involved": c.tools_involved,
+                    "resolved": c.resolved,
+                    "resolution": c.resolution,
+                    "created_at": c.created_at,
+                }
+                for c in cases
+            ],
+        })
+    except Exception:
+        logger.exception("Failed to list failure cases")
+        return jsonify({"error": "Failed to list failure cases"}), 500
+
+
+@teamwork_routes.route("/teamwork/failures/stats", methods=["GET"])
+def failure_stats():
+    """Return failure journal statistics."""
+    try:
+        user_id = _get_teamwork_user_id()
+        from prax.services.memory.failure_journal import get_failure_stats
+
+        return jsonify(get_failure_stats(user_id=user_id))
+    except Exception:
+        logger.exception("Failed to get failure stats")
+        return jsonify({"error": "Failed to get failure stats"}), 500
+
+
+@teamwork_routes.route("/teamwork/failures/<case_id>/resolve", methods=["POST"])
+def resolve_failure(case_id: str):
+    """Mark a failure case as resolved.
+
+    JSON body: {resolution: "description of what was fixed"}
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        resolution = data.get("resolution", "").strip()
+        if not resolution:
+            return jsonify({"error": "resolution is required"}), 400
+
+        from prax.services.memory.failure_journal import resolve_failure as _resolve
+
+        updated = _resolve(case_id, resolution)
+        if not updated:
+            return jsonify({"error": f"Failure case not found: {case_id}"}), 404
+        return jsonify({"resolved": True, "case_id": case_id})
+    except Exception:
+        logger.exception("Failed to resolve failure case %s", case_id)
+        return jsonify({"error": "Failed to resolve failure case"}), 500
+
+
+@teamwork_routes.route("/teamwork/eval/run", methods=["POST"])
+def run_eval():
+    """Run eval on a single failure case or full suite.
+
+    JSON body: {case_id?: str, judge_tier?: str, replay?: bool, max_cases?: int}
+    If case_id is provided, runs single case. Otherwise runs the full suite.
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        case_id = data.get("case_id")
+        judge_tier = data.get("judge_tier", "low")
+        replay = data.get("replay", True)
+
+        if case_id:
+            from prax.eval.runner import run_eval as _run_eval
+            result = _run_eval(
+                case_id=case_id,
+                replay=replay,
+                judge_tier=judge_tier,
+            )
+            return jsonify({
+                "id": result.id,
+                "case_id": result.case_id,
+                "passed": result.passed,
+                "score": result.score,
+                "reasoning": result.reasoning,
+                "judge_model": result.judge_model,
+                "created_at": result.created_at,
+            })
+        else:
+            from prax.eval.runner import run_eval_suite
+
+            user_id = _get_teamwork_user_id()
+            max_cases = data.get("max_cases", 20)
+            report = run_eval_suite(
+                user_id=user_id,
+                replay=replay,
+                judge_tier=judge_tier,
+                max_cases=max_cases,
+            )
+            return jsonify(report)
+    except Exception:
+        logger.exception("Eval run failed")
+        return jsonify({"error": "Eval run failed"}), 500
+
+
+@teamwork_routes.route("/teamwork/eval/results", methods=["GET"])
+def eval_results():
+    """Return recent eval results.
+
+    Query params: date=YYYY-MM-DD, limit=100
+    """
+    try:
+        from prax.eval.runner import load_results
+
+        date = request.args.get("date")
+        limit = int(request.args.get("limit", "100"))
+        results = load_results(date=date, limit=limit)
+        return jsonify({
+            "results": [
+                {
+                    "id": r.id,
+                    "case_id": r.case_id,
+                    "passed": r.passed,
+                    "score": r.score,
+                    "reasoning": r.reasoning,
+                    "judge_model": r.judge_model,
+                    "created_at": r.created_at,
+                }
+                for r in results
+            ],
+        })
+    except Exception:
+        logger.exception("Failed to load eval results")
+        return jsonify({"error": "Failed to load eval results"}), 500
+
+
+# ---------------------------------------------------------------------------
+# Memory API — STM, LTM, Graph, and stats
+# ---------------------------------------------------------------------------
+
+@teamwork_routes.route("/teamwork/memory/config", methods=["GET"])
+def memory_config():
+    """Return whether the memory subsystem is enabled and the current user_id."""
+    try:
+        svc = _memory_service()
+        user_id = _get_teamwork_user_id()
+        return jsonify({
+            "enabled": svc.available,
+            "memory_enabled": svc.available,
+            "user_id": user_id,
+        })
+    except Exception:
+        logger.exception("Failed to get memory config")
+        return jsonify({"error": "Failed to get memory config"}), 500
+
+
+@teamwork_routes.route("/teamwork/memory/stm/<user_id>", methods=["GET"])
+def memory_stm_list(user_id: str):
+    """Return all STM (scratchpad) entries for a user."""
+    try:
+        from prax.services.memory.stm import stm_read
+        entries = stm_read(user_id)
+        return jsonify({
+            "user_id": user_id,
+            "entries": [
+                {
+                    "key": e.key,
+                    "content": e.content,
+                    "tags": e.tags,
+                    "created_at": e.created_at,
+                    "access_count": e.access_count,
+                    "importance": e.importance,
+                }
+                for e in entries
+            ],
+        })
+    except Exception:
+        logger.exception("Failed to list STM entries for %s", user_id)
+        return jsonify({"error": "Failed to list STM entries"}), 500
+
+
+@teamwork_routes.route("/teamwork/memory/stm/<user_id>", methods=["PUT"])
+def memory_stm_upsert(user_id: str):
+    """Create or update an STM entry.
+
+    JSON body: {key, content, tags?, importance?}
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        key = data.get("key", "").strip()
+        content = data.get("content", "").strip()
+        if not key or not content:
+            return jsonify({"error": "key and content are required"}), 400
+
+        from prax.services.memory.stm import stm_write
+        entry = stm_write(
+            user_id,
+            key=key,
+            content=content,
+            tags=data.get("tags"),
+            importance=data.get("importance", 0.5),
+        )
+        return jsonify({
+            "key": entry.key,
+            "content": entry.content,
+            "tags": entry.tags,
+            "created_at": entry.created_at,
+            "access_count": entry.access_count,
+            "importance": entry.importance,
+        })
+    except Exception:
+        logger.exception("Failed to upsert STM entry for %s", user_id)
+        return jsonify({"error": "Failed to upsert STM entry"}), 500
+
+
+@teamwork_routes.route("/teamwork/memory/stm/<user_id>/<key>", methods=["DELETE"])
+def memory_stm_delete(user_id: str, key: str):
+    """Delete an STM entry by key."""
+    try:
+        from prax.services.memory.stm import stm_delete
+        deleted = stm_delete(user_id, key)
+        if not deleted:
+            return jsonify({"error": f"STM entry not found: {key}"}), 404
+        return jsonify({"deleted": True, "key": key})
+    except Exception:
+        logger.exception("Failed to delete STM entry '%s' for %s", key, user_id)
+        return jsonify({"error": "Failed to delete STM entry"}), 500
+
+
+@teamwork_routes.route("/teamwork/memory/ltm/<user_id>", methods=["GET"])
+def memory_ltm_recall(user_id: str):
+    """Recall long-term memories for a user.
+
+    Query params: q=<search term>, top_k=5
+    """
+    try:
+        svc = _memory_service()
+        if not svc.available:
+            return _memory_disabled_response()
+
+        query = request.args.get("q", "").strip()
+        if not query:
+            return jsonify({"error": "q query parameter is required"}), 400
+
+        top_k = int(request.args.get("top_k", "5"))
+        memories = svc.recall(user_id, query, top_k=top_k)
+        return jsonify({
+            "user_id": user_id,
+            "query": query,
+            "memories": [
+                {
+                    "memory_id": m.memory_id,
+                    "content": m.content,
+                    "score": m.score,
+                    "source": m.source,
+                    "importance": m.importance,
+                    "created_at": m.created_at,
+                    "entities": m.entities,
+                }
+                for m in memories
+            ],
+        })
+    except Exception:
+        logger.exception("Failed to recall LTM for %s", user_id)
+        return jsonify({"error": "Failed to recall memories"}), 500
+
+
+@teamwork_routes.route("/teamwork/memory/ltm/<user_id>", methods=["POST"])
+def memory_ltm_store(user_id: str):
+    """Store a new long-term memory.
+
+    JSON body: {content, importance?, tags?, source?}
+    """
+    try:
+        svc = _memory_service()
+        if not svc.available:
+            return _memory_disabled_response()
+
+        data = request.get_json(silent=True) or {}
+        content = data.get("content", "").strip()
+        if not content:
+            return jsonify({"error": "content is required"}), 400
+
+        memory_id = svc.remember(
+            user_id,
+            content=content,
+            importance=data.get("importance", 0.5),
+            tags=data.get("tags"),
+            source=data.get("source", "api"),
+        )
+        if not memory_id:
+            return jsonify({"error": "Failed to store memory"}), 500
+        return jsonify({"memory_id": memory_id}), 201
+    except Exception:
+        logger.exception("Failed to store LTM for %s", user_id)
+        return jsonify({"error": "Failed to store memory"}), 500
+
+
+@teamwork_routes.route("/teamwork/memory/ltm/<user_id>/<memory_id>", methods=["DELETE"])
+def memory_ltm_forget(user_id: str, memory_id: str):
+    """Delete a specific long-term memory."""
+    try:
+        svc = _memory_service()
+        if not svc.available:
+            return _memory_disabled_response()
+
+        deleted = svc.forget(user_id, memory_id)
+        if not deleted:
+            return jsonify({"error": f"Memory not found: {memory_id}"}), 404
+        return jsonify({"deleted": True, "memory_id": memory_id})
+    except Exception:
+        logger.exception("Failed to forget memory '%s' for %s", memory_id, user_id)
+        return jsonify({"error": "Failed to forget memory"}), 500
+
+
+@teamwork_routes.route("/teamwork/memory/graph/<user_id>", methods=["GET"])
+def memory_graph_stats(user_id: str):
+    """Return graph stats and entity list for a user."""
+    try:
+        svc = _memory_service()
+        if not svc.available:
+            return _memory_disabled_response()
+
+        from prax.services.memory.graph_store import get_stats, search_entities
+        stats = get_stats(user_id)
+        # Return top entities by mention count
+        entities = search_entities(user_id, "", limit=50)
+        return jsonify({
+            "user_id": user_id,
+            "stats": stats,
+            "entities": entities,
+        })
+    except Exception:
+        logger.exception("Failed to get graph stats for %s", user_id)
+        return jsonify({"error": "Failed to get graph stats"}), 500
+
+
+@teamwork_routes.route("/teamwork/memory/graph/<user_id>/entity/<name>", methods=["GET"])
+def memory_graph_entity(user_id: str, name: str):
+    """Return entity details with relations."""
+    try:
+        svc = _memory_service()
+        if not svc.available:
+            return _memory_disabled_response()
+
+        entity = svc.entity_lookup(user_id, name)
+        if not entity:
+            return jsonify({"error": f"Entity not found: {name}"}), 404
+        return jsonify({
+            "id": entity.id,
+            "name": entity.name,
+            "display_name": entity.display_name,
+            "entity_type": entity.entity_type,
+            "importance": entity.importance,
+            "mention_count": entity.mention_count,
+            "first_seen": entity.first_seen,
+            "last_seen": entity.last_seen,
+            "properties": entity.properties,
+            "relations": entity.relations,
+        })
+    except Exception:
+        logger.exception("Failed to get entity '%s' for %s", name, user_id)
+        return jsonify({"error": "Failed to get entity"}), 500
+
+
+@teamwork_routes.route("/teamwork/memory/stats/<user_id>", methods=["GET"])
+def memory_stats(user_id: str):
+    """Return full memory system stats for a user."""
+    try:
+        svc = _memory_service()
+        stats = svc.stats(user_id)
+        return jsonify({"user_id": user_id, **stats})
+    except Exception:
+        logger.exception("Failed to get memory stats for %s", user_id)
+        return jsonify({"error": "Failed to get memory stats"}), 500

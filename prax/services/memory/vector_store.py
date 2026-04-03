@@ -30,9 +30,14 @@ logger = logging.getLogger(__name__)
 
 COLLECTION = "prax_memories"
 
-# Dense vector dimension — matches text-embedding-3-small.
-# If using a different model, update this or auto-detect on first embed.
-DENSE_DIM = 1536
+# Dense vector dimension per embedding provider.
+_PROVIDER_DIM = {"openai": 1536, "ollama": 768, "local": 384}
+
+
+def _dense_dim() -> int:
+    """Return the expected dense vector dimension for the configured provider."""
+    provider = getattr(settings, "embedding_provider", "openai")
+    return _PROVIDER_DIM.get(provider, 1536)
 
 
 def _get_client():
@@ -60,7 +65,7 @@ def _ensure_collection(client) -> None:
     client.create_collection(
         collection_name=COLLECTION,
         vectors_config={
-            "dense": VectorParams(size=DENSE_DIM, distance=Distance.COSINE),
+            "dense": VectorParams(size=_dense_dim(), distance=Distance.COSINE),
         },
         sparse_vectors_config={
             "sparse": SparseVectorParams(index=SparseIndexParams()),
@@ -155,14 +160,15 @@ def search_dense(
                 FieldCondition(key="importance", range=Range(gte=min_importance))
             )
 
-        results = client.search(
+        resp = client.query_points(
             collection_name=COLLECTION,
-            query_vector=("dense", query_vector),
+            query=query_vector,
+            using="dense",
             query_filter=Filter(must=conditions),
             limit=top_k,
             with_payload=True,
         )
-        return [_to_memory_result(r) for r in results]
+        return [_to_memory_result(r) for r in resp.points]
 
     except Exception:
         logger.exception("Qdrant dense search failed")
@@ -184,16 +190,17 @@ def search_sparse(
         indices = sorted(sparse_vector.keys())
         values = [sparse_vector[i] for i in indices]
 
-        results = client.search(
+        resp = client.query_points(
             collection_name=COLLECTION,
-            query_vector=("sparse", SparseVector(indices=indices, values=values)),
+            query=SparseVector(indices=indices, values=values),
+            using="sparse",
             query_filter=Filter(
                 must=[FieldCondition(key="user_id", match=MatchValue(value=user_id))]
             ),
             limit=top_k,
             with_payload=True,
         )
-        return [_to_memory_result(r) for r in results]
+        return [_to_memory_result(r) for r in resp.points]
 
     except Exception:
         logger.exception("Qdrant sparse search failed")
@@ -231,20 +238,24 @@ def reinforce_memory(memory_id: str, interaction_epoch: int = 0) -> None:
         logger.debug("Memory reinforcement failed for %s", memory_id, exc_info=True)
 
 
+def _epoch_point_id(user_id: str) -> str:
+    """Deterministic UUID for a user's epoch counter sentinel point."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"prax:epoch:{user_id}"))
+
+
 def get_interaction_epoch(user_id: str) -> int:
     """Return the current interaction epoch (message count) for a user.
 
-    Stored in the first memory point's metadata or via a dedicated counter.
+    Stored as a sentinel point in Qdrant with a deterministic UUID.
     Falls back to 0 if no data is available.
     """
     try:
         client = _get_client()
-        from qdrant_client.models import FieldCondition, Filter, MatchValue
+        _ensure_collection(client)
 
-        # Use a sentinel point to store the counter
         points = client.retrieve(
             collection_name=COLLECTION,
-            ids=[f"epoch_{user_id}"],
+            ids=[_epoch_point_id(user_id)],
             with_payload=True,
         )
         if points:
@@ -268,8 +279,8 @@ def increment_interaction_epoch(user_id: str) -> int:
         new_epoch = current + 1
         # Store as a sentinel point with a zero vector
         point = PointStruct(
-            id=f"epoch_{user_id}",
-            vector={"dense": [0.0] * DENSE_DIM},
+            id=_epoch_point_id(user_id),
+            vector={"dense": [0.0] * _dense_dim()},
             payload={
                 "user_id": f"_system_{user_id}",
                 "content": "",

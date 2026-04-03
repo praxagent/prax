@@ -387,8 +387,8 @@ def search_entities(user_id: str, query: str, limit: int = 10) -> list[dict]:
             result = session.run(
                 """
                 MATCH (e:Entity {user_id: $uid})
-                WHERE toLower(e.display_name) CONTAINS toLower($query)
-                   OR toLower(e.name) CONTAINS $query_lower
+                WHERE toLower(e.display_name) CONTAINS toLower($search_term)
+                   OR toLower(e.name) CONTAINS $search_term_lower
                 RETURN e.id AS id,
                        e.display_name AS name,
                        e.type AS type,
@@ -398,8 +398,8 @@ def search_entities(user_id: str, query: str, limit: int = 10) -> list[dict]:
                 LIMIT $limit
                 """,
                 uid=user_id,
-                query=query,
-                query_lower=query.strip().lower(),
+                search_term=query,
+                search_term_lower=query.strip().lower(),
                 limit=limit,
             )
             return [dict(r) for r in result]

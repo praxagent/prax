@@ -647,6 +647,62 @@ Open [http://localhost:6333/dashboard](http://localhost:6333/dashboard) to explo
 
 ---
 
+## Test Evidence
+
+End-to-end integration tests exercise the full memory stack with real Qdrant, Neo4j, and Ollama — no mocks.  Run with `uv run pytest tests/e2e/test_memory.py -v -s`.
+
+### Test Suite
+
+| Test Class | Tests | Coverage |
+|---|---|---|
+| `TestSTM` | 2 | Write/read/delete/update + tags |
+| `TestLTM` | 3 | Store + semantic recall, ranking correctness, hybrid vs dense-only |
+| `TestGraphStore` | 4 | Entity lifecycle, bi-temporal edges, temporal events, causal links |
+| `TestMemoryServiceIntegration` | 1 | Full remember→recall through MemoryService facade |
+| `TestMemoryContextInjection` | 3 | Empty context without memory, enriched context with memory, side-by-side comparison |
+| `TestInteractionDecay` | 2 | Epoch counter increment via Qdrant |
+| `TestFullPipeline` | 1 | Realistic multi-turn session: STM + LTM + graph + memory context |
+
+### Sample Output: With vs Without Memory
+
+The `test_with_vs_without_memory_comparison` test stores user preferences, then shows the context the agent receives:
+
+**WITHOUT memory** — agent has no personal context:
+
+```
+(empty)
+```
+
+**WITH memory** — 4 facts recalled and injected into the system prompt:
+
+```
+## Relevant Memories
+- [conversation, 2026-04-02] User prefers Rust for systems projects and Python for scripts.
+- [conversation, 2026-04-02] User uses NixOS with flake-based project templates.
+- [conversation, 2026-04-02] User insists on MIT license for all personal projects.
+- [conversation, 2026-04-02] User's preferred editor is Helix with catppuccin theme.
+```
+
+With memory, an agent asked "Can you help me set up a new project?" now knows the user wants Rust + NixOS flakes + MIT license + Helix — and can scaffold accordingly.
+
+### Sample Output: Full Pipeline
+
+The `test_realistic_user_session` test simulates a multi-turn conversation building up STM, LTM, and graph layers, then retrieves context for a follow-up question:
+
+```
+## Working Memory (Scratchpad)
+- **user_role**: data scientist at FinCorp
+- **current_project**: fraud detection model using XGBoost
+
+## Relevant Memories
+- [conversation, 2026-04-02] User is a data scientist at FinCorp working on fraud detection with XGBoost.
+- [conversation, 2026-04-02] User prefers polars over pandas for large datasets because of performance.
+```
+
+The agent now knows the user is a data scientist at FinCorp using XGBoost for fraud detection and prefers polars — personalized answers to "optimize my data pipeline" become possible.
+
+---
+
 ## Graceful Degradation
 
 The memory system follows Prax's pattern of graceful degradation:

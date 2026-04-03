@@ -1,10 +1,7 @@
-"""Tests for the five research-backed memory improvements.
+"""Unit tests for advanced memory features.
 
-1. Bi-temporal edges (Zep/Graphiti-inspired)
-2. Consolidation validation gate (Harvard error propagation study)
-3. Multi-graph separation (MAGMA-inspired)
-4. Query-adaptive retrieval weights (type-specific weighted RRF)
-5. Interaction-based decay (FOREVER-inspired)
+Covers bi-temporal edges, consolidation validation gate, multi-graph
+separation, query-adaptive retrieval weights, and interaction-based decay.
 """
 import json
 import os

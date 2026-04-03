@@ -218,24 +218,27 @@ Prax has a two-layer memory system inspired by human cognition, implemented acro
      │  key → value  │       │         │ RRF     │
      │  + importance │       │  ┌──────┴──────┐  │
      │  + tags       │       │  │ Neo4j       │  │
-     │               │       │  │ entity graph│  │
-     └───────────────┘       │  └─────────────┘  │
+     │               │       │  │ entities    │  │
+     └───────────────┘       │  │ temporals   │  │
+                             │  │ causals     │  │
+                             │  └─────────────┘  │
                              └───────────────────┘
                                       │
                              ┌────────▼────────┐
                              │ Consolidation   │
                              │ (scheduled)     │
                              │ traces → LLM    │
+                             │ → conf gate≥0.6 │
                              │ → graph + vector│
-                             │ → decay + prune │
+                             │ → dual decay    │
                              └─────────────────┘
 ```
 
 **Short-term memory (STM)** is a per-user JSON scratchpad stored in the workspace (`{workspace}/memory/stm.json`). It requires no infrastructure — works even without the memory Docker profile. The orchestrator injects STM entries into the system prompt on every turn.
 
-**Long-term memory (LTM)** requires Qdrant (vector store) and Neo4j (knowledge graph), started via `--profile memory`. Memories are stored as both dense embeddings (semantic similarity) and sparse TF-IDF vectors (keyword matching) in Qdrant, plus entities and typed relations in Neo4j. At query time, all three retrieval arms (dense, sparse, graph neighbourhood) run in parallel and results are fused via Reciprocal Rank Fusion (RRF).
+**Long-term memory (LTM)** requires Qdrant (vector store) and Neo4j (knowledge graph), started via `--profile memory`. Memories are stored as both dense embeddings (semantic similarity) and sparse TF-IDF vectors (keyword matching) in Qdrant, plus entities, typed relations, temporal events, and causal links in Neo4j (multi-graph separation). At query time, all three retrieval arms (dense, sparse, graph neighbourhood) run in parallel and results are fused via **query-adaptive weighted RRF** — factual queries boost sparse+graph, semantic queries boost dense.
 
-**Consolidation** converts conversation traces into durable memories: LLM extraction of entities/relations/facts → graph upsert → vector upsert → Ebbinghaus decay → daily summaries.
+**Consolidation** converts conversation traces into durable memories: LLM extraction of entities/relations/facts/temporal events/causal links → **confidence validation gate** (≥0.6 → LTM, below → STM pending review) → graph upsert with **bi-temporal edges** (valid_from/valid_until for supersession tracking) → vector upsert → **dual decay** (Ebbinghaus time-based + interaction-based, using the stronger signal) → daily summaries.
 
 **Embedding providers** are pluggable: OpenAI (default, cloud), Ollama (local, no data leaves your machine), or fastembed (in-process, zero dependencies). The system gracefully degrades — if Qdrant or Neo4j are unreachable, LTM returns empty results without errors. STM always works.
 

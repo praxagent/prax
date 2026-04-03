@@ -1,4 +1,4 @@
-"""E2E test: PDF → narrated video presentation via the live docker-compose stack.
+"""E2E test: text → narrated video presentation via the live docker-compose stack.
 
 Sends a message through the TeamWork webhook, waits for the agent to produce
 an MP4 in the workspace, then validates it with ffprobe inside the sandbox
@@ -6,7 +6,7 @@ container.
 
 Requirements:
     docker-compose up   (app, sandbox, teamwork, ngrok)
-    pdf2presentation plugin imported for the test user's workspace
+    txt2presentation plugin imported for the test user's workspace
 
 Run::
 
@@ -87,14 +87,24 @@ def _workspace_active_dir() -> Path:
 
 
 def _find_mp4s(since: float) -> list[Path]:
-    """Find MP4 files in the user's active workspace created after *since*."""
-    active = _workspace_active_dir()
-    if not active.is_dir():
-        return []
+    """Find MP4 files in the user's workspace created after *since*.
+
+    Searches both ``active/`` and ``plugin_data/`` directories since
+    IMPORTED plugins (like txt2presentation) save to plugin_data/.
+    """
+    ws_root = Path(_WORKSPACE_DIR) / _USER_ID
+    search_dirs = [ws_root / "active"]
+    plugin_data = ws_root / "plugin_data"
+    if plugin_data.is_dir():
+        search_dirs.extend(plugin_data.iterdir())
+
     mp4s = []
-    for p in active.glob("*.mp4"):
-        if p.stat().st_mtime >= since:
-            mp4s.append(p)
+    for d in search_dirs:
+        if not d.is_dir():
+            continue
+        for p in d.rglob("*.mp4"):
+            if p.stat().st_mtime >= since:
+                mp4s.append(p)
     return sorted(mp4s, key=lambda p: p.stat().st_mtime, reverse=True)
 
 
@@ -204,7 +214,10 @@ class TestPdfToPresentation:
 
         # ----- Validate with ffprobe inside the sandbox -----
         # The workspace is mounted at /workspaces inside the sandbox.
-        container_path = f"/workspaces/{_USER_ID}/active/{mp4_path.name}"
+        # Derive the container path from the host path relative to workspace root.
+        _ws_root = Path(_WORKSPACE_DIR) / _USER_ID
+        rel_path = mp4_path.relative_to(_ws_root)
+        container_path = f"/workspaces/{_USER_ID}/{rel_path}"
 
         probe = _ffprobe_json(container_path)
 

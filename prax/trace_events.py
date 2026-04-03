@@ -42,6 +42,9 @@ class TraceEvent(StrEnum):
     EPISTEMIC_GATE = "epistemic_gate"
     LOGPROB_ENTROPY = "logprob_entropy"
     SEMANTIC_ENTROPY = "semantic_entropy"
+    FEEDBACK = "feedback"
+    FAILURE_CASE = "failure_case"
+    EVAL_RESULT = "eval_result"
 
     @classmethod
     def values(cls) -> set[str]:

@@ -140,6 +140,6 @@ All plugin lifecycle events are recorded as typed trace entries, searchable via 
 
 Example queries:
 ```python
-search_trace(uid, "pdf2presentation", type_filter="plugin_activate")
+search_trace(uid, "txt2presentation", type_filter="plugin_activate")
 search_trace(uid, "security", type_filter="plugin_security_warn")
 ```
