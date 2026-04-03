@@ -7,7 +7,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-03-26T06:34:06.470614Z"
+exclude-newer = "2026-03-27T02:46:37.515883Z"
 exclude-newer-span = "P7D"
 
 [[package]]
@@ -2275,7 +2275,7 @@ wheels = [
 
 [[package]]
 name = "prax"
-version = "0.8.0"
+version = "0.9.0"
 source = { editable = "." }
 dependencies = [
     { name = "apscheduler" },

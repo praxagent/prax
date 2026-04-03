@@ -100,6 +100,7 @@ def _run_claude(prompt: str, session_id: str | None = None, timeout: int = 300) 
         "-p", prompt,
         "--output-format", "json",
         "--max-turns", "50",
+        "--permission-mode", "bypassPermissions",
     ])
 
     logger.info(

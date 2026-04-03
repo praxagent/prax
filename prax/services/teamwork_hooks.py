@@ -123,6 +123,73 @@ def sync_conversation_history() -> None:
         logger.debug("TeamWork hook: sync_conversation_history failed", exc_info=True)
 
 
+_AGENT_DISPLAY_NAMES = {
+    "claude-code": "Claude Code",
+    "codex": "Codex",
+    "opencode": "OpenCode",
+}
+
+_AGENT_CHANNEL_DESCRIPTIONS = {
+    "claude-code": "Live transcript of Prax ↔ Claude Code collaboration sessions",
+    "codex": "Live transcript of Prax ↔ Codex collaboration sessions",
+    "opencode": "Live transcript of Prax ↔ OpenCode collaboration sessions",
+}
+
+# Tracks which agent channels have been lazily created this process lifetime.
+_ensured_agent_channels: set[str] = set()
+
+
+def _ensure_agent_channel(tw, channel_name: str) -> None:
+    """Lazily create a coding agent channel and bot identity on first use."""
+    if channel_name in _ensured_agent_channels:
+        return
+    try:
+        display = _AGENT_DISPLAY_NAMES.get(channel_name, channel_name)
+        desc = _AGENT_CHANNEL_DESCRIPTIONS.get(channel_name, f"Prax ↔ {display} sessions")
+        tw.ensure_channels([{"name": channel_name, "description": desc}])
+        tw.create_agent(name=display, role="developer", soul=f"{display} — coding agent in sandbox")
+        _ensured_agent_channels.add(channel_name)
+    except Exception:
+        logger.debug("TeamWork hook: _ensure_agent_channel(%s) failed", channel_name, exc_info=True)
+
+
+def mirror_coding_agent_turn(
+    channel: str,
+    prax_message: str | None,
+    agent_response: str | None,
+    meta: str = "",
+) -> None:
+    """Mirror a Prax ↔ coding agent exchange to the agent's TeamWork channel.
+
+    The channel (#claude-code, #codex, or #opencode) is created lazily
+    on first call — it only appears in the sidebar when the tool is used.
+
+    Args:
+        channel: Channel name matching the agent (e.g. "claude-code").
+        prax_message: What Prax sent (None to skip).
+        agent_response: What the agent replied (None to skip).
+        meta: Optional context line (e.g. "Session started: abc123").
+    """
+    try:
+        tw = _tw()
+        if not tw:
+            return
+
+        _ensure_agent_channel(tw, channel)
+        display = _AGENT_DISPLAY_NAMES.get(channel, channel)
+
+        if meta:
+            tw.send_message(content=meta, channel=channel, agent_name="Prax")
+
+        if prax_message:
+            tw.send_message(content=prax_message, channel=channel, agent_name="Prax")
+
+        if agent_response:
+            tw.send_message(content=agent_response, channel=channel, agent_name=display)
+    except Exception:
+        logger.debug("TeamWork hook: mirror_coding_agent_turn(%s) failed", channel, exc_info=True)
+
+
 def mirror_plan_to_tasks(goal: str, steps: list[dict]) -> list[str]:
     """Create TeamWork tasks mirroring an agent plan. Returns task IDs."""
     task_ids: list[str] = []

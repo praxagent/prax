@@ -307,6 +307,73 @@ def restore_note_to_version(slug: str, commit: str):
         return jsonify({"error": "Failed to restore note version"}), 500
 
 
+def _handle_claude_code_interjection(tw, content: str, channel_id: str) -> bool:
+    """Handle a human message posted in #claude-code.
+
+    If there's an active Claude Code session, the message is forwarded
+    directly to Claude Code via the bridge.  Returns True if handled.
+
+    If no session is active (or the bridge is down), returns False so
+    the caller can fall through to the normal conversation flow — letting
+    Prax process the request (e.g. start a session himself).
+    """
+    from prax.agent.claude_code_tools import _post, is_bridge_available
+
+    if not is_bridge_available():
+        return False  # Let Prax handle it through normal conversation
+
+    # Find the active session by querying the bridge.
+    try:
+        import requests as _req
+
+        from prax.agent.claude_code_tools import _bridge_url
+        from prax.agent.claude_code_tools import _headers as _bridge_headers
+
+        resp = _req.get(
+            f"{_bridge_url()}/sessions",
+            headers=_bridge_headers(),
+            timeout=5,
+        )
+        sessions = resp.json().get("sessions", []) if resp.ok else []
+    except Exception:
+        sessions = []
+
+    if not sessions:
+        return False  # No active session — let Prax handle it normally
+
+    # Use the most recently active session.
+    session_id = sessions[0]["session_id"]
+
+    # Post the human's message to the channel for the transcript.
+    tw.send_message(
+        content=f"**[Human override]** {content}",
+        channel="claude-code",
+    )
+
+    # Forward to Claude Code via the bridge.
+    result = _post("/session/message", {
+        "session_id": session_id,
+        "message": f"[HUMAN OVERRIDE from the project owner]: {content}",
+        "timeout": 300,
+    }, timeout=300)
+
+    if "error" in result:
+        tw.send_message(
+            content=f"Failed to relay to Claude Code: {result['error']}",
+            channel="claude-code",
+            agent_name="Prax",
+        )
+        return True
+
+    response = result.get("response", "(no response)")
+    tw.send_message(
+        content=response,
+        channel="claude-code",
+        agent_name="Claude Code",
+    )
+    return True
+
+
 def _handle_message(
     app: Flask,
     project_id: str,
@@ -326,6 +393,19 @@ def _handle_message(
             tw = get_teamwork_client()
 
             user_id = _get_teamwork_user_id()
+
+            # Coding agent channels (#claude-code, #codex, #opencode) — if there's
+            # an active session, relay directly.  Otherwise fall through to Prax's
+            # normal flow so he can process the request using the coding agent.
+            _coding_channels = {"claude-code", "codex", "opencode"}
+            is_coding_channel = any(
+                tw.get_channel_id(ch) == channel_id
+                for ch in _coding_channels
+                if tw.get_channel_id(ch)
+            )
+            if is_coding_channel:
+                if _handle_claude_code_interjection(tw, content, channel_id):
+                    return
 
             # Determine if this is a DM or a public channel.
             known_channels = set(tw._channels.values()) if tw._channels else set()
@@ -387,6 +467,12 @@ def _handle_message(
                     "The user may ask you to update notes, create new ones, or discuss "
                     "content they're viewing. Use note_read, note_create, note_update "
                     "tools as needed."
+                )
+            elif is_coding_channel:
+                tool_guidance = (
+                    "The user is posting in a coding agent channel. They expect you "
+                    "to use the coding agent (claude_code_start_session) for this task. "
+                    "Start a session and collaborate. The transcript will appear in this channel."
                 )
             else:
                 tool_guidance = (
@@ -1009,3 +1095,71 @@ def memory_stats(user_id: str):
     except Exception:
         logger.exception("Failed to get memory stats for %s", user_id)
         return jsonify({"error": "Failed to get memory stats"}), 500
+
+
+# ---------------------------------------------------------------------------
+# Claude Code Bridge — session visibility and management
+# ---------------------------------------------------------------------------
+
+@teamwork_routes.route("/teamwork/claude-code/sessions", methods=["GET"])
+def claude_code_sessions():
+    """List active Claude Code sessions.
+
+    Returns session IDs, turn counts, and idle times so the user
+    can see if a session is dangling.
+    """
+    try:
+        from prax.agent.claude_code_tools import (
+            _bridge_url,
+            is_bridge_available,
+        )
+        from prax.agent.claude_code_tools import (
+            _headers as _bridge_headers,
+        )
+
+        if not is_bridge_available():
+            return jsonify({"sessions": [], "bridge_available": False})
+
+        import requests as _req
+        resp = _req.get(
+            f"{_bridge_url()}/sessions",
+            headers=_bridge_headers(),
+            timeout=5,
+        )
+        if not resp.ok:
+            return jsonify({"sessions": [], "error": "Bridge returned error"}), 502
+
+        sessions = resp.json().get("sessions", [])
+        return jsonify({"sessions": sessions, "bridge_available": True})
+    except Exception:
+        logger.exception("Failed to list Claude Code sessions")
+        return jsonify({"error": "Failed to query bridge"}), 500
+
+
+@teamwork_routes.route("/teamwork/claude-code/sessions/<session_id>", methods=["DELETE"])
+def claude_code_kill_session(session_id: str):
+    """Terminate a Claude Code session.
+
+    Allows the user to kill a dangling session from the UI.
+    """
+    try:
+        from prax.agent.claude_code_tools import _post, is_bridge_available
+        from prax.services.teamwork_hooks import mirror_claude_code_turn
+
+        if not is_bridge_available():
+            return jsonify({"error": "Bridge not available"}), 503
+
+        result = _post("/session/end", {"session_id": session_id})
+        if "error" in result:
+            return jsonify({"error": result["error"]}), 400
+
+        turns = result.get("turns", 0)
+        mirror_claude_code_turn(
+            prax_message=None,
+            claude_response=None,
+            meta=f"Session `{session_id}` terminated by user after {turns} turns.",
+        )
+        return jsonify({"ended": True, "session_id": session_id, "turns": turns})
+    except Exception:
+        logger.exception("Failed to terminate Claude Code session")
+        return jsonify({"error": "Failed to terminate session"}), 500
