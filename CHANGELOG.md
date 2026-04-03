@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/praxagent/prax/compare/v0.9.0...v0.10.0) (2026-04-03)
+
+
+### Features
+
+* enhance self coding ([#21](https://github.com/praxagent/prax/issues/21)) ([3f93ca6](https://github.com/praxagent/prax/commit/3f93ca6394dade717980f0d37eb13b2ca5986287))
+
 ## [0.9.0](https://github.com/praxagent/prax/compare/v0.8.0...v0.9.0) (2026-04-03)
 
 
