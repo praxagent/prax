@@ -27,3 +27,64 @@ On startup you'll see:
 ```
 Starting Prax — provider=openai model=gpt-4o temperature=0.7 encoding=o200k_base
 ```
+
+## Memory System Setup
+
+Prax has a two-layer memory system. **Short-term memory (STM)** works out of the box with no extra infrastructure. **Long-term memory (LTM)** requires Qdrant and Neo4j.
+
+### Enabling Long-Term Memory
+
+```bash
+# Start core services + memory infrastructure
+docker compose --profile memory up --build
+```
+
+Then set in `.env`:
+```env
+MEMORY_ENABLED=true
+```
+
+This starts Qdrant (vector store, port 6333) and Neo4j (knowledge graph, port 7474/7687).
+
+### Choosing an Embedding Provider
+
+Memory search quality depends on embeddings — numerical representations of text used for similarity matching. You have three choices:
+
+**Option 1: OpenAI (default)** — Highest quality, easiest setup. Your memory text is sent to OpenAI's API for embedding. If you're already using OpenAI for LLM calls, this is the simplest path.
+
+```env
+EMBEDDING_PROVIDER=openai
+EMBEDDING_MODEL=text-embedding-3-small
+```
+
+**Option 2: Ollama (local)** — No data leaves your machine. Good quality. Requires running Ollama (included in Docker Compose).
+
+```bash
+# Start with Ollama
+docker compose --profile memory --profile ollama up --build
+
+# Pull the embedding model (one-time)
+docker compose exec ollama ollama pull nomic-embed-text
+```
+
+```env
+EMBEDDING_PROVIDER=ollama
+EMBEDDING_MODEL=nomic-embed-text
+OLLAMA_BASE_URL=http://localhost:11434
+```
+
+**Option 3: fastembed (in-process)** — Zero infrastructure, runs inside the Prax process. Lower quality but simplest possible setup.
+
+```env
+EMBEDDING_PROVIDER=local
+```
+
+See [Memory documentation](../infrastructure/memory.md#embedding-providers) for a detailed comparison of quality, speed, cost, and privacy trade-offs.
+
+### Verifying Memory
+
+After starting with memory enabled, you can verify it's working:
+
+- **Qdrant dashboard:** [http://localhost:6333/dashboard](http://localhost:6333/dashboard)
+- **Neo4j browser:** [http://localhost:7474](http://localhost:7474) (login: `neo4j` / `prax-memory`)
+- **In chat:** Ask Prax "what's your memory status?" — it will use the `memory_stats` tool

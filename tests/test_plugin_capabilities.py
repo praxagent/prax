@@ -8,6 +8,19 @@ import pytest
 from prax.plugins.capabilities import PluginCapabilities
 from prax.plugins.registry import PluginTrust
 
+
+def _sandbox_available() -> bool:
+    """Check if the Docker sandbox container is running."""
+    try:
+        import docker
+        client = docker.from_env()
+        containers = client.containers.list(
+            filters={"label": "com.docker.compose.service=sandbox"}
+        )
+        return len(containers) > 0
+    except Exception:
+        return False
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -230,8 +243,12 @@ class TestScopedFilesystem:
         assert path.endswith("test-user")
         assert "plugin_data" not in path
 
-    # -- run_command --
+    # -- run_command (requires Docker sandbox) --
 
+    @pytest.mark.skipif(
+        not _sandbox_available(),
+        reason="Sandbox container not running",
+    )
     def test_imported_run_command_forces_cwd(self, imported_caps, workspace):
         import os
         result = imported_caps.run_command(["pwd"])
@@ -243,6 +260,10 @@ class TestScopedFilesystem:
         with pytest.raises(ValueError, match="Path traversal"):
             imported_caps.run_command(["pwd"], cwd="../../../etc")
 
+    @pytest.mark.skipif(
+        not _sandbox_available(),
+        reason="Sandbox container not running",
+    )
     def test_builtin_run_command_respects_cwd(self, builtin_caps, workspace, tmp_path):
         result = builtin_caps.run_command(["pwd"], cwd=str(tmp_path))
         assert result.stdout.strip() == str(tmp_path)

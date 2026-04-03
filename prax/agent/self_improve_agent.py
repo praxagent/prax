@@ -33,6 +33,8 @@ and fix bugs in the application's own code.
   live codebase.  Use source_grep to find functions, imports, and patterns
   BEFORE reading individual files — don't guess file paths.
 - **Logs**: Use read_logs to see recent errors and tracebacks.
+- **Failure journal**: Check the failure journal for observed agent failures
+  that need fixing — these are concrete, user-reported problems with traces.
 - **Code editing**: Use the self_improve_* tools for direct code modification:
   - self_improve_start — create isolated worktree
   - self_improve_search — grep within the worktree
@@ -44,6 +46,13 @@ and fix bugs in the application's own code.
   - self_improve_verify — run tests + lint + startup check
   - self_improve_deploy — hot-swap verified changes into the live app
 - **Sandbox**: For complex tasks, use sandbox_start to launch OpenCode.
+- **Claude Code** (if available): Use claude_code_start_session to begin a
+  multi-turn collaboration session with Claude Code on the host machine.
+  Claude Code has full access to the codebase, terminal, and git.  Use this
+  for complex tasks that benefit from iterative back-and-forth — it's like
+  pair programming with another AI developer.  The session is conversational:
+  explain what you need, review its proposals, iterate until the fix is right,
+  then ask it to run the tests.  End the session with claude_code_end_session.
 
 ## Workflow
 1. **Search**: Use source_grep to find relevant code.  Understand the
@@ -88,6 +97,13 @@ def _build_self_improve_tools() -> list:
     if settings.self_improve_enabled:
         from prax.agent.workspace_tools import read_logs
         tools.append(read_logs)
+
+    # Add Claude Code collaboration tools if the bridge is running.
+    try:
+        from prax.agent.claude_code_tools import build_claude_code_tools
+        tools.extend(build_claude_code_tools())
+    except Exception:
+        pass  # Bridge not available — tools not added
 
     return tools
 

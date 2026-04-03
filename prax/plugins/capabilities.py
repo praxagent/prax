@@ -11,9 +11,9 @@ import logging
 import os
 import re
 import subprocess
-import tempfile
 from typing import Any
 
+from prax.plugins.permissions import PluginPermissions
 from prax.plugins.policy import PluginPolicy, get_policy
 from prax.plugins.registry import PluginTrust
 
@@ -54,6 +54,7 @@ class PluginCapabilities:
         trust_tier: str,
         user_id: str | None = None,
         approved_secrets: set[str] | None = None,
+        permissions: PluginPermissions | None = None,
     ) -> None:
         self.plugin_rel_path = plugin_rel_path
         self.trust_tier = trust_tier
@@ -61,6 +62,27 @@ class PluginCapabilities:
         self.policy: PluginPolicy = get_policy(trust_tier)
         self._http_request_count = 0
         self._approved_secrets: set[str] = approved_secrets or set()
+
+        # Declarative permissions from permissions.md — authoritative ceiling.
+        self._permissions: PluginPermissions | None = permissions
+
+    # ------------------------------------------------------------------
+    # Internal — permissions.md enforcement
+    # ------------------------------------------------------------------
+
+    def _check_permission(self, capability: str) -> None:
+        """Raise if *capability* is not declared in permissions.md.
+
+        For BUILTIN plugins, permissions.md is optional (all allowed).
+        For IMPORTED plugins, permissions.md is the authoritative ceiling.
+        """
+        if self._permissions is None:
+            return  # No permissions.md — use tier policy only (backward compat)
+        if capability not in self._permissions.capabilities:
+            raise PermissionError(
+                f"Plugin '{self.plugin_rel_path}' does not declare '{capability}' "
+                f"in its permissions.md — blocked."
+            )
 
     # ------------------------------------------------------------------
     # Internal — scoped data directory
@@ -86,6 +108,7 @@ class PluginCapabilities:
 
     def build_llm(self, tier: str = "medium") -> Any:
         """Return a LangChain LLM without exposing API keys to the plugin."""
+        self._check_permission("llm")
         if not self.policy.can_use_llm:
             raise PermissionError(
                 f"Plugin '{self.plugin_rel_path}' (tier={self.trust_tier}) "
@@ -102,6 +125,7 @@ class PluginCapabilities:
     # ------------------------------------------------------------------
 
     def _check_http(self) -> None:
+        self._check_permission("http")
         if not self.policy.can_make_http:
             raise PermissionError(
                 f"Plugin '{self.plugin_rel_path}' is not permitted to make HTTP requests."
@@ -212,13 +236,26 @@ class PluginCapabilities:
     ) -> subprocess.CompletedProcess:
         """Run a shell command. Audited and time-limited.
 
+        Commands are routed through the sandbox-aware shell utilities so
+        that system packages like pdflatex, ffmpeg, and pdftoppm are
+        available even when the host container doesn't have them.
+
         IMPORTED plugins have ``cwd`` forced to their scoped directory.
         Any ``cwd`` they pass is treated as a relative path within it.
         """
+        self._check_permission("commands")
         if not self.policy.can_run_commands:
             raise PermissionError(
                 f"Plugin '{self.plugin_rel_path}' is not permitted to run commands."
             )
+        # Enforce command whitelist from permissions.md.
+        if self._permissions and self._permissions.allowed_commands is not None:
+            cmd_name = cmd[0] if cmd else ""
+            if not self._permissions.is_command_allowed(cmd_name):
+                raise PermissionError(
+                    f"Plugin '{self.plugin_rel_path}' is not allowed to run '{cmd_name}'. "
+                    f"Allowed commands: {sorted(self._permissions.allowed_commands)}"
+                )
         if self.trust_tier == PluginTrust.IMPORTED and self.user_id:
             from prax.services.workspace_service import safe_join
             forced_cwd = self._plugin_data_root()
@@ -229,17 +266,13 @@ class PluginCapabilities:
         logger.info(
             "Plugin %s running command: %s (cwd=%s)", self.plugin_rel_path, cmd, cwd,
         )
-        return subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=cwd,
-        )
+        from prax.utils.shell import run_command as sandbox_run
+        return sandbox_run(cmd, cwd=cwd, timeout=timeout)
 
     def shared_tempdir(self, prefix: str = "prax_") -> str:
-        """Create and return a temporary directory path."""
-        d = tempfile.mkdtemp(prefix=prefix)
+        """Create and return a temporary directory accessible from both app and sandbox."""
+        from prax.utils.shell import shared_tempdir as sandbox_tempdir
+        d = sandbox_tempdir(prefix=prefix)
         logger.info("Plugin %s created tempdir %s", self.plugin_rel_path, d)
         return d
 
@@ -258,6 +291,7 @@ class PluginCapabilities:
 
         Returns the output path on success.
         """
+        self._check_permission("tts")
         logger.info(
             "Plugin %s TTS request (%s/%s, %d chars)",
             self.plugin_rel_path, provider, voice, len(text),
@@ -287,6 +321,40 @@ class PluginCapabilities:
         else:
             raise ValueError(f"Unsupported TTS provider: {provider}")
         return output_path
+
+    # ------------------------------------------------------------------
+    # Audio transcription — framework handles API key
+    # ------------------------------------------------------------------
+
+    def transcribe_audio(self, audio_path: str) -> str:
+        """Transcribe an audio file using OpenAI Whisper without exposing API keys.
+
+        Returns the transcript text.  The audio file must be < 25 MB
+        (OpenAI Whisper API limit).
+        """
+        self._check_permission("transcription")
+        logger.info(
+            "Plugin %s transcription request (%s)",
+            self.plugin_rel_path, audio_path,
+        )
+        file_size = os.path.getsize(audio_path)
+        if file_size > 25 * 1024 * 1024:
+            raise ValueError(
+                f"Audio file is {file_size / (1024*1024):.1f} MB — "
+                f"exceeds the 25 MB Whisper API limit. "
+                f"Split the file or compress it first."
+            )
+
+        from openai import OpenAI
+
+        from prax.settings import settings
+        client = OpenAI(api_key=settings.openai_key)
+        with open(audio_path, "rb") as f:
+            transcript = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=f,
+            )
+        return transcript.text
 
     # ------------------------------------------------------------------
     # Approved secrets — explicit permission grants

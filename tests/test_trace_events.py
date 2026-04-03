@@ -12,6 +12,7 @@ class TestTraceEventVocabulary:
             "tier_choice",
             "think",
             "prediction_error", "epistemic_gate", "logprob_entropy", "semantic_entropy",
+            "feedback", "failure_case", "eval_result",
         }
         assert TraceEvent.values() == expected
 
