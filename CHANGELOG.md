@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/praxagent/prax/compare/v0.8.0...v0.9.0) (2026-04-03)
+
+
+### Features
+
+* give prax longterm memory ([#19](https://github.com/praxagent/prax/issues/19)) ([65e9d97](https://github.com/praxagent/prax/commit/65e9d976a6a1b78c611b7257841698f13d8807e9))
+
 ## [0.8.0](https://github.com/praxagent/prax/compare/v0.7.0...v0.8.0) (2026-04-02)
 
 
