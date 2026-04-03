@@ -307,22 +307,20 @@ def restore_note_to_version(slug: str, commit: str):
         return jsonify({"error": "Failed to restore note version"}), 500
 
 
-def _handle_claude_code_interjection(tw, content: str, channel_id: str) -> None:
+def _handle_claude_code_interjection(tw, content: str, channel_id: str) -> bool:
     """Handle a human message posted in #claude-code.
 
-    The message is forwarded to the active Claude Code session via Prax.
-    Prax acts as mediator — it receives the human's direction and relays
-    it to Claude Code, then posts Claude Code's response back to the channel.
+    If there's an active Claude Code session, the message is forwarded
+    directly to Claude Code via the bridge.  Returns True if handled.
+
+    If no session is active (or the bridge is down), returns False so
+    the caller can fall through to the normal conversation flow — letting
+    Prax process the request (e.g. start a session himself).
     """
     from prax.agent.claude_code_tools import _post, is_bridge_available
 
     if not is_bridge_available():
-        tw.send_message(
-            content="Claude Code bridge is not running — cannot forward your message.",
-            channel="claude-code",
-            agent_name="Prax",
-        )
-        return
+        return False  # Let Prax handle it through normal conversation
 
     # Find the active session by querying the bridge.
     try:
@@ -341,15 +339,7 @@ def _handle_claude_code_interjection(tw, content: str, channel_id: str) -> None:
         sessions = []
 
     if not sessions:
-        tw.send_message(
-            content=(
-                "No active Claude Code session. Your message has been noted — "
-                "Prax will see it when he starts the next session."
-            ),
-            channel="claude-code",
-            agent_name="Prax",
-        )
-        return
+        return False  # No active session — let Prax handle it normally
 
     # Use the most recently active session.
     session_id = sessions[0]["session_id"]
@@ -373,7 +363,7 @@ def _handle_claude_code_interjection(tw, content: str, channel_id: str) -> None:
             channel="claude-code",
             agent_name="Prax",
         )
-        return
+        return True
 
     response = result.get("response", "(no response)")
     tw.send_message(
@@ -381,6 +371,7 @@ def _handle_claude_code_interjection(tw, content: str, channel_id: str) -> None:
         channel="claude-code",
         agent_name="Claude Code",
     )
+    return True
 
 
 def _handle_message(
@@ -403,12 +394,13 @@ def _handle_message(
 
             user_id = _get_teamwork_user_id()
 
-            # #claude-code channel — human interjection into an active session.
-            # Route through Prax as mediator rather than the normal conversation flow.
+            # #claude-code channel — if there's an active session, relay directly
+            # to Claude Code.  Otherwise fall through to Prax's normal flow so
+            # he can process the request (e.g. start a session himself).
             claude_code_channel_id = tw.get_channel_id("claude-code")
             if claude_code_channel_id and channel_id == claude_code_channel_id:
-                _handle_claude_code_interjection(tw, content, channel_id)
-                return
+                if _handle_claude_code_interjection(tw, content, channel_id):
+                    return
 
             # Determine if this is a DM or a public channel.
             known_channels = set(tw._channels.values()) if tw._channels else set()
