@@ -325,9 +325,19 @@ class ConversationAgent:
 
         difficulty_hint = "\n\n" + difficulty_context_for_prompt(user_input)
 
+        # Memory injection: retrieve relevant memories and STM scratchpad.
+        memory_context = ""
+        if uid:
+            try:
+                from prax.services.memory_service import get_memory_service
+                memory_context = get_memory_service().build_memory_context(uid, user_input)
+            except Exception:
+                pass  # Graceful degradation — memory is optional.
+
         full_prompt = (
             _load_system_prompt()
             + workspace_context
+            + memory_context
             + complexity_hint
             + difficulty_hint
             + metacognitive_hint

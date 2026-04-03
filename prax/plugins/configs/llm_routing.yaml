@@ -36,3 +36,16 @@ defaults:
 #     provider: anthropic
 #     model: claude-sonnet-4-20250514
 #     temperature: 0.2
+#
+#   # Memory system components:
+#   subagent_memory:
+#     tier: low
+#     temperature: 0.3
+#
+#   memory_consolidation:
+#     tier: low           # entity/relation extraction + daily summaries
+#     temperature: 0.2
+#
+#   memory_compact:
+#     tier: low           # STM compaction summarisation
+#     temperature: 0.2

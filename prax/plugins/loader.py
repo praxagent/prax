@@ -229,12 +229,17 @@ class PluginLoader:
                     sig = inspect.signature(reg_fn)
                     if sig.parameters:
                         from prax.agent.user_context import current_user_id
+                        from prax.plugins.permissions import load_permissions
                         approved = set(self.registry.get_approved_permissions(rel_key))
+                        # Load permissions.md — authoritative capability ceiling.
+                        plugin_dir = plugin_file.parent
+                        perms = load_permissions(plugin_dir)
                         caps = PluginCapabilities(
                             plugin_rel_path=rel_key,
                             trust_tier=trust_tier,
                             user_id=current_user_id.get(),
                             approved_secrets=approved,
+                            permissions=perms,
                         )
                         plugin_tools = reg_fn(caps)
                     else:
@@ -315,12 +320,34 @@ class PluginLoader:
         approved = set(self.registry.get_approved_permissions(rel_key))
 
         from prax.agent.user_context import current_user_id
+        from prax.plugins.permissions import load_permissions
+
+        # Load permissions.md — authoritative capability ceiling for IMPORTED plugins.
+        plugin_dir = plugin_file.parent
+        perms = load_permissions(plugin_dir)
+        if perms is None:
+            logger.warning(
+                "IMPORTED plugin %s has no permissions.md — loading with no capabilities. "
+                "Add a permissions.md to declare what this plugin needs.",
+                rel_key,
+            )
+            from prax.plugins.permissions import NONE as NO_PERMS
+            perms = NO_PERMS
+
+        # Use secrets declared in permissions.md (replaces PLUGIN_PERMISSIONS).
+        if perms.secrets:
+            self.registry.set_declared_permissions(
+                rel_key,
+                [{"key": s["key"], "reason": s["reason"]} for s in perms.secrets],
+            )
+
         bridge = get_bridge(rel_key)
         caps = PluginCapabilities(
             plugin_rel_path=rel_key,
             trust_tier=trust_tier,
             user_id=current_user_id.get(),
             approved_secrets=approved,
+            permissions=perms,
         )
 
         try:

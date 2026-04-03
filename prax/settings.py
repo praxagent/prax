@@ -143,6 +143,18 @@ class AppSettings(BaseSettings):
     git_author_email: str = Field(default="prax@localhost", alias="GIT_AUTHOR_EMAIL")
     git_author_name: str = Field(default="Prax", alias="GIT_AUTHOR_NAME")
 
+    # Claude Code Bridge — multi-turn collaboration with Claude Code on the host.
+    # Start the bridge manually: ./scripts/start_claude_bridge.sh
+    # Prax detects whether the bridge is running and disables tools if it's down.
+    claude_bridge_url: str = Field(
+        default="", alias="CLAUDE_BRIDGE_URL",
+        description="Claude Code bridge endpoint (e.g. http://host.docker.internal:9819).",
+    )
+    claude_bridge_secret: str = Field(
+        default="", alias="CLAUDE_BRIDGE_SECRET",
+        description="Shared secret for bridge auth. Must match the bridge's CLAUDE_BRIDGE_SECRET.",
+    )
+
     # Prax SSH key — base64-encoded private key for pushing workspaces
     prax_ssh_key_b64: str | None = Field(default=None, alias="PRAX_SSH_KEY_B64")
 
@@ -156,6 +168,31 @@ class AppSettings(BaseSettings):
     def ssh_key_b64(self) -> str | None:
         """Return the SSH key, preferring PRAX_SSH_KEY_B64 over the legacy setting."""
         return self.prax_ssh_key_b64 or self.plugin_repo_ssh_key_b64
+
+    # Memory system (vector store + knowledge graph)
+    memory_enabled: bool = Field(default=True, alias="MEMORY_ENABLED")
+    qdrant_url: str = Field(default="http://localhost:6333", alias="QDRANT_URL")
+    neo4j_uri: str = Field(default="bolt://localhost:7687", alias="NEO4J_URI")
+    neo4j_user: str = Field(default="neo4j", alias="NEO4J_USER")
+    neo4j_password: str = Field(default="prax-memory", alias="NEO4J_PASSWORD")
+    embedding_model: str = Field(default="text-embedding-3-small", alias="EMBEDDING_MODEL")
+    embedding_provider: str = Field(default="openai", alias="EMBEDDING_PROVIDER")
+    ollama_base_url: str = Field(
+        default="http://localhost:11434", alias="OLLAMA_BASE_URL",
+        description="Ollama endpoint for local embeddings (when EMBEDDING_PROVIDER=ollama).",
+    )
+    memory_consolidation_interval: int = Field(
+        default=3600, alias="MEMORY_CONSOLIDATION_INTERVAL",
+        description="Seconds between automatic consolidation runs.",
+    )
+    memory_stm_max_entries: int = Field(
+        default=50, alias="MEMORY_STM_MAX_ENTRIES",
+        description="Max scratchpad entries before LLM compaction kicks in.",
+    )
+    memory_decay_halflife_days: float = Field(
+        default=7.0, alias="MEMORY_DECAY_HALFLIFE_DAYS",
+        description="Half-life in days for Ebbinghaus-style memory importance decay.",
+    )
 
     # Observability (OTel tracing, Prometheus metrics, Grafana dashboards)
     observability_enabled: bool = Field(default=False, alias="OBSERVABILITY_ENABLED")
