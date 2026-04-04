@@ -202,19 +202,42 @@ def _deliver_message(user_id: str, message: str, channel: str | None = None) -> 
         elif channel == "all":
             logger.warning("Cannot deliver via SMS — no phone number for user %s", user_id)
 
+    if channel in ("teamwork", "all"):
+        try:
+            from prax.services.teamwork_hooks import post_to_channel
+            from prax.settings import settings
+            post_to_channel("general", message, agent_name=settings.agent_name)
+        except Exception:
+            logger.exception("Failed to deliver via TeamWork")
+
 
 # ---------------------------------------------------------------------------
 # Schedule / reminder firing
 # ---------------------------------------------------------------------------
 
-def _on_fire(user_id: str, schedule_id: str, prompt: str) -> None:
-    """Called when a cron triggers.  Generate content via the agent, deliver."""
-    logger.info("Schedule fired: user=%s id=%s", user_id, schedule_id)
+def _on_fire(user_id: str, schedule_id: str, prompt: str, channel: str | None = None) -> None:
+    """Called when a cron triggers.  Generate content via the agent, deliver.
+
+    The prompt is processed through the agent so it can use tools (search,
+    fetch, summarize, etc.).  The [SCHEDULED_TASK] prefix tells the agent
+    not to ask follow-up questions and not to use scheduling tools.
+    """
+    logger.info("Schedule fired: user=%s id=%s channel=%s", user_id, schedule_id, channel)
     try:
         from prax.services.conversation_service import conversation_service
 
-        response = conversation_service.reply(user_id, f"[Scheduled task] {prompt}")
-        _deliver_message(user_id, response)
+        response = conversation_service.reply(
+            user_id,
+            f"[SCHEDULED_TASK — CRITICAL RULES: "
+            f"1) Do NOT ask follow-up questions — the user is not present. "
+            f"2) Do NOT use schedule_create, schedule_reminder, or any scheduling tools. "
+            f"3) Do NOT ask for confirmation or clarification. "
+            f"4) Just execute the task using your best judgment and respond with the result. "
+            f"5) If the task is ambiguous, take the most reasonable interpretation and do it. "
+            f"6) Keep your response concise — it will be delivered as a notification.] "
+            f"{prompt}",
+        )
+        _deliver_message(user_id, response, channel=channel)
 
         # Persist last_run (no git commit — this is housekeeping only).
         with _lock:
@@ -235,13 +258,14 @@ def _on_reminder_fire(
     prompt: str,
     channel: str | None = None,
 ) -> None:
-    """Called when a one-time reminder fires.  Deliver and auto-delete."""
+    """Called when a one-time reminder fires.  Deliver and auto-delete.
+
+    Unlike cron jobs (which run through the agent for complex tasks),
+    reminders deliver the prompt directly — no agent processing.
+    """
     logger.info("Reminder fired: user=%s id=%s channel=%s", user_id, reminder_id, channel)
     try:
-        from prax.services.conversation_service import conversation_service
-
-        response = conversation_service.reply(user_id, f"[Reminder] {prompt}")
-        _deliver_message(user_id, response, channel=channel)
+        _deliver_message(user_id, f"\u23f0 Reminder: {prompt}", channel=channel)
 
         # Auto-delete the reminder from YAML.
         with _lock:
@@ -277,7 +301,7 @@ def _register_job(user_id: str, schedule: dict, default_tz: str) -> str | None:
     job = _scheduler.add_job(
         _on_fire,
         trigger=trigger,
-        args=[user_id, sched_id, schedule["prompt"]],
+        args=[user_id, sched_id, schedule["prompt"], schedule.get("channel")],
         id=f"{user_id}:{sched_id}",
         replace_existing=True,
         name=f"{user_id}:{schedule.get('description', sched_id)}",
@@ -391,6 +415,7 @@ def create_schedule(
     prompt: str,
     cron_expr: str,
     timezone: str | None = None,
+    channel: str | None = None,
 ) -> dict[str, Any]:
     """Create a new scheduled task."""
     try:
@@ -421,6 +446,7 @@ def create_schedule(
             "prompt": prompt,
             "cron": cron_expr,
             "timezone": tz_name,
+            "channel": channel or "all",
             "enabled": True,
             "created_at": datetime.now(ZoneInfo(tz_name)).isoformat(),
             "last_run": None,
@@ -552,8 +578,8 @@ def create_reminder(
             If None, defaults to the channel inferred from the user_id.
     """
     # Validate channel if provided.
-    if channel and channel not in ("sms", "discord", "all"):
-        return {"error": f"Invalid channel: {channel}. Use 'sms', 'discord', or 'all'."}
+    if channel and channel not in ("sms", "discord", "teamwork", "all"):
+        return {"error": f"Invalid channel: {channel}. Use 'sms', 'discord', 'teamwork', or 'all'."}
 
     with _lock:
         data = _read_schedules(user_id)

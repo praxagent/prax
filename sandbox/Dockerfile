@@ -17,8 +17,9 @@ RUN npm install -g opencode-ai @anthropic-ai/claude-code @openai/codex
 
 WORKDIR /workspace
 
-RUN mkdir -p /root/.config/opencode
-COPY opencode.json /root/.config/opencode/opencode.json
+# Seed config — copied to /opt/ so it survives volume mounts.
+# The entrypoint seeds /root/.config/opencode/ on first run.
+COPY opencode.json /opt/opencode.json
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh

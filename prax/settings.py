@@ -55,7 +55,7 @@ class AppSettings(BaseSettings):
     vision_provider: str = Field(default="openai", alias="VISION_PROVIDER")
 
     # Workspace
-    workspace_dir: str = Field(default="./workspaces", alias="WORKSPACE_DIR")
+    workspace_dir: str = Field(default="../workspaces", alias="WORKSPACE_DIR")
 
     # Runtime environment
     running_in_docker: bool = Field(default=False, alias="RUNNING_IN_DOCKER")

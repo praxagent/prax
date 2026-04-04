@@ -248,12 +248,21 @@ class ConversationAgent:
         # graph shows what started it — without system prefixes or tool guidance.
         root_span.ctx.graph.trigger = trigger or user_input
 
+        # Classify session — groups related traces together.
+        try:
+            from prax.services.session_service import classify_session
+            session_id = classify_session(current_user_id.get() or "anonymous", user_input)
+            root_span.ctx.graph.session_id = session_id
+        except Exception:
+            pass
+
         # Callback handler that adds individual tool calls as child nodes
         # in the execution graph — gives TeamWork full depth visibility.
         _graph_cb = GraphCallbackHandler(
             parent_span_id=root_span.span_id,
             graph=root_span.ctx.graph,
             trace_id=root_span.trace_id,
+            live_agent_name=settings.agent_name,
         )
 
         # Reset per-plugin call counters for the new message.
@@ -366,6 +375,12 @@ class ConversationAgent:
             "callbacks": [_graph_cb],
         }
 
+        # Set Prax to working status so the UI shows him active.
+        from prax.services.teamwork_hooks import log_activity, push_live_output, set_role_status
+        set_role_status(settings.agent_name, "working")
+        push_live_output(settings.agent_name, "Processing request...\n", status="running", append=False)
+        log_activity(settings.agent_name, "task_started", f"Processing: {user_input[:150]}")
+
         try:
             result = self._invoke_with_retry(messages, config, turn.user_id)
 
@@ -418,6 +433,16 @@ class ConversationAgent:
         # Reset all TeamWork role agents to idle now that the turn is done.
         from prax.services.teamwork_hooks import reset_all_idle
         reset_all_idle()
+        # Mark Prax's live output as completed so the UI shows the session log.
+        push_live_output(
+            settings.agent_name,
+            f"\nCompleted ({_graph_cb._tool_count} tool calls)\n",
+            status="completed",
+        )
+        log_activity(
+            settings.agent_name, "task_completed",
+            f"Completed with {_graph_cb._tool_count} tool calls",
+        )
 
         # Write full agent trace to the user's workspace log.
         self._write_trace(uid, user_input, result.get("messages", []))
@@ -432,6 +457,23 @@ class ConversationAgent:
         # Deterministic claim audit: check for ungrounded numeric claims.
         if response:
             response = self._audit_claims(response, result.get("messages", []), uid)
+
+        # Update session summary for next turn's classification.
+        try:
+            from prax.services.session_service import update_session_summary
+            update_session_summary(uid or "anonymous", user_input, response)
+        except Exception:
+            pass
+
+        # Export trajectory for fine-tuning (fire-and-forget).
+        try:
+            from prax.services.trajectory_service import export_trajectory
+            export_trajectory(
+                uid, user_input, response, result.get("messages", []),
+                session_id=root_span.ctx.graph.session_id,
+            )
+        except Exception:
+            pass
 
         root_span.end(status="completed", summary=response[:200] if response else "")
         return response
@@ -570,11 +612,20 @@ class ConversationAgent:
         are the primary defense.  This is a post-hoc detection layer for
         monitoring and debugging.
         """
+        from prax.agent.trace import start_span
+        audit_span = start_span("claim_audit", "auditor")
+
         try:
             from prax.agent.claim_audit import audit_claims, format_audit_warning
-            from prax.services.teamwork_hooks import post_to_channel, set_role_status
+            from prax.services.teamwork_hooks import (
+                log_activity,
+                post_to_channel,
+                push_live_output,
+                set_role_status,
+            )
 
-            set_role_status("Skeptic", "working")
+            set_role_status("Auditor", "working")
+            push_live_output("Auditor", "Running claim audit...\n", status="running", append=False)
 
             # Collect all tool results from this turn.
             tool_results: list[str] = []
@@ -587,7 +638,10 @@ class ConversationAgent:
             if findings:
                 warning = format_audit_warning(findings)
                 logger.warning("Claim audit flagged response (user=%s): %s", user_id, warning)
-                post_to_channel("general", f"[Claim Audit] {warning}", agent_name="Skeptic")
+                post_to_channel("general", f"[Claim Audit] {warning}", agent_name="Auditor")
+                push_live_output("Auditor", f"Flagged: {warning}\n", status="completed")
+                log_activity("Auditor", "audit", f"Claim audit flagged: {warning}")
+                audit_span.end(status="completed", summary=f"Flagged: {warning[:200]}")
 
                 # Persist to trace as an audit event.
                 if user_id:
@@ -598,8 +652,15 @@ class ConversationAgent:
                         }])
                     except Exception:
                         pass
+            else:
+                push_live_output("Auditor", "No claims flagged.\n", status="completed")
+                log_activity("Auditor", "audit", "Claim audit passed — no issues found")
+                audit_span.end(status="completed", summary="No claims flagged")
         except Exception:
             logger.debug("Claim audit failed", exc_info=True)
+            audit_span.end(status="failed", summary="Audit error")
+        finally:
+            set_role_status("Auditor", "idle")
 
         return response
 

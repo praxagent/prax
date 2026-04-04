@@ -100,6 +100,60 @@ def workspace_save(filename: str, content: str) -> str:
 
 
 @tool
+def workspace_download(url: str, filename: str = "") -> str:
+    """Download a file from a URL and save it to the workspace.
+
+    Works for any file type: PDFs, images, archives, datasets, etc.
+    The file is saved as binary — not converted to text.
+
+    Args:
+        url: Direct URL to the file.
+        filename: Name to save as (optional — auto-detected from URL if omitted).
+    """
+    import re
+    from pathlib import Path
+    from urllib.parse import unquote, urlparse
+
+    import requests as _requests
+
+    try:
+        uid = _get_user_id()
+
+        # Auto-detect filename from URL if not provided
+        if not filename:
+            parsed = urlparse(url)
+            filename = unquote(Path(parsed.path).name) or "download"
+            # Clean up query params from filename
+            filename = re.sub(r'[?#].*$', '', filename)
+            if not Path(filename).suffix:
+                filename += ".bin"
+
+        # Sanitize filename
+        filename = re.sub(r'[^\w\-_. ]', '_', filename)
+
+        resp = _requests.get(url, timeout=60, stream=True, allow_redirects=True, headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        })
+        resp.raise_for_status()
+
+        # Save binary content to workspace
+        ws_root = workspace_service.workspace_root(uid)
+        file_path = Path(ws_root) / filename
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(file_path, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=8192):
+                f.write(chunk)
+
+        size = file_path.stat().st_size
+        size_str = f"{size / 1024:.0f} KB" if size < 1024 * 1024 else f"{size / (1024 * 1024):.1f} MB"
+        content_type = resp.headers.get("content-type", "unknown")
+
+        return f"Downloaded {filename} ({size_str}, {content_type}) to workspace."
+    except Exception as e:
+        return f"Failed to download {url}: {e}"
+
+
+@tool
 def workspace_patch(filename: str, old_text: str, new_text: str) -> str:
     """Apply a precise text replacement to a workspace file.
 
@@ -753,7 +807,7 @@ def build_workspace_tools():
 
     tools = [
         user_notes_update, user_notes_read, reread_instructions,
-        workspace_save, workspace_patch, workspace_read, workspace_list,
+        workspace_save, workspace_download, workspace_patch, workspace_read, workspace_list,
         workspace_send_file, latex_compile,
         workspace_archive, workspace_search, workspace_restore,
         log_link, links_history,

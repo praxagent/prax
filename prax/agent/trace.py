@@ -64,6 +64,7 @@ class ExecutionGraph:
         self._nodes: dict[str, SpanNode] = {}
         self._lock = threading.Lock()
         self.trigger: str = ""  # User message or cron/event that started this trace
+        self.session_id: str = ""  # Groups related traces into a session
 
     def add_node(self, node: SpanNode) -> None:
         with self._lock:
@@ -139,6 +140,8 @@ class ExecutionGraph:
             }
             if self.trigger:
                 result["trigger"] = self.trigger
+            if self.session_id:
+                result["session_id"] = self.session_id
             return result
 
     def _format_node(
@@ -336,6 +339,8 @@ def _graph_from_dict(data: dict) -> ExecutionGraph | None:
         return None
 
     graph = ExecutionGraph(trace_id)
+    graph.trigger = data.get("trigger", "")
+    graph.session_id = data.get("session_id", "")
     for nd in nodes:
         started_at = datetime.fromisoformat(nd["started_at"])
         finished_at = (
@@ -653,6 +658,38 @@ def delete_graph(trace_id: str) -> bool:
     return removed is not None
 
 
+def update_graph_session(trace_id: str, new_session_id: str) -> bool:
+    """Move a graph to a different session. Updates in memory and on disk."""
+    with _active_graphs_lock:
+        graph = _active_graphs.get(trace_id)
+        if not graph:
+            return False
+        graph.session_id = new_session_id
+
+    # Update on disk — rewrite the line with the new session_id.
+    try:
+        d = _graphs_dir()
+        for filepath in d.glob("graphs-*.jsonl"):
+            lines = filepath.read_text().strip().splitlines()
+            updated = False
+            new_lines = []
+            for ln in lines:
+                if f'"trace_id": "{trace_id}"' in ln:
+                    import json
+                    data = json.loads(ln)
+                    data["session_id"] = new_session_id
+                    new_lines.append(json.dumps(data))
+                    updated = True
+                else:
+                    new_lines.append(ln)
+            if updated:
+                filepath.write_text("\n".join(new_lines) + "\n")
+    except Exception:
+        logger.warning("Failed to update session for graph %s on disk", trace_id, exc_info=True)
+
+    return True
+
+
 def build_identity_context(name: str) -> str:
     """Build a context string for injection into agent system prompts.
 
@@ -718,7 +755,8 @@ class GraphCallbackHandler(BaseCallbackHandler):
     ignore_chat_model: bool = True
 
     def __init__(
-        self, *, parent_span_id: str, graph: ExecutionGraph, trace_id: str
+        self, *, parent_span_id: str, graph: ExecutionGraph, trace_id: str,
+        live_agent_name: str | None = None,
     ):
         super().__init__()
         self._parent_span_id = parent_span_id
@@ -729,6 +767,8 @@ class GraphCallbackHandler(BaseCallbackHandler):
         # Track active tool names for deduplication (LangGraph fires
         # on_tool_start at both ToolNode and individual invocation levels).
         self._active_names: dict[str, str] = {}  # tool_name → span_id
+        self._live_agent = live_agent_name  # push live output to TeamWork
+        self._tool_count = 0
 
     def on_tool_start(
         self, serialized: dict, input_str: str, *, run_id, **kwargs
@@ -746,6 +786,20 @@ class GraphCallbackHandler(BaseCallbackHandler):
         if tool_name in self._active_names:
             self._active[rid] = self._active_names[tool_name]
             return
+
+        # Push live output to TeamWork so the user sees tool calls in real time.
+        if self._live_agent:
+            self._tool_count += 1
+            try:
+                from prax.services.teamwork_hooks import push_live_output
+                is_first = self._tool_count == 1
+                line = f"[{self._tool_count}] {tool_name}..."
+                push_live_output(
+                    self._live_agent, line + "\n",
+                    status="running", append=not is_first,
+                )
+            except Exception:
+                pass
 
         span_id = uuid.uuid4().hex[:12]
         node = SpanNode(
@@ -785,11 +839,32 @@ class GraphCallbackHandler(BaseCallbackHandler):
         span_id = self._active.pop(rid, None)
         if span_id:
             # Remove from active names dedup tracker.
+            tool_name = ""
+            for k, v in list(self._active_names.items()):
+                if v == span_id:
+                    tool_name = k
             self._active_names = {
                 k: v for k, v in self._active_names.items() if v != span_id
             }
             preview = str(output)[:2000] if output else ""
             self._graph.complete_node(span_id, status="completed", summary=preview)
+
+            # Push completion to live output + activity log
+            if self._live_agent and tool_name:
+                try:
+                    from prax.services.teamwork_hooks import log_activity, push_live_output
+                    result_preview = str(output)[:200] if output else "(no output)"
+                    push_live_output(
+                        self._live_agent,
+                        f"    \u2714 {tool_name}: {result_preview}\n",
+                        status="running",
+                    )
+                    log_activity(
+                        self._live_agent, "tool_use",
+                        f"{tool_name}: {result_preview}",
+                    )
+                except Exception:
+                    pass
 
     def on_tool_error(self, error, *, run_id, **kwargs) -> None:
         rid = str(run_id)

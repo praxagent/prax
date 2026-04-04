@@ -30,4 +30,10 @@ sleep 1
 # Expose CDP on 0.0.0.0:9223 so other containers can reach it.
 socat TCP-LISTEN:9223,fork,reuseaddr,bind=0.0.0.0 TCP:127.0.0.1:9222 &
 
+# Seed OpenCode config if the mounted volume is empty (first run).
+OPENCODE_CFG=/root/.config/opencode/opencode.json
+if [ ! -f "$OPENCODE_CFG" ]; then
+  cp /opt/opencode.json "$OPENCODE_CFG"
+fi
+
 exec opencode serve --hostname 0.0.0.0 --port 4096
