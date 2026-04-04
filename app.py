@@ -136,6 +136,48 @@ def create_app():
         except Exception:
             logger.warning("TeamWork integration failed to initialize", exc_info=True)
 
+    # --- Health probes (Kubernetes/Docker-compatible) ---
+
+    @app.route("/healthz/live")
+    def liveness():
+        """Liveness probe — is the process alive and responding?
+        Fast check, no external dependencies. Use for Docker HEALTHCHECK
+        and Kubernetes livenessProbe.
+        """
+        from flask import jsonify as _jsonify
+        return _jsonify({"status": "alive"})
+
+    @app.route("/healthz/ready")
+    def readiness():
+        """Readiness probe — is the agent ready to accept work?
+        Checks critical subsystems. Use for Kubernetes readinessProbe
+        and load balancer health checks.
+        """
+        from flask import jsonify as _jsonify
+        issues = []
+
+        # Check LLM provider reachability via circuit breaker
+        try:
+            from prax.agent.circuit_breaker import get_all_breakers
+            for name, state in get_all_breakers().items():
+                if state["state"] == "open":
+                    issues.append(f"{name}: circuit breaker open")
+        except Exception:
+            pass
+
+        # Check health monitor status
+        try:
+            from prax.agent.health_monitor import get_last_check
+            check = get_last_check()
+            if check and check.overall == "unhealthy":
+                issues.append(f"health: {check.overall}")
+        except Exception:
+            pass
+
+        if issues:
+            return _jsonify({"status": "not_ready", "issues": issues}), 503
+        return _jsonify({"status": "ready"})
+
     return app
 
 

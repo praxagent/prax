@@ -1520,3 +1520,38 @@ def set_model():
     except Exception:
         logger.exception("Failed to set model override")
         return jsonify({"error": "Failed to set model override"}), 500
+
+
+# ---------------------------------------------------------------------------
+# Health monitoring
+# ---------------------------------------------------------------------------
+
+
+@teamwork_routes.route("/teamwork/health", methods=["GET"])
+def health_status():
+    """Return health monitoring data for the TeamWork UI."""
+    try:
+        from prax.agent.health_monitor import get_health_status
+        return jsonify(get_health_status())
+    except Exception:
+        logger.exception("Failed to get health status")
+        return jsonify({"error": "Failed to get health status"}), 500
+
+
+@teamwork_routes.route("/teamwork/health/events", methods=["GET"])
+def health_events():
+    """Return recent health events for the TeamWork UI."""
+    try:
+        minutes = request.args.get("minutes", "60", type=int)
+        category = request.args.get("category")
+        severity = request.args.get("severity")
+        limit = request.args.get("limit", "100", type=int)
+        from prax.services.health_telemetry import get_recent_events
+        events = get_recent_events(
+            minutes=minutes, category=category,
+            severity=severity, limit=limit,
+        )
+        return jsonify({"events": events})
+    except Exception:
+        logger.exception("Failed to get health events")
+        return jsonify({"error": "Failed to get health events"}), 500

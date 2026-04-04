@@ -291,12 +291,23 @@ def compact_history(
             content=f"[COMPACTED CONVERSATION HISTORY]\n{summary}\n[END COMPACTED HISTORY]"
         )
 
+        summary_tokens = count_tokens(summary, model)
         logger.info(
             "Context compaction: %d messages → summary (%d tokens) + %d recent messages",
             len(old_msgs),
-            count_tokens(summary, model),
+            summary_tokens,
             len(recent_msgs),
         )
+        try:
+            from prax.services.health_telemetry import EventCategory, record_event
+            record_event(
+                EventCategory.CONTEXT_COMPACTION,
+                component="context_manager",
+                details=f"{len(old_msgs)} msgs compacted to {summary_tokens} tokens",
+                tokens=summary_tokens,
+            )
+        except Exception:
+            pass
 
         return system_msgs + [compaction_msg] + recent_msgs
 

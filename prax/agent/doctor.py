@@ -35,6 +35,7 @@ def prax_doctor() -> str:
     checks.append(_check_teamwork())
     checks.append(_check_scheduler())
     checks.append(_check_settings())
+    checks.append(_check_health_monitor())
 
     ok = sum(1 for c in checks if c.startswith("[OK]"))
     warn = sum(1 for c in checks if c.startswith("[WARN]"))
@@ -263,6 +264,29 @@ def _check_settings() -> str:
         )
     except Exception as e:
         return f"[FAIL] Settings: {e}"
+
+
+def _check_health_monitor() -> str:
+    try:
+        from prax.settings import settings
+        if not settings.health_monitor_enabled:
+            return "[OK] Health Monitor: disabled (HEALTH_MONITOR_ENABLED=false)"
+
+        from prax.agent.health_monitor import get_last_check
+        check = get_last_check()
+        if check is None:
+            return "[OK] Health Monitor: enabled, no checks run yet"
+
+        if check.overall == "healthy":
+            return (
+                f"[OK] Health Monitor: {check.overall} "
+                f"({len(check.subsystems)} subsystems checked)"
+            )
+        alert_summary = "; ".join(check.alerts[:3])
+        prefix = "[WARN]" if check.overall == "degraded" else "[FAIL]"
+        return f"{prefix} Health Monitor: {check.overall} — {alert_summary}"
+    except Exception as e:
+        return f"[WARN] Health Monitor: {e}"
 
 
 def build_doctor_tools() -> list:

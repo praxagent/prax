@@ -195,6 +195,10 @@ class AppSettings(BaseSettings):
     observability_enabled: bool = Field(default=False, alias="OBSERVABILITY_ENABLED")
     grafana_url: str = Field(default="", alias="GRAFANA_URL")  # e.g. "http://localhost:3001"
 
+    # Health monitoring watchdog — periodic self-checks every N turns.
+    # Set to false to disable for minimal RAM / lightweight deployments.
+    health_monitor_enabled: bool = Field(default=True, alias="HEALTH_MONITOR_ENABLED")
+
     # TeamWork integration (web UI)
     teamwork_url: str = Field(default="", alias="TEAMWORK_URL")  # e.g. "http://teamwork:8000"
     teamwork_api_key: str = Field(default="", alias="TEAMWORK_API_KEY")

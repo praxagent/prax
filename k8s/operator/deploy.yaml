@@ -1,0 +1,135 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prax-operator
+  namespace: prax-system
+  labels:
+    app.kubernetes.io/name: prax-operator
+    app.kubernetes.io/component: operator
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prax-operator
+  labels:
+    app.kubernetes.io/name: prax-operator
+    app.kubernetes.io/component: operator
+rules:
+  # CRD management
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+  # Prax custom resources
+  - apiGroups: ["prax.ai"]
+    resources:
+      - praxinstances
+      - praxinstances/status
+      - praxworkspaces
+      - praxworkspaces/status
+      - praxsandboxes
+      - praxsandboxes/status
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Core resources the operator creates and manages
+  - apiGroups: [""]
+    resources:
+      - pods
+      - pods/status
+      - services
+      - persistentvolumeclaims
+      - events
+      - configmaps
+      - secrets
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Deployments and StatefulSets
+  - apiGroups: ["apps"]
+    resources:
+      - deployments
+      - deployments/status
+      - statefulsets
+      - statefulsets/status
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # kopf needs events and leases for leader election
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # kopf needs cluster-wide permissions for its finalizers
+  - apiGroups: ["kopf.dev"]
+    resources: ["clusterkopfpeerings"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prax-operator
+  labels:
+    app.kubernetes.io/name: prax-operator
+    app.kubernetes.io/component: operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prax-operator
+subjects:
+  - kind: ServiceAccount
+    name: prax-operator
+    namespace: prax-system
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prax-operator
+  namespace: prax-system
+  labels:
+    app.kubernetes.io/name: prax-operator
+    app.kubernetes.io/component: operator
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: prax-operator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: prax-operator
+        app.kubernetes.io/component: operator
+    spec:
+      serviceAccountName: prax-operator
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: operator
+          image: prax-operator:latest
+          imagePullPolicy: IfNotPresent
+          command: ["kopf", "run", "operator.py", "--verbose", "--liveness=http://0.0.0.0:8080/healthz"]
+          ports:
+            - containerPort: 8080
+              name: healthz
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          env:
+            - name: QDRANT_URL
+              value: "http://qdrant.prax-system.svc.cluster.local:6333"

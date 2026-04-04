@@ -265,7 +265,8 @@ class ConversationAgent:
 
         from prax.agent.trace import GraphCallbackHandler, start_span
 
-        _run_deadline = _time.monotonic() + settings.agent_run_timeout
+        _run_start = _time.monotonic()
+        _run_deadline = _run_start + settings.agent_run_timeout
 
         # Start a root span that wraps the entire orchestrator invocation.
         # This sets last_root_trace_id so callers can attach it to responses.
@@ -370,6 +371,19 @@ class ConversationAgent:
             except Exception:
                 pass  # Graceful degradation — memory is optional.
 
+        # Health monitor: inject advisory from last check if anomalies detected.
+        health_hint = ""
+        try:
+            from prax.agent.health_monitor import get_last_check
+            last_check = get_last_check()
+            if last_check and last_check.overall != "healthy" and last_check.alerts:
+                health_hint = (
+                    "\n\n## Health Advisory\n"
+                    + "\n".join(f"- {a}" for a in last_check.alerts)
+                )
+        except Exception:
+            pass
+
         full_prompt = (
             _load_system_prompt()
             + workspace_context
@@ -378,6 +392,7 @@ class ConversationAgent:
             + difficulty_hint
             + metacognitive_hint
             + prediction_hint
+            + health_hint
         )
 
         # Persist instructions so the agent can re-read them mid-conversation.
@@ -463,6 +478,15 @@ class ConversationAgent:
                     "Agent run hit wall-clock timeout (%ds) for user %s",
                     settings.agent_run_timeout, uid,
                 )
+                try:
+                    from prax.services.health_telemetry import EventCategory, Severity, record_event
+                    record_event(
+                        EventCategory.TURN_TIMEOUT, Severity.WARNING,
+                        component="orchestrator",
+                        details=f"Timeout after {settings.agent_run_timeout}s for user {uid}",
+                    )
+                except Exception:
+                    pass
 
             self._rebuild_if_needed()
         finally:
@@ -516,6 +540,25 @@ class ConversationAgent:
                 uid, user_input, response, result.get("messages", []),
                 session_id=root_span.ctx.graph.session_id,
             )
+        except Exception:
+            pass
+
+        # Health telemetry: record turn completion.
+        try:
+            from prax.services.health_telemetry import EventCategory, record_event
+            record_event(
+                EventCategory.TURN_COMPLETED,
+                component="orchestrator",
+                details=f"user={uid or 'anonymous'}, tools={_graph_cb._tool_count}",
+                latency_ms=((_time.monotonic() - _run_start) * 1000),
+            )
+        except Exception:
+            pass
+
+        # Health monitor: check for anomalies every N turns.
+        try:
+            from prax.agent.health_monitor import on_turn_end
+            on_turn_end()
         except Exception:
             pass
 
@@ -573,6 +616,15 @@ class ConversationAgent:
                         "Context overflow (attempt %d/%d) — compacting and retrying",
                         _context_retries, _MAX_CONTEXT_RETRIES,
                     )
+                    try:
+                        from prax.services.health_telemetry import EventCategory, Severity, record_event
+                        record_event(
+                            EventCategory.CONTEXT_OVERFLOW, Severity.WARNING,
+                            component="orchestrator",
+                            details=f"Attempt {_context_retries}/{_MAX_CONTEXT_RETRIES}",
+                        )
+                    except Exception:
+                        pass
                     try:
                         from prax.plugins.llm_config import get_component_config
                         cfg = get_component_config("orchestrator")
@@ -651,6 +703,17 @@ class ConversationAgent:
                         "callbacks": _callbacks,
                     }
                     continue
+
+                # Record the retry event for health monitoring.
+                try:
+                    from prax.services.health_telemetry import EventCategory, Severity, record_event
+                    record_event(
+                        EventCategory.RETRY, Severity.WARNING,
+                        component="orchestrator",
+                        details=f"Graph failed for user {user_id}: {type(exc).__name__}",
+                    )
+                except Exception:
+                    pass
 
                 if not self.checkpoint_mgr.can_retry(user_id):
                     logger.error(

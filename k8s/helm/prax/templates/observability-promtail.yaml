@@ -1,0 +1,46 @@
+{{- if .Values.observability.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "prax.fullname" . }}-promtail
+  namespace: {{ include "prax.namespace" . }}
+  labels:
+    {{- include "prax.componentLabels" (dict "component" "promtail" "context" $) | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "prax.componentSelectorLabels" (dict "component" "promtail" "context" $) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "prax.componentLabels" (dict "component" "promtail" "context" $) | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "prax.serviceAccountName" . }}
+      containers:
+        - name: promtail
+          image: {{ .Values.observability.promtail.image }}
+          args:
+            - "-config.file=/etc/promtail/config.yaml"
+          resources:
+            {{- toYaml .Values.observability.promtail.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/promtail/config.yaml
+              subPath: promtail.yaml
+            - name: varlog
+              mountPath: /var/log
+              readOnly: true
+            - name: containers
+              mountPath: /var/lib/docker/containers
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "prax.fullname" . }}-promtail-config
+        - name: varlog
+          hostPath:
+            path: /var/log
+        - name: containers
+          hostPath:
+            path: /var/lib/docker/containers
+{{- end }}

@@ -11,4 +11,5 @@ Practical guides for setting up, extending, and testing Prax.
 - [Scheduler](scheduler.md) — Cron jobs, reminders, timezone, YAML format, TeamWork UI
 - [Trajectory Export](trajectory-export.md) — Real-time training data export with outcome classification
 - [Feedback Loop](feedback-loop.md) — Agent improvement loop: feedback, failure journal, eval runner
+- [Authentication](authentication.md) — Tailscale, Google/GitHub OAuth, Authentik, multi-user routing
 - [Troubleshooting](troubleshooting.md) — Common issues and fixes

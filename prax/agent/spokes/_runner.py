@@ -173,6 +173,15 @@ def run_spoke(
                         label, _ctx_retries,
                     )
                     try:
+                        from prax.services.health_telemetry import EventCategory, Severity, record_event
+                        record_event(
+                            EventCategory.CONTEXT_OVERFLOW, Severity.WARNING,
+                            component=f"spoke:{label}",
+                            details=f"Attempt {_ctx_retries}/3",
+                        )
+                    except Exception:
+                        pass
+                    try:
                         from prax.agent.context_manager import (
                             clear_old_tool_results,
                             compact_history,
@@ -192,6 +201,16 @@ def run_spoke(
         logger.warning("Spoke [%s] failed: %s", label, exc, exc_info=True)
         span.end(status="failed", summary=str(exc)[:200])
         _finish(role_name, label=label, status="failed", start_time=_spoke_start)
+        try:
+            from prax.services.health_telemetry import EventCategory, Severity, record_event
+            record_event(
+                EventCategory.SPOKE_FAILURE, Severity.WARNING,
+                component=label,
+                details=f"{type(exc).__name__}: {str(exc)[:200]}",
+                latency_ms=((_time.monotonic() - _spoke_start) * 1000),
+            )
+        except Exception:
+            pass
         return f"Spoke agent failed: {exc}"
 
     # Log tool calls for debugging
@@ -203,6 +222,16 @@ def run_spoke(
             logger.info("Spoke [%s] completed (%d tool calls): %s", label, tool_count, msg.content[:120])
             span.end(status="completed", summary=msg.content[:200], tool_calls=tool_count)
             _finish(role_name, channel, msg.content, label=label, status="success", start_time=_spoke_start)
+            try:
+                from prax.services.health_telemetry import EventCategory, record_event
+                record_event(
+                    EventCategory.SPOKE_SUCCESS,
+                    component=label,
+                    details=f"{tool_count} tool calls",
+                    latency_ms=((_time.monotonic() - _spoke_start) * 1000),
+                )
+            except Exception:
+                pass
             return msg.content
 
     span.end(status="completed", summary="No output produced", tool_calls=tool_count)

@@ -1,0 +1,100 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: praxworkspaces.prax.ai
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.14.0
+spec:
+  group: prax.ai
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: PraxWorkspace represents a user's workspace with storage and sandbox assignment.
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - userId
+                - instanceRef
+              properties:
+                userId:
+                  type: string
+                  description: Unique identifier for the user who owns this workspace.
+                  minLength: 1
+                instanceRef:
+                  type: string
+                  description: Name of the PraxInstance this workspace belongs to.
+                  minLength: 1
+                storageSize:
+                  type: string
+                  default: 5Gi
+                  description: Size of the PersistentVolumeClaim for workspace storage.
+                  pattern: ^[0-9]+[EPTGMK]i?$
+                sandboxAssignment:
+                  type: string
+                  description: Name of the PraxSandbox CR currently assigned to this workspace.
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum:
+                    - Provisioning
+                    - Ready
+                    - Suspended
+                    - Terminating
+                  description: Current phase of the workspace lifecycle.
+                pvcName:
+                  type: string
+                  description: Name of the PVC created for this workspace.
+                sandboxPod:
+                  type: string
+                  description: Name of the Pod running the assigned sandbox.
+                lastActive:
+                  type: string
+                  format: date-time
+                  description: Timestamp of the last user activity in this workspace.
+                memoryCollections:
+                  type: object
+                  description: References to memory backend resources for this user.
+                  properties:
+                    qdrantCollection:
+                      type: string
+                      description: Name of the Qdrant collection for vector memory.
+                    neo4jNamespace:
+                      type: string
+                      description: Neo4j namespace/database for graph memory.
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: User
+          type: string
+          jsonPath: .spec.userId
+        - name: Instance
+          type: string
+          jsonPath: .spec.instanceRef
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Sandbox
+          type: string
+          jsonPath: .status.sandboxPod
+        - name: Storage
+          type: string
+          jsonPath: .spec.storageSize
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+  scope: Namespaced
+  names:
+    plural: praxworkspaces
+    singular: praxworkspace
+    kind: PraxWorkspace
+    shortNames:
+      - pw

@@ -124,6 +124,21 @@ def build_llm(
     except Exception:
         callbacks = []
 
+    # Circuit breaker: fail fast if this provider has been tripping.
+    try:
+        from prax.agent.circuit_breaker import get_breaker
+        breaker = get_breaker(f"llm:{provider_name}")
+        if not breaker.is_allowed():
+            raise ConnectionError(
+                f"Circuit breaker OPEN for LLM provider '{provider_name}' — "
+                f"too many recent failures. Will retry automatically in "
+                f"{breaker.recovery_timeout:.0f}s."
+            )
+    except (ConnectionError, ImportError):
+        raise
+    except Exception:
+        pass  # Breaker system failure should never block LLM usage
+
     if provider_name == "openai":
         if not settings.openai_key:
             raise ValueError("OPENAI_KEY is required for OpenAI provider")
