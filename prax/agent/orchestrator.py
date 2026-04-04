@@ -32,6 +32,31 @@ _COMPLEXITY_SIGNALS = [
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Runtime model override — set via the /teamwork/model API
+# ---------------------------------------------------------------------------
+
+_model_override: str | None = None
+
+
+def set_model_override(model: str | None) -> None:
+    """Set a runtime override for the orchestrator model.
+
+    Pass ``None`` or ``"auto"`` to clear the override and revert to
+    the config default.
+    """
+    global _model_override
+    if model and model.lower() == "auto":
+        model = None
+    _model_override = model
+    logger.info("Model override set to: %s", _model_override or "(auto)")
+
+
+def get_model_override() -> str | None:
+    """Return the current runtime model override, or None if using config default."""
+    return _model_override
+
+
 # Hardcoded fallback — used only if the prompt file is missing.
 _FALLBACK_PROMPT = (
     "You are a warm, capable AI assistant. "
@@ -84,9 +109,11 @@ class ConversationAgent:
     ) -> None:
         from prax.plugins.llm_config import get_component_config
         cfg = get_component_config("orchestrator")
+        # Runtime model override takes precedence over config and constructor args
+        effective_model = _model_override or model or cfg.get("model")
         self.llm = build_llm(
             provider=provider or cfg.get("provider"),
-            model=model or cfg.get("model"),
+            model=effective_model,
             temperature=temperature if temperature is not None else cfg.get("temperature"),
             tier=tier or cfg.get("tier") or "low",
         )
@@ -367,6 +394,23 @@ class ConversationAgent:
             + [HumanMessage(content=user_input)]
         )
 
+        # Context window management — budget, clear old tool results, compact.
+        try:
+            from prax.agent.context_manager import prepare_context
+            from prax.plugins.llm_config import get_component_config
+            cfg = get_component_config("orchestrator")
+            orch_tier = cfg.get("tier") or "low"
+            orch_model = cfg.get("model") or ""
+            messages, ctx_budget = prepare_context(messages, tier=orch_tier, model=orch_model)
+            logger.info(
+                "Context budget: %d/%d tokens (system=%d, history=%d)%s",
+                ctx_budget.total, ctx_budget.limit,
+                ctx_budget.system_prompt, ctx_budget.history,
+                " [OVERFLOW]" if ctx_budget.overflow else "",
+            )
+        except Exception:
+            logger.debug("Context management failed, proceeding without", exc_info=True)
+
         # Start a checkpointed turn for this user.
         turn = self.checkpoint_mgr.start_turn(uid or "anonymous")
         config = {
@@ -512,10 +556,50 @@ class ConversationAgent:
         _callbacks = config.get("callbacks", [])
         fresh_restarts = 0  # Guard against infinite fresh-start loops.
 
+        _context_retries = 0
+        _MAX_CONTEXT_RETRIES = 3
+
         while True:
             try:
                 return self.graph.invoke({"messages": messages}, config=config)
             except Exception as exc:
+                # --- Context overflow recovery ---
+                # If the LLM rejects the payload for being too large,
+                # compact 20% more aggressively and retry (up to 3 times).
+                from langchain_core.exceptions import ContextOverflowError
+                if isinstance(exc, ContextOverflowError) and _context_retries < _MAX_CONTEXT_RETRIES:
+                    _context_retries += 1
+                    logger.warning(
+                        "Context overflow (attempt %d/%d) — compacting and retrying",
+                        _context_retries, _MAX_CONTEXT_RETRIES,
+                    )
+                    try:
+                        from prax.plugins.llm_config import get_component_config
+                        cfg = get_component_config("orchestrator")
+                        tier = cfg.get("tier") or "low"
+                        model = cfg.get("model") or ""
+                        # Reduce the budget by 20% each retry
+                        from prax.agent.context_manager import get_context_limit
+                        shrunk_limit = int(get_context_limit(tier, model) * (0.8 ** _context_retries))
+                        from prax.agent.context_manager import (
+                            clear_old_tool_results,
+                            compact_history,
+                            count_message_tokens,
+                            truncate_history,
+                        )
+                        messages = clear_old_tool_results(messages, keep_last_n=3)
+                        messages = compact_history(messages, shrunk_limit, tier=tier)
+                        messages = truncate_history(messages, shrunk_limit)
+                        new_count = count_message_tokens(messages)
+                        logger.info(
+                            "Context compacted to %d tokens (limit=%d, attempt=%d)",
+                            new_count, shrunk_limit, _context_retries,
+                        )
+                        continue  # retry with compacted messages
+                    except Exception as compact_err:
+                        logger.warning("Context compaction failed: %s", compact_err)
+                        # Fall through to normal error handling
+
                 logger.warning(
                     "Agent graph failed (user=%s): %s", user_id, exc,
                 )

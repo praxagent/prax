@@ -1341,3 +1341,182 @@ def set_timezone():
     except Exception:
         logger.exception("Failed to set timezone")
         return jsonify({"error": "Failed to set timezone"}), 500
+
+
+# ---------------------------------------------------------------------------
+# Context Management — stats and manual compaction
+# ---------------------------------------------------------------------------
+
+@teamwork_routes.route("/teamwork/context/stats", methods=["GET"])
+def context_stats():
+    """Return context window stats for the current user."""
+    try:
+        from prax.agent.context_manager import count_message_tokens, count_tokens, get_context_limit
+        from prax.services.conversation_service import conversation_service
+
+        uid = _get_teamwork_user_id()
+        history = conversation_service._build_history(
+            int(uid.replace("-", "")[:15], 16),
+        )
+
+        # Count tokens in current history
+        from langchain_core.messages import AIMessage as AM
+        from langchain_core.messages import HumanMessage as HM
+        msgs = []
+        for h in history:
+            if h.get("role") == "user":
+                msgs.append(HM(content=h.get("content", "")))
+            elif h.get("role") == "assistant":
+                msgs.append(AM(content=h.get("content", "")))
+
+        history_tokens = count_message_tokens(msgs) if msgs else 0
+
+        # System prompt size
+        from prax.agent.orchestrator import _load_system_prompt
+        sys_tokens = count_tokens(_load_system_prompt())
+
+        # Current model info for context limit resolution
+        from prax.agent.orchestrator import get_model_override
+        from prax.plugins.llm_config import get_component_config as _gcc
+        _cfg = _gcc("orchestrator")
+        override = get_model_override()
+        current_model = override or _cfg.get("model") or ""
+        current_tier = _cfg.get("tier") or "low"
+        if not current_model:
+            from prax.agent.model_tiers import resolve_model as _rm
+            current_model = _rm(current_tier)
+        context_limit = get_context_limit(current_tier, current_model)
+
+        return jsonify({
+            "history_messages": len(history),
+            "history_tokens": history_tokens,
+            "system_prompt_tokens": sys_tokens,
+            "total_tokens": history_tokens + sys_tokens,
+            "context_limit": context_limit,
+            "current_model": current_model,
+            "current_tier": current_tier,
+            "limits": {
+                "low": get_context_limit("low"),
+                "medium": get_context_limit("medium"),
+                "high": get_context_limit("high"),
+                "pro": get_context_limit("pro"),
+            },
+        })
+    except Exception:
+        logger.exception("Failed to get context stats")
+        return jsonify({"error": "Failed to get context stats"}), 500
+
+
+@teamwork_routes.route("/teamwork/context/compact", methods=["POST"])
+def context_compact():
+    """Trigger manual compaction of the conversation history.
+
+    Currently performs a dry-run analysis showing how much space compaction
+    would reclaim. Full persistence is not yet implemented because the
+    conversation store doesn't expose a rewrite API.
+    """
+    try:
+        from prax.services.conversation_service import conversation_service
+
+        uid = _get_teamwork_user_id()
+        conversation_key = int(uid.replace("-", "")[:15], 16)
+        history = conversation_service._build_history(conversation_key)
+
+        if not history:
+            return jsonify({"compacted": False, "reason": "No history to compact"})
+
+        from langchain_core.messages import AIMessage as AM
+        from langchain_core.messages import HumanMessage as HM
+        msgs = []
+        for h in history:
+            if h.get("role") == "user":
+                msgs.append(HM(content=h.get("content", "")))
+            elif h.get("role") == "assistant":
+                msgs.append(AM(content=h.get("content", "")))
+
+        from prax.agent.context_manager import compact_history, count_message_tokens
+        before_tokens = count_message_tokens(msgs)
+        compacted = compact_history(msgs)
+        after_tokens = count_message_tokens(compacted)
+
+        return jsonify({
+            "compacted": True,
+            "dry_run": True,
+            "before_tokens": before_tokens,
+            "after_tokens": after_tokens,
+            "messages_before": len(msgs),
+            "messages_after": len(compacted),
+            "savings_tokens": before_tokens - after_tokens,
+        })
+    except Exception:
+        logger.exception("Failed to compact context")
+        return jsonify({"error": "Failed to compact context"}), 500
+
+
+# ---------------------------------------------------------------------------
+# Model Picker API
+# ---------------------------------------------------------------------------
+
+@teamwork_routes.route("/teamwork/model", methods=["GET"])
+def get_model():
+    """Return the current orchestrator model, tier, and available models."""
+    try:
+        from prax.agent.model_tiers import get_available_tiers
+        from prax.agent.orchestrator import get_model_override
+        from prax.plugins.llm_config import get_component_config
+
+        cfg = get_component_config("orchestrator")
+        override = get_model_override()
+        current_tier = cfg.get("tier") or "low"
+
+        # Determine current effective model
+        if override:
+            current_model = override
+        elif cfg.get("model"):
+            current_model = cfg.get("model")
+        else:
+            from prax.agent.model_tiers import resolve_model
+            current_model = resolve_model(current_tier)
+
+        # Build available models list
+        available = []
+        for tc in get_available_tiers():
+            available.append({
+                "tier": tc.tier.value,
+                "model": tc.model,
+            })
+
+        return jsonify({
+            "current_model": current_model,
+            "current_tier": current_tier,
+            "override": override,
+            "available": available,
+        })
+    except Exception:
+        logger.exception("Failed to get model info")
+        return jsonify({"error": "Failed to get model info"}), 500
+
+
+@teamwork_routes.route("/teamwork/model", methods=["PUT"])
+def set_model():
+    """Set a runtime model override for the orchestrator.
+
+    JSON body: {"model": "claude-sonnet-4-6"} or {"model": "auto"} to clear.
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        model = data.get("model", "").strip()
+        if not model:
+            return jsonify({"error": "model is required"}), 400
+
+        from prax.agent.orchestrator import get_model_override, set_model_override
+        set_model_override(model)
+
+        effective_override = get_model_override()
+        return jsonify({
+            "override": effective_override,
+            "message": f"Model override set to {effective_override}" if effective_override else "Model override cleared (auto mode)",
+        })
+    except Exception:
+        logger.exception("Failed to set model override")
+        return jsonify({"error": "Failed to set model override"}), 500
