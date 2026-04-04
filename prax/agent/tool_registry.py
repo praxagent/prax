@@ -10,7 +10,6 @@ from langchain_core.tools import BaseTool
 
 from prax.agent.governed_tool import wrap_with_governance
 from prax.agent.tools import build_default_tools
-from prax.plugins.loader import get_plugin_loader
 
 _registered: list[BaseTool] = []
 
@@ -24,11 +23,14 @@ def clear_tools() -> None:
 
 
 def get_registered_tools() -> list[BaseTool]:
-    """Return all tools: built-in + plugin-provided + manually registered.
+    """Return tools for the orchestrator — built-in + manually registered.
+
+    Plugin-provided tools (arxiv, news, pdf, youtube, web_summary, etc.)
+    are NOT included here — they're accessed via the research spoke
+    (delegate_research) which loads them internally.
 
     Every tool is wrapped with governance (risk classification + audit
     logging) before being handed to the agent.
     """
-    loader = get_plugin_loader()
-    raw = build_default_tools() + loader.get_tools() + list(_registered)
+    raw = build_default_tools() + list(_registered)
     return [wrap_with_governance(t) for t in raw]

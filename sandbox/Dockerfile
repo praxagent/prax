@@ -13,7 +13,10 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
     chromium socat \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g opencode-ai @anthropic-ai/claude-code @openai/codex
+RUN npm install -g opencode-ai @anthropic-ai/claude-code @openai/codex \
+    && curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && ln -s /root/.local/bin/uv /usr/local/bin/uv \
+    && ln -s /root/.local/bin/uvx /usr/local/bin/uvx
 
 WORKDIR /workspace
 
