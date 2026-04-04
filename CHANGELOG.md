@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/praxagent/prax/compare/v0.10.0...v0.11.0) (2026-04-04)
+
+
+### Features
+
+* add cron and alarm options, improves trace management ([543124c](https://github.com/praxagent/prax/commit/543124ca08afc9e9c9b3dda3de428225df028831))
+
 ## [0.10.0](https://github.com/praxagent/prax/compare/v0.9.0...v0.10.0) (2026-04-03)
 
 
