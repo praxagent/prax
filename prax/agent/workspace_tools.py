@@ -804,18 +804,25 @@ def request_extended_budget(reason: str, additional_calls: int = 20) -> str:
 
 
 def build_workspace_tools():
+    """Return tools that the orchestrator needs directly in its reasoning loop.
 
+    File management, archiving, links, and latex have been moved to the
+    workspace spoke (delegate_workspace). Scheduling tools have been moved
+    to the scheduler spoke (delegate_scheduler). Course tools have been
+    moved to the course spoke (delegate_course).
+    """
     tools = [
-        user_notes_update, user_notes_read, reread_instructions,
-        workspace_save, workspace_download, workspace_patch, workspace_read, workspace_list,
-        workspace_send_file, latex_compile,
-        workspace_archive, workspace_search, workspace_restore,
-        log_link, links_history,
-        todo_add, todo_list, todo_complete, todo_remove,
+        # User context — quick reads/writes the orchestrator does inline
+        user_notes_update, user_notes_read,
+        # Planning — the orchestrator manages its own plan
         agent_plan, agent_step_done, agent_plan_status, agent_plan_clear,
+        # Todo — lightweight, frequently called inline
+        todo_add, todo_list, todo_complete, todo_remove,
+        # Conversation awareness
         conversation_history, conversation_search,
-        read_logs, system_status,
+        # Meta / reasoning
         think, request_extended_budget,
+        read_logs, system_status,
     ]
 
     return tools

@@ -24,18 +24,24 @@ def build_all_spoke_tools() -> list:
     """Return delegation tools from all registered spokes."""
     from prax.agent.spokes.browser import build_spoke_tools as browser_spoke
     from prax.agent.spokes.content import build_spoke_tools as content_spoke
+    from prax.agent.spokes.course import build_spoke_tools as course_spoke
     from prax.agent.spokes.finetune import build_spoke_tools as finetune_spoke
     from prax.agent.spokes.knowledge import build_spoke_tools as knowledge_spoke
     from prax.agent.spokes.memory import build_spoke_tools as memory_spoke
     from prax.agent.spokes.sandbox import build_spoke_tools as sandbox_spoke
+    from prax.agent.spokes.scheduler import build_spoke_tools as scheduler_spoke
     from prax.agent.spokes.sysadmin import build_spoke_tools as sysadmin_spoke
+    from prax.agent.spokes.workspace import build_spoke_tools as workspace_spoke
 
     return [
         *browser_spoke(),
         *content_spoke(),
+        *course_spoke(),
         *finetune_spoke(),
         *knowledge_spoke(),
         *memory_spoke(),
         *sandbox_spoke(),
+        *scheduler_spoke(),
         *sysadmin_spoke(),
+        *workspace_spoke(),
     ]

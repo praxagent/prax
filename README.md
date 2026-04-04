@@ -244,39 +244,38 @@ Resolved failures stay as permanent regression guards — every fix adds a test 
 
 ---
 
-## Claude Code Bridge
+## Coding Agents
 
-Prax can collaborate with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) in multi-turn sessions — like pair programming with another AI developer. The bridge runs on the **host** (not in Docker) and gives Prax conversational access to Claude Code working on the live codebase.
+The sandbox container has three coding agents installed: **Claude Code** (Anthropic), **Codex** (OpenAI), and **OpenCode** (multi-provider). Prax uses these for self-improvement tasks — bug fixes, refactors, new features.
 
 ### Setup
 
-1. Install Claude Code on the host: `npm install -g @anthropic-ai/claude-code`
-2. (Optional) Set a shared secret in `.env`:
-   ```env
-   CLAUDE_BRIDGE_SECRET=your-secret-here
-   ```
-3. Start the bridge:
-   ```bash
-   ./scripts/start_claude_bridge.sh
-   ```
-4. The bridge listens on port 9819. In docker-compose, `CLAUDE_BRIDGE_URL` defaults to `http://host.docker.internal:9819` — no extra config needed.
+1. Set `SELF_IMPROVE_ENABLED=true` in `.env` (required — global gate for all self-modification)
+2. Choose your preferred agent: `SELF_IMPROVE_AGENT=claude-code` (or `codex` / `opencode`)
+3. Rebuild the sandbox: `docker compose up --build sandbox`
+4. Configure via TeamWork terminal: `cd /source && claude login` (or `codex login`)
 
-### How it works
+All agents have full read-write access to the codebase at `/source/` in the sandbox. Changes appear on your host machine immediately (bind mount). Agent configs persist across container rebuilds via workspace volumes.
 
-Prax detects whether the bridge is running at startup. If it's up, the `claude_code_*` tools appear in the agent's toolset. If it's down, the tools are hidden — Prax won't try to use them.
+> **Warning:** All three agents use provider API tokens and cost money per invocation. Monitor your API spend when self-improvement is enabled.
 
-Inside a session, Prax and Claude Code have back-and-forth conversations. Claude Code can read files, edit code, run tests, use git, and more. The self-improvement agent uses this for complex bug fixes that benefit from iterative refinement.
+---
 
+## Agent Autonomy
+
+Control how independently Prax operates via `PRAX_AUTONOMY` in `.env`:
+
+| Level | Behavior |
+|-------|----------|
+| `guided` | **(default)** All safety gates active. HIGH-risk tools require user confirmation. Prescriptive workflow rules enforced. Most conservative. |
+| `balanced` | **(recommended)** Removes prescriptive workflow rules — Prax uses judgment. HIGH-risk tools still gated but smart auto-approve kicks in when intent is clear. Agent decides its own approach. |
+| `autonomous` | Also relaxes recursion limits, allows self-tier-upgrade (agent can switch to a more capable model mid-task), and earned trust can downgrade browser tool risk levels. Most independent. |
+
+```env
+PRAX_AUTONOMY=balanced
 ```
-Prax (Docker) → HTTP bridge (host:9819) → Claude Code CLI → codebase
-```
 
-Environment variables:
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CLAUDE_BRIDGE_URL` | `http://host.docker.internal:9819` | Bridge endpoint |
-| `CLAUDE_BRIDGE_SECRET` | *(empty)* | Shared auth secret (recommended for production) |
-| `CLAUDE_BRIDGE_PORT` | `9819` | Port the bridge listens on (set when starting the bridge) |
+If Prax keeps asking "should I proceed?" or "do you want me to...?" when the answer is obviously yes — switch from `guided` to `balanced`. The `guided` mode is designed for initial setup and untrusted environments. For daily use, `balanced` is the right default.
 
 ---
 

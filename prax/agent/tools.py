@@ -14,10 +14,8 @@ from datetime import UTC, datetime
 from langchain_core.tools import tool
 
 from prax.agent.codegen_tools import build_codegen_tools_for_main_agent
-from prax.agent.course_tools import build_course_tools
 from prax.agent.doctor import build_doctor_tools
 from prax.agent.research_agent import build_research_tools
-from prax.agent.scheduler_tools import build_scheduler_tools
 from prax.agent.spokes import build_all_spoke_tools
 from prax.agent.subagent import build_subagent_tools
 from prax.agent.vision_tools import build_vision_tools
@@ -132,14 +130,21 @@ def build_default_tools():
     from prax.agent.sandbox_tools import sandbox_shell
 
     return (
+        # Kernel tools — essential for basic reasoning
         [background_search_tool, get_current_datetime, fetch_url_content, sandbox_shell]
+        # Orchestrator-level workspace tools (planning, todos, notes, meta)
         + build_workspace_tools()
-        + build_scheduler_tools()
+        # Self-improvement entry points (pending/rollback only)
         + build_codegen_tools_for_main_agent()
+        # Sub-agent delegation (delegate_task, delegate_parallel)
         + build_subagent_tools()
-        + build_all_spoke_tools()  # browser, content, finetune, knowledge, sandbox, sysadmin
-        + build_course_tools()
+        # All spoke delegation tools (browser, content, course, finetune,
+        # knowledge, memory, sandbox, scheduler, sysadmin, workspace)
+        + build_all_spoke_tools()
+        # Research delegation
         + build_research_tools()
+        # Vision (conditional)
         + build_vision_tools()
+        # Diagnostics
         + build_doctor_tools()
     )

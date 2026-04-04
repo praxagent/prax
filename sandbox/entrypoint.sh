@@ -36,4 +36,19 @@ if [ ! -f "$OPENCODE_CFG" ]; then
   cp /opt/opencode.json "$OPENCODE_CFG"
 fi
 
+# Persist Claude Code config across container rebuilds.
+# Claude stores its main config at ~/.claude.json (a file outside ~/.claude/).
+# We symlink it into the persisted ~/.claude/ directory so it survives.
+CLAUDE_JSON=/root/.claude.json
+CLAUDE_DIR=/root/.claude
+mkdir -p "$CLAUDE_DIR"
+if [ -f "$CLAUDE_JSON" ] && [ ! -L "$CLAUDE_JSON" ]; then
+  # First run after rebuild — move existing config into persisted dir
+  mv "$CLAUDE_JSON" "$CLAUDE_DIR/claude.json"
+  ln -s "$CLAUDE_DIR/claude.json" "$CLAUDE_JSON"
+elif [ -f "$CLAUDE_DIR/claude.json" ] && [ ! -e "$CLAUDE_JSON" ]; then
+  # Config exists in persisted dir but symlink is missing (fresh container)
+  ln -s "$CLAUDE_DIR/claude.json" "$CLAUDE_JSON"
+fi
+
 exec opencode serve --hostname 0.0.0.0 --port 4096

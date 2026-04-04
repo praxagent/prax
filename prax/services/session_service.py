@@ -30,21 +30,35 @@ def _get_user_state(user_id: str) -> dict:
             "topic_summary": "",
             "last_message_at": None,
             "turn_count": 0,
+            "recent_turns": [],  # last few (user_msg, response) pairs
         }
     return _user_sessions[user_id]
 
 
-def _is_continuation_llm(topic_summary: str, new_message: str) -> bool:
+def _is_continuation_llm(topic_summary: str, new_message: str, recent_turns: list) -> bool:
     """Ask a cheap LLM whether the new message continues the current session."""
     try:
         from prax.agent.llm_factory import build_llm
 
         llm = build_llm(config_key="session_classifier", default_tier="low")
+
+        # Build conversation history for context
+        history = ""
+        if recent_turns:
+            history = "Recent conversation:\n"
+            for user_msg, response in recent_turns[-3:]:  # last 3 turns
+                history += f"  User: {user_msg[:100]}\n"
+                history += f"  Assistant: {response[:100]}\n"
+            history += "\n"
+
         prompt = (
-            "You are a conversation classifier. Given the current session topic "
+            "You are a conversation classifier. Given the session context "
             "and a new user message, answer ONLY 'yes' or 'no'.\n\n"
-            "Is this new message a continuation of the same topic/task?\n\n"
-            f"Current session topic: {topic_summary}\n\n"
+            "Is this new message a continuation of the same conversation/task? "
+            "Short replies like 'do it', 'yes', 'ok', 'fix that' are almost always "
+            "continuations. A new topic is something completely unrelated.\n\n"
+            f"Session topic: {topic_summary}\n\n"
+            f"{history}"
             f"New message: {new_message}\n\n"
             "Answer (yes or no):"
         )
@@ -52,8 +66,9 @@ def _is_continuation_llm(topic_summary: str, new_message: str) -> bool:
         answer = response.content.strip().lower()
         return answer.startswith("yes")
     except Exception:
-        logger.debug("Session classifier LLM failed, defaulting to new session", exc_info=True)
-        return False
+        logger.debug("Session classifier LLM failed, defaulting to continuation", exc_info=True)
+        # Default to continuation on failure — splitting is worse than over-grouping
+        return True
 
 
 def _update_topic_summary(old_summary: str, new_message: str, response: str) -> str:
@@ -114,7 +129,9 @@ def classify_session(user_id: str, user_message: str) -> str:
             return state["session_id"]
 
     # Rule 3: Ask the LLM
-    is_continuation = _is_continuation_llm(state["topic_summary"], user_message)
+    is_continuation = _is_continuation_llm(
+        state["topic_summary"], user_message, state.get("recent_turns", []),
+    )
 
     if is_continuation:
         state["last_message_at"] = now
@@ -140,6 +157,11 @@ def update_session_summary(user_id: str, user_message: str, response: str) -> No
     state = _get_user_state(user_id)
     if not state["session_id"]:
         return
+
+    # Track recent turns for classifier context
+    turns = state.get("recent_turns", [])
+    turns.append((user_message[:200], response[:200]))
+    state["recent_turns"] = turns[-5:]  # keep last 5 turns
 
     state["topic_summary"] = _update_topic_summary(
         state["topic_summary"], user_message, response,
