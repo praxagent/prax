@@ -85,23 +85,21 @@ def teamwork_webhook():
 
 
 def _build_trace_metadata() -> dict | None:
-    """Build observability metadata to attach to the agent's response message.
+    """Build trace metadata to attach to the agent's response message.
 
-    Returns a dict with trace_id and Grafana deep-link, or None if
-    observability is disabled or no trace is available.
+    Always includes the trace_id (for the Execution Graphs panel).
+    Optionally includes a Grafana deep-link if observability is enabled.
     """
-    from prax.settings import settings
-    if not settings.observability_enabled:
-        return None
-
     from prax.agent.trace import last_root_trace_id
+
     trace_id = last_root_trace_id.get()
     if not trace_id:
         return None
 
     metadata: dict = {"trace_id": trace_id}
-    if settings.grafana_url:
-        # Deep-link to Tempo trace search in Grafana
+
+    from prax.settings import settings
+    if settings.observability_enabled and settings.grafana_url:
         metadata["grafana_trace_url"] = (
             f"{settings.grafana_url.rstrip('/')}/explore?"
             f"left=%7B%22datasource%22:%22tempo%22,"
@@ -482,13 +480,42 @@ def _handle_message(
                     "returns empty/broken content. Use it freely when HTTP tools fail."
                 )
 
+            # Look up channel name and purpose for agent context.
+            channel_name = ""
+            channel_purpose = ""
+            if tw._channels:
+                for cname, cid in tw._channels.items():
+                    if cid == channel_id:
+                        channel_name = cname
+                        break
+            # Fetch channel description (purpose) from TeamWork API.
+            if channel_name and not is_dm:
+                try:
+                    import requests as _req
+                    resp = _req.get(
+                        f"{tw.base_url}/api/channels/{channel_id}",
+                        headers=tw._headers(),
+                        timeout=3,
+                    )
+                    if resp.ok:
+                        channel_purpose = resp.json().get("description") or ""
+                except Exception:
+                    pass
+
+            channel_ctx = ""
+            if channel_name and not is_dm:
+                channel_ctx = f"Channel: #{channel_name}"
+                if channel_purpose:
+                    channel_ctx += f" — Purpose: {channel_purpose}"
+                channel_ctx += ". "
+
             if is_dm:
                 channel_hint = (
                     f"[via TeamWork web UI — private DM. {view_hint}{tool_guidance}]\n"
                 )
             else:
                 channel_hint = (
-                    f"[via TeamWork web UI — public channel. {view_hint}{tool_guidance}]\n"
+                    f"[via TeamWork web UI — #{channel_name or 'channel'}. {channel_ctx}{view_hint}{tool_guidance}]\n"
                 )
 
             # When the user is viewing the terminal or browser, fetch context
@@ -1144,7 +1171,7 @@ def claude_code_kill_session(session_id: str):
     """
     try:
         from prax.agent.claude_code_tools import _post, is_bridge_available
-        from prax.services.teamwork_hooks import mirror_claude_code_turn
+        from prax.services.teamwork_hooks import mirror_coding_agent_turn
 
         if not is_bridge_available():
             return jsonify({"error": "Bridge not available"}), 503
@@ -1154,12 +1181,163 @@ def claude_code_kill_session(session_id: str):
             return jsonify({"error": result["error"]}), 400
 
         turns = result.get("turns", 0)
-        mirror_claude_code_turn(
+        mirror_coding_agent_turn(
+            "claude-code",
             prax_message=None,
-            claude_response=None,
+            agent_response=None,
             meta=f"Session `{session_id}` terminated by user after {turns} turns.",
         )
         return jsonify({"ended": True, "session_id": session_id, "turns": turns})
     except Exception:
         logger.exception("Failed to terminate Claude Code session")
         return jsonify({"error": "Failed to terminate session"}), 500
+
+
+# ---------------------------------------------------------------------------
+# Scheduler — cron job and reminder management
+# ---------------------------------------------------------------------------
+
+def _scheduler_user_id() -> str:
+    """Return the user ID for scheduler operations."""
+    return _get_teamwork_user_id()
+
+
+@teamwork_routes.route("/teamwork/schedules", methods=["GET"])
+def list_schedules():
+    """List all cron schedules and one-time reminders for the current user."""
+    try:
+        from prax.services import scheduler_service
+        uid = _scheduler_user_id()
+        schedules = scheduler_service.list_schedules(uid)
+        reminders = scheduler_service.list_reminders(uid)
+        return jsonify({"schedules": schedules, "reminders": reminders})
+    except Exception:
+        logger.exception("Failed to list schedules")
+        return jsonify({"error": "Failed to list schedules"}), 500
+
+
+@teamwork_routes.route("/teamwork/schedules", methods=["POST"])
+def create_schedule():
+    """Create a new cron schedule."""
+    try:
+        from prax.services import scheduler_service
+        data = request.get_json(silent=True) or {}
+        uid = _scheduler_user_id()
+        result = scheduler_service.create_schedule(
+            uid,
+            description=data.get("description", ""),
+            prompt=data.get("prompt", ""),
+            cron_expr=data.get("cron", ""),
+            timezone=data.get("timezone"),
+            channel=data.get("channel"),
+        )
+        if "error" in result:
+            return jsonify({"error": result["error"]}), 400
+        return jsonify(result), 201
+    except Exception:
+        logger.exception("Failed to create schedule")
+        return jsonify({"error": "Failed to create schedule"}), 500
+
+
+@teamwork_routes.route("/teamwork/schedules/<schedule_id>", methods=["PATCH"])
+def update_schedule(schedule_id: str):
+    """Update a schedule (description, prompt, cron, timezone, enabled)."""
+    try:
+        from prax.services import scheduler_service
+        data = request.get_json(silent=True) or {}
+        uid = _scheduler_user_id()
+        result = scheduler_service.update_schedule(
+            uid, schedule_id,
+            description=data.get("description"),
+            prompt=data.get("prompt"),
+            cron=data.get("cron"),
+            timezone=data.get("timezone"),
+            enabled=data.get("enabled"),
+        )
+        if "error" in result:
+            return jsonify({"error": result["error"]}), 400
+        return jsonify(result)
+    except Exception:
+        logger.exception("Failed to update schedule")
+        return jsonify({"error": "Failed to update schedule"}), 500
+
+
+@teamwork_routes.route("/teamwork/schedules/<schedule_id>", methods=["DELETE"])
+def delete_schedule(schedule_id: str):
+    """Delete a schedule permanently."""
+    try:
+        from prax.services import scheduler_service
+        uid = _scheduler_user_id()
+        result = scheduler_service.delete_schedule(uid, schedule_id)
+        if "error" in result:
+            return jsonify({"error": result["error"]}), 400
+        return jsonify(result)
+    except Exception:
+        logger.exception("Failed to delete schedule")
+        return jsonify({"error": "Failed to delete schedule"}), 500
+
+
+@teamwork_routes.route("/teamwork/reminders", methods=["POST"])
+def create_reminder():
+    """Create a one-time reminder."""
+    try:
+        from prax.services import scheduler_service
+        data = request.get_json(silent=True) or {}
+        uid = _scheduler_user_id()
+        result = scheduler_service.create_reminder(
+            uid,
+            description=data.get("description", ""),
+            prompt=data.get("prompt", ""),
+            fire_at=data.get("fire_at", ""),
+            timezone=data.get("timezone"),
+            channel=data.get("channel"),
+        )
+        if "error" in result:
+            return jsonify({"error": result["error"]}), 400
+        return jsonify(result), 201
+    except Exception:
+        logger.exception("Failed to create reminder")
+        return jsonify({"error": "Failed to create reminder"}), 500
+
+
+@teamwork_routes.route("/teamwork/reminders/<reminder_id>", methods=["DELETE"])
+def delete_reminder(reminder_id: str):
+    """Delete a pending reminder."""
+    try:
+        from prax.services import scheduler_service
+        uid = _scheduler_user_id()
+        result = scheduler_service.delete_reminder(uid, reminder_id)
+        if "error" in result:
+            return jsonify({"error": result["error"]}), 400
+        return jsonify(result)
+    except Exception:
+        logger.exception("Failed to delete reminder")
+        return jsonify({"error": "Failed to delete reminder"}), 500
+
+
+@teamwork_routes.route("/teamwork/timezone", methods=["GET"])
+def get_timezone():
+    """Get the user's default timezone."""
+    try:
+        from prax.services import scheduler_service
+        uid = _scheduler_user_id()
+        data = scheduler_service._read_schedules(uid)
+        return jsonify({"timezone": data.get("timezone", "UTC")})
+    except Exception:
+        return jsonify({"timezone": "UTC"})
+
+
+@teamwork_routes.route("/teamwork/timezone", methods=["PUT"])
+def set_timezone():
+    """Set the user's default timezone."""
+    try:
+        from prax.services import scheduler_service
+        data = request.get_json(silent=True) or {}
+        uid = _scheduler_user_id()
+        result = scheduler_service.set_user_timezone(uid, data.get("timezone", "UTC"))
+        if "error" in result:
+            return jsonify({"error": result["error"]}), 400
+        return jsonify(result)
+    except Exception:
+        logger.exception("Failed to set timezone")
+        return jsonify({"error": "Failed to set timezone"}), 500

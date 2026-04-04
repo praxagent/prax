@@ -35,7 +35,8 @@ def set_role_status(role_name: str, status: str) -> None:
 
 def reset_all_idle() -> None:
     """Set all role agents to idle. Call at end of each agent turn."""
-    for role in ("Planner", "Researcher", "Executor", "Skeptic", "Auditor"):
+    from prax.settings import settings
+    for role in (settings.agent_name, "Planner", "Researcher", "Executor", "Auditor"):
         set_role_status(role, "idle")
 
 
@@ -54,6 +55,25 @@ def post_to_channel(channel: str, content: str, agent_name: str | None = None) -
             tw.send_message(content=content, channel=channel, agent_name=agent_name)
     except Exception:
         logger.debug("TeamWork hook: post_to_channel(%s) failed", channel, exc_info=True)
+
+
+def log_activity(
+    agent_name: str,
+    activity_type: str,
+    description: str,
+    extra_data: dict | None = None,
+) -> None:
+    """Create a persistent activity log entry in TeamWork.
+
+    Unlike push_live_output (in-memory, ephemeral), activity logs are
+    stored in the database and visible in the agent's Work Logs panel.
+    """
+    try:
+        tw = _tw()
+        if tw:
+            tw.create_activity_log(agent_name, activity_type, description, extra_data)
+    except Exception:
+        logger.debug("TeamWork hook: log_activity(%s, %s) failed", agent_name, activity_type, exc_info=True)
 
 
 def push_live_output(

@@ -270,6 +270,29 @@ class TeamWorkClient:
         except Exception:
             logger.warning("Failed to update TeamWork task", exc_info=True)
 
+    # ----- Activity logs -----
+
+    def create_activity_log(
+        self,
+        agent_name: str,
+        activity_type: str,
+        description: str,
+        extra_data: dict | None = None,
+    ) -> None:
+        """Create a persistent activity log entry for an agent."""
+        agent_id = self._agents.get(agent_name)
+        if not agent_id or not self._project_id:
+            return
+        try:
+            self._post(f"/projects/{self._project_id}/activity", {
+                "agent_id": agent_id,
+                "activity_type": activity_type,
+                "description": description,
+                "extra_data": extra_data,
+            })
+        except Exception:
+            logger.debug("Failed to create activity log for %s", agent_name, exc_info=True)
+
     # ----- Live output -----
 
     def update_live_output(

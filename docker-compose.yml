@@ -41,7 +41,7 @@ services:
       - ./conversations.db:/app/conversations.db
       - ./static:/app/static
       - ./logs:/app/logs
-      - ${WORKSPACE_DIR:-./workspaces}:/app/workspaces
+      - ${WORKSPACE_DIR:-../workspaces}:/app/workspaces
       # Dev: mount source for live reload without rebuilding the image.
       - ./prax:/app/prax
       - ./app.py:/app/app.py
@@ -77,18 +77,15 @@ services:
       - OPENAI_API_KEY=${OPENAI_KEY}
       - CLAUDE_CODE_DISABLE_NONINTERACTIVE_CHECK=1
     volumes:
-      - ${WORKSPACE_DIR:-./workspaces}:/workspaces
+      - ${WORKSPACE_DIR:-../workspaces}:/workspaces
       # Full repo mount — coding agents (Claude Code, Codex, OpenCode) need
       # read-write access to the codebase for self-improvement tasks.
-      # .env is NOT included: secrets are passed via environment vars above.
+      # Secrets are passed via environment vars, not .env.
       - .:/source
-      # Mask .env inside /source so coding agents can't read raw secrets.
-      # The empty volume overlay hides the host .env file.
-      - /source/.env
-      # Coding agent configs — persist auth and settings across restarts.
-      - claude-code-config:/root/.claude
-      - codex-config:/root/.codex
-      - opencode-config:/root/.config/opencode
+      # Coding agent configs — stored in workspace so they survive rebuilds.
+      - ${WORKSPACE_DIR:-../workspaces}/.claude:/root/.claude
+      - ${WORKSPACE_DIR:-../workspaces}/.codex:/root/.codex
+      - ${WORKSPACE_DIR:-../workspaces}/.opencode:/root/.config/opencode
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:4096/global/health"]
       interval: 5s
@@ -106,6 +103,9 @@ services:
       context: ${TEAMWORK_PATH:-../teamwork}
       dockerfile: Dockerfile
     restart: unless-stopped
+    # Grant Docker socket access for terminal (exec into sandbox).
+    # GID 0 = root group, which owns the socket on macOS Docker Desktop.
+    group_add: ["0"]
     ports:
       - "3000:8000"
       - "8000:8000"
@@ -121,8 +121,8 @@ services:
       # Prax app URL — required for plugin management proxy.
       - PRAX_URL=http://app:5001
     volumes:
-      - ${WORKSPACE_DIR:-./workspaces}/.teamwork:/app/data
-      - ${WORKSPACE_DIR:-./workspaces}:/workspace
+      - ${WORKSPACE_DIR:-../workspaces}/.teamwork:/app/data
+      - ${WORKSPACE_DIR:-../workspaces}:/workspace
       - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -142,7 +142,7 @@ services:
       - "6333:6333"   # HTTP API
       - "6334:6334"   # gRPC
     volumes:
-      - qdrant-data:/qdrant/storage
+      - ${WORKSPACE_DIR:-../workspaces}/.qdrant:/qdrant/storage
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:6333/healthz"]
       interval: 10s
@@ -161,7 +161,7 @@ services:
       - "7474:7474"   # Browser UI
       - "7687:7687"   # Bolt protocol
     volumes:
-      - neo4j-data:/data
+      - ${WORKSPACE_DIR:-../workspaces}/.neo4j:/data
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:7474/"]
       interval: 10s
@@ -181,7 +181,7 @@ services:
     ports:
       - "11434:11434"
     volumes:
-      - ollama-data:/root/.ollama
+      - ${WORKSPACE_DIR:-../workspaces}/.ollama:/root/.ollama
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/11434'"]
       interval: 10s
@@ -278,12 +278,8 @@ services:
       - prometheus
 
 volumes:
-  claude-code-config:
-  codex-config:
-  opencode-config:
-  ollama-data:
-  qdrant-data:
-  neo4j-data:
+  # Observability data — ephemeral, fine as Docker volumes.
+  # All persistent data (memory, models, agent configs) lives in WORKSPACE_DIR.
   tempo-data:
   loki-data:
   prometheus-data:

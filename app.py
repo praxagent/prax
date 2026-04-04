@@ -120,15 +120,17 @@ def create_app():
                 ("Planner", "planner", "Breaks complex requests into structured plans"),
                 ("Researcher", "researcher", "Investigates questions via web search and document analysis"),
                 ("Executor", "executor", "Executes tool calls and workspace operations"),
-                ("Skeptic", "skeptic", "Challenges assumptions and audits claims for accuracy"),
-                ("Auditor", "auditor", "Reviews governance logs and tool risk classifications"),
+                ("Auditor", "auditor", "Reviews claims for accuracy and audits governance logs"),
             ]:
                 tw.create_agent(name=role_name, role=role_type, soul=soul)
             # Ensure #discord and #sms mirror channels exist (backfills
             # for projects created before mirroring was added).
-            from prax.services.teamwork_hooks import ensure_mirror_channels, sync_conversation_history
+            from prax.services.teamwork_hooks import ensure_mirror_channels, reset_all_idle, sync_conversation_history
             ensure_mirror_channels()
             sync_conversation_history()
+            # Reset all agents to idle on startup — clears stuck "working"
+            # status from previous runs that crashed or were interrupted.
+            reset_all_idle()
             # Coding agent channels (#claude-code, #codex, #opencode) are
             # created lazily on first tool invocation — no startup setup needed.
         except Exception:

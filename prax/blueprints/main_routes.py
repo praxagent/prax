@@ -55,6 +55,25 @@ def delete_execution_graph(trace_id):
     return jsonify({"error": "not found"}), 404
 
 
+@main_routes.route('/execution/graphs/<trace_id>/session', methods=['PATCH'])
+def move_graph_session(trace_id):
+    """Move a trace to a different session.
+
+    JSON body: {"session_id": "target_session_id"}
+    """
+    from flask import request
+
+    from prax.agent.trace import update_graph_session
+    data = request.get_json(silent=True) or {}
+    new_session_id = data.get("session_id", "")
+    if not new_session_id:
+        return jsonify({"error": "session_id is required"}), 400
+    updated = update_graph_session(trace_id, new_session_id)
+    if updated:
+        return jsonify({"ok": True, "session_id": new_session_id})
+    return jsonify({"error": "trace not found"}), 404
+
+
 @main_routes.route('/static/<path:path>')
 def serve_static(path):
     return send_from_directory('static', path)
