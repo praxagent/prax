@@ -253,6 +253,49 @@ class MemoryService:
             logger.exception("consolidate() failed")
             return ConsolidationResult()
 
+
+# ---------------------------------------------------------------------------
+# Auto-consolidation — runs every N turns per user via orchestrator hook
+# ---------------------------------------------------------------------------
+
+# Tracks how many turns have happened since the last consolidation per user.
+# Memory consolidation is expensive (LLM calls) so we don't run it on every
+# turn — only every N turns to amortize the cost.
+_consolidation_turns_since: dict[str, int] = {}
+_CONSOLIDATE_EVERY_N_TURNS = 5
+
+
+def maybe_consolidate(user_id: str) -> bool:
+    """Run consolidation for *user_id* if at least N turns have passed.
+
+    Called by the orchestrator at the end of every turn. No-op most turns;
+    triggers a real consolidation run every N turns. This is the ONLY thing
+    that automatically writes to the user's STM/LTM — without this hook,
+    memory stays empty even though the infrastructure is in place.
+
+    Returns True if consolidation actually ran, False if skipped.
+    """
+    if not user_id:
+        return False
+    count = _consolidation_turns_since.get(user_id, 0) + 1
+    if count < _CONSOLIDATE_EVERY_N_TURNS:
+        _consolidation_turns_since[user_id] = count
+        return False
+    _consolidation_turns_since[user_id] = 0
+    try:
+        result = get_memory_service().consolidate(user_id)
+        logger.info(
+            "Auto-consolidation for %s: entities=%d, relations=%d, memories=%d",
+            user_id,
+            getattr(result, "entities_added", 0),
+            getattr(result, "relations_added", 0),
+            getattr(result, "memories_added", 0),
+        )
+        return True
+    except Exception:
+        logger.debug("Auto-consolidation failed for %s", user_id, exc_info=True)
+        return False
+
     # ------------------------------------------------------------------
     # Stats / diagnostics
     # ------------------------------------------------------------------
@@ -308,7 +351,12 @@ class MemoryService:
 
         Called by the orchestrator to inject memory into the system prompt.
         Budget-constrained to avoid bloating context.
+
+        Memories and STM entries include relative timestamps so the model
+        can distinguish fresh context from stale context.
         """
+        from prax.utils.time_format import format_relative_time
+
         parts: list[str] = []
 
         # STM scratchpad (always available, no infra dependency)
@@ -318,7 +366,9 @@ class MemoryService:
             if stm_entries:
                 parts.append("\n## Working Memory (Scratchpad)")
                 for entry in stm_entries[-5:]:
-                    parts.append(f"- **{entry.key}**: {entry.content[:200]}")
+                    rel = format_relative_time(entry.created_at)
+                    rel_str = f" ({rel})" if rel else ""
+                    parts.append(f"- **{entry.key}**{rel_str}: {entry.content[:200]}")
         except Exception:
             pass
 
@@ -330,7 +380,9 @@ class MemoryService:
                     parts.append("\n## Relevant Memories")
                     for m in memories:
                         date = m.created_at[:10] if m.created_at else "?"
-                        parts.append(f"- [{m.source}, {date}] {m.content[:200]}")
+                        rel = format_relative_time(m.created_at)
+                        rel_str = f", {rel}" if rel else ""
+                        parts.append(f"- [{m.source}, {date}{rel_str}] {m.content[:200]}")
             except Exception:
                 pass
 

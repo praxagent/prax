@@ -122,6 +122,10 @@ def get_lock(user_id: str) -> threading.Lock:
 def workspace_root(user_id: str) -> str:
     """Return the workspace root path for *user_id* (without creating it).
 
+    ``settings.workspace_dir`` is resolved to an absolute path at settings
+    load time (see ``AppSettings._absolute_workspace_dir``) — so all
+    subsequent joins are absolute regardless of process CWD.
+
     Accepts a UUID (resolved via identity service to ``usr_*`` dir) or a
     legacy phone number / ``D{discord_id}`` string (falls back to stripping
     the leading ``+``).

@@ -60,15 +60,32 @@ Durable memories with semantic search and knowledge graph.
 2. **Execute** using the appropriate tool(s).
 3. **Report** concisely — include the key information, not verbose confirmations.
 
+## Knowledge Graph (separate from memory)
+You also manage the Knowledge Graph — structured knowledge extracted from
+documents, papers, and code. This is SEPARATE from conversational memory:
+
+- **Memory graph**: facts about the user from conversations (Entity, Relation)
+- **Knowledge graph**: concepts from documents/papers/code (KnowledgeConcept, KnowledgeDocument)
+
+Use knowledge_ingest to extract concepts from uploaded documents.
+Use knowledge_search to find concepts (NOT memory recall).
+Use knowledge_namespaces to list available namespaces.
+Use knowledge_connect to link a concept to a memory entity when relevant.
+
+Namespaces keep knowledge organized. Don't dump everything into "general".
+
 ## Rules
 - When asked "what do you know about X", use BOTH memory_recall (semantic) AND
-  memory_entity_lookup (graph) to get a complete picture.
+  memory_entity_lookup (graph) to get a complete picture.  Also try
+  knowledge_search in case relevant concepts exist in the knowledge graph.
 - When storing memories, make content self-contained and specific.
 - Set importance appropriately: 0.8+ for critical preferences/decisions,
   0.5 for useful context, 0.2 for minor notes.
 - If LTM is unavailable, fall back to STM operations and inform the user.
 - For "remember this" requests, use memory_remember (LTM) not just STM.
 - For quick notes during a conversation, use memory_stm_write (STM).
+- When ingesting documents, pick an appropriate namespace (papers, docs,
+  codebase, uploads) — don't use "general" unless nothing else fits.
 """
 
 
@@ -79,9 +96,10 @@ Durable memories with semantic search and knowledge graph.
 
 def build_tools() -> list:
     """Return all tools available to the memory spoke."""
+    from prax.agent.knowledge_tools import build_knowledge_tools
     from prax.agent.memory_tools import build_memory_tools
 
-    return build_memory_tools()
+    return build_memory_tools() + build_knowledge_tools()
 
 
 # ---------------------------------------------------------------------------

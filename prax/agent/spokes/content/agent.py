@@ -4,9 +4,10 @@ Two modes:
 - **blog** (default): Research → Write → Publish → Review → Revise (loop)
 - **course_module**: Sandbox-based rich content via the Course Author sub-agent
 
-The Content Editor is a procedural coordinator, not a ReAct agent.  It calls
-sub-agents (researcher, writer, reviewer, course author) in sequence and
-manages the revision loop.  Prax delegates here via ``delegate_content_editor``.
+The Content Editor is a procedural coordinator, not a ReAct agent.  It uses
+the reusable ``SynthesisPipeline`` from ``prax.agent.pipelines`` to orchestrate
+the research → write → review → revise loop.  Prax delegates here via
+``delegate_content_editor``.
 """
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ import logging
 
 from langchain_core.tools import tool
 
+from prax.agent.pipelines import SynthesisPipeline
 from prax.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -21,8 +23,13 @@ logger = logging.getLogger(__name__)
 MAX_REVISIONS = 3
 
 
+# ---------------------------------------------------------------------------
+# Phase callables — wired into the SynthesisPipeline
+# ---------------------------------------------------------------------------
+
+
 def _research(topic: str, notes: str) -> str:
-    """Phase 1: Parallel research on the topic."""
+    """Phase 1: Research the topic via the research sub-agent."""
     from prax.agent.subagent import _run_subagent
 
     query = f"Research the following topic thoroughly for a blog post:\n\n{topic}"
@@ -59,7 +66,7 @@ def _publish(title: str, content: str, tags: list[str] | None = None,
 
 
 def _review(draft: str, url: str | None, pass_number: int) -> str:
-    """Phase 3: Adversarial review with visual inspection."""
+    """Phase 4: Adversarial review with visual inspection."""
     from prax.agent.spokes.content.reviewer import run_reviewer
 
     logger.info("Content pipeline — Phase: Review (pass %d)", pass_number)
@@ -70,15 +77,10 @@ def _review(draft: str, url: str | None, pass_number: int) -> str:
     )
 
 
+# Backwards-compat: older tests call this.
 def _is_approved(review: str) -> bool:
-    """Check if the reviewer approved the draft.
-
-    The reviewer's output must START with APPROVED (possibly bold-wrapped).
-    """
-    first_line = review.strip().split("\n")[0].strip()
-    # Strip markdown bold markers
-    cleaned = first_line.replace("*", "").replace("_", "").strip().upper()
-    return cleaned.startswith("APPROVED")
+    """Check if the reviewer approved the draft."""
+    return SynthesisPipeline._is_approved(review)
 
 
 def _post_status(message: str) -> None:
@@ -97,66 +99,23 @@ def run_content_pipeline(topic: str, notes: str = "", tags: str = "") -> str:
     Returns a summary with the published URL or an error description.
     """
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
-    title = topic.strip().split("\n")[0][:120]  # First line as title, capped
 
-    _post_status(f"Starting content pipeline: *{title}*")
-
-    # --- Phase 1: Research ---
-    _post_status("Researching topic...")
-    research = _research(topic, notes)
-    if not research or "failed" in research.lower()[:50]:
-        return f"Research phase failed: {research}"
-
-    # --- Phase 2: Write first draft ---
-    _post_status("Writing first draft...")
-    draft = _write(topic, research)
-    if not draft or "failed" in draft.lower()[:50]:
-        return f"Writing phase failed: {draft}"
-
-    # --- Phase 3: Publish initial draft ---
-    pub = _publish(title, draft, tags=tag_list)
-    if "error" in pub:
-        return f"Publishing failed: {pub['error']}"
-
-    slug = pub.get("slug", "")
-    url = pub.get("url", "")
-    _post_status(f"First draft published: {url}")
-
-    # --- Phase 4: Review-Revise loop (max MAX_REVISIONS passes) ---
-    for pass_num in range(1, MAX_REVISIONS + 1):
-        _post_status(f"Review pass {pass_num}/{MAX_REVISIONS}...")
-        review = _review(draft, url, pass_num)
-
-        if _is_approved(review):
-            _post_status(f"Approved on pass {pass_num}! Final URL: {url}")
-            logger.info("Content pipeline — APPROVED on pass %d", pass_num)
-            _finish()
-            return (
-                f"Blog post published and approved after {pass_num} review pass(es).\n\n"
-                f"**{title}**\n{url}\n\n"
-                f"Reviewer verdict: {review[:500]}"
-            )
-
-        # Revise based on feedback
-        _post_status(f"Revising based on feedback (pass {pass_num})...")
-        draft = _write(topic, research, feedback=review, previous_draft=draft)
-        if not draft or "failed" in draft.lower()[:50]:
-            logger.warning("Revision failed on pass %d", pass_num)
-            break
-
-        # Re-publish the updated draft
-        pub = _publish(title, draft, slug=slug)
-        url = pub.get("url", url)
-
-    # Exhausted revision cycles — publish whatever we have
-    _post_status(f"Published after {MAX_REVISIONS} revision cycles: {url}")
-    _finish()
-    return (
-        f"Blog post published after {MAX_REVISIONS} revision cycles "
-        f"(reviewer did not fully approve).\n\n"
-        f"**{title}**\n{url}\n\n"
-        f"Last review feedback:\n{review[:500]}"
+    pipeline = SynthesisPipeline(
+        researcher=_research,
+        writer=_write,
+        publisher=_publish,
+        reviewer=_review,
+        max_revisions=MAX_REVISIONS,
+        status_callback=_post_status,
+        item_kind="Blog post",
     )
+
+    try:
+        result = pipeline.run(topic, notes=notes, tags=tag_list)
+    finally:
+        _finish()
+
+    return result.summary(item_kind="Blog post")
 
 
 def _finish() -> None:
@@ -233,4 +192,6 @@ def delegate_content_editor(
 
 def build_spoke_tools() -> list:
     """Return the delegation tool for the main agent."""
-    return [delegate_content_editor]
+    from prax.agent.office_tools import build_office_tools
+
+    return [delegate_content_editor, *build_office_tools()]

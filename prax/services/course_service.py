@@ -116,18 +116,30 @@ def get_course(user_id: str, course_id: str) -> dict:
     """Read a course's full metadata."""
     with get_lock(user_id):
         root = ensure_workspace(user_id)
-        return _read_course(_course_dir(root, course_id))
+        data = _read_course(_course_dir(root, course_id))
+    try:
+        from prax.services import access_log
+        access_log.touch(user_id, "course", course_id)
+    except Exception:
+        pass
+    return data
 
 
 def list_courses(user_id: str) -> list[dict]:
-    """List all courses with summary info."""
+    """List all courses with summary info.
+
+    Sorted by most-recently-accessed first, then created_at desc.
+    """
+    from prax.services import access_log
+
     with get_lock(user_id):
         root = ensure_workspace(user_id)
         courses_root = courses_dir(root)
         results = []
         if not os.path.isdir(courses_root):
             return results
-        for entry in sorted(os.listdir(courses_root)):
+        access_map = access_log.get_all(user_id, "course")
+        for entry in os.listdir(courses_root):
             course_path = os.path.join(courses_root, entry)
             if not os.path.isdir(course_path):
                 continue
@@ -140,9 +152,15 @@ def list_courses(user_id: str) -> list[dict]:
                     "status": data["status"],
                     "level": data.get("level"),
                     "progress": data.get("progress", {}),
+                    "created_at": data.get("created_at", ""),
+                    "accessed_at": access_map.get(data["id"], ""),
                 })
             except Exception:
                 continue
+        results.sort(
+            key=lambda c: (c["accessed_at"], c.get("created_at", "")),
+            reverse=True,
+        )
         return results
 
 

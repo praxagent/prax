@@ -22,8 +22,10 @@ graph TB
     Prax -->|delegate_sandbox| Sandbox["Sandbox Spoke"]
     Prax -->|delegate_finetune| Finetune["Finetune Spoke"]
     Prax -->|delegate_knowledge| Knowledge["Knowledge Spoke"]
-    Prax -->|delegate_research| Research["Research Spoke"]
+    Prax -->|delegate_research| Research["Research Spoke\n+ Professor capability"]
     Prax -->|delegate_task| Generic["Generic Sub-Agent"]
+
+    Research -->|hard questions| Professor["multi_model_query\nOpenAI + Claude + Gemini\npro-tier models"]
 
     style Prax fill:#4A90D9,color:#fff
     style Browser fill:#F5A623,color:#fff

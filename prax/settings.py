@@ -1,7 +1,8 @@
 """Application settings loaded via Pydantic for validation and reuse."""
+import os
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -220,6 +221,21 @@ class AppSettings(BaseSettings):
     phone_to_greeting_map: str | None = Field(default=None, alias="PHONE_TO_GREETING_MAP")
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    @field_validator("workspace_dir")
+    @classmethod
+    def _absolute_workspace_dir(cls, v: str) -> str:
+        """Ensure ``workspace_dir`` is always an absolute path.
+
+        Relative paths (like ``./workspaces`` or ``../workspaces``) are
+        resolved at settings load time. If any code changes the process
+        CWD later (git subprocesses, Hugo, etc.), all workspace lookups
+        still resolve to the original absolute path — preventing nested
+        ``workspaces/user1/workspaces/user2/`` path corruption.
+        """
+        if not v:
+            return v
+        return os.path.abspath(v)
 
 
 _WEAK_SECRET_KEYS = frozenset({"change-me", "changeme", "secret", "dev", "test", ""})

@@ -29,6 +29,43 @@ def _format_ingest_result(result: dict, verb: str = "Saved as note") -> str:
     )
 
 
+# Phrases that indicate a note was fabricated because the real source
+# couldn't be read.  We refuse to save such notes at the tool layer so
+# fabrication can't slip past the system prompt rules.
+_FABRICATION_MARKERS = (
+    "(inferred)",
+    "[inferred]",
+    "inferred content",
+    "likely content",
+    "best guess",
+    "best-guess",
+    "probably contained",
+    "this note is inferred",
+    "could not access",
+    "could not read",
+    "couldn't access",
+    "couldn't read",
+    "fetch failed",
+    "404 not found",
+    "page not found",
+)
+
+
+def _looks_fabricated(title: str, content: str) -> str | None:
+    """Detect notes that appear to be fabricated from failed source fetches.
+
+    Returns a reason string if fabrication is detected, else None.
+    """
+    haystack = f"{title}\n{content[:2000]}".lower()
+    hits = [m for m in _FABRICATION_MARKERS if m in haystack]
+    if hits:
+        return (
+            f"note appears to describe its own source failure "
+            f"(matched: {', '.join(hits[:3])})"
+        )
+    return None
+
+
 @tool
 def note_create(title: str, content: str, tags: str = "") -> str:
     """Create a note from the current conversation and publish it as a web page.
@@ -46,10 +83,41 @@ def note_create(title: str, content: str, tags: str = "") -> str:
         content: Full markdown content for the note.
         tags: Comma-separated tags for search (e.g. "math, linear-algebra").
     """
+    # Runtime guard: block fabricated notes even if the prompt rules were
+    # ignored. If the source couldn't be read, no note should be created.
+    fabrication_reason = _looks_fabricated(title, content)
+    if fabrication_reason:
+        return (
+            f"BLOCKED — fabricated note refused: {fabrication_reason}. "
+            f"Report the source failure to the user instead of saving a "
+            f"made-up note. Do NOT retry with the same content. If the user "
+            f"explicitly wants a note on the TOPIC without the source, "
+            f"rewrite with a different title (no 'inferred'/'likely'/"
+            f"'probably') and remove all source-failure disclaimers from "
+            f"the content first."
+        )
+
+    # Quality review — reject raw dumps and low-effort content, up to
+    # MAX_REVISIONS times before allowing the save through.
+    try:
+        from prax.services import note_quality
+        review = note_quality.review_note(title, content)
+        if not review["approved"] and not review["force_save"]:
+            note_quality.increment_revision(title)
+            return f"REVIEW REJECTED — {note_quality.format_feedback(review)}"
+    except Exception:
+        pass  # Review is best-effort — don't block saves on reviewer failure.
+
     try:
         result = note_service.save_and_publish(
             _get_user_id(), title, content, tags=_parse_tags(tags),
         )
+        # Clear revision counter on successful save.
+        try:
+            from prax.services import note_quality
+            note_quality.clear_revision(title)
+        except Exception:
+            pass
         return _format_ingest_result(result, verb="Note created")
     except Exception as e:
         return f"Error creating note: {e}"

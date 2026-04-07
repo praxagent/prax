@@ -8,6 +8,7 @@ This section summarizes empirically validated findings from academic research an
 - [Orchestration](orchestration.md) — §3-§5: Bounded sub-agents, workspace persistence, context management
 - [Grounding](grounding.md) — §6-§7: Error recovery via checkpointing, anti-hallucination
 - [Production Patterns](production-patterns.md) — §8-§10: Framework patterns, tool overload, content pipelines
+- [Pipeline Composition](pipeline-composition.md) — Hardcoded vs dynamic pipeline synthesis; skill libraries; LLM-Modulo
 - [Plugin Sandboxing](plugin-sandboxing.md) — §11: The Glass Sandbox problem and process isolation
 - [Model Routing](model-routing.md) — §12-§13: Thompson Sampling, difficulty-driven routing
 - [Error & Metacognition](error-metacognition.md) — §14-§15: Multi-perspective recovery, failure profiles
@@ -29,3 +30,4 @@ This section summarizes empirically validated findings from academic research an
 11. **Never trust the model's self-reported confidence** — LLMs are systematically miscalibrated due to RLHF. Measure uncertainty extrinsically through prediction errors, behavioral variance, and token entropy. The harness must be the arbiter of confidence, not the model.
 12. **Prove every mechanism earns its complexity** — log prediction errors, correlate with outcomes, A/B test epistemic gating. Remove mechanisms that don't measurably improve task completion.
 13. **Benchmark externally** — internal tests validate architecture; external benchmarks (GAIA, SWE-bench) establish competitive positioning and surface blind spots.
+14. **Autonomy is a continuum, not a trichotomy** — the meaningful question isn't "hardcoded vs dynamic" but "which degrees of freedom at runtime". Use an autonomy-level taxonomy: **L0** (recipe selection only), **L1** (parameterized fixed skeleton — prompts/rubric/budget dynamic, shape fixed), **L2** (validated graph composition from typed primitives), **L3** (unbounded — empirically broken, avoid). Pure dynamic composition is empirically fragile (AutoGPT-style); pure hardcoded pipelines can't cover the long tail. The winning shape across Voyager, ChatHTN, LLM-Modulo, RAP, MetaGPT, and Anthropic's orchestrator-workers is: **deterministic backbone + library of proven units + LLM as gap-filler when retrieval misses + hard verifier on output**. Prax today is L0 with L1 machinery built but not exposed. Before escalating, **instrument the current system first** — measure where L0 actually fails (Pareto chart of missing shapes) and justify L1/L2 from evidence, not ideology.

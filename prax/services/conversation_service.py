@@ -34,14 +34,25 @@ logger = logging.getLogger(__name__)
 
 
 def _history_to_messages(history: list[dict]) -> list:
+    """Convert stored history dicts to LangChain messages.
+
+    Each message is prefixed with a compact timestamp tag ``[2h ago]``
+    or ``[3d ago]`` so the model can tell stale context from fresh context.
+    """
+    from prax.utils.time_format import format_relative_time
+
     messages = []
     for item in history:
+        ts = item.get("date", "")
+        rel = format_relative_time(ts) if ts else ""
+        prefix = f"[{rel}] " if rel else ""
+        content = prefix + item["content"]
         if item["role"] == "system":
-            messages.append(SystemMessage(content=item["content"]))
+            messages.append(SystemMessage(content=content))
         elif item["role"] == "assistant":
-            messages.append(AIMessage(content=item["content"]))
+            messages.append(AIMessage(content=content))
         else:
-            messages.append(HumanMessage(content=item["content"]))
+            messages.append(HumanMessage(content=content))
     return messages
 
 
@@ -59,11 +70,12 @@ class ConversationService:
         self._database = database_name or settings.database_name
 
     def _build_history(self, phone_int: int) -> list[dict]:
-        conversation = self._retrieve(self._database, phone_int) or []
-        return [
-            {key: value for key, value in entry.items() if key != "date"}
-            for entry in conversation
-        ]
+        """Return stored conversation history, preserving the ``date`` field.
+
+        The date is used by ``_history_to_messages`` to add relative-time
+        tags so the LLM can distinguish fresh context from stale context.
+        """
+        return self._retrieve(self._database, phone_int) or []
 
     def reply(
         self,

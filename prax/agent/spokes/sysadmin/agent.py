@@ -49,6 +49,9 @@ plugin management, configuration, source inspection, and self-maintenance tasks.
 
 ### Source introspection
 - **source_read** / **source_list** / **source_grep** — read Prax's own source code
+- **code_structure** — analyze a file's classes, functions, imports via AST parsing
+- **code_dependencies** — map import dependencies across a directory
+- **code_search_ast** — find functions/classes/methods by name using AST (not text grep)
 
 ### Workspace sync
 - **workspace_set_remote** / **workspace_push** — configure and push to remote git
@@ -83,11 +86,16 @@ plugin management, configuration, source inspection, and self-maintenance tasks.
 
 def build_tools() -> list:
     """Return all tools available to the sysadmin spoke."""
+    from prax.agent.ast_tools import build_ast_tools
     from prax.agent.plugin_fix_agent import delegate_plugin_fix
     from prax.agent.plugin_tools import build_plugin_tools
     from prax.agent.self_improve_agent import delegate_self_improve
 
-    return build_plugin_tools() + [delegate_self_improve, delegate_plugin_fix]
+    return (
+        build_plugin_tools()
+        + build_ast_tools()
+        + [delegate_self_improve, delegate_plugin_fix]
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -384,8 +384,54 @@ class ConversationAgent:
         except Exception:
             pass
 
+        # Temporal + channel context — gives the model a clear "now" so it
+        # can distinguish fresh requests from stale STM/LTM context.
+        temporal_context = ""
+        try:
+            from prax.agent.user_context import current_channel_name
+            from prax.utils.time_format import format_current_time
+
+            # Resolve user timezone if available.
+            tz_name: str | None = None
+            try:
+                from prax.services.memory.stm import stm_read
+                if uid:
+                    stm_entries = stm_read(uid)
+                    for entry in stm_entries:
+                        if "timezone" in entry.key.lower() or "timezone" in entry.content.lower():
+                            # Best-effort — content may be "timezone: America/Los_Angeles"
+                            content = entry.content
+                            for marker in ("America/", "Europe/", "Asia/", "Africa/", "Australia/", "Pacific/"):
+                                if marker in content:
+                                    start = content.index(marker)
+                                    end = start
+                                    while end < len(content) and (content[end].isalnum() or content[end] in "/_-"):
+                                        end += 1
+                                    tz_name = content[start:end]
+                                    break
+                            break
+            except Exception:
+                pass
+
+            now_str = format_current_time(tz_name)
+            channel_label = current_channel_name.get("")
+            channel_line = (
+                f"Channel: #{channel_label}" if channel_label and channel_label != "DM"
+                else ("Channel: Direct Message" if channel_label == "DM" else "")
+            )
+            temporal_context = (
+                f"\n\n## Current Context\n"
+                f"- **Now:** {now_str}\n"
+                + (f"- **{channel_line}**\n" if channel_line else "")
+                + "- The current user message (below) is the source of truth "
+                  "for the task. Any older STM/memory context is for reference only."
+            )
+        except Exception:
+            pass
+
         full_prompt = (
             _load_system_prompt()
+            + temporal_context
             + workspace_context
             + memory_context
             + complexity_hint
@@ -554,6 +600,67 @@ class ConversationAgent:
             )
         except Exception:
             pass
+
+        # Pipeline coverage instrumentation (Phase 0) — capture which spoke
+        # matched, the request, and the outcome so we can build a Pareto chart
+        # of coverage gaps.
+        try:
+            from prax.services import pipeline_coverage
+            delegations = []
+            for msg in result.get("messages", []):
+                if isinstance(msg, AIMessage):
+                    for tc in getattr(msg, "tool_calls", []) or []:
+                        name = tc.get("name", "")
+                        if name.startswith("delegate_"):
+                            delegations.append(name.removeprefix("delegate_"))
+            # Determine the matched spoke. Heuristic:
+            # - Single delegation → that spoke
+            # - Multiple delegations → first one (the primary)
+            # - Generic delegate_task → "fallback"
+            # - No delegation → "direct"
+            if not delegations:
+                matched_spoke = "direct"
+            elif "task" in delegations:
+                matched_spoke = "fallback"
+            else:
+                matched_spoke = delegations[0]
+
+            # Determine the outcome status. The orchestrator's status is set
+            # via root_span.end below — at this point we know it's at least
+            # "completed" by virtue of reaching this code path.
+            outcome_status = "completed"
+            if _time.monotonic() >= _run_deadline:
+                outcome_status = "timeout"
+            elif not response:
+                outcome_status = "failed"
+
+            embedding = pipeline_coverage._embed_request(user_input)
+            pipeline_coverage.record_turn(
+                user_id=uid or "anonymous",
+                request=user_input,
+                matched_spoke=matched_spoke,
+                delegations=delegations,
+                outcome_status=outcome_status,
+                tool_call_count=_graph_cb._tool_count,
+                duration_ms=((_time.monotonic() - _run_start) * 1000),
+                embedding=embedding,
+            )
+            # Periodic auto-prune so the on-disk file stays bounded
+            # without a separate scheduler. No-op most turns; rewrites
+            # the file every 100 turns to drop entries older than 30 days.
+            pipeline_coverage.maybe_prune()
+        except Exception:
+            logger.debug("Pipeline coverage recording failed", exc_info=True)
+
+        # Auto-consolidate memory every N turns. Without this hook the
+        # memory consolidation pipeline is dead code — Prax never calls
+        # stm_write himself, so STM/LTM stay empty even though the
+        # infrastructure is in place.
+        try:
+            from prax.services.memory_service import maybe_consolidate
+            maybe_consolidate(uid or "")
+        except Exception:
+            logger.debug("Auto-consolidation failed", exc_info=True)
 
         # Health monitor: check for anomalies every N turns.
         try:

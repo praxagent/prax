@@ -139,7 +139,14 @@ def get_note(user_id: str, slug: str) -> dict:
         path = _note_path(root, slug)
         if not os.path.isfile(path):
             raise FileNotFoundError(f"Note not found: {slug}")
-        return _parse_note(path)
+        meta = _parse_note(path)
+    # Touch access time (outside the lock — access log has its own I/O).
+    try:
+        from prax.services import access_log
+        access_log.touch(user_id, "note", slug)
+    except Exception:
+        pass
+    return meta
 
 
 def delete_note(user_id: str, slug: str) -> dict:
@@ -234,12 +241,18 @@ def restore_note_version(user_id: str, slug: str, commit: str) -> dict:
 
 
 def list_notes(user_id: str) -> list[dict]:
-    """List all notes with metadata (no content)."""
+    """List all notes with metadata (no content).
+
+    Sorted by most-recently-accessed first, falling back to creation date.
+    """
+    from prax.services import access_log
+
     with get_lock(user_id):
         root = ensure_workspace(user_id)
         notes_root = _notes_dir(root)
+        access_map = access_log.get_all(user_id, "note")
         results = []
-        for fname in sorted(os.listdir(notes_root)):
+        for fname in os.listdir(notes_root):
             if not fname.endswith(".md"):
                 continue
             try:
@@ -250,9 +263,15 @@ def list_notes(user_id: str) -> list[dict]:
                     "tags": meta["tags"],
                     "created_at": meta["created_at"],
                     "updated_at": meta["updated_at"],
+                    "accessed_at": access_map.get(meta["slug"], ""),
                 })
             except Exception:
                 continue
+        # Sort by access time desc, then created_at desc.
+        results.sort(
+            key=lambda n: (n["accessed_at"], n["created_at"]),
+            reverse=True,
+        )
         return results
 
 
@@ -570,6 +589,29 @@ def publish_notes(user_id: str, base_url: str, slug: str | None = None) -> dict:
     err = run_hugo(site if 'site' in dir() else hugo_site_dir(root))
     if err:
         return err
+
+    # Verify the generated HTML actually exists before returning a URL.
+    # Without this check, we'd return a URL that 404s on click.
+    if slug:
+        expected_path = os.path.join(site, "public", "notes", slug, "index.html")
+        if not os.path.exists(expected_path):
+            # Try the un-slugged notes index as a sanity check.
+            notes_index = os.path.join(site, "public", "notes", "index.html")
+            if not os.path.exists(notes_index):
+                return {
+                    "error": (
+                        f"Hugo build completed but output not found at "
+                        f"{expected_path} — note is saved but the web page "
+                        f"is not accessible. Check Hugo site config."
+                    ),
+                }
+            return {
+                "error": (
+                    f"Hugo built the site but the specific note page for "
+                    f"'{slug}' was not generated. The note is saved; check "
+                    f"that the markdown frontmatter is valid."
+                ),
+            }
 
     url_slug = f"notes/{slug}/" if slug else "notes/"
     url = f"{base_url.rstrip('/')}/{url_slug}"

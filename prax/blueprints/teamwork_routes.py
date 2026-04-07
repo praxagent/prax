@@ -89,11 +89,22 @@ def _build_trace_metadata() -> dict | None:
 
     Always includes the trace_id (for the Execution Graphs panel).
     Optionally includes a Grafana deep-link if observability is enabled.
+
+    Tries the ContextVar first (most accurate), then falls back to the
+    last completed graph (robust across thread/async boundaries).
     """
-    from prax.agent.trace import last_root_trace_id
+    from prax.agent.trace import get_last_completed_graph, last_root_trace_id
 
     trace_id = last_root_trace_id.get()
     if not trace_id:
+        # ContextVar may not propagate across thread boundaries —
+        # fall back to the last completed graph stored at module scope.
+        graph = get_last_completed_graph()
+        if graph:
+            trace_id = graph.trace_id
+
+    if not trace_id:
+        logger.debug("No trace_id available for response metadata")
         return None
 
     metadata: dict = {"trace_id": trace_id}
@@ -582,8 +593,10 @@ def _handle_message(
 
             # Always set channel context so agent hooks know which channel
             # originated the request (used for response routing).
+            from prax.agent.user_context import current_channel_name
             current_channel_id.set(channel_id)
             current_active_view.set(active_view)
+            current_channel_name.set(channel_name or ("DM" if is_dm else ""))
 
             # Derive a per-channel conversation key so each TeamWork channel
             # gets its own isolated conversation history.
@@ -1555,3 +1568,89 @@ def health_events():
     except Exception:
         logger.exception("Failed to get health events")
         return jsonify({"error": "Failed to get health events"}), 500
+
+
+# ---------------------------------------------------------------------------
+# Pipeline coverage (Phase 0 of pipeline evolution roadmap)
+# ---------------------------------------------------------------------------
+
+
+@teamwork_routes.route("/teamwork/pipeline-coverage", methods=["GET"])
+def pipeline_coverage_report():
+    """Return the Pareto coverage report.
+
+    Query params:
+      - days (int, default 14): look-back window in days
+      - top_n (int, default 20): top N clusters to include
+
+    See docs/PIPELINE_EVOLUTION_TODO.md for how to interpret the results.
+    """
+    try:
+        days = request.args.get("days", "14", type=int)
+        top_n = request.args.get("top_n", "20", type=int)
+        from prax.services.pipeline_coverage import get_coverage_report
+        report = get_coverage_report(days=days, top_n=top_n)
+        return jsonify(report)
+    except Exception:
+        logger.exception("Failed to get pipeline coverage report")
+        return jsonify({"error": "Failed to get pipeline coverage report"}), 500
+
+
+@teamwork_routes.route("/teamwork/pipeline-coverage/events", methods=["GET"])
+def pipeline_coverage_events():
+    """Return raw recent coverage events for inspection (no embeddings)."""
+    try:
+        days = request.args.get("days", "14", type=int)
+        limit = request.args.get("limit", "200", type=int)
+        from prax.services.pipeline_coverage import get_recent_events
+        events = get_recent_events(days=days, limit=limit)
+        # Strip embeddings — they're large and not useful in the JSON response.
+        for evt in events:
+            evt.pop("embedding", None)
+        return jsonify({"events": events})
+    except Exception:
+        logger.exception("Failed to get pipeline coverage events")
+        return jsonify({"error": "Failed to get pipeline coverage events"}), 500
+
+
+@teamwork_routes.route("/teamwork/pipeline-coverage/test-mode", methods=["POST", "GET"])
+def pipeline_coverage_test_mode():
+    """Toggle pipeline-coverage test mode without restarting the app.
+
+    POST body:
+        {"enabled": true|false, "file": "/optional/path/to/file.jsonl"}
+
+    When enabled, all coverage events are written to a separate JSONL
+    file (default ``<workspace>/.pipeline_coverage_harness.jsonl``) so
+    harness scenarios never mix with real user data. The in-memory
+    event buffer is cleared on every toggle.
+
+    GET returns the current state (no body required).
+    """
+    try:
+        from pathlib import Path as _Path
+
+        from prax.services import pipeline_coverage as _pc
+        from prax.services.pipeline_coverage import (
+            is_test_mode,
+            set_test_mode,
+        )
+
+        if request.method == "GET":
+            return jsonify({
+                "enabled": is_test_mode(),
+                "file": str(_pc._test_file_path) if _pc._test_file_path else None,
+            })
+
+        body = request.get_json(silent=True) or {}
+        enabled = bool(body.get("enabled", False))
+        raw_path = body.get("file")
+        test_file = _Path(raw_path) if raw_path else None
+        set_test_mode(enabled, test_file=test_file)
+        return jsonify({
+            "enabled": is_test_mode(),
+            "file": str(_pc._test_file_path) if _pc._test_file_path else None,
+        })
+    except Exception:
+        logger.exception("Failed to toggle pipeline coverage test mode")
+        return jsonify({"error": "Failed to toggle pipeline coverage test mode"}), 500
