@@ -604,6 +604,15 @@ class ConversationAgent:
         # Pipeline coverage instrumentation (Phase 0) — capture which spoke
         # matched, the request, and the outcome so we can build a Pareto chart
         # of coverage gaps.
+        #
+        # Canonical short names for each spoke. Keeps the coverage log,
+        # harness scenarios, and Pareto reports consistent regardless of
+        # the underlying delegate_* tool name.
+        _SPOKE_NAME_MAP = {
+            "content_editor": "content",
+            # All other spokes already use their short name as the delegate
+            # tool suffix (delegate_browser, delegate_knowledge, etc.).
+        }
         try:
             from prax.services import pipeline_coverage
             delegations = []
@@ -612,7 +621,8 @@ class ConversationAgent:
                     for tc in getattr(msg, "tool_calls", []) or []:
                         name = tc.get("name", "")
                         if name.startswith("delegate_"):
-                            delegations.append(name.removeprefix("delegate_"))
+                            raw = name.removeprefix("delegate_")
+                            delegations.append(_SPOKE_NAME_MAP.get(raw, raw))
             # Determine the matched spoke. Heuristic:
             # - Single delegation → that spoke
             # - Multiple delegations → first one (the primary)

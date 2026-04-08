@@ -126,20 +126,34 @@ SCENARIOS: list[Scenario] = [
              "content"),
 
     # ------------------------------------------------------------------
-    # sandbox spoke
+    # sandbox spoke — scenarios that ACTUALLY need a sandbox.
+    # Trivial code questions (1+1, sum range, regex lint) should NOT
+    # delegate — Prax should answer them directly. These scenarios test
+    # cases that need real execution: package installs, file I/O, or
+    # multi-step scripts where Prax cannot reliably predict the output.
     # ------------------------------------------------------------------
-    Scenario("sandbox_python_sum",
-             "Run this Python code: print(sum(range(100)))",
+    Scenario("sandbox_install_package",
+             "Install networkx in a sandbox and compute the shortest path "
+             "between nodes A and D in a graph with edges "
+             "[(A,B,1),(B,C,2),(A,C,5),(C,D,1),(B,D,4)]. Return the path and total weight.",
              "sandbox"),
-    Scenario("sandbox_regex",
-             "Test if this regex works: ^[a-z]+$",
+    Scenario("sandbox_untrusted_exec",
+             "I'll paste some untrusted Python code below — execute it in a "
+             "safe sandbox and tell me what it prints (do NOT run it in your "
+             "own environment): `import random; [print(random.randint(0,9)) for _ in range(5)]`",
              "sandbox"),
-    Scenario("sandbox_eigenvalues",
-             "Calculate the eigenvalues of [[1,2],[3,4]]",
+    Scenario("sandbox_multi_step",
+             "Run a multi-step Python script in a sandbox: download the text "
+             "of Shakespeare's Sonnet 18 from https://www.gutenberg.org/cache/epub/1041/pg1041.txt, "
+             "count the word 'love', and return the count.",
              "sandbox"),
 
     # ------------------------------------------------------------------
     # scheduler spoke
+    # HARNESS NOTE: these scenarios create REAL reminders that will fire.
+    # The "oven reminder" is a legitimate end-to-end test of reminder
+    # delivery. The "daily briefing" creates a recurring job — keep it
+    # to verify scheduling works, but expect to manually clean up.
     # ------------------------------------------------------------------
     Scenario("scheduler_reminder",
              "Remind me in 30 minutes to check the oven",
@@ -162,14 +176,22 @@ SCENARIOS: list[Scenario] = [
              "sysadmin"),
 
     # ------------------------------------------------------------------
-    # memory spoke
+    # memory — expected "direct" now.
+    # delegate_memory was removed from the orchestrator tool list because
+    # it was acting as a catch-all drain (15/36 turns misrouted).
+    # Memory WRITES now happen automatically via turn-end consolidation
+    # (see prax/services/memory_service.py:maybe_consolidate). Memory
+    # READS happen via the memory_context injection at the start of
+    # every turn. So "remember X" or "what do you know about me"
+    # requests now get handled directly by the orchestrator with the
+    # context already in its system prompt.
     # ------------------------------------------------------------------
     Scenario("memory_remember",
              "Remember that I prefer dark mode and live in San Francisco",
-             "memory"),
+             "direct"),
     Scenario("memory_recall",
              "What do you know about me?",
-             "memory"),
+             "direct"),
 
     # ------------------------------------------------------------------
     # course spoke

@@ -158,11 +158,16 @@ def build_tools() -> list:
 def delegate_knowledge(task: str) -> str:
     """Delegate a knowledge management task to the Knowledge Agent.
 
-    The Knowledge Agent manages notes (markdown web pages) and research
-    projects (organized collections of notes, links, and sources).
+    The Knowledge Agent creates **persistent, shareable notes** — markdown
+    pages published as web pages with URLs. This is the RIGHT tool when the
+    user says "save a note", "write up", "document", "deep dive", "explain X".
+
+    The output is a real file with a URL the user can share, not a fact
+    stashed in Prax's working memory.
 
     Use this for:
-    - "Save this as a note" / "Make a note about X"
+    - "Save this as a note" / "Make a note about X" / "Write up a note on Y"
+    - "Do a deep dive note on [topic]" / "Explain [topic] and save it"
     - "Update my note on quantum computing"
     - "Find my notes about eigenvalues"
     - "Link these two notes together"
@@ -173,9 +178,18 @@ def delegate_knowledge(task: str) -> str:
     - "List my notes" / "List my projects"
 
     Do NOT use this for:
+    - **Storing user preferences or facts about the user** (use delegate_memory).
+      "Save a note about X" creates a document. "Remember that I prefer X"
+      saves a user fact. These are different things.
     - Blog posts (use delegate_content_editor)
     - Workspace files (use workspace_save directly)
     - Course materials (use course_save_material directly)
+
+    The distinguishing rule: delegate_knowledge produces a **markdown page
+    with a URL**. delegate_memory produces an **STM scratchpad entry or LTM
+    graph node**. If the user wants something they can open in a browser,
+    it's knowledge. If they want Prax to remember something about them
+    across conversations, it's memory.
 
     Args:
         task: Description of the knowledge management task.  Include note

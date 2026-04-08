@@ -384,11 +384,24 @@ def delegate_research(question: str) -> str:
     The research agent will search multiple sources, read primary documents,
     cross-reference claims, and return a structured report with citations.
 
+    **ALWAYS use this for questions about external topics, current events,
+    academic papers, technical subjects, or "what's out there" queries.**
+    The research agent pulls from the live web; the memory spoke only
+    knows what the user has personally told Prax.
+
     Use this for questions that need depth:
-    - "What are the latest findings on X?"
-    - "Find the paper about Y and summarize the key results"
+    - "What are the latest findings on X?" — external knowledge, use research
+    - "What are current best practices for Y?" — external, use research
+    - "Find the paper about Z and summarize the key results"
     - "Compare approaches A and B — what does the literature say?"
-    - "What's the current state of the art in Z?"
+    - "What's the current state of the art in Q?"
+    - "How does [external concept] work?"
+    - "What are recent developments in [field]?"
+
+    DO NOT route these to delegate_memory — memory is for the user's personal
+    facts (preferences, timezone, past conversations about their projects).
+    Research is for the outside world. When in doubt, if the question is
+    about "the world" rather than "me/us/my stuff," use research.
 
     Args:
         question: A clear, self-contained research question.  Include any

@@ -437,6 +437,23 @@ def create_schedule(
         if timezone and data["timezone"] == "UTC":
             data["timezone"] = timezone
 
+        # Deduplicate: if an enabled schedule with the same description and
+        # cron already exists, return it instead of creating a duplicate.
+        # Prax has historically created multiple "Daily morning briefing"
+        # entries when users re-asked, causing duplicate SMS deliveries.
+        desc_lower = description.strip().lower()
+        for existing in data["schedules"]:
+            if (
+                existing.get("enabled", True)
+                and existing.get("description", "").strip().lower() == desc_lower
+                and existing.get("cron") == cron_expr
+            ):
+                return {
+                    "status": "exists",
+                    "schedule": existing,
+                    "note": "A matching schedule already exists; not creating a duplicate.",
+                }
+
         slug = description.lower().replace(" ", "-")[:20]
         sched_id = f"{slug}-{uuid.uuid4().hex[:6]}"
 

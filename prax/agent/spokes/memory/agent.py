@@ -111,24 +111,32 @@ def build_tools() -> list:
 def delegate_memory(task: str) -> str:
     """Delegate a memory management task to the Memory Agent.
 
-    The Memory Agent handles short-term scratchpad and long-term semantic
-    memory (vector store + knowledge graph).
+    The Memory Agent handles **facts about the user** — their preferences,
+    context, history, and the knowledge graph OF the user's world. It is
+    NOT for general knowledge questions about external topics.
 
-    Use this for:
+    Use this ONLY for:
     - "Remember that I prefer dark mode" / "Store this preference"
-    - "What do you remember about eigenvalues?"
-    - "What topics have we discussed?"
-    - "What's connected to project Alpha?"
-    - "Forget what you know about X"
-    - "Save this to my working notes"
+    - "What do you remember about ME?" / "What do you know about MY project?"
+    - "What topics have WE discussed?" (about the user's own conversations)
+    - "What's connected to MY project Alpha?"
+    - "Forget what you know about me"
+    - "Save this user fact to my working notes"
     - "What's in my scratchpad?"
     - "Run memory consolidation"
     - "Show memory stats"
 
     Do NOT use this for:
-    - Saving files to workspace (use workspace_save)
-    - Creating notes/pages (use delegate_knowledge)
-    - Searching conversation history (use conversation_search)
+    - **General knowledge questions** like "What are the latest findings on X?"
+      or "What is a transformer?" — use delegate_research instead.
+    - **System state queries** like "what plugins are installed?" or
+      "check system status" — use delegate_sysadmin instead.
+    - **Creating notes/pages** (use delegate_knowledge with note_create/note_deep_dive)
+    - **Saving files to workspace** (use workspace_save)
+    - **Searching conversation history** (use conversation_search)
+
+    The distinguishing rule: delegate_memory is for "what does Prax know
+    about ME/MY world" — not "what does Prax know about the world in general."
 
     Args:
         task: Description of the memory task.  Include the content to

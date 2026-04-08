@@ -253,49 +253,6 @@ class MemoryService:
             logger.exception("consolidate() failed")
             return ConsolidationResult()
 
-
-# ---------------------------------------------------------------------------
-# Auto-consolidation — runs every N turns per user via orchestrator hook
-# ---------------------------------------------------------------------------
-
-# Tracks how many turns have happened since the last consolidation per user.
-# Memory consolidation is expensive (LLM calls) so we don't run it on every
-# turn — only every N turns to amortize the cost.
-_consolidation_turns_since: dict[str, int] = {}
-_CONSOLIDATE_EVERY_N_TURNS = 5
-
-
-def maybe_consolidate(user_id: str) -> bool:
-    """Run consolidation for *user_id* if at least N turns have passed.
-
-    Called by the orchestrator at the end of every turn. No-op most turns;
-    triggers a real consolidation run every N turns. This is the ONLY thing
-    that automatically writes to the user's STM/LTM — without this hook,
-    memory stays empty even though the infrastructure is in place.
-
-    Returns True if consolidation actually ran, False if skipped.
-    """
-    if not user_id:
-        return False
-    count = _consolidation_turns_since.get(user_id, 0) + 1
-    if count < _CONSOLIDATE_EVERY_N_TURNS:
-        _consolidation_turns_since[user_id] = count
-        return False
-    _consolidation_turns_since[user_id] = 0
-    try:
-        result = get_memory_service().consolidate(user_id)
-        logger.info(
-            "Auto-consolidation for %s: entities=%d, relations=%d, memories=%d",
-            user_id,
-            getattr(result, "entities_added", 0),
-            getattr(result, "relations_added", 0),
-            getattr(result, "memories_added", 0),
-        )
-        return True
-    except Exception:
-        logger.debug("Auto-consolidation failed for %s", user_id, exc_info=True)
-        return False
-
     # ------------------------------------------------------------------
     # Stats / diagnostics
     # ------------------------------------------------------------------
@@ -403,3 +360,46 @@ def get_memory_service() -> MemoryService:
     if _instance is None:
         _instance = MemoryService()
     return _instance
+
+
+# ---------------------------------------------------------------------------
+# Auto-consolidation — runs every N turns per user via orchestrator hook
+# ---------------------------------------------------------------------------
+
+# Tracks how many turns have happened since the last consolidation per user.
+# Memory consolidation is expensive (LLM calls) so we don't run it on every
+# turn — only every N turns to amortize the cost.
+_consolidation_turns_since: dict[str, int] = {}
+_CONSOLIDATE_EVERY_N_TURNS = 5
+
+
+def maybe_consolidate(user_id: str) -> bool:
+    """Run consolidation for *user_id* if at least N turns have passed.
+
+    Called by the orchestrator at the end of every turn. No-op most turns;
+    triggers a real consolidation run every N turns. This is the ONLY thing
+    that automatically writes to the user's STM/LTM — without this hook,
+    memory stays empty even though the infrastructure is in place.
+
+    Returns True if consolidation actually ran, False if skipped.
+    """
+    if not user_id:
+        return False
+    count = _consolidation_turns_since.get(user_id, 0) + 1
+    if count < _CONSOLIDATE_EVERY_N_TURNS:
+        _consolidation_turns_since[user_id] = count
+        return False
+    _consolidation_turns_since[user_id] = 0
+    try:
+        result = get_memory_service().consolidate(user_id)
+        logger.info(
+            "Auto-consolidation for %s: entities=%d, relations=%d, memories=%d",
+            user_id,
+            getattr(result, "entities_added", 0),
+            getattr(result, "relations_added", 0),
+            getattr(result, "memories_added", 0),
+        )
+        return True
+    except Exception:
+        logger.debug("Auto-consolidation failed for %s", user_id, exc_info=True)
+        return False

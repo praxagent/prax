@@ -106,12 +106,14 @@ def build_tools() -> list:
 def delegate_sysadmin(task: str) -> str:
     """Delegate a system administration task to the Sysadmin Agent.
 
-    The Sysadmin Agent handles all plugin management, configuration changes,
-    source inspection, and self-maintenance tasks.  It can install, update,
-    and remove plugins, change LLM routing, read source code, and delegate
-    complex code fixes to specialized sub-agents.
+    The Sysadmin Agent owns **Prax's own operational state**: plugin
+    management, configuration, source inspection, activity logs, system
+    status, self-maintenance, and code changes.
 
     Use this for:
+    - **System state queries**: "What plugins are installed?", "Check system
+      status", "Show me my recent activity logs", "What's the current config?",
+      "How healthy is Prax right now?"
     - "Install this plugin from GitHub"
     - "Check if any plugins have updates"
     - "Update all plugins to latest"
@@ -123,6 +125,12 @@ def delegate_sysadmin(task: str) -> str:
     - "Fix the broken weather plugin"
     - "Show me the system prompt"
     - "Push my workspace to the remote"
+
+    **Important**: Questions like "what plugins are installed" or "show me
+    the activity logs" are SYSTEM STATE questions — they belong here, NOT
+    in delegate_memory (which is for facts about the user, not about Prax's
+    own operational state). If the user asks about how Prax is configured
+    or what tools are available, that's sysadmin territory.
 
     Do NOT use this for user-facing tasks like research, browsing, or content
     creation — those go to other spokes or the orchestrator directly.

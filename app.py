@@ -90,12 +90,21 @@ def create_app():
     init_identity_db()
     migrate_legacy_users()
 
-    init_scheduler()
-
     # In debug mode Werkzeug spawns a reloader process + a child process.
-    # Only start the Discord bot once — in the child (WERKZEUG_RUN_MAIN=true)
-    # or when not in debug mode at all.
-    if not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+    # Both the parent and child would otherwise call init_scheduler() and
+    # init_discord_bot(), causing duplicate jobs (one per scheduler instance)
+    # — which manifests as duplicate SMS reminders. Only initialize these
+    # singletons in the child process (WERKZEUG_RUN_MAIN=true), or when
+    # not in debug mode at all.
+    #
+    # NOTE: we check `settings.debug` (the env-var-driven setting), NOT
+    # `app.debug`. Flask only sets `app.debug` when `app.run(debug=True)`
+    # is called, which happens AFTER create_app() returns. At this point
+    # in execution, `app.debug` is always False, which would defeat the
+    # guard and let the parent reloader process double-init the scheduler.
+    _is_reloader_child = os.environ.get("WERKZEUG_RUN_MAIN") == "true"
+    if not settings.debug or _is_reloader_child:
+        init_scheduler()
         start_discord_bot()
 
     # Initialize TeamWork integration if configured
