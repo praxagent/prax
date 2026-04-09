@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/praxagent/prax/compare/v0.12.0...v0.13.0) (2026-04-09)
+
+
+### Features
+
+* improve context management, memory management, library, agentic flow ([#25](https://github.com/praxagent/prax/issues/25)) ([ca1a223](https://github.com/praxagent/prax/commit/ca1a22390aa67f53fa7a4ed7b619903ce061a56d))
+
 ## [0.12.0](https://github.com/praxagent/prax/compare/v0.11.0...v0.12.0) (2026-04-04)
 
 
