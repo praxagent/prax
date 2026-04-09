@@ -180,7 +180,7 @@ graph LR
 | `prax/agent/scheduler_tools.py` | 9 scheduler tools: recurring cron + one-time reminders |
 | `prax/agent/finetune_tools.py` | 8 fine-tuning tools (harvest, train, verify, promote, rollback) |
 | `prax/agent/codegen_tools.py` | 10 self-improvement tools (worktree, edit, test, lint, verify, deploy, PR) |
-| `prax/agent/note_tools.py` | 7 note tools (create, update, list, search, url_to_note, pdf_to_note, note_link) |
+| `prax/agent/note_tools.py` | 7 note tools (create, update, list, search, note_from_url, pdf_to_note, note_link) |
 | `prax/agent/project_tools.py` | 6 research project tools (create, status, add note/link/source, brief) |
 | `prax/agent/browser_tools.py` | 14 browser tools (navigate, click, fill, screenshot, login, VNC) |
 | `prax/agent/tool_registry.py` | Tool aggregation: built-in + plugin-provided + manually registered |

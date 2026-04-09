@@ -18,7 +18,6 @@ import asyncio
 import datetime as dt
 import logging
 import os
-import textwrap
 from typing import Any
 
 import httpx
@@ -50,7 +49,7 @@ def _k8s_client() -> client.ApiClient:
 
 
 def _now_iso() -> str:
-    return dt.datetime.now(dt.timezone.utc).isoformat()
+    return dt.datetime.now(dt.UTC).isoformat()
 
 
 def _make_owner_ref(body: kopf.Body) -> list[dict[str, Any]]:
@@ -206,7 +205,6 @@ def _build_sandbox_cr(
     owner_refs: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Build a PraxSandbox custom resource dict."""
-    sandbox_spec = spec.get("sandbox", {})
     res_spec = (spec.get("resources") or {}).get("sandbox")
     sandbox_cr: dict[str, Any] = {
         "apiVersion": f"{CRD_GROUP}/{CRD_VERSION}",
@@ -631,7 +629,7 @@ async def on_workspace_create(
             logger.info("PVC '%s' already exists", pvc_name)
         else:
             _patch_status("praxworkspaces", namespace, name, {"phase": "Provisioning"})
-            raise kopf.PermanentError(f"Failed to create PVC: {exc.reason}")
+            raise kopf.PermanentError(f"Failed to create PVC: {exc.reason}") from exc
 
     # --- Create Qdrant collection ---
     collection_name = f"prax-{user_id}"
@@ -841,13 +839,13 @@ def on_sandbox_create(
                 name=instance_name,
             )
             image = instance.get("spec", {}).get("sandboxImage", "")
-        except kubernetes.client.exceptions.ApiException:
+        except kubernetes.client.exceptions.ApiException as exc:
             logger.error("Cannot resolve sandbox image from PraxInstance '%s'", instance_name)
             _patch_status("praxsandboxes", namespace, name, {
                 "phase": "Terminated",
                 "healthStatus": "unhealthy",
             })
-            raise kopf.PermanentError(f"PraxInstance '{instance_name}' not found")
+            raise kopf.PermanentError(f"PraxInstance '{instance_name}' not found") from exc
 
     if not image:
         raise kopf.PermanentError("No sandbox image configured")
@@ -874,7 +872,7 @@ def on_sandbox_create(
                 "phase": "Terminated",
                 "healthStatus": "unhealthy",
             })
-            raise kopf.TemporaryError(f"Failed to create pod: {exc.reason}", delay=15)
+            raise kopf.TemporaryError(f"Failed to create pod: {exc.reason}", delay=15) from exc
 
     _patch_status("praxsandboxes", namespace, name, {
         "phase": "Ready",
@@ -1126,7 +1124,7 @@ async def _run_health_check(
         idle_ratio = ready_count / total if total > 0 else 0
         if idle_ratio > 0.5:
             # Check if idle sandboxes have been idle long enough
-            now_dt = dt.datetime.now(dt.timezone.utc)
+            now_dt = dt.datetime.now(dt.UTC)
             for sb in ready_sandboxes:
                 if total <= pool_size:
                     break

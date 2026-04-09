@@ -50,7 +50,14 @@ commands with no abstraction overhead.
 - **browser_click** — click by CSS selector with auto-wait
 - **browser_find** — query elements by CSS selector
 - **browser_press** — press keyboard keys
-- **browser_screenshot** — PNG screenshot
+- **browser_screenshot** — PNG screenshot of the current page, saved into
+  the user's active workspace.  Returns the filename so you can deliver
+  it with ``workspace_send_file``.
+- **browser_page_screenshot** — **one-shot** tool for "send me a screenshot
+  of X" requests: navigates to a URL, takes a screenshot, and delivers it
+  to the user's current channel in one call.  Use this whenever the user
+  asks for a screenshot of a specific URL instead of chaining
+  browser_open → browser_screenshot → workspace_send_file manually.
 - **browser_read_page** — full page text content
 
 Use Playwright for: login flows, form filling, waiting for elements to appear,
@@ -128,6 +135,10 @@ def delegate_browser(task: str) -> str:
     - "Log into x.com and read this tweet"
     - "Fill out this form with these values"
     - "Take a screenshot of the current page"
+    - "Send me a screenshot of the NYT front page" / "grab a screenshot
+      of [URL]" / "what does [site] look like right now" — the browser
+      agent uses ``browser_page_screenshot`` which navigates, captures,
+      and delivers the image to the user's channel in one call.
     - "Search Google for X and summarize the results"
     - "Navigate to a site, click through pages, extract data"
 

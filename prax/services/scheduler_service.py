@@ -376,13 +376,37 @@ def _sync_user_jobs(user_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 def _load_all_users() -> None:
+    """Scan the workspaces dir and register jobs for every user with a schedules.yaml.
+
+    Deduplicates by resolved path: if multiple directories (e.g., legacy
+    phone-numbered dir + identity-migration symlinks pointing to it) resolve
+    to the same canonical workspace, only the first one is processed. This
+    prevents the same schedule from being registered N times — historically
+    this caused N-fold duplicate SMS deliveries when migrate_legacy_users()
+    accumulated stale symlinks across container rebuilds.
+    """
     ws = Path(settings.workspace_dir)
     if not ws.exists():
         return
-    for user_dir in ws.iterdir():
-        if user_dir.is_dir() and (user_dir / "schedules.yaml").exists():
-            with _lock:
-                _sync_user_jobs(user_dir.name)
+    seen_resolved: set[Path] = set()
+    for user_dir in sorted(ws.iterdir()):
+        if not user_dir.is_dir():
+            continue
+        if not (user_dir / "schedules.yaml").exists():
+            continue
+        try:
+            resolved = user_dir.resolve()
+        except OSError:
+            continue
+        if resolved in seen_resolved:
+            logger.debug(
+                "Skipping duplicate workspace path for scheduler: %s -> %s",
+                user_dir.name, resolved,
+            )
+            continue
+        seen_resolved.add(resolved)
+        with _lock:
+            _sync_user_jobs(user_dir.name)
 
 
 def init_scheduler() -> None:
@@ -660,6 +684,66 @@ def list_reminders(user_id: str) -> list[dict]:
                 r["next_run"] = None
 
     return reminders
+
+
+def update_reminder(user_id: str, reminder_id: str, **kwargs) -> dict[str, Any]:
+    """Update fields on a pending one-time reminder.
+
+    Accepts: description, prompt, fire_at, timezone, channel.
+    Re-registers the APScheduler job if fire_at or timezone changed.
+    """
+    allowed = {"description", "prompt", "fire_at", "timezone", "channel"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+    if not updates:
+        return {"error": "No valid fields to update"}
+
+    if "channel" in updates and updates["channel"] not in ("sms", "discord", "teamwork", "all"):
+        return {"error": f"Invalid channel: {updates['channel']}"}
+
+    if "timezone" in updates:
+        try:
+            _validate_timezone(updates["timezone"])
+        except ValueError:
+            return {"error": f"Invalid timezone: {updates['timezone']}"}
+
+    with _lock:
+        data = _read_schedules(user_id)
+        default_tz = data.get("timezone", "UTC")
+
+        reminder = None
+        for r in data["reminders"]:
+            if r["id"] == reminder_id:
+                reminder = r
+                break
+        if reminder is None:
+            return {"error": f"Reminder '{reminder_id}' not found"}
+
+        # Validate fire_at if provided; normalize to isoformat with tz.
+        if "fire_at" in updates:
+            tz_name = updates.get("timezone", reminder.get("timezone", default_tz))
+            try:
+                tz = _validate_timezone(tz_name)
+                fire_dt = datetime.fromisoformat(updates["fire_at"])
+                if fire_dt.tzinfo is None:
+                    fire_dt = fire_dt.replace(tzinfo=tz)
+            except ValueError:
+                return {"error": f"Invalid datetime format: {updates['fire_at']}"}
+            if fire_dt <= datetime.now(tz):
+                return {"error": "Reminder time must be in the future"}
+            updates["fire_at"] = fire_dt.isoformat()
+
+        reminder.update(updates)
+        _write_schedules(user_id, data)
+
+        # Re-register the APScheduler job so trigger/args pick up the changes.
+        if _scheduler:
+            try:
+                _scheduler.remove_job(f"{user_id}:reminder:{reminder_id}")
+            except Exception:
+                pass
+            _register_reminder_job(user_id, reminder, reminder.get("timezone", default_tz))
+
+    return {"status": "updated", "reminder": reminder}
 
 
 def delete_reminder(user_id: str, reminder_id: str) -> dict[str, Any]:

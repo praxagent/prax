@@ -32,6 +32,12 @@ class AppSettings(BaseSettings):
     amadeus_api_secret: str | None = Field(default=None, alias="AMADEUS_API_SECRET")
     twilio_account_sid: str | None = Field(default=None, alias="TWILIO_ACCOUNT_SID")
     twilio_auth_token: str | None = Field(default=None, alias="TWILIO_AUTH_TOKEN")
+    # Jina AI Reader — clean HTML→markdown fetcher used for URL→note,
+    # auto-capture, and fetch_url_content.  Works without a key on the
+    # free tier (lower rate limits, ~20 req/min).  Set JINA_API_KEY to
+    # use your paid quota for higher throughput and better reliability.
+    # Sign up at https://jina.ai.
+    jina_api_key: str | None = Field(default=None, alias="JINA_API_KEY")
 
     # Models / Agents
     agent_name: str = Field(default="Prax", alias="AGENT_NAME")

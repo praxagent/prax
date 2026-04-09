@@ -44,6 +44,12 @@ high-quality deep-dive note on the requested topic.
   "intuitively...", "note that..."
 - **Mermaid diagrams** where they help visualize relationships
 - **Synthesized prose**, not raw copy-paste from the source
+- **Obsidian-style wikilinks** to 2–5 related existing notes where they
+  naturally fit in the prose — syntax is ``[[slug]]`` for same-notebook
+  links and ``[[project/notebook/slug]]`` for cross-notebook. The
+  caller will give you a list of existing note slugs in the
+  "Related existing notes" section — cite them where they fit.  A
+  deep-dive note without cross-references is an isolated island.
 
 ## Source material
 The caller provides research/source content as context. Use it as the
@@ -51,6 +57,14 @@ substrate for your explanation — DO NOT copy it verbatim. You are
 SYNTHESIZING: reading the source, understanding the concepts, and
 rewriting them in your own voice with added examples, intuition, and
 structure.
+
+## Wikilinks
+If the caller provides a "Related existing notes" section, pull 2–5
+relevant ``[[slug]]`` references into your prose where they naturally
+fit the argument.  Do NOT invent slugs that weren't in the list — dead
+wikilinks are caught by the health check and count against quality.
+If the caller does not provide that section, it's fine to skip
+wikilinks — don't guess at what notes exist.
 
 ## If you receive reviewer feedback
 Address every point the reviewer raised. Don't just tweak — if the
@@ -91,6 +105,17 @@ mediocre note. Reject notes that are shallow, raw-copied, or broken.
    or feels like a summary instead of an explanation, reject.
 7. **Factual errors or unverified claims** — if the note makes claims the
    source material doesn't support, reject.
+
+## Soft criteria (flag as "Should Improve", don't reject for these alone)
+- **No wikilinks** — when the writer had access to a "Related existing
+  notes" list and used zero ``[[slug]]`` references, note the missed
+  cross-reference opportunity. A deep-dive note that is disconnected
+  from the rest of the library is less valuable than one that plugs
+  into the existing knowledge graph.  Do NOT reject on this criterion
+  alone — it's an improvement signal, not a blocker.
+- **Dead wikilinks** — if the writer invented a ``[[slug]]`` that
+  wasn't in the provided list, flag it as must-fix (dead links
+  pollute the graph).
 
 ## Approval
 If none of the rejection criteria apply and the note is a genuine deep
@@ -138,6 +163,41 @@ def _make_researcher(source_content: str | None):
     return _researcher
 
 
+def _collect_related_notes(topic: str, *, limit: int = 20) -> str:
+    """Build a "Related existing notes" slug list for the writer prompt.
+
+    Pulls the user's existing note titles + slugs so the writer can
+    add ``[[wikilinks]]`` that actually resolve.  Returns an empty
+    string when the service is unavailable or the list is empty — the
+    writer's prompt handles the "no list" case gracefully.
+    """
+    try:
+        from prax.services import note_service
+
+        uid = current_user_id.get() or ""
+        if not uid:
+            return ""
+        all_notes = note_service.list_notes(uid)[:limit]
+        if not all_notes:
+            return ""
+        lines = ["## Related existing notes (use [[slug]] to link)"]
+        for note in all_notes:
+            slug = note.get("slug") or ""
+            title = note.get("title") or slug
+            tags = note.get("tags") or []
+            tag_str = f" — tags: {', '.join(tags)}" if tags else ""
+            lines.append(f"- ``[[{slug}]]`` — {title}{tag_str}")
+        lines.append(
+            "\nPick 2–5 that are topically adjacent to the note you're "
+            "writing and weave them into your prose where they naturally "
+            "fit. Do NOT invent slugs that aren't in this list."
+        )
+        return "\n".join(lines)
+    except Exception:
+        logger.debug("Could not collect related notes for writer", exc_info=True)
+        return ""
+
+
 def _note_writer(
     topic: str,
     research: str,
@@ -159,10 +219,14 @@ def _note_writer(
     graph = create_react_agent(llm, [])
     prompt = _NOTE_WRITER_PROMPT.format(agent_name=settings.agent_name)
 
+    related = _collect_related_notes(topic)
+    related_block = f"\n\n{related}\n\n" if related else "\n\n"
+
     if feedback and previous_draft:
         task = (
             f"# Topic\n{topic}\n\n"
-            f"# Source material\n{research[:20_000]}\n\n"
+            f"# Source material\n{research[:20_000]}"
+            f"{related_block}"
             f"# Previous draft\n{previous_draft}\n\n"
             f"# Reviewer feedback\n{feedback}\n\n"
             "Rewrite the note addressing every point in the reviewer feedback. "
@@ -171,10 +235,13 @@ def _note_writer(
     else:
         task = (
             f"# Topic\n{topic}\n\n"
-            f"# Source material\n{research[:20_000]}\n\n"
+            f"# Source material\n{research[:20_000]}"
+            f"{related_block}"
             "Write a deep-dive note on this topic using the source material "
-            "as the substrate. Synthesize, don't copy. Return ONLY the "
-            "markdown content — no preamble."
+            "as the substrate. Synthesize, don't copy. Weave in 2–5 "
+            "``[[slug]]`` wikilinks from the related-notes list above "
+            "where they naturally fit. Return ONLY the markdown content — "
+            "no preamble."
         )
 
     logger.info("Note writer starting (revision=%s)", feedback is not None)

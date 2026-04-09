@@ -215,6 +215,53 @@ class ConversationAgent:
         "workspace_save", "workspace_patch", "note_create", "note_update",
     })
 
+    # Substrings that indicate a delegation response contains a caveat /
+    # partial-completion signal.  When any of these appear in a sub-agent's
+    # reply, the auto-completer MUST NOT silently mark steps done — the
+    # delegated agent is explicitly saying the work is not fully done or
+    # there are qualifications the main agent needs to surface to the user.
+    # Matching is lowercase, whole-string contains.
+    _CAVEAT_MARKERS = frozenset({
+        "one caveat",
+        "however,",
+        "but it does not guarantee",
+        "does not guarantee",
+        "if you want, i can",
+        "if you'd like, i can",
+        "if you want me to",
+        "do you want me to",
+        "want me to",
+        "should i",
+        "partial",
+        "could not",
+        "couldn't",
+        "unable to",
+        "not fully",
+        "not complete",
+        "does not include",
+        "doesn't include",
+        "missing",
+        "placeholder",
+        "skipped",
+        "didn't actually",
+        "did not actually",
+    })
+
+    @classmethod
+    def _response_has_caveat(cls, content: str) -> str | None:
+        """Return the first caveat marker found in ``content``, else None.
+
+        Used by :meth:`_auto_complete_plan_steps` to refuse auto-completion
+        when a sub-agent's reply explicitly flagged partial work.
+        """
+        if not content:
+            return None
+        lowered = content.lower()
+        for marker in cls._CAVEAT_MARKERS:
+            if marker in lowered:
+                return marker
+        return None
+
     @staticmethod
     def _auto_complete_plan_steps(uid: str, messages: list) -> None:
         """Auto-mark plan steps done when delegation/work tools returned successfully.
@@ -223,6 +270,13 @@ class ConversationAgent:
         incomplete steps and work was clearly done (delegation returned, files
         saved), marks ALL incomplete steps as done. This prevents the plan
         enforcement loop from re-delegating work that already completed.
+
+        Refuses to auto-complete if any delegation response contained a
+        caveat marker (see :attr:`_CAVEAT_MARKERS`) — in that case the
+        sub-agent is explicitly saying the work is partial, and silently
+        marking the plan done would let Prax lie "Done" to the user.
+        Prax must explicitly call ``agent_step_done`` for each step he's
+        actually completed when caveats are present.
         """
         plan = read_plan(uid)
         if not plan:
@@ -236,15 +290,33 @@ class ConversationAgent:
         from prax.services.workspace_service import complete_plan_step
 
         work_done = False
+        caveat_found: str | None = None
         for msg in messages:
             if isinstance(msg, ToolMessage) and msg.name in ConversationAgent._DELEGATION_TOOLS:
-                content = (msg.content or "").lower()
+                content = msg.content or ""
+                content_lower = content.lower()
                 # Only count as done if the result doesn't look like an error
-                if not any(err in content for err in ("failed", "error:", "sub-agent failed")):
-                    work_done = True
+                if any(err in content_lower for err in ("failed", "error:", "sub-agent failed")):
+                    continue
+                work_done = True
+                # Check for partial-completion caveats that should block
+                # silent auto-completion.
+                marker = ConversationAgent._response_has_caveat(content)
+                if marker:
+                    caveat_found = marker
                     break
 
         if not work_done:
+            return
+
+        if caveat_found:
+            logger.warning(
+                "Refusing to auto-complete plan steps: delegation response "
+                "contained caveat marker %r. Prax must explicitly call "
+                "agent_step_done for completed steps and surface the caveat "
+                "to the user.",
+                caveat_found,
+            )
             return
 
         # Auto-mark all incomplete steps as done — the work was completed
@@ -568,9 +640,18 @@ class ConversationAgent:
                 response = msg.content
                 break
 
-        # Deterministic claim audit: check for ungrounded numeric claims.
+        # Deterministic claim audit: check for ungrounded numeric claims
+        # AND narrative (news/weather) claims without grounding tool calls.
+        # Scheduled tasks get a blocking check — hallucinated notifications
+        # sent to an absent user are especially damaging.
         if response:
-            response = self._audit_claims(response, result.get("messages", []), uid)
+            is_scheduled = user_input.lstrip().startswith("[SCHEDULED_TASK")
+            response = self._audit_claims(
+                response,
+                result.get("messages", []),
+                uid,
+                scheduled=is_scheduled,
+            )
 
         # Update session summary for next turn's classification.
         try:
@@ -868,19 +949,41 @@ class ConversationAgent:
                 config = {**rollback_cfg, "callbacks": _callbacks}
 
     @staticmethod
-    def _audit_claims(response: str, messages: list, user_id: str | None) -> str:
+    def _audit_claims(
+        response: str,
+        messages: list,
+        user_id: str | None,
+        *,
+        scheduled: bool = False,
+    ) -> str:
         """Run deterministic claim audit and log findings.
 
-        If ungrounded claims are found, appends a trace audit entry.
-        Does NOT block the response — the epistemic tags and system prompt
-        are the primary defense.  This is a post-hoc detection layer for
-        monitoring and debugging.
+        Two independent checks run:
+
+        1. Numeric claim audit — verbatim-match dollar/percent/rank claims
+           against tool results (catches fabricated numbers like the
+           PHL→SNA $83 incident).
+        2. Narrative grounding audit — detect "news/weather/headlines"
+           language in the response and verify that at least one
+           research/web/news/browser tool was actually called this turn.
+
+        For scheduled tasks, narrative-grounding failures are promoted to
+        a BLOCKING substitution: the fabricated response is replaced with
+        a safe fallback because the user is not present to push back.
+        For interactive turns, both checks remain advisory — the epistemic
+        tags and system prompt are the primary defense, and the human can
+        always correct in the next turn.
         """
         from prax.agent.trace import start_span
         audit_span = start_span("claim_audit", "auditor")
 
         try:
-            from prax.agent.claim_audit import audit_claims, format_audit_warning
+            from prax.agent.claim_audit import (
+                audit_claims,
+                audit_narrative_grounding,
+                audit_plan_completion,
+                format_audit_warning,
+            )
             from prax.services.teamwork_hooks import (
                 log_activity,
                 post_to_channel,
@@ -898,10 +1001,32 @@ class ConversationAgent:
                     tool_results.append(msg.content)
 
             findings = audit_claims(response, tool_results)
+            narrative = audit_narrative_grounding(response, messages)
+            plan_mismatch = audit_plan_completion(response, messages)
 
+            flagged_parts: list[str] = []
             if findings:
-                warning = format_audit_warning(findings)
-                logger.warning("Claim audit flagged response (user=%s): %s", user_id, warning)
+                flagged_parts.append(format_audit_warning(findings))
+            if narrative:
+                called = ", ".join(narrative["called_tools"]) or "(none)"
+                phrases = ", ".join(f"'{p}'" for p in narrative["phrases"])
+                flagged_parts.append(
+                    f"UNGROUNDED NARRATIVE: claims phrases {phrases} but no "
+                    f"research/web/news/browser tool was called (called: {called})"
+                )
+            if plan_mismatch:
+                flagged_parts.append(
+                    f"PLAN-COMPLETION MISMATCH: response claims "
+                    f"{plan_mismatch['completion_claim']!r} but "
+                    f"{plan_mismatch['caveat_tool']} reply contained caveat "
+                    f"{plan_mismatch['caveat_marker']!r} — the sub-agent "
+                    f"said the work is partial and the response ignored it"
+                )
+
+            if flagged_parts:
+                warning = "; ".join(flagged_parts)
+                logger.warning("Claim audit flagged response (user=%s scheduled=%s): %s",
+                               user_id, scheduled, warning)
                 post_to_channel("general", f"[Claim Audit] {warning}", agent_name="Auditor")
                 push_live_output("Auditor", f"Flagged: {warning}\n", status="completed")
                 log_activity("Auditor", "audit", f"Claim audit flagged: {warning}")
@@ -916,6 +1041,24 @@ class ConversationAgent:
                         }])
                     except Exception:
                         pass
+
+                # BLOCKING substitution for scheduled tasks with narrative
+                # hallucinations. The user is not present to correct — better
+                # to deliver nothing substantive than fabricated news.
+                if scheduled and narrative:
+                    logger.error(
+                        "BLOCKING scheduled-task response due to ungrounded "
+                        "narrative claims (user=%s): %s",
+                        user_id, warning,
+                    )
+                    return (
+                        "[Auto-suppressed scheduled briefing]\n\n"
+                        "I couldn't fetch fresh news or weather data for "
+                        "today's briefing — rather than send you made-up "
+                        "content, I'm holding this one. Ask me for a "
+                        "briefing when you have a moment and I'll try again "
+                        "with live research."
+                    )
             else:
                 push_live_output("Auditor", "No claims flagged.\n", status="completed")
                 log_activity("Auditor", "audit", "Claim audit passed — no issues found")

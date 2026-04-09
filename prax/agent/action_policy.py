@@ -128,6 +128,7 @@ _MEDIUM: set[str] = {
     "browser_open",
     "browser_read_page",
     "browser_screenshot",
+    "browser_page_screenshot",
     "browser_find",
     "fetch_url_content",
     "background_search_tool",
@@ -148,9 +149,14 @@ _MEDIUM: set[str] = {
     # publishable content
     "note_create",
     "note_update",
-    "url_to_note",
+    "note_from_url",
     "pdf_to_note",
     "arxiv_to_note",
+    # library archive (long-term document storage)
+    "library_archive_capture",
+    "library_archive_pdf",
+    # library space cover generation (image API call)
+    "library_space_generate_cover",
     "course_create",
     "course_update",
     "course_publish",
