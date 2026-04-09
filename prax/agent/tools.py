@@ -76,9 +76,10 @@ def get_current_datetime(timezone_name: str = "UTC") -> str:
 def fetch_url_content(url: str) -> str:
     """Fetch the text content of a URL as clean, LLM-friendly markdown.
 
-    Uses a reader service to extract the main content from web pages —
-    strips navigation, ads, sidebars, and boilerplate automatically.
-    Returns clean markdown suitable for summarisation or analysis.
+    Routes through the Jina Reader service (headless browser,
+    server-side render) to extract the main content — strips
+    navigation, ads, sidebars, and boilerplate automatically.  Honors
+    the ``JINA_API_KEY`` setting if configured for paid-tier throughput.
 
     Use this as the FIRST approach when a user shares a URL.  It is fast
     (~1-2s) and produces high-quality output for articles, docs, and blogs.
@@ -88,42 +89,19 @@ def fetch_url_content(url: str) -> str:
     fall back to delegate_browser which uses a full browser with JS
     rendering and persistent login sessions.
     """
-    import requests as _requests
+    from prax.services.url_reader import ReaderError, fetch_markdown
 
-    # Route through reader service for clean markdown extraction.
-    # The request originates from the reader's infrastructure, not ours.
     try:
-        resp = _requests.get(
-            f"https://r.jina.ai/{url}",
-            headers={
-                "Accept": "text/markdown",
-                "X-No-Cache": "true",
-            },
-            timeout=20,
-            allow_redirects=True,
-        )
-        resp.raise_for_status()
-
-        text = resp.text.strip()
-
-        # If the reader returned very little content, the page likely
-        # needs JS rendering or authentication — signal to use browser.
-        if len(text) < 50:
-            return (
-                f"Reader returned minimal content for {url} — the page may "
-                "require JavaScript or authentication. Use delegate_browser "
-                "to load it in a full browser."
-            )
-
-        if len(text) > 15000:
-            text = text[:15000] + "\n\n[Content truncated]"
-
-        return f"{text}\n\nSource: {url}"
-    except Exception as e:
+        # Orchestrator-level fetches get a smaller cap than the note
+        # pipeline because they go straight into turn context.
+        text = fetch_markdown(url, max_chars=15_000)
+    except ReaderError as exc:
         return (
-            f"Failed to fetch URL via reader: {e}. "
-            "Use delegate_browser for full browser rendering."
+            f"{exc}\n\nUse delegate_browser for full browser rendering "
+            "with JS + persistent sessions if the page needs them."
         )
+
+    return f"{text}\n\nSource: {url}"
 
 
 def build_default_tools():

@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "prax.fullname" . }}-teamwork
+  namespace: {{ include "prax.namespace" . }}
+  labels:
+    {{- include "prax.componentLabels" (dict "component" "teamwork" "context" $) | nindent 4 }}
+spec:
+  replicas: {{ .Values.teamwork.replicas }}
+  selector:
+    matchLabels:
+      {{- include "prax.componentSelectorLabels" (dict "component" "teamwork" "context" $) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "prax.componentLabels" (dict "component" "teamwork" "context" $) | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "prax.serviceAccountName" . }}
+      containers:
+        - name: teamwork
+          image: {{ include "prax.image" (dict "img" .Values.images.teamwork) }}
+          imagePullPolicy: {{ .Values.images.teamwork.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            - name: DATABASE_URL
+              value: "sqlite+aiosqlite:///data/vteam.db"
+            - name: WORKSPACE_PATH
+              value: "/workspace"
+            - name: PRAX_URL
+              value: http://{{ include "prax.fullname" . }}-app:5001
+            - name: SANDBOX_CONTAINER
+              value: {{ .Values.config.sandboxContainer | quote }}
+            - name: CHROME_CDP_HOST
+              value: {{ include "prax.fullname" . }}-sandbox
+            - name: CHROME_CDP_PORT
+              value: "9223"
+            - name: CORS_ORIGINS
+              value: {{ .Values.config.corsOrigins | quote }}
+            - name: EXTERNAL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "prax.fullname" . }}-secrets
+                  key: TEAMWORK_API_KEY
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.teamwork.resources | nindent 12 }}
+          volumeMounts:
+            - name: teamwork-data
+              mountPath: /app/data
+            - name: workspace
+              mountPath: /workspace
+      volumes:
+        - name: teamwork-data
+          persistentVolumeClaim:
+            claimName: {{ include "prax.fullname" . }}-teamwork-data
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: {{ include "prax.fullname" . }}-workspace
+---
+# TeamWork data PVC (SQLite database — single replica so RWO is fine)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "prax.fullname" . }}-teamwork-data
+  namespace: {{ include "prax.namespace" . }}
+  labels:
+    {{- include "prax.componentLabels" (dict "component" "teamwork" "context" $) | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.persistence.teamwork.accessMode }}
+  {{- if .Values.global.storageClass }}
+  storageClassName: {{ .Values.global.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.teamwork.size }}

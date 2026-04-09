@@ -28,6 +28,85 @@ APOLOGY_MSG = "Sorry, something went wrong processing your message. Please try a
 
 _ARXIV_ID_RE = re.compile(r"(\d{4}\.\d{4,5})(v\d+)?")
 
+# Very permissive URL matcher for auto-capture of shared links in SMS.
+_URL_RE = re.compile(r"https?://[^\s<>()\[\]]+")
+
+
+def _fetch_url_as_markdown(url: str, timeout: int = 20) -> str | None:
+    """Fetch a URL through the Jina reader and return clean markdown.
+
+    Thin wrapper around :func:`prax.services.url_reader.try_fetch_markdown`.
+    Used by :func:`_maybe_auto_capture_raw` so the library/raw/ entry
+    actually contains the article body rather than just the URL and the
+    user's message.  Returns ``None`` on any failure so callers can
+    degrade gracefully.  Honors ``JINA_API_KEY`` when set for paid quota.
+    """
+    from prax.services.url_reader import try_fetch_markdown
+
+    return try_fetch_markdown(url, timeout=timeout)
+
+
+def _maybe_auto_capture_raw(user_id: str, text: str) -> str | None:
+    """Detect shared URLs in an inbound message and drop them into
+    library/raw/ so they're tracked in the user's knowledge base.
+
+    Returns the slug of the captured raw item on success, or ``None``
+    if there was nothing URL-like to capture or the capture failed.
+
+    We capture on any message that contains at least one URL, EXCEPT
+    PDFs — those already have their own dedicated flow via
+    ``_handle_pdf`` and get saved to the workspace as notes.
+
+    The captured body includes both the user's original message AND
+    the fetched page content (via Jina reader), so the raw entry is
+    actually usable for "promote to notebook" later.  If the fetch
+    fails, the raw entry still gets the user's message so nothing is
+    lost.
+    """
+    urls = _URL_RE.findall(text or "")
+    if not urls:
+        return None
+    # PDFs get handled by the dedicated PDF flow, don't double-capture.
+    if any(detect_pdf_url(u) for u in urls):
+        return None
+    try:
+        from prax.services.library_service import raw_capture
+        # Title comes from the first URL (domain + path) for a readable slug.
+        primary = urls[0]
+        parsed = urlparse(primary)
+        title = (parsed.netloc + parsed.path).rstrip("/") or primary
+        # Trim the title so the slug stays reasonable.
+        title = title[:80]
+
+        # Fetch the page content so the raw entry is actually useful.
+        fetched = _fetch_url_as_markdown(primary)
+        if fetched:
+            body = (
+                f"> User message:\n> {text.strip()}\n\n"
+                f"---\n\n"
+                f"## Fetched page content\n\n{fetched}"
+            )
+        else:
+            body = (
+                f"> User message:\n> {text.strip()}\n\n"
+                f"---\n\n"
+                f"*[Could not fetch page content automatically — promote "
+                f"to a notebook and use note_from_url for a full pull.]*"
+            )
+
+        result = raw_capture(
+            user_id,
+            title=title,
+            content=body,
+            source_url=primary,
+        )
+        if "error" in result:
+            return None
+        return result["raw"]["slug"]
+    except Exception:
+        logger.exception("Auto-capture of raw URL failed")
+        return None
+
 
 def _derive_filename(url: str) -> str:
     """Extract a human-readable base filename from a PDF URL."""
@@ -63,7 +142,20 @@ class SmsService:
             from prax.services.teamwork_hooks import forward_to_channel
             forward_to_channel("sms", user.display_name, text)
 
-            response = conversation_service.reply(user.id, text)
+            # Auto-capture bare URLs into library/raw/.  The agent still
+            # sees the original message and can reason about it, but now
+            # it knows the content is safely saved in raw/ and can offer
+            # to promote it to a notebook.
+            captured = _maybe_auto_capture_raw(user.id, text)
+            prompt = text
+            if captured:
+                prompt = (
+                    f"{text}\n\n"
+                    f"[SYSTEM: captured to library/raw/ as `{captured}` — "
+                    f"offer to promote it to a notebook if relevant.]"
+                )
+
+            response = conversation_service.reply(user.id, prompt)
             send_sms(response, from_number)
 
             # Mirror the agent response to #sms.

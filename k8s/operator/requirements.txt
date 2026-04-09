@@ -1,0 +1,3 @@
+kopf>=1.37
+kubernetes>=28.0
+httpx>=0.27

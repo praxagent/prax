@@ -361,24 +361,23 @@ def _summarize_briefing(content: str) -> str:
 
 
 def _do_briefing(user_id: str, sources: list[dict]) -> str:
-    """Full executive summary — published to /news/ as a Hugo page."""
+    """Full executive summary — persisted to library/outputs/."""
     content = _build_briefing_content(sources)
     today = datetime.now(UTC).strftime("%B %-d, %Y")
-    title = f"Prax's Curated News Report — {today}"
+    title = f"News Briefing — {today}"
     digest = _summarize_briefing(content)
 
     try:
-        from prax.services.note_service import publish_news
-        result = publish_news(user_id, title, content)
-        if "error" in result:
-            return f"Briefing generated but publishing failed: {result['error']}\n\n{content}"
+        from prax.services.library_service import write_output
+        result = write_output(user_id, title, content, kind="news-briefing")
+        slug = result.get("output", {}).get("slug", "")
         return (
-            f"Published: {result['url']}\n\n"
-            f"Digest (share the URL, not this raw text):\n{digest}"
+            f"Saved to library/outputs/ as `{slug}`.\n\n"
+            f"Digest:\n{digest}"
         )
     except Exception as exc:
-        logger.exception("Failed to publish news briefing")
-        return f"Briefing generated but publishing failed: {exc}\n\n{content}"
+        logger.exception("Failed to save news briefing to library outputs")
+        return f"Briefing generated but saving failed: {exc}\n\n{content}"
 
 
 def _do_check(workspace_root: str, sources: list[dict], feed_name: str) -> str:
@@ -480,8 +479,7 @@ def news(action: str = "briefing", source: str = "") -> str:
         return "Error: no active user context."
 
     # Hold the lock only for config I/O — action functions manage their
-    # own locking if needed (publish_news acquires the same per-user lock,
-    # and threading.Lock is NOT reentrant).
+    # own locking if needed.
     with get_lock(uid):
         root = ensure_workspace(uid)
         _ensure_config(root)

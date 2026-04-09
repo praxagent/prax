@@ -29,6 +29,43 @@ def _format_ingest_result(result: dict, verb: str = "Saved as note") -> str:
     )
 
 
+# Phrases that indicate a note was fabricated because the real source
+# couldn't be read.  We refuse to save such notes at the tool layer so
+# fabrication can't slip past the system prompt rules.
+_FABRICATION_MARKERS = (
+    "(inferred)",
+    "[inferred]",
+    "inferred content",
+    "likely content",
+    "best guess",
+    "best-guess",
+    "probably contained",
+    "this note is inferred",
+    "could not access",
+    "could not read",
+    "couldn't access",
+    "couldn't read",
+    "fetch failed",
+    "404 not found",
+    "page not found",
+)
+
+
+def _looks_fabricated(title: str, content: str) -> str | None:
+    """Detect notes that appear to be fabricated from failed source fetches.
+
+    Returns a reason string if fabrication is detected, else None.
+    """
+    haystack = f"{title}\n{content[:2000]}".lower()
+    hits = [m for m in _FABRICATION_MARKERS if m in haystack]
+    if hits:
+        return (
+            f"note appears to describe its own source failure "
+            f"(matched: {', '.join(hits[:3])})"
+        )
+    return None
+
+
 @tool
 def note_create(title: str, content: str, tags: str = "") -> str:
     """Create a note from the current conversation and publish it as a web page.
@@ -46,10 +83,41 @@ def note_create(title: str, content: str, tags: str = "") -> str:
         content: Full markdown content for the note.
         tags: Comma-separated tags for search (e.g. "math, linear-algebra").
     """
+    # Runtime guard: block fabricated notes even if the prompt rules were
+    # ignored. If the source couldn't be read, no note should be created.
+    fabrication_reason = _looks_fabricated(title, content)
+    if fabrication_reason:
+        return (
+            f"BLOCKED — fabricated note refused: {fabrication_reason}. "
+            f"Report the source failure to the user instead of saving a "
+            f"made-up note. Do NOT retry with the same content. If the user "
+            f"explicitly wants a note on the TOPIC without the source, "
+            f"rewrite with a different title (no 'inferred'/'likely'/"
+            f"'probably') and remove all source-failure disclaimers from "
+            f"the content first."
+        )
+
+    # Quality review — reject raw dumps and low-effort content, up to
+    # MAX_REVISIONS times before allowing the save through.
+    try:
+        from prax.services import note_quality
+        review = note_quality.review_note(title, content)
+        if not review["approved"] and not review["force_save"]:
+            note_quality.increment_revision(title)
+            return f"REVIEW REJECTED — {note_quality.format_feedback(review)}"
+    except Exception:
+        pass  # Review is best-effort — don't block saves on reviewer failure.
+
     try:
         result = note_service.save_and_publish(
             _get_user_id(), title, content, tags=_parse_tags(tags),
         )
+        # Clear revision counter on successful save.
+        try:
+            from prax.services import note_quality
+            note_quality.clear_revision(title)
+        except Exception:
+            pass
         return _format_ingest_result(result, verb="Note created")
     except Exception as e:
         return f"Error creating note: {e}"
@@ -191,60 +259,90 @@ def note_search(query: str) -> str:
         return f"Error searching notes: {e}"
 
 
-@tool
-def url_to_note(url: str, title: str = "", tags: str = "") -> str:
-    """Fetch a web page and save its content as a note.
+def _fetch_clean_url_content(url: str) -> tuple[str, str]:
+    """Fetch a URL and return ``(clean_markdown, title)``.
 
-    Downloads the URL, extracts readable content, and publishes it as a
-    rendered note the user can read in their browser.
+    Thin wrapper around :func:`prax.services.url_reader.fetch_markdown_and_title`.
+    Kept as a module-level helper so existing tests and callers can
+    stub it as a single point.  The underlying reader honors
+    ``JINA_API_KEY`` when set for paid-tier quota.
+
+    Raises on failure — callers should catch and fall back or report.
+    """
+    from prax.services.url_reader import fetch_markdown_and_title
+
+    return fetch_markdown_and_title(url, timeout=30)
+
+
+@tool
+def note_from_url(url: str, topic_hint: str = "", tags: str = "") -> str:
+    """Fetch a URL and create a synthesized deep-dive note from it.
+
+    This is the **only** URL → note tool.  It always produces a real
+    synthesized note through the deep-dive pipeline (writer → reviewer →
+    revise) — raw HTML dumps are never produced.
+
+    Pipeline:
+
+    1. Fetches ``url`` via the Jina reader service (clean markdown,
+       same quality as ``fetch_url_content``).
+    2. Passes the clean source to ``note_deep_dive`` which runs the
+       full write → review → revise loop using a high-tier writer LLM
+       and a cross-provider reviewer.
+    3. Publishes the result and returns the shareable URL.
 
     Args:
-        url: The web page URL to fetch.
-        title: Optional title (auto-detected from page if empty).
+        url: The web page to create a note from.
+        topic_hint: Optional extra context to sharpen the note's angle
+            (e.g. "focus on the ROP gadget selection strategy").  If
+            empty, the topic is derived from the article title.
         tags: Comma-separated tags.
+
+    Notes:
+        - If Jina reader returns an empty or minimal result the caller
+          should fall back to ``delegate_browser`` for a full browser
+          render and then pass the rendered text to ``note_deep_dive``
+          directly.
+        - For already-fetched content (PDF, pasted text, research
+          output) skip this tool and call ``note_deep_dive`` directly
+          with the source content.
     """
     try:
-        import requests
-        from bs4 import BeautifulSoup
-
-        resp = requests.get(url, timeout=30, headers={"User-Agent": "Prax/1.0"})
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
-
-        # Extract title from page if not provided.
-        if not title:
-            title_el = soup.find("title")
-            title = title_el.get_text(strip=True) if title_el else url
-
-        # Extract main content — try article/main first, fall back to body.
-        content_el = None
-        for selector in ("article", "main", "[role=main]", ".post-content", ".entry-content"):
-            content_el = soup.select_one(selector)
-            if content_el:
-                break
-        if not content_el:
-            content_el = soup.find("body")
-
-        # Strip scripts, styles, navs.
-        if content_el:
-            for tag in content_el.find_all(["script", "style", "nav", "header", "footer", "aside"]):
-                tag.decompose()
-            text = content_el.get_text("\n\n", strip=True)
-        else:
-            text = soup.get_text("\n\n", strip=True)
-
-        # Truncate if extremely long.
-        if len(text) > 50000:
-            text = text[:50000] + "\n\n*[Content truncated]*"
-
-        result = note_service.save_and_publish(
-            _get_user_id(), title, text,
-            tags=_parse_tags(tags, default=["web"]),
-            source_url=url,
-        )
-        return _format_ingest_result(result)
+        content, page_title = _fetch_clean_url_content(url)
     except Exception as e:
-        return f"Error creating note from URL: {e}"
+        return (
+            f"Error fetching {url}: {e}\n\n"
+            "If the page requires JavaScript or authentication, use "
+            "delegate_browser to fetch it, then call note_deep_dive "
+            "with the rendered text as source_content."
+        )
+
+    # Build the topic line for the deep-dive pipeline.  First line of
+    # the topic becomes the note title.
+    if topic_hint.strip():
+        topic = topic_hint.strip()
+        if page_title and page_title.lower() not in topic.lower():
+            topic = f"{topic}\n\n(Based on: {page_title})"
+    elif page_title:
+        topic = page_title
+    else:
+        topic = f"Deep dive: {url}"
+
+    # Include the source URL in the context so the note can cite it.
+    source_content = (
+        f"Source URL: {url}\n\n"
+        f"{content[:40000]}"
+    )
+
+    # Import locally to avoid a circular import with the knowledge spoke.
+    from prax.agent.spokes.knowledge.deep_dive import note_deep_dive
+
+    result = note_deep_dive.invoke({
+        "topic": topic,
+        "source_content": source_content,
+        "tags": tags,
+    })
+    return result
 
 
 @tool
@@ -324,5 +422,5 @@ def build_note_tools() -> list:
     """Return the list of note tools to register with the main agent."""
     return [
         note_create, note_read, note_update, note_list, note_search,
-        url_to_note, pdf_to_note, note_link,
+        note_from_url, pdf_to_note, note_link,
     ]

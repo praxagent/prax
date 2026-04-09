@@ -1,0 +1,83 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "prax.fullname" . }}-config
+  namespace: {{ include "prax.namespace" . }}
+  labels:
+    {{- include "prax.labels" . | nindent 4 }}
+data:
+  # Flask / General
+  SESSION_TYPE: {{ .Values.config.sessionType | quote }}
+  DEBUG: {{ .Values.config.debug | quote }}
+  LOG_PATH: {{ .Values.config.logPath | quote }}
+  PORT: {{ .Values.config.port | quote }}
+  DATABASE_NAME: {{ .Values.config.databaseName | quote }}
+  RUNNING_IN_DOCKER: "true"
+
+  # Agent
+  AGENT_NAME: {{ .Values.config.agentName | quote }}
+  BASE_MODEL: {{ .Values.config.baseModel | quote }}
+  LLM_PROVIDER: {{ .Values.config.llmProvider | quote }}
+  AGENT_TEMPERATURE: {{ .Values.config.agentTemperature | quote }}
+
+  # Model tiers
+  LOW_MODEL: {{ .Values.config.lowModel | quote }}
+  LOW_ENABLED: {{ .Values.config.lowEnabled | quote }}
+  MEDIUM_MODEL: {{ .Values.config.mediumModel | quote }}
+  MEDIUM_ENABLED: {{ .Values.config.mediumEnabled | quote }}
+  HIGH_MODEL: {{ .Values.config.highModel | quote }}
+  HIGH_ENABLED: {{ .Values.config.highEnabled | quote }}
+  PRO_MODEL: {{ .Values.config.proModel | quote }}
+  PRO_ENABLED: {{ .Values.config.proEnabled | quote }}
+
+  # Vision
+  VISION_MODEL: {{ .Values.config.visionModel | quote }}
+  VISION_PROVIDER: {{ .Values.config.visionProvider | quote }}
+
+  # Autonomy
+  PRAX_AUTONOMY: {{ .Values.config.praxAutonomy | quote }}
+
+  # Memory
+  MEMORY_ENABLED: {{ .Values.config.memoryEnabled | quote }}
+  EMBEDDING_PROVIDER: {{ .Values.config.embeddingProvider | quote }}
+  EMBEDDING_MODEL: {{ .Values.config.embeddingModel | quote }}
+  MEMORY_CONSOLIDATION_INTERVAL: {{ .Values.config.memoryConsolidationInterval | quote }}
+  MEMORY_DECAY_HALFLIFE_DAYS: {{ .Values.config.memoryDecayHalflifeDays | quote }}
+  MEMORY_STM_MAX_ENTRIES: {{ .Values.config.memoryStmMaxEntries | quote }}
+  NEO4J_USER: "neo4j"
+
+  # Self-improvement
+  SELF_IMPROVE_ENABLED: {{ .Values.config.selfImproveEnabled | quote }}
+  SELF_IMPROVE_AGENT: {{ .Values.config.selfImproveAgent | quote }}
+
+  # Observability
+  OBSERVABILITY_ENABLED: {{ .Values.config.observabilityEnabled | quote }}
+  HEALTH_MONITOR_ENABLED: {{ .Values.config.healthMonitorEnabled | quote }}
+
+  # Browser
+  BROWSER_HEADLESS: {{ .Values.config.browserHeadless | quote }}
+  BROWSER_TIMEOUT: {{ .Values.config.browserTimeout | quote }}
+
+  # Workspace
+  WORKSPACE_DIR: {{ .Values.config.workspaceDir | quote }}
+
+  # Sandbox
+  SANDBOX_TIMEOUT: {{ .Values.config.sandboxTimeout | quote }}
+  SANDBOX_MAX_CONCURRENT: {{ .Values.config.sandboxMaxConcurrent | quote }}
+  SANDBOX_DEFAULT_MODEL: {{ .Values.config.sandboxDefaultModel | quote }}
+  SANDBOX_MAX_ROUNDS: {{ .Values.config.sandboxMaxRounds | quote }}
+
+  # Agent guardrails
+  AGENT_MAX_TOOL_CALLS: {{ .Values.config.agentMaxToolCalls | quote }}
+  AGENT_MAX_DELEGATION_DEPTH: {{ .Values.config.agentMaxDelegationDepth | quote }}
+  AGENT_RUN_TIMEOUT: {{ .Values.config.agentRunTimeout | quote }}
+
+  # Phone metadata
+  ROOT_PHONE_NUMBER: {{ .Values.config.rootPhoneNumber | quote }}
+  PHONE_TO_NAME_MAP: {{ .Values.config.phoneToNameMap | quote }}
+  PHONE_TO_EMAIL_MAP: {{ .Values.config.phoneToEmailMap | quote }}
+  PHONE_TO_GREETING_MAP: {{ .Values.config.phoneToGreetingMap | quote }}
+  DISCORD_ALLOWED_USERS: {{ .Values.config.discordAllowedUsers | quote }}
+  DISCORD_ALLOWED_CHANNELS: {{ .Values.config.discordAllowedChannels | quote }}
+  DISCORD_TO_PHONE_MAP: {{ .Values.config.discordToPhoneMap | quote }}
+  TEAMWORK_USER_PHONE: {{ .Values.config.teamworkUserPhone | quote }}

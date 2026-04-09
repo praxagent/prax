@@ -1,0 +1,45 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "prax.fullname" . }}-ollama-init
+  namespace: {{ include "prax.namespace" . }}
+  labels:
+    {{- include "prax.componentLabels" (dict "component" "ollama-init" "context" $) | nindent 4 }}
+  annotations:
+    # Run after install/upgrade; allow re-runs on upgrade to pull new models.
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "prax.componentLabels" (dict "component" "ollama-init" "context" $) | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        # Wait for Ollama to be ready before pulling the model
+        - name: wait-for-ollama
+          image: curlimages/curl:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Waiting for Ollama to be ready..."
+              until curl -sf http://{{ include "prax.fullname" . }}-ollama:11434/ >/dev/null 2>&1; do
+                sleep 3
+              done
+              echo "Ollama is ready."
+      containers:
+        - name: pull-model
+          image: curlimages/curl:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Pulling embedding model: {{ .Values.ollama.initModel }}..."
+              curl -sf http://{{ include "prax.fullname" . }}-ollama:11434/api/pull \
+                -d '{"model": "{{ .Values.ollama.initModel }}"}'
+              echo ""
+              echo "Model pull complete."

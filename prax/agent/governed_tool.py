@@ -66,6 +66,12 @@ def drain_audit_log() -> list[dict]:
     _high_risk_confirmed = False
     _tool_call_count = 0
     _tool_call_budget = 0
+    # Reset loop detector at turn boundary.
+    try:
+        from prax.agent.loop_detector import reset as _reset_loops
+        _reset_loops()
+    except Exception:
+        pass
     return entries
 
 
@@ -185,11 +191,33 @@ def wrap_with_governance(tool: BaseTool) -> BaseTool:
                     tool_name, risk, kwargs,
                     result="BLOCKED — tool call budget exhausted",
                 ))
+                try:
+                    from prax.services.health_telemetry import EventCategory, Severity, record_event
+                    record_event(
+                        EventCategory.BUDGET_EXHAUSTED, Severity.WARNING,
+                        component="governed_tool",
+                        details=f"Budget exhausted at {_tool_call_budget} calls (tool: {tool_name})",
+                    )
+                except Exception:
+                    pass
                 return (
                     f"Tool call budget exhausted ({_tool_call_budget} calls used). "
                     f"Use request_extended_budget(reason, additional_calls) to "
                     f"request more calls if the task genuinely requires it."
                 )
+
+        # --- Loop detection ---
+        try:
+            from prax.agent.loop_detector import check as _loop_check
+            loop_msg = _loop_check(tool_name, kwargs)
+            if loop_msg:
+                _audit_buffer.append(log_action(
+                    tool_name, risk, kwargs,
+                    result=f"LOOP — {loop_msg[:80]}",
+                ))
+                return loop_msg
+        except Exception:
+            pass
 
         # --- HIGH-risk gate with smart auto-approve ---
         if risk is RiskLevel.HIGH and not _high_risk_confirmed:
@@ -289,6 +317,15 @@ def wrap_with_governance(tool: BaseTool) -> BaseTool:
             _audit_buffer.append(log_action(
                 tool_name, risk, kwargs, result=f"ERROR: {exc}",
             ))
+            try:
+                from prax.services.health_telemetry import EventCategory, Severity, record_event
+                record_event(
+                    EventCategory.TOOL_ERROR, Severity.WARNING,
+                    component=tool_name,
+                    details=f"{type(exc).__name__}: {str(exc)[:200]}",
+                )
+            except Exception:
+                pass
             raise
 
     # Augment the tool's args schema with expected_observation so the

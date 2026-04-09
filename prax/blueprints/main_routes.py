@@ -106,7 +106,7 @@ def serve_course_site(path=''):
     """
     import os
 
-    from prax.services.course_service import find_course_site_public_dir
+    from prax.services.hugo_publishing import find_course_site_public_dir
 
     public_dir = find_course_site_public_dir(path)
     if not public_dir:

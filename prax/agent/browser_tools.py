@@ -44,15 +44,100 @@ def browser_read_page() -> str:
 
 
 @tool
-def browser_screenshot() -> str:
+def browser_screenshot(full_page: bool = False) -> str:
     """Take a screenshot of the current browser page.
 
-    Returns the file path to the screenshot image.
+    The screenshot is saved into the user's active workspace as
+    ``screenshot-<timestamp>-<host>.png``, so you can deliver it to the
+    user with ``workspace_send_file(filename)``.
+
+    Args:
+        full_page: If True, capture the entire scrollable page.  If
+            False (default), capture just the visible viewport.
+
+    Returns: A message including the saved filename so you can pass it
+    straight to ``workspace_send_file``.  Example:
+    ``"Screenshot saved to workspace: screenshot-20260409-102030-nytimes.com.png"``.
     """
-    result = browser_service.screenshot(_get_user_id())
+    result = browser_service.screenshot(_get_user_id(), full_page=full_page)
     if "error" in result:
         return f"Browser error: {result['error']}"
-    return f"Screenshot saved: {result['path']} (page: {result['url']})"
+    return (
+        f"Screenshot saved to workspace: **{result['filename']}** "
+        f"(page: {result['url']}).\n"
+        f"Deliver it with `workspace_send_file('{result['filename']}')`."
+    )
+
+
+@tool
+def browser_page_screenshot(
+    url: str,
+    full_page: bool = False,
+    send_to_user: bool = True,
+    message: str = "",
+) -> str:
+    """Navigate to a URL, take a screenshot, and deliver it to the user.
+
+    This is the one-shot tool for "send me a screenshot of X" requests.
+    It runs navigate → wait for render → screenshot → (optionally)
+    deliver the image back to the user via their current channel.
+
+    Args:
+        url: The page to screenshot.
+        full_page: If True, capture the full scrollable page instead of
+            just the viewport.  Use for "screenshot the entire page" or
+            when the user wants to see content below the fold.
+        send_to_user: If True (default), immediately delivers the file
+            via ``workspace_send_file`` — the user gets the image on
+            whatever channel they're using (Discord, TeamWork, SMS via
+            ngrok link).  Set to False if you want to take the
+            screenshot without sending (e.g. to inspect it yourself
+            first with the vision tools).
+        message: Optional caption to include with the delivery.
+
+    Returns: The result of the full flow, including the delivery
+    confirmation if ``send_to_user`` is True.
+
+    Example requests this serves:
+    - "send me a screenshot of the new york times front page"
+    - "grab a screenshot of https://example.com/dashboard"
+    - "what does the hacker news homepage look like right now"
+    """
+    uid = _get_user_id()
+
+    # Step 1: navigate.
+    nav = browser_service.navigate(uid, url)
+    if "error" in nav:
+        return f"Navigation failed: {nav['error']}"
+
+    # Step 2: screenshot into workspace.
+    shot = browser_service.screenshot(uid, full_page=full_page)
+    if "error" in shot:
+        return f"Screenshot failed: {shot['error']}"
+
+    filename = shot["filename"]
+    summary = (
+        f"Screenshot of **{nav.get('title') or url}** saved as "
+        f"`{filename}` (page: {shot['url']})."
+    )
+
+    if not send_to_user:
+        return (
+            f"{summary}\n"
+            f"Call `workspace_send_file('{filename}')` when you're ready "
+            f"to deliver it."
+        )
+
+    # Step 3: deliver via workspace_send_file.  Import locally to avoid
+    # a circular import between browser_tools and workspace_tools.
+    from prax.agent.workspace_tools import workspace_send_file
+
+    caption = message or f"Screenshot of {nav.get('title') or url}"
+    delivery = workspace_send_file.invoke({
+        "filename": filename,
+        "message": caption,
+    })
+    return f"{summary}\n\n{delivery}"
 
 
 @risk_tool(risk=RiskLevel.HIGH)
@@ -215,6 +300,7 @@ def browser_profiles() -> str:
 def build_browser_tools() -> list:
     return [
         browser_open, browser_read_page, browser_screenshot,
+        browser_page_screenshot,
         browser_click, browser_fill, browser_press, browser_find,
         browser_credentials, browser_login, browser_close,
         browser_request_login, browser_finish_login,

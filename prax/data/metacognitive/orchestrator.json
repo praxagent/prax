@@ -1,50 +1,14 @@
 {
   "component": "orchestrator",
   "patterns": {
-    "graph_HTTPError": {
-      "pattern_id": "graph_HTTPError",
-      "description": "Graph invocation failed: HTTPError: 429 Client Error: Unknown Error for url: https://export.arxiv.org/api/query?sear",
+    "graph_CalledProcessError": {
+      "pattern_id": "graph_CalledProcessError",
+      "description": "Graph invocation failed: CalledProcessError: Command '['git', 'commit', '-m', 'Step 3 done: Present the plan concisely to ']'",
       "category": "",
-      "confidence": 0.9322608503304375,
-      "occurrences": 6,
-      "last_seen": 1774842405.42293,
-      "compensating_instruction": "Previous runs hit HTTPError \u2014 verify tool args before calling."
-    },
-    "graph_BadRequestError": {
-      "pattern_id": "graph_BadRequestError",
-      "description": "Graph invocation failed: BadRequestError: Error code: 400 - {'error': {'message': \"An assistant message with 'tool_calls' ",
-      "category": "",
-      "confidence": 0.6997759502653328,
-      "occurrences": 4,
-      "last_seen": 1774842405.8856242,
-      "compensating_instruction": "Previous runs hit BadRequestError \u2014 verify tool args before calling."
-    },
-    "graph_RuntimeError": {
-      "pattern_id": "graph_RuntimeError",
-      "description": "Graph invocation failed: RuntimeError: cannot schedule new futures after shutdown",
-      "category": "",
-      "confidence": 0.47347356421169207,
-      "occurrences": 3,
-      "last_seen": 1774824067.5007553,
-      "compensating_instruction": "Previous runs hit RuntimeError \u2014 verify tool args before calling."
-    },
-    "graph_ReadTimeout": {
-      "pattern_id": "graph_ReadTimeout",
-      "description": "Graph invocation failed: ReadTimeout: HTTPSConnectionPool(host='export.arxiv.org', port=443): Read timed out. (read ti",
-      "category": "",
-      "confidence": 0.5113250878002191,
-      "occurrences": 2,
-      "last_seen": 1774842438.5559812,
-      "compensating_instruction": "Previous runs hit ReadTimeout \u2014 verify tool args before calling."
-    },
-    "graph_AttributeError": {
-      "pattern_id": "graph_AttributeError",
-      "description": "Graph invocation failed: AttributeError: 'GraphCallbackHandler' object has no attribute 'raise_error'",
-      "category": "",
-      "confidence": 0.8,
-      "occurrences": 3,
-      "last_seen": 1774938450.742211,
-      "compensating_instruction": "Previous runs hit AttributeError \u2014 verify tool args before calling."
+      "confidence": 0.5,
+      "occurrences": 1,
+      "last_seen": 1775581018.1893287,
+      "compensating_instruction": "Previous runs hit CalledProcessError \u2014 verify tool args before calling."
     }
   }
 }

@@ -209,3 +209,157 @@ def test_browser_profiles_empty(monkeypatch):
 
     result = module.browser_profiles.invoke({})
     assert "no" in result.lower()
+
+
+# ---------- Screenshot + one-shot page screenshot -------------------------
+
+def test_browser_screenshot_returns_workspace_filename(monkeypatch):
+    """browser_screenshot's result must include the workspace filename
+    so the agent can pass it straight to workspace_send_file."""
+    module = importlib.reload(importlib.import_module("prax.agent.browser_tools"))
+    svc = importlib.import_module("prax.services.browser_service")
+
+    monkeypatch.setattr(
+        svc, "screenshot",
+        lambda uid, full_page=False: {
+            "path": "/workspaces/user/active/screenshot-20260409-102030-nytimes.com.png",
+            "filename": "screenshot-20260409-102030-nytimes.com.png",
+            "url": "https://nytimes.com",
+            "workspace": True,
+        },
+    )
+    current_user_id.set("+10000000000")
+
+    result = module.browser_screenshot.invoke({})
+    assert "screenshot-20260409-102030-nytimes.com.png" in result
+    assert "workspace_send_file" in result
+    assert "nytimes.com" in result
+
+
+def test_browser_screenshot_full_page_param(monkeypatch):
+    """full_page is forwarded through to the service."""
+    module = importlib.reload(importlib.import_module("prax.agent.browser_tools"))
+    svc = importlib.import_module("prax.services.browser_service")
+
+    captured = {}
+
+    def fake_screenshot(uid, full_page=False):
+        captured["full_page"] = full_page
+        return {
+            "path": "/workspaces/u/active/x.png",
+            "filename": "x.png",
+            "url": "https://example.com",
+            "workspace": True,
+        }
+
+    monkeypatch.setattr(svc, "screenshot", fake_screenshot)
+    current_user_id.set("+10000000000")
+
+    module.browser_screenshot.invoke({"full_page": True})
+    assert captured["full_page"] is True
+
+
+class _FakeTool:
+    """Minimal stand-in for a LangChain StructuredTool used in tests."""
+
+    def __init__(self, handler):
+        self._handler = handler
+
+    def invoke(self, payload):
+        return self._handler(**payload)
+
+
+def test_browser_page_screenshot_delivers_to_user(monkeypatch):
+    """browser_page_screenshot chains navigate → screenshot → deliver."""
+    module = importlib.reload(importlib.import_module("prax.agent.browser_tools"))
+    svc = importlib.import_module("prax.services.browser_service")
+    ws_tools = importlib.import_module("prax.agent.workspace_tools")
+
+    nav_calls: list[str] = []
+    shot_calls: list[bool] = []
+    delivery_calls: list[dict] = []
+
+    monkeypatch.setattr(
+        svc, "navigate",
+        lambda uid, url: nav_calls.append(url) or {
+            "url": url, "title": "The New York Times", "content": "headline 1\nheadline 2",
+        },
+    )
+    monkeypatch.setattr(
+        svc, "screenshot",
+        lambda uid, full_page=False: shot_calls.append(full_page) or {
+            "path": "/workspaces/u/active/screenshot-nyt.png",
+            "filename": "screenshot-nyt.png",
+            "url": "https://nytimes.com",
+            "workspace": True,
+        },
+    )
+
+    def _send(filename, message=""):
+        delivery_calls.append({"filename": filename, "message": message})
+        return f"Sent {filename} via Discord."
+
+    monkeypatch.setattr(ws_tools, "workspace_send_file", _FakeTool(_send))
+    current_user_id.set("+10000000000")
+
+    result = module.browser_page_screenshot.invoke({"url": "https://nytimes.com"})
+
+    assert nav_calls == ["https://nytimes.com"]
+    assert shot_calls == [False]
+    assert len(delivery_calls) == 1
+    assert delivery_calls[0]["filename"] == "screenshot-nyt.png"
+    assert "New York Times" in delivery_calls[0]["message"]
+    assert "Sent screenshot-nyt.png" in result
+
+
+def test_browser_page_screenshot_no_send(monkeypatch):
+    """send_to_user=False skips delivery but still captures."""
+    module = importlib.reload(importlib.import_module("prax.agent.browser_tools"))
+    svc = importlib.import_module("prax.services.browser_service")
+    ws_tools = importlib.import_module("prax.agent.workspace_tools")
+
+    monkeypatch.setattr(
+        svc, "navigate",
+        lambda uid, url: {"url": url, "title": "Page", "content": "x"},
+    )
+    monkeypatch.setattr(
+        svc, "screenshot",
+        lambda uid, full_page=False: {
+            "path": "/workspaces/u/active/p.png",
+            "filename": "p.png",
+            "url": "https://example.com",
+            "workspace": True,
+        },
+    )
+
+    called = []
+
+    def _send(filename, message=""):
+        called.append(filename)
+        return ""
+
+    monkeypatch.setattr(ws_tools, "workspace_send_file", _FakeTool(_send))
+    current_user_id.set("+10000000000")
+
+    result = module.browser_page_screenshot.invoke({
+        "url": "https://example.com",
+        "send_to_user": False,
+    })
+    assert called == []
+    assert "workspace_send_file('p.png')" in result
+
+
+def test_browser_page_screenshot_navigation_failure(monkeypatch):
+    """Navigation errors propagate as a clean error message."""
+    module = importlib.reload(importlib.import_module("prax.agent.browser_tools"))
+    svc = importlib.import_module("prax.services.browser_service")
+
+    monkeypatch.setattr(
+        svc, "navigate",
+        lambda uid, url: {"error": "DNS resolution failed"},
+    )
+    current_user_id.set("+10000000000")
+
+    result = module.browser_page_screenshot.invoke({"url": "https://bogus.invalid"})
+    assert "Navigation failed" in result
+    assert "DNS" in result

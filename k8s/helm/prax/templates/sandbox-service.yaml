@@ -1,0 +1,45 @@
+# Headless service — enables stable DNS for StatefulSet pods
+# (e.g., prax-sandbox-0.prax-sandbox-headless)
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "prax.fullname" . }}-sandbox-headless
+  namespace: {{ include "prax.namespace" . }}
+  labels:
+    {{- include "prax.componentLabels" (dict "component" "sandbox" "context" $) | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - name: opencode
+      port: 4096
+      targetPort: opencode
+      protocol: TCP
+    - name: chrome-cdp
+      port: 9223
+      targetPort: chrome-cdp
+      protocol: TCP
+  selector:
+    {{- include "prax.componentSelectorLabels" (dict "component" "sandbox" "context" $) | nindent 4 }}
+---
+# ClusterIP service — load-balanced access for other services
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "prax.fullname" . }}-sandbox
+  namespace: {{ include "prax.namespace" . }}
+  labels:
+    {{- include "prax.componentLabels" (dict "component" "sandbox" "context" $) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: opencode
+      port: 4096
+      targetPort: opencode
+      protocol: TCP
+    - name: chrome-cdp
+      port: 9223
+      targetPort: chrome-cdp
+      protocol: TCP
+  selector:
+    {{- include "prax.componentSelectorLabels" (dict "component" "sandbox" "context" $) | nindent 4 }}

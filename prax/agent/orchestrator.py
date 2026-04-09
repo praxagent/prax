@@ -32,6 +32,31 @@ _COMPLEXITY_SIGNALS = [
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Runtime model override — set via the /teamwork/model API
+# ---------------------------------------------------------------------------
+
+_model_override: str | None = None
+
+
+def set_model_override(model: str | None) -> None:
+    """Set a runtime override for the orchestrator model.
+
+    Pass ``None`` or ``"auto"`` to clear the override and revert to
+    the config default.
+    """
+    global _model_override
+    if model and model.lower() == "auto":
+        model = None
+    _model_override = model
+    logger.info("Model override set to: %s", _model_override or "(auto)")
+
+
+def get_model_override() -> str | None:
+    """Return the current runtime model override, or None if using config default."""
+    return _model_override
+
+
 # Hardcoded fallback — used only if the prompt file is missing.
 _FALLBACK_PROMPT = (
     "You are a warm, capable AI assistant. "
@@ -84,9 +109,11 @@ class ConversationAgent:
     ) -> None:
         from prax.plugins.llm_config import get_component_config
         cfg = get_component_config("orchestrator")
+        # Runtime model override takes precedence over config and constructor args
+        effective_model = _model_override or model or cfg.get("model")
         self.llm = build_llm(
             provider=provider or cfg.get("provider"),
-            model=model or cfg.get("model"),
+            model=effective_model,
             temperature=temperature if temperature is not None else cfg.get("temperature"),
             tier=tier or cfg.get("tier") or "low",
         )
@@ -188,6 +215,53 @@ class ConversationAgent:
         "workspace_save", "workspace_patch", "note_create", "note_update",
     })
 
+    # Substrings that indicate a delegation response contains a caveat /
+    # partial-completion signal.  When any of these appear in a sub-agent's
+    # reply, the auto-completer MUST NOT silently mark steps done — the
+    # delegated agent is explicitly saying the work is not fully done or
+    # there are qualifications the main agent needs to surface to the user.
+    # Matching is lowercase, whole-string contains.
+    _CAVEAT_MARKERS = frozenset({
+        "one caveat",
+        "however,",
+        "but it does not guarantee",
+        "does not guarantee",
+        "if you want, i can",
+        "if you'd like, i can",
+        "if you want me to",
+        "do you want me to",
+        "want me to",
+        "should i",
+        "partial",
+        "could not",
+        "couldn't",
+        "unable to",
+        "not fully",
+        "not complete",
+        "does not include",
+        "doesn't include",
+        "missing",
+        "placeholder",
+        "skipped",
+        "didn't actually",
+        "did not actually",
+    })
+
+    @classmethod
+    def _response_has_caveat(cls, content: str) -> str | None:
+        """Return the first caveat marker found in ``content``, else None.
+
+        Used by :meth:`_auto_complete_plan_steps` to refuse auto-completion
+        when a sub-agent's reply explicitly flagged partial work.
+        """
+        if not content:
+            return None
+        lowered = content.lower()
+        for marker in cls._CAVEAT_MARKERS:
+            if marker in lowered:
+                return marker
+        return None
+
     @staticmethod
     def _auto_complete_plan_steps(uid: str, messages: list) -> None:
         """Auto-mark plan steps done when delegation/work tools returned successfully.
@@ -196,6 +270,13 @@ class ConversationAgent:
         incomplete steps and work was clearly done (delegation returned, files
         saved), marks ALL incomplete steps as done. This prevents the plan
         enforcement loop from re-delegating work that already completed.
+
+        Refuses to auto-complete if any delegation response contained a
+        caveat marker (see :attr:`_CAVEAT_MARKERS`) — in that case the
+        sub-agent is explicitly saying the work is partial, and silently
+        marking the plan done would let Prax lie "Done" to the user.
+        Prax must explicitly call ``agent_step_done`` for each step he's
+        actually completed when caveats are present.
         """
         plan = read_plan(uid)
         if not plan:
@@ -209,15 +290,33 @@ class ConversationAgent:
         from prax.services.workspace_service import complete_plan_step
 
         work_done = False
+        caveat_found: str | None = None
         for msg in messages:
             if isinstance(msg, ToolMessage) and msg.name in ConversationAgent._DELEGATION_TOOLS:
-                content = (msg.content or "").lower()
+                content = msg.content or ""
+                content_lower = content.lower()
                 # Only count as done if the result doesn't look like an error
-                if not any(err in content for err in ("failed", "error:", "sub-agent failed")):
-                    work_done = True
+                if any(err in content_lower for err in ("failed", "error:", "sub-agent failed")):
+                    continue
+                work_done = True
+                # Check for partial-completion caveats that should block
+                # silent auto-completion.
+                marker = ConversationAgent._response_has_caveat(content)
+                if marker:
+                    caveat_found = marker
                     break
 
         if not work_done:
+            return
+
+        if caveat_found:
+            logger.warning(
+                "Refusing to auto-complete plan steps: delegation response "
+                "contained caveat marker %r. Prax must explicitly call "
+                "agent_step_done for completed steps and surface the caveat "
+                "to the user.",
+                caveat_found,
+            )
             return
 
         # Auto-mark all incomplete steps as done — the work was completed
@@ -238,7 +337,8 @@ class ConversationAgent:
 
         from prax.agent.trace import GraphCallbackHandler, start_span
 
-        _run_deadline = _time.monotonic() + settings.agent_run_timeout
+        _run_start = _time.monotonic()
+        _run_deadline = _run_start + settings.agent_run_timeout
 
         # Start a root span that wraps the entire orchestrator invocation.
         # This sets last_root_trace_id so callers can attach it to responses.
@@ -343,14 +443,74 @@ class ConversationAgent:
             except Exception:
                 pass  # Graceful degradation — memory is optional.
 
+        # Health monitor: inject advisory from last check if anomalies detected.
+        health_hint = ""
+        try:
+            from prax.agent.health_monitor import get_last_check
+            last_check = get_last_check()
+            if last_check and last_check.overall != "healthy" and last_check.alerts:
+                health_hint = (
+                    "\n\n## Health Advisory\n"
+                    + "\n".join(f"- {a}" for a in last_check.alerts)
+                )
+        except Exception:
+            pass
+
+        # Temporal + channel context — gives the model a clear "now" so it
+        # can distinguish fresh requests from stale STM/LTM context.
+        temporal_context = ""
+        try:
+            from prax.agent.user_context import current_channel_name
+            from prax.utils.time_format import format_current_time
+
+            # Resolve user timezone if available.
+            tz_name: str | None = None
+            try:
+                from prax.services.memory.stm import stm_read
+                if uid:
+                    stm_entries = stm_read(uid)
+                    for entry in stm_entries:
+                        if "timezone" in entry.key.lower() or "timezone" in entry.content.lower():
+                            # Best-effort — content may be "timezone: America/Los_Angeles"
+                            content = entry.content
+                            for marker in ("America/", "Europe/", "Asia/", "Africa/", "Australia/", "Pacific/"):
+                                if marker in content:
+                                    start = content.index(marker)
+                                    end = start
+                                    while end < len(content) and (content[end].isalnum() or content[end] in "/_-"):
+                                        end += 1
+                                    tz_name = content[start:end]
+                                    break
+                            break
+            except Exception:
+                pass
+
+            now_str = format_current_time(tz_name)
+            channel_label = current_channel_name.get("")
+            channel_line = (
+                f"Channel: #{channel_label}" if channel_label and channel_label != "DM"
+                else ("Channel: Direct Message" if channel_label == "DM" else "")
+            )
+            temporal_context = (
+                f"\n\n## Current Context\n"
+                f"- **Now:** {now_str}\n"
+                + (f"- **{channel_line}**\n" if channel_line else "")
+                + "- The current user message (below) is the source of truth "
+                  "for the task. Any older STM/memory context is for reference only."
+            )
+        except Exception:
+            pass
+
         full_prompt = (
             _load_system_prompt()
+            + temporal_context
             + workspace_context
             + memory_context
             + complexity_hint
             + difficulty_hint
             + metacognitive_hint
             + prediction_hint
+            + health_hint
         )
 
         # Persist instructions so the agent can re-read them mid-conversation.
@@ -366,6 +526,23 @@ class ConversationAgent:
             + history
             + [HumanMessage(content=user_input)]
         )
+
+        # Context window management — budget, clear old tool results, compact.
+        try:
+            from prax.agent.context_manager import prepare_context
+            from prax.plugins.llm_config import get_component_config
+            cfg = get_component_config("orchestrator")
+            orch_tier = cfg.get("tier") or "low"
+            orch_model = cfg.get("model") or ""
+            messages, ctx_budget = prepare_context(messages, tier=orch_tier, model=orch_model)
+            logger.info(
+                "Context budget: %d/%d tokens (system=%d, history=%d)%s",
+                ctx_budget.total, ctx_budget.limit,
+                ctx_budget.system_prompt, ctx_budget.history,
+                " [OVERFLOW]" if ctx_budget.overflow else "",
+            )
+        except Exception:
+            logger.debug("Context management failed, proceeding without", exc_info=True)
 
         # Start a checkpointed turn for this user.
         turn = self.checkpoint_mgr.start_turn(uid or "anonymous")
@@ -419,6 +596,15 @@ class ConversationAgent:
                     "Agent run hit wall-clock timeout (%ds) for user %s",
                     settings.agent_run_timeout, uid,
                 )
+                try:
+                    from prax.services.health_telemetry import EventCategory, Severity, record_event
+                    record_event(
+                        EventCategory.TURN_TIMEOUT, Severity.WARNING,
+                        component="orchestrator",
+                        details=f"Timeout after {settings.agent_run_timeout}s for user {uid}",
+                    )
+                except Exception:
+                    pass
 
             self._rebuild_if_needed()
         finally:
@@ -454,9 +640,18 @@ class ConversationAgent:
                 response = msg.content
                 break
 
-        # Deterministic claim audit: check for ungrounded numeric claims.
+        # Deterministic claim audit: check for ungrounded numeric claims
+        # AND narrative (news/weather) claims without grounding tool calls.
+        # Scheduled tasks get a blocking check — hallucinated notifications
+        # sent to an absent user are especially damaging.
         if response:
-            response = self._audit_claims(response, result.get("messages", []), uid)
+            is_scheduled = user_input.lstrip().startswith("[SCHEDULED_TASK")
+            response = self._audit_claims(
+                response,
+                result.get("messages", []),
+                uid,
+                scheduled=is_scheduled,
+            )
 
         # Update session summary for next turn's classification.
         try:
@@ -472,6 +667,96 @@ class ConversationAgent:
                 uid, user_input, response, result.get("messages", []),
                 session_id=root_span.ctx.graph.session_id,
             )
+        except Exception:
+            pass
+
+        # Health telemetry: record turn completion.
+        try:
+            from prax.services.health_telemetry import EventCategory, record_event
+            record_event(
+                EventCategory.TURN_COMPLETED,
+                component="orchestrator",
+                details=f"user={uid or 'anonymous'}, tools={_graph_cb._tool_count}",
+                latency_ms=((_time.monotonic() - _run_start) * 1000),
+            )
+        except Exception:
+            pass
+
+        # Pipeline coverage instrumentation (Phase 0) — capture which spoke
+        # matched, the request, and the outcome so we can build a Pareto chart
+        # of coverage gaps.
+        #
+        # Canonical short names for each spoke. Keeps the coverage log,
+        # harness scenarios, and Pareto reports consistent regardless of
+        # the underlying delegate_* tool name.
+        _SPOKE_NAME_MAP = {
+            "content_editor": "content",
+            # All other spokes already use their short name as the delegate
+            # tool suffix (delegate_browser, delegate_knowledge, etc.).
+        }
+        try:
+            from prax.services import pipeline_coverage
+            delegations = []
+            for msg in result.get("messages", []):
+                if isinstance(msg, AIMessage):
+                    for tc in getattr(msg, "tool_calls", []) or []:
+                        name = tc.get("name", "")
+                        if name.startswith("delegate_"):
+                            raw = name.removeprefix("delegate_")
+                            delegations.append(_SPOKE_NAME_MAP.get(raw, raw))
+            # Determine the matched spoke. Heuristic:
+            # - Single delegation → that spoke
+            # - Multiple delegations → first one (the primary)
+            # - Generic delegate_task → "fallback"
+            # - No delegation → "direct"
+            if not delegations:
+                matched_spoke = "direct"
+            elif "task" in delegations:
+                matched_spoke = "fallback"
+            else:
+                matched_spoke = delegations[0]
+
+            # Determine the outcome status. The orchestrator's status is set
+            # via root_span.end below — at this point we know it's at least
+            # "completed" by virtue of reaching this code path.
+            outcome_status = "completed"
+            if _time.monotonic() >= _run_deadline:
+                outcome_status = "timeout"
+            elif not response:
+                outcome_status = "failed"
+
+            embedding = pipeline_coverage._embed_request(user_input)
+            pipeline_coverage.record_turn(
+                user_id=uid or "anonymous",
+                request=user_input,
+                matched_spoke=matched_spoke,
+                delegations=delegations,
+                outcome_status=outcome_status,
+                tool_call_count=_graph_cb._tool_count,
+                duration_ms=((_time.monotonic() - _run_start) * 1000),
+                embedding=embedding,
+            )
+            # Periodic auto-prune so the on-disk file stays bounded
+            # without a separate scheduler. No-op most turns; rewrites
+            # the file every 100 turns to drop entries older than 30 days.
+            pipeline_coverage.maybe_prune()
+        except Exception:
+            logger.debug("Pipeline coverage recording failed", exc_info=True)
+
+        # Auto-consolidate memory every N turns. Without this hook the
+        # memory consolidation pipeline is dead code — Prax never calls
+        # stm_write himself, so STM/LTM stay empty even though the
+        # infrastructure is in place.
+        try:
+            from prax.services.memory_service import maybe_consolidate
+            maybe_consolidate(uid or "")
+        except Exception:
+            logger.debug("Auto-consolidation failed", exc_info=True)
+
+        # Health monitor: check for anomalies every N turns.
+        try:
+            from prax.agent.health_monitor import on_turn_end
+            on_turn_end()
         except Exception:
             pass
 
@@ -512,10 +797,59 @@ class ConversationAgent:
         _callbacks = config.get("callbacks", [])
         fresh_restarts = 0  # Guard against infinite fresh-start loops.
 
+        _context_retries = 0
+        _MAX_CONTEXT_RETRIES = 3
+
         while True:
             try:
                 return self.graph.invoke({"messages": messages}, config=config)
             except Exception as exc:
+                # --- Context overflow recovery ---
+                # If the LLM rejects the payload for being too large,
+                # compact 20% more aggressively and retry (up to 3 times).
+                from langchain_core.exceptions import ContextOverflowError
+                if isinstance(exc, ContextOverflowError) and _context_retries < _MAX_CONTEXT_RETRIES:
+                    _context_retries += 1
+                    logger.warning(
+                        "Context overflow (attempt %d/%d) — compacting and retrying",
+                        _context_retries, _MAX_CONTEXT_RETRIES,
+                    )
+                    try:
+                        from prax.services.health_telemetry import EventCategory, Severity, record_event
+                        record_event(
+                            EventCategory.CONTEXT_OVERFLOW, Severity.WARNING,
+                            component="orchestrator",
+                            details=f"Attempt {_context_retries}/{_MAX_CONTEXT_RETRIES}",
+                        )
+                    except Exception:
+                        pass
+                    try:
+                        from prax.plugins.llm_config import get_component_config
+                        cfg = get_component_config("orchestrator")
+                        tier = cfg.get("tier") or "low"
+                        model = cfg.get("model") or ""
+                        # Reduce the budget by 20% each retry
+                        from prax.agent.context_manager import get_context_limit
+                        shrunk_limit = int(get_context_limit(tier, model) * (0.8 ** _context_retries))
+                        from prax.agent.context_manager import (
+                            clear_old_tool_results,
+                            compact_history,
+                            count_message_tokens,
+                            truncate_history,
+                        )
+                        messages = clear_old_tool_results(messages, keep_last_n=3)
+                        messages = compact_history(messages, shrunk_limit, tier=tier)
+                        messages = truncate_history(messages, shrunk_limit)
+                        new_count = count_message_tokens(messages)
+                        logger.info(
+                            "Context compacted to %d tokens (limit=%d, attempt=%d)",
+                            new_count, shrunk_limit, _context_retries,
+                        )
+                        continue  # retry with compacted messages
+                    except Exception as compact_err:
+                        logger.warning("Context compaction failed: %s", compact_err)
+                        # Fall through to normal error handling
+
                 logger.warning(
                     "Agent graph failed (user=%s): %s", user_id, exc,
                 )
@@ -568,6 +902,17 @@ class ConversationAgent:
                     }
                     continue
 
+                # Record the retry event for health monitoring.
+                try:
+                    from prax.services.health_telemetry import EventCategory, Severity, record_event
+                    record_event(
+                        EventCategory.RETRY, Severity.WARNING,
+                        component="orchestrator",
+                        details=f"Graph failed for user {user_id}: {type(exc).__name__}",
+                    )
+                except Exception:
+                    pass
+
                 if not self.checkpoint_mgr.can_retry(user_id):
                     logger.error(
                         "No retries left for user %s, raising", user_id,
@@ -604,19 +949,41 @@ class ConversationAgent:
                 config = {**rollback_cfg, "callbacks": _callbacks}
 
     @staticmethod
-    def _audit_claims(response: str, messages: list, user_id: str | None) -> str:
+    def _audit_claims(
+        response: str,
+        messages: list,
+        user_id: str | None,
+        *,
+        scheduled: bool = False,
+    ) -> str:
         """Run deterministic claim audit and log findings.
 
-        If ungrounded claims are found, appends a trace audit entry.
-        Does NOT block the response — the epistemic tags and system prompt
-        are the primary defense.  This is a post-hoc detection layer for
-        monitoring and debugging.
+        Two independent checks run:
+
+        1. Numeric claim audit — verbatim-match dollar/percent/rank claims
+           against tool results (catches fabricated numbers like the
+           PHL→SNA $83 incident).
+        2. Narrative grounding audit — detect "news/weather/headlines"
+           language in the response and verify that at least one
+           research/web/news/browser tool was actually called this turn.
+
+        For scheduled tasks, narrative-grounding failures are promoted to
+        a BLOCKING substitution: the fabricated response is replaced with
+        a safe fallback because the user is not present to push back.
+        For interactive turns, both checks remain advisory — the epistemic
+        tags and system prompt are the primary defense, and the human can
+        always correct in the next turn.
         """
         from prax.agent.trace import start_span
         audit_span = start_span("claim_audit", "auditor")
 
         try:
-            from prax.agent.claim_audit import audit_claims, format_audit_warning
+            from prax.agent.claim_audit import (
+                audit_claims,
+                audit_narrative_grounding,
+                audit_plan_completion,
+                format_audit_warning,
+            )
             from prax.services.teamwork_hooks import (
                 log_activity,
                 post_to_channel,
@@ -634,10 +1001,32 @@ class ConversationAgent:
                     tool_results.append(msg.content)
 
             findings = audit_claims(response, tool_results)
+            narrative = audit_narrative_grounding(response, messages)
+            plan_mismatch = audit_plan_completion(response, messages)
 
+            flagged_parts: list[str] = []
             if findings:
-                warning = format_audit_warning(findings)
-                logger.warning("Claim audit flagged response (user=%s): %s", user_id, warning)
+                flagged_parts.append(format_audit_warning(findings))
+            if narrative:
+                called = ", ".join(narrative["called_tools"]) or "(none)"
+                phrases = ", ".join(f"'{p}'" for p in narrative["phrases"])
+                flagged_parts.append(
+                    f"UNGROUNDED NARRATIVE: claims phrases {phrases} but no "
+                    f"research/web/news/browser tool was called (called: {called})"
+                )
+            if plan_mismatch:
+                flagged_parts.append(
+                    f"PLAN-COMPLETION MISMATCH: response claims "
+                    f"{plan_mismatch['completion_claim']!r} but "
+                    f"{plan_mismatch['caveat_tool']} reply contained caveat "
+                    f"{plan_mismatch['caveat_marker']!r} — the sub-agent "
+                    f"said the work is partial and the response ignored it"
+                )
+
+            if flagged_parts:
+                warning = "; ".join(flagged_parts)
+                logger.warning("Claim audit flagged response (user=%s scheduled=%s): %s",
+                               user_id, scheduled, warning)
                 post_to_channel("general", f"[Claim Audit] {warning}", agent_name="Auditor")
                 push_live_output("Auditor", f"Flagged: {warning}\n", status="completed")
                 log_activity("Auditor", "audit", f"Claim audit flagged: {warning}")
@@ -652,6 +1041,24 @@ class ConversationAgent:
                         }])
                     except Exception:
                         pass
+
+                # BLOCKING substitution for scheduled tasks with narrative
+                # hallucinations. The user is not present to correct — better
+                # to deliver nothing substantive than fabricated news.
+                if scheduled and narrative:
+                    logger.error(
+                        "BLOCKING scheduled-task response due to ungrounded "
+                        "narrative claims (user=%s): %s",
+                        user_id, warning,
+                    )
+                    return (
+                        "[Auto-suppressed scheduled briefing]\n\n"
+                        "I couldn't fetch fresh news or weather data for "
+                        "today's briefing — rather than send you made-up "
+                        "content, I'm holding this one. Ask me for a "
+                        "briefing when you have a moment and I'll try again "
+                        "with live research."
+                    )
             else:
                 push_live_output("Auditor", "No claims flagged.\n", status="completed")
                 log_activity("Auditor", "audit", "Claim audit passed — no issues found")

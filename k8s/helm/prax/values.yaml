@@ -1,0 +1,323 @@
+# =============================================================================
+# Prax AI Assistant — Helm Values
+# =============================================================================
+# Fill in secrets before deploying. All API keys default to empty strings.
+# Use `helm install prax ./k8s/helm/prax -f my-values.yaml` with overrides.
+
+# -- Global settings ----------------------------------------------------------
+global:
+  # Storage class for all PVCs. Set to your cluster's default or a specific
+  # provisioner (e.g., "gp3", "efs-sc", "nfs-client").
+  storageClass: ""
+
+# -- Image configuration ------------------------------------------------------
+# Each service can override registry, repository, tag, and pullPolicy.
+images:
+  app:
+    registry: ""
+    repository: prax-app
+    tag: "0.5.0"
+    pullPolicy: IfNotPresent
+  sandbox:
+    registry: ""
+    repository: prax-sandbox
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  teamwork:
+    registry: ""
+    repository: teamwork
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  qdrant:
+    repository: qdrant/qdrant
+    tag: "v1.13.2"
+    pullPolicy: IfNotPresent
+  neo4j:
+    repository: neo4j
+    tag: "5-community"
+    pullPolicy: IfNotPresent
+  ollama:
+    repository: ollama/ollama
+    tag: "latest"
+    pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# -- Replica counts -----------------------------------------------------------
+app:
+  replicas: 1
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "2Gi"
+      cpu: "1000m"
+
+sandbox:
+  replicas: 1
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "4Gi"
+      cpu: "2000m"
+  # Sandbox pool — horizontal autoscaling for multi-user deployments.
+  pool:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 70
+
+teamwork:
+  replicas: 1
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+
+qdrant:
+  replicas: 1
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+
+neo4j:
+  replicas: 1
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "2Gi"
+      cpu: "1000m"
+
+ollama:
+  replicas: 1
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "4Gi"
+      cpu: "2000m"
+  # Model to pull on init (embedding model used by Prax memory system)
+  initModel: "nomic-embed-text"
+
+# -- Persistence --------------------------------------------------------------
+persistence:
+  workspace:
+    size: 10Gi
+    # ReadWriteMany required — needs a CSI driver that supports it (EFS, NFS, etc.)
+    accessMode: ReadWriteMany
+    storageClass: ""
+  conversationsDb:
+    size: 1Gi
+    accessMode: ReadWriteOnce
+  qdrant:
+    size: 5Gi
+    accessMode: ReadWriteOnce
+  neo4j:
+    size: 5Gi
+    accessMode: ReadWriteOnce
+  ollama:
+    size: 10Gi
+    accessMode: ReadWriteOnce
+  teamwork:
+    size: 1Gi
+    accessMode: ReadWriteOnce
+  agentConfigs:
+    size: 1Gi
+    accessMode: ReadWriteOnce
+
+# -- Secrets (API keys) -------------------------------------------------------
+# All default to empty — fill in before deploying or use an external secret manager.
+secrets:
+  flaskSecretKey: "change-me"
+  openaiKey: ""
+  anthropicKey: ""
+  googleApiKey: ""
+  googleCseId: ""
+  googleVertexProject: ""
+  googleVertexLocation: ""
+  elevenlabsApiKey: ""
+  amadeusApiKey: ""
+  amadeusApiSecret: ""
+  twilioAccountSid: ""
+  twilioAuthToken: ""
+  discordBotToken: ""
+  neo4jPassword: "prax-memory"
+  teamworkApiKey: ""
+  praxSshKeyB64: ""
+  nytUsername: ""
+  nytPassword: ""
+
+# -- Config (non-secret environment) ------------------------------------------
+config:
+  # Flask / General
+  sessionType: "filesystem"
+  debug: "false"
+  logPath: "app.log"
+  port: "5001"
+  databaseName: "conversations.db"
+
+  # Agent
+  agentName: "Prax"
+  baseModel: "gpt-5.4-nano"
+  llmProvider: "openai"
+  agentTemperature: "0.7"
+
+  # Model tiers
+  lowModel: "gpt-5.4-nano"
+  lowEnabled: "true"
+  mediumModel: "gpt-5.4-mini"
+  mediumEnabled: "true"
+  highModel: "gpt-5.4"
+  highEnabled: "true"
+  proModel: "gpt-5.4-pro"
+  proEnabled: "false"
+
+  # Vision
+  visionModel: "gpt-image-1.5"
+  visionProvider: "openai"
+
+  # Autonomy
+  praxAutonomy: "balanced"
+
+  # Memory
+  memoryEnabled: "true"
+  embeddingProvider: "ollama"
+  embeddingModel: "nomic-embed-text"
+  memoryConsolidationInterval: "3600"
+  memoryDecayHalflifeDays: "7.0"
+  memoryStmMaxEntries: "50"
+
+  # Self-improvement
+  selfImproveEnabled: "false"
+  selfImproveAgent: "claude-code"
+
+  # Observability (Prax-side flags — separate from the observability stack toggle)
+  observabilityEnabled: "true"
+  healthMonitorEnabled: "true"
+
+  # Browser
+  browserHeadless: "true"
+  browserTimeout: "30000"
+
+  # Workspace
+  workspaceDir: "./workspaces"
+
+  # Sandbox
+  sandboxTimeout: "1800"
+  sandboxMaxConcurrent: "5"
+  sandboxDefaultModel: "openai/gpt-5.4"
+  sandboxMaxRounds: "10"
+
+  # Agent guardrails
+  agentMaxToolCalls: "40"
+  agentMaxDelegationDepth: "4"
+  agentRunTimeout: "300"
+
+  # Phone metadata (JSON strings — set in your values override)
+  rootPhoneNumber: ""
+  phoneToNameMap: ""
+  phoneToEmailMap: ""
+  phoneToGreetingMap: ""
+  discordAllowedUsers: ""
+  discordAllowedChannels: ""
+  discordToPhoneMap: ""
+  teamworkUserPhone: ""
+
+  # TeamWork
+  sandboxContainer: "prax-sandbox-1"
+  corsOrigins: '["http://localhost:3000","http://localhost:5173"]'
+
+# -- Ingress ------------------------------------------------------------------
+ingress:
+  enabled: false
+  className: "nginx"
+  annotations: {}
+    # nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    # nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  hosts:
+    - host: prax.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+          service: teamwork
+          port: 8000
+        - path: /healthz
+          pathType: Prefix
+          service: app
+          port: 5001
+  tls: []
+  #  - secretName: prax-tls
+  #    hosts:
+  #      - prax.example.com
+
+# -- Observability stack (optional) -------------------------------------------
+observability:
+  enabled: false
+  tempo:
+    image: grafana/tempo:2.7.2
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "1Gi"
+        cpu: "500m"
+  loki:
+    image: grafana/loki:3.4.2
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "1Gi"
+        cpu: "500m"
+  promtail:
+    image: grafana/promtail:3.4.2
+    resources:
+      requests:
+        memory: "128Mi"
+        cpu: "50m"
+      limits:
+        memory: "256Mi"
+        cpu: "200m"
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    retention: "30d"
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "1Gi"
+        cpu: "500m"
+  grafana:
+    image: grafana/grafana:11.5.2
+    adminUser: "admin"
+    adminPassword: "prax"
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "512Mi"
+        cpu: "500m"
+
+# -- Service account -----------------------------------------------------------
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}

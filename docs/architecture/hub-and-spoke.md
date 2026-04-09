@@ -22,8 +22,10 @@ graph TB
     Prax -->|delegate_sandbox| Sandbox["Sandbox Spoke"]
     Prax -->|delegate_finetune| Finetune["Finetune Spoke"]
     Prax -->|delegate_knowledge| Knowledge["Knowledge Spoke"]
-    Prax -->|delegate_research| Research["Research Spoke"]
+    Prax -->|delegate_research| Research["Research Spoke\n+ Professor capability"]
     Prax -->|delegate_task| Generic["Generic Sub-Agent"]
+
+    Research -->|hard questions| Professor["multi_model_query\nOpenAI + Claude + Gemini\npro-tier models"]
 
     style Prax fill:#4A90D9,color:#fff
     style Browser fill:#F5A623,color:#fff
@@ -178,7 +180,7 @@ graph LR
 | `prax/agent/scheduler_tools.py` | 9 scheduler tools: recurring cron + one-time reminders |
 | `prax/agent/finetune_tools.py` | 8 fine-tuning tools (harvest, train, verify, promote, rollback) |
 | `prax/agent/codegen_tools.py` | 10 self-improvement tools (worktree, edit, test, lint, verify, deploy, PR) |
-| `prax/agent/note_tools.py` | 7 note tools (create, update, list, search, url_to_note, pdf_to_note, note_link) |
+| `prax/agent/note_tools.py` | 7 note tools (create, update, list, search, note_from_url, pdf_to_note, note_link) |
 | `prax/agent/project_tools.py` | 6 research project tools (create, status, add note/link/source, brief) |
 | `prax/agent/browser_tools.py` | 14 browser tools (navigate, click, fill, screenshot, login, VNC) |
 | `prax/agent/tool_registry.py` | Tool aggregation: built-in + plugin-provided + manually registered |

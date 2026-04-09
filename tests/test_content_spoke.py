@@ -3,12 +3,16 @@ from unittest.mock import MagicMock, patch
 
 
 def test_build_spoke_tools_returns_delegate():
-    """The content spoke exports exactly one delegation tool."""
+    """The content spoke exports delegation + office tools."""
     from prax.agent.spokes.content import build_spoke_tools
 
     tools = build_spoke_tools()
-    assert len(tools) == 1
-    assert tools[0].name == "delegate_content_editor"
+    names = {t.name for t in tools}
+    assert "delegate_content_editor" in names
+    assert "create_presentation" in names
+    assert "create_spreadsheet" in names
+    assert "create_pdf" in names
+    assert len(tools) == 4
 
 
 def test_content_spoke_registered():
@@ -157,7 +161,7 @@ def test_full_pipeline_max_revisions():
         from prax.agent.spokes.content.agent import run_content_pipeline
 
         result = run_content_pipeline("Test Topic")
-        assert "3 revision cycles" in result
+        assert "3 revision cycle" in result
         assert "did not fully approve" in result
 
 

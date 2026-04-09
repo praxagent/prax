@@ -90,12 +90,21 @@ def create_app():
     init_identity_db()
     migrate_legacy_users()
 
-    init_scheduler()
-
     # In debug mode Werkzeug spawns a reloader process + a child process.
-    # Only start the Discord bot once — in the child (WERKZEUG_RUN_MAIN=true)
-    # or when not in debug mode at all.
-    if not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+    # Both the parent and child would otherwise call init_scheduler() and
+    # init_discord_bot(), causing duplicate jobs (one per scheduler instance)
+    # — which manifests as duplicate SMS reminders. Only initialize these
+    # singletons in the child process (WERKZEUG_RUN_MAIN=true), or when
+    # not in debug mode at all.
+    #
+    # NOTE: we check `settings.debug` (the env-var-driven setting), NOT
+    # `app.debug`. Flask only sets `app.debug` when `app.run(debug=True)`
+    # is called, which happens AFTER create_app() returns. At this point
+    # in execution, `app.debug` is always False, which would defeat the
+    # guard and let the parent reloader process double-init the scheduler.
+    _is_reloader_child = os.environ.get("WERKZEUG_RUN_MAIN") == "true"
+    if not settings.debug or _is_reloader_child:
+        init_scheduler()
         start_discord_bot()
 
     # Initialize TeamWork integration if configured
@@ -135,6 +144,48 @@ def create_app():
             # created lazily on first tool invocation — no startup setup needed.
         except Exception:
             logger.warning("TeamWork integration failed to initialize", exc_info=True)
+
+    # --- Health probes (Kubernetes/Docker-compatible) ---
+
+    @app.route("/healthz/live")
+    def liveness():
+        """Liveness probe — is the process alive and responding?
+        Fast check, no external dependencies. Use for Docker HEALTHCHECK
+        and Kubernetes livenessProbe.
+        """
+        from flask import jsonify as _jsonify
+        return _jsonify({"status": "alive"})
+
+    @app.route("/healthz/ready")
+    def readiness():
+        """Readiness probe — is the agent ready to accept work?
+        Checks critical subsystems. Use for Kubernetes readinessProbe
+        and load balancer health checks.
+        """
+        from flask import jsonify as _jsonify
+        issues = []
+
+        # Check LLM provider reachability via circuit breaker
+        try:
+            from prax.agent.circuit_breaker import get_all_breakers
+            for name, state in get_all_breakers().items():
+                if state["state"] == "open":
+                    issues.append(f"{name}: circuit breaker open")
+        except Exception:
+            pass
+
+        # Check health monitor status
+        try:
+            from prax.agent.health_monitor import get_last_check
+            check = get_last_check()
+            if check and check.overall == "unhealthy":
+                issues.append(f"health: {check.overall}")
+        except Exception:
+            pass
+
+        if issues:
+            return _jsonify({"status": "not_ready", "issues": issues}), 503
+        return _jsonify({"status": "ready"})
 
     return app
 

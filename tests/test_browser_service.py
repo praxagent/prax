@@ -156,10 +156,31 @@ class TestNavigation:
         result = browser_mod.get_content("+10000000000")
         assert "content" in result
 
-    def test_screenshot(self, browser_mod):
+    def test_screenshot(self, browser_mod, tmp_path, monkeypatch):
+        # Point workspace_dir at an isolated tmp so the test doesn't
+        # pollute the real workspace.  screenshot() now saves into
+        # the user's active dir by default.
+        from prax.services import workspace_service
+        monkeypatch.setattr(
+            workspace_service.settings, "workspace_dir", str(tmp_path),
+        )
         browser_mod.navigate("+10000000000", "https://example.com")
         result = browser_mod.screenshot("+10000000000")
         assert "path" in result
+        assert result.get("workspace") is True
+        assert result["filename"].startswith("screenshot-")
+        assert result["filename"].endswith(".png")
+        # The file must land under the user's active dir.
+        assert "/active/" in result["path"]
+        assert os.path.isfile(result["path"])
+
+    def test_screenshot_tempfile_mode(self, browser_mod):
+        """save_to_workspace=False falls back to a temp file."""
+        browser_mod.navigate("+10000000000", "https://example.com")
+        result = browser_mod.screenshot("+10000000000", save_to_workspace=False)
+        assert "path" in result
+        assert result.get("workspace") is False
+        assert os.path.isfile(result["path"])
 
 
 # ---------- Interaction ----------------------------------------------------

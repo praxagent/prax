@@ -169,9 +169,11 @@ def run_e2e(tmp_path):
             stack.enter_context(
                 patch("prax.plugins.loader.get_plugin_loader", return_value=mock_loader)
             )
-            stack.enter_context(
-                patch("prax.agent.tool_registry.get_plugin_loader", return_value=mock_loader)
-            )
+            # Note: prax.agent.tool_registry does NOT import
+            # get_plugin_loader — callers import it directly from
+            # prax.plugins.loader — so patching it there is enough.
+            # The old `patch("prax.agent.tool_registry.get_plugin_loader")`
+            # line was removed because it now raises AttributeError.
 
             for target in _CORE_MOCKS:
                 stack.enter_context(patch(target))

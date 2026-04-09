@@ -17,16 +17,39 @@ defaults:
   tier: null       # null = use component default (low for orchestrator, etc.)
   temperature: null  # null = use env AGENT_TEMPERATURE
 
-# Per-component overrides (uncomment to use):
-# components:
-#   orchestrator:
-#     tier: low          # Prax main loop — low by default, upgrades itself
-#     temperature: 0.7
-#
-#   subagent_research:
-#     tier: low          # research sub-agent
-#     temperature: 0.3
-#
+components:
+  orchestrator:
+    tier: medium         # Prax main loop — medium to handle 54K system prompt + 35 tools
+    temperature: 0.7
+
+  subagent_research:
+    tier: high           # research sub-agent — reads sources, writes reports with citations
+    temperature: 0.3
+
+  subagent_knowledge:
+    tier: high           # note synthesis — MUST be high or better, nano produces raw dumps
+    temperature: 0.5
+
+  subagent_content_writer:
+    tier: high           # blog post writing — needs real composition ability
+    temperature: 0.6
+
+  subagent_content_reviewer:
+    tier: high           # adversarial review — cross-provider diversity via llm_factory
+    temperature: 0.3
+
+  subagent_note_writer:
+    tier: high           # deep-dive note synthesis — high tier floor
+    temperature: 0.5
+
+  note_quality_reviewer:
+    tier: low            # cheap JSON classifier — yes/no approval
+    temperature: 0.2
+
+  subagent_professor:
+    tier: pro            # multi-model consensus — uses expensive pro models
+    temperature: 0.3
+
 #   subagent_codegen:
 #     tier: medium       # code generation needs more intelligence
 #     temperature: 0.2

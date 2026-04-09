@@ -1,0 +1,161 @@
+{{- if .Values.observability.enabled }}
+# -- Tempo configuration -------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "prax.fullname" . }}-tempo-config
+  namespace: {{ include "prax.namespace" . }}
+  labels:
+    {{- include "prax.componentLabels" (dict "component" "tempo" "context" $) | nindent 4 }}
+data:
+  tempo.yaml: |
+    stream_over_http_enabled: true
+
+    server:
+      http_listen_port: 3200
+
+    distributor:
+      receivers:
+        otlp:
+          protocols:
+            grpc:
+              endpoint: "0.0.0.0:4317"
+            http:
+              endpoint: "0.0.0.0:4318"
+
+    storage:
+      trace:
+        backend: local
+        local:
+          path: /var/tempo/traces
+        wal:
+          path: /var/tempo/wal
+        block:
+          bloom_filter_false_positive: 0.05
+---
+# -- Prometheus configuration --------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "prax.fullname" . }}-prometheus-config
+  namespace: {{ include "prax.namespace" . }}
+  labels:
+    {{- include "prax.componentLabels" (dict "component" "prometheus" "context" $) | nindent 4 }}
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+
+    scrape_configs:
+      - job_name: "prax"
+        static_configs:
+          - targets: ["{{ include "prax.fullname" . }}-app:5001"]
+        metrics_path: /metrics
+        scrape_interval: 10s
+---
+# -- Promtail configuration ---------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "prax.fullname" . }}-promtail-config
+  namespace: {{ include "prax.namespace" . }}
+  labels:
+    {{- include "prax.componentLabels" (dict "component" "promtail" "context" $) | nindent 4 }}
+data:
+  promtail.yaml: |
+    server:
+      http_listen_port: 9080
+      grpc_listen_port: 0
+
+    positions:
+      filename: /tmp/positions.yaml
+
+    clients:
+      - url: http://{{ include "prax.fullname" . }}-loki:3100/loki/api/v1/push
+
+    scrape_configs:
+      - job_name: kubernetes-pods
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - {{ include "prax.namespace" . }}
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - source_labels: [__meta_kubernetes_pod_container_name]
+            target_label: container
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]
+            target_label: service
+---
+# -- Grafana datasources ------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "prax.fullname" . }}-grafana-datasources
+  namespace: {{ include "prax.namespace" . }}
+  labels:
+    {{- include "prax.componentLabels" (dict "component" "grafana" "context" $) | nindent 4 }}
+data:
+  datasources.yaml: |
+    apiVersion: 1
+
+    datasources:
+      - name: Tempo
+        type: tempo
+        access: proxy
+        url: http://{{ include "prax.fullname" . }}-tempo:3200
+        isDefault: true
+        jsonData:
+          tracesToLogsV2:
+            datasourceUid: loki
+            filterByTraceID: true
+            filterBySpanID: false
+          tracesToMetrics:
+            datasourceUid: prometheus
+          serviceMap:
+            datasourceUid: prometheus
+
+      - name: Loki
+        type: loki
+        uid: loki
+        access: proxy
+        url: http://{{ include "prax.fullname" . }}-loki:3100
+        jsonData:
+          derivedFields:
+            - datasourceUid: tempo
+              matcherRegex: "trace_id=(\\w+)"
+              name: TraceID
+              url: "$${__value.raw}"
+
+      - name: Prometheus
+        type: prometheus
+        uid: prometheus
+        access: proxy
+        url: http://{{ include "prax.fullname" . }}-prometheus:9090
+---
+# -- Grafana dashboard provider ------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "prax.fullname" . }}-grafana-dashboards-provider
+  namespace: {{ include "prax.namespace" . }}
+  labels:
+    {{- include "prax.componentLabels" (dict "component" "grafana" "context" $) | nindent 4 }}
+data:
+  provider.yaml: |
+    apiVersion: 1
+
+    providers:
+      - name: Prax
+        orgId: 1
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /etc/grafana/provisioning/dashboards
+          foldersFromFilesStructure: false
+{{- end }}

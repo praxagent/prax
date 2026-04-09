@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "prax.fullname" . }}-workspace
+  namespace: {{ include "prax.namespace" . }}
+  labels:
+    {{- include "prax.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.persistence.workspace.accessMode }}
+  {{- if or .Values.persistence.workspace.storageClass .Values.global.storageClass }}
+  storageClassName: {{ .Values.persistence.workspace.storageClass | default .Values.global.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.workspace.size }}

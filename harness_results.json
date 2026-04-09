@@ -1,0 +1,732 @@
+{
+  "scenarios_run": 36,
+  "fallback_count": 11,
+  "fallback_rate": 0.3055555555555556,
+  "by_expected_spoke": {
+    "knowledge": {
+      "expected": 4,
+      "matched": 3,
+      "actual": [
+        "knowledge",
+        "unknown",
+        "knowledge",
+        "knowledge"
+      ]
+    },
+    "research": {
+      "expected": 3,
+      "matched": 1,
+      "actual": [
+        "unknown",
+        "unknown",
+        "research"
+      ]
+    },
+    "browser": {
+      "expected": 3,
+      "matched": 1,
+      "actual": [
+        "browser",
+        "unknown",
+        "unknown"
+      ]
+    },
+    "content": {
+      "expected": 2,
+      "matched": 1,
+      "actual": [
+        "unknown",
+        "content"
+      ]
+    },
+    "sandbox": {
+      "expected": 3,
+      "matched": 3,
+      "actual": [
+        "sandbox",
+        "sandbox",
+        "sandbox"
+      ]
+    },
+    "scheduler": {
+      "expected": 2,
+      "matched": 2,
+      "actual": [
+        "scheduler",
+        "scheduler"
+      ]
+    },
+    "sysadmin": {
+      "expected": 3,
+      "matched": 2,
+      "actual": [
+        "sysadmin",
+        "direct",
+        "sysadmin"
+      ]
+    },
+    "direct": {
+      "expected": 2,
+      "matched": 0,
+      "actual": [
+        "sysadmin",
+        "memory"
+      ]
+    },
+    "course": {
+      "expected": 2,
+      "matched": 2,
+      "actual": [
+        "course",
+        "course"
+      ]
+    },
+    "workspace": {
+      "expected": 2,
+      "matched": 2,
+      "actual": [
+        "workspace",
+        "workspace"
+      ]
+    },
+    "fallback": {
+      "expected": 10,
+      "matched": 3,
+      "actual": [
+        "memory",
+        "research",
+        "direct",
+        "workspace",
+        "unknown",
+        "research",
+        "direct",
+        "workspace",
+        "direct",
+        "workspace"
+      ]
+    }
+  },
+  "scenario_results": [
+    {
+      "name": "knowledge_save_note",
+      "request": "Save a note about gradient descent optimization techniques",
+      "expected_spoke": "knowledge",
+      "matched_spoke": "knowledge",
+      "delegations": [
+        "knowledge"
+      ],
+      "outcome_status": "completed",
+      "duration_ms": 146120.18594198162,
+      "tool_call_count": 6,
+      "turns": 1,
+      "matched_expected": true,
+      "error": null
+    },
+    {
+      "name": "knowledge_deep_dive",
+      "request": "Make me a deep dive note on chi-squared distributions, with equations and toy examples",
+      "expected_spoke": "knowledge",
+      "matched_spoke": "",
+      "delegations": [],
+      "outcome_status": "timeout",
+      "duration_ms": 0,
+      "tool_call_count": 0,
+      "turns": 1,
+      "matched_expected": false,
+      "error": "timeout waiting for coverage event"
+    },
+    {
+      "name": "knowledge_search",
+      "request": "Search my notes for anything about transformers",
+      "expected_spoke": "knowledge",
+      "matched_spoke": "knowledge",
+      "delegations": [
+        "knowledge"
+      ],
+      "outcome_status": "completed",
+      "duration_ms": 11534.140506002586,
+      "tool_call_count": 1,
+      "turns": 1,
+      "matched_expected": true,
+      "error": null
+    },
+    {
+      "name": "knowledge_update",
+      "request": "Update my note on 'machine learning basics' with this new info: cross-validation is essential",
+      "expected_spoke": "knowledge",
+      "matched_spoke": "knowledge",
+      "delegations": [
+        "knowledge"
+      ],
+      "outcome_status": "completed",
+      "duration_ms": 6544.421334983781,
+      "tool_call_count": 2,
+      "turns": 1,
+      "matched_expected": true,
+      "error": null
+    },
+    {
+      "name": "research_kvcache",
+      "request": "What are the latest findings on KV cache compression?",
+      "expected_spoke": "research",
+      "matched_spoke": "",
+      "delegations": [],
+      "outcome_status": "timeout",
+      "duration_ms": 0,
+      "tool_call_count": 0,
+      "turns": 1,
+      "matched_expected": false,
+      "error": "timeout waiting for coverage event"
+    },
+    {
+      "name": "research_compare_archs",
+      "request": "Compare Mamba, Transformer, and RWKV architectures",
+      "expected_spoke": "research",
+      "matched_spoke": "",
+      "delegations": [],
+      "outcome_status": "timeout",
+      "duration_ms": 0,
+      "tool_call_count": 0,
+      "turns": 1,
+      "matched_expected": false,
+      "error": "timeout waiting for coverage event"
+    },
+    {
+      "name": "research_arxiv",
+      "request": "Find recent arXiv papers on diffusion models",
+      "expected_spoke": "research",
+      "matched_spoke": "research",
+      "delegations": [
+        "research"
+      ],
+      "outcome_status": "completed",
+      "duration_ms": 54474.56773300655,
+      "tool_call_count": 15,
+      "turns": 1,
+      "matched_expected": true,
+      "error": null
+    },
+    {
+      "name": "browser_screenshot",
+      "request": "Take a screenshot of github.com/anthropics",
+      "expected_spoke": "browser",
+      "matched_spoke": "browser",
+      "delegations": [
+        "browser"
+      ],
+      "outcome_status": "completed",
+      "duration_ms": 10262.31313002063,
+      "tool_call_count": 1,
+      "turns": 1,
+      "matched_expected": true,
+      "error": null
+    },
+    {
+      "name": "browser_hn",
+      "request": "Read the latest post on hackernews",
+      "expected_spoke": "browser",
+      "matched_spoke": "",
+      "delegations": [],
+      "outcome_status": "timeout",
+      "duration_ms": 0,
+      "tool_call_count": 0,
+      "turns": 1,
+      "matched_expected": false,
+      "error": "timeout waiting for coverage event"
+    },
+    {
+      "name": "browser_open",
+      "request": "Open https://example.com and tell me what you see",
+      "expected_spoke": "browser",
+      "matched_spoke": "",
+      "delegations": [],
+      "outcome_status": "timeout",
+      "duration_ms": 0,
+      "tool_call_count": 0,
+      "turns": 1,
+      "matched_expected": false,
+      "error": "timeout waiting for coverage event"
+    },
+    {
+      "name": "content_blog_ai_agents",
+      "request": "Write a blog post about the future of AI agents",
+      "expected_spoke": "content",
+      "matched_spoke": "",
+      "delegations": [],
+      "outcome_status": "timeout",
+      "duration_ms": 0,
+      "tool_call_count": 0,
+      "turns": 1,
+      "matched_expected": false,
+      "error": "timeout waiting for coverage event"
+    },
+    {
+      "name": "content_react_vue",
+      "request": "Create an article comparing React and Vue",
+      "expected_spoke": "content",
+      "matched_spoke": "content",
+      "delegations": [
+        "content"
+      ],
+      "outcome_status": "timeout",
+      "duration_ms": 589413.4798079613,
+      "tool_call_count": 10,
+      "turns": 1,
+      "matched_expected": true,
+      "error": null
+    },
+    {
+      "name": "sandbox_install_package",
+      "request": "Install networkx in a sandbox and compute the shortest path between nodes A and D in a graph with edges [(A,B,1),(B,C,2),(A,C,5),(C,D,1),(B,D,4)]. Return the path and total weight.",
+      "expected_spoke": "sandbox",
+      "matched_spoke": "sandbox",
+      "delegations": [
+        "sandbox"
+      ],
+      "outcome_status": "completed",
+      "duration_ms": 11509.227212984115,
+      "tool_call_count": 1,
+      "turns": 1,
+      "matched_expected": true,
+      "error": null
+    },
+    {
+      "name": "sandbox_untrusted_exec",
+      "request": "I'll paste some untrusted Python code below \u2014 execute it in a safe sandbox and tell me what it prints (do NOT run it in your own environment): `import random; [print(random.randint(0,9)) for _ in range(5)]`",
+      "expected_spoke": "sandbox",
+      "matched_spoke": "sandbox",
+      "delegations": [
+        "sandbox"
+      ],
+      "outcome_status": "completed",
+      "duration_ms": 5373.285502020735,
+      "tool_call_count": 1,
+      "turns": 1,
+      "matched_expected": true,
+      "error": null
+    },
+    {
+      "name": "sandbox_multi_step",
+      "request": "Run a multi-step Python script in a sandbox: download the text of Shakespeare's Sonnet 18 from https://www.gutenberg.org/cache/epub/1041/pg1041.txt, count the word 'love', and return the count.",
+      "expected_spoke": "sandbox",
+      "matched_spoke": "sandbox",
+      "delegations": [
+        "sandbox"
+      ],
+      "outcome_status": "completed",
+      "duration_ms": 25878.39117902331,
+      "tool_call_count": 1,
+      "turns": 1,
+      "matched_expected": true,
+      "error": null
+    },
+    {
+      "name": "scheduler_reminder",
+      "request": "Remind me in 30 minutes to check the oven",
+      "expected_spoke": "scheduler",
+      "matched_spoke": "scheduler",
+      "delegations": [
+        "scheduler"
+      ],
+      "outcome_status": "completed",
+      "duration_ms": 4742.448002041783,
+      "tool_call_count": 1,
+      "turns": 1,
+      "matched_expected": true,
+      "error": null
+    },
+    {
+      "name": "scheduler_daily",
+      "request": "Schedule a daily 9am morning briefing",
+      "expected_spoke": "scheduler",
+      "matched_spoke": "scheduler",
+      "delegations": [
+        "scheduler"
+      ],
+      "outcome_status": "completed",
+      "duration_ms": 11469.968298042659,
+      "tool_call_count": 2,
+      "turns": 1,
+      "matched_expected": true,
+      "error": null
+    },
+    {
+      "name": "sysadmin_plugins",
+      "request": "What plugins are installed?",
+      "expected_spoke": "sysadmin",
+      "matched_spoke": "sysadmin",
+      "delegations": [
+        "sysadmin"
+      ],
+      "outcome_status": "completed",
+      "duration_ms": 12112.896297010593,
+      "tool_call_count": 1,
+      "turns": 1,
+      "matched_expected": true,
+      "error": null
+    },
+    {
+      "name": "sysadmin_status",
+      "request": "Check the system status",
+      "expected_spoke": "sysadmin",
+      "matched_spoke": "direct",
+      "delegations": [],
+      "outcome_status": "completed",
+      "duration_ms": 3350.255294004455,
+      "tool_call_count": 1,
+      "turns": 1,
+      "matched_expected": false,
+      "error": null
+    },
+    {
+      "name": "sysadmin_logs",
+      "request": "Show me my recent activity logs",
+      "expected_spoke": "sysadmin",
+      "matched_spoke": "sysadmin",
+      "delegations": [
+        "sysadmin"
+      ],
+      "outcome_status": "completed",
+      "duration_ms": 10653.389214014169,
+      "tool_call_count": 1,
+      "turns": 1,
+      "matched_expected": true,
+      "error": null
+    },
+    {
+      "name": "memory_remember",
+      "request": "Remember that I prefer dark mode and live in San Francisco",
+      "expected_spoke": "direct",
+      "matched_spoke": "sysadmin",
+      "delegations": [
+        "sysadmin"
+      ],
+      "outcome_status": "completed",
+      "duration_ms": 6762.340295012109,
+      "tool_call_count": 2,
+      "turns": 1,
+      "matched_expected": false,
+      "error": null
+    },
+    {
+      "name": "memory_recall",
+      "request": "What do you know about me?",
+      "expected_spoke": "direct",
+      "matched_spoke": "memory",
+      "delegations": [
+        "memory"
+      ],
+      "outcome_status": "completed",
+      "duration_ms": 17773.44771596836,
+      "tool_call_count": 7,
+      "turns": 1,
+      "matched_expected": false,
+      "error": null
+    },
+    {
+      "name": "course_linalg",
+      "request": "Teach me the basics of linear algebra",
+      "expected_spoke": "course",
+      "matched_spoke": "course",
+      "delegations": [
+        "course"
+      ],
+      "outcome_status": "completed",
+      "duration_ms": 12692.598462977912,
+      "tool_call_count": 5,
+      "turns": 1,
+      "matched_expected": true,
+      "error": null
+    },
+    {
+      "name": "course_continue",
+      "request": "Continue my course on quantum computing",
+      "expected_spoke": "course",
+      "matched_spoke": "course",
+      "delegations": [
+        "course"
+      ],
+      "outcome_status": "completed",
+      "duration_ms": 8610.569087031763,
+      "tool_call_count": 1,
+      "turns": 1,
+      "matched_expected": true,
+      "error": null
+    },
+    {
+      "name": "workspace_save",
+      "request": "Save the content 'hello world' to a file called test.txt",
+      "expected_spoke": "workspace",
+      "matched_spoke": "workspace",
+      "delegations": [
+        "workspace"
+      ],
+      "outcome_status": "completed",
+      "duration_ms": 11470.917129016016,
+      "tool_call_count": 3,
+      "turns": 1,
+      "matched_expected": true,
+      "error": null
+    },
+    {
+      "name": "workspace_list",
+      "request": "List the files in my workspace",
+      "expected_spoke": "workspace",
+      "matched_spoke": "workspace",
+      "delegations": [
+        "workspace"
+      ],
+      "outcome_status": "completed",
+      "duration_ms": 9168.785837013274,
+      "tool_call_count": 1,
+      "turns": 1,
+      "matched_expected": true,
+      "error": null
+    },
+    {
+      "name": "fallback_slide_deck",
+      "request": "Make me a slide deck about quantum computing with 12 slides",
+      "expected_spoke": "fallback",
+      "matched_spoke": "memory",
+      "delegations": [
+        "memory",
+        "sandbox"
+      ],
+      "outcome_status": "completed",
+      "duration_ms": 20666.57734196633,
+      "tool_call_count": 10,
+      "turns": 1,
+      "matched_expected": false,
+      "error": null
+    },
+    {
+      "name": "fallback_comparison_matrix",
+      "request": "Create a comparison matrix of these 5 frameworks: Django, Flask, FastAPI, Tornado, Bottle",
+      "expected_spoke": "fallback",
+      "matched_spoke": "research",
+      "delegations": [
+        "research"
+      ],
+      "outcome_status": "completed",
+      "duration_ms": 61800.842236028984,
+      "tool_call_count": 22,
+      "turns": 1,
+      "matched_expected": false,
+      "error": null
+    },
+    {
+      "name": "fallback_translate",
+      "request": "Translate this paragraph into Spanish, French, and German: 'The quick brown fox jumps over the lazy dog.'",
+      "expected_spoke": "fallback",
+      "matched_spoke": "direct",
+      "delegations": [],
+      "outcome_status": "completed",
+      "duration_ms": 5926.940960984211,
+      "tool_call_count": 2,
+      "turns": 1,
+      "matched_expected": true,
+      "error": null
+    },
+    {
+      "name": "fallback_one_pager",
+      "request": "Build me a one-page brief with executive summary and key bullets on remote work productivity",
+      "expected_spoke": "fallback",
+      "matched_spoke": "workspace",
+      "delegations": [
+        "workspace"
+      ],
+      "outcome_status": "completed",
+      "duration_ms": 16101.380216015968,
+      "tool_call_count": 5,
+      "turns": 1,
+      "matched_expected": false,
+      "error": null
+    },
+    {
+      "name": "fallback_html_email",
+      "request": "Generate an HTML email template for a product launch",
+      "expected_spoke": "fallback",
+      "matched_spoke": "",
+      "delegations": [],
+      "outcome_status": "timeout",
+      "duration_ms": 0,
+      "tool_call_count": 0,
+      "turns": 1,
+      "matched_expected": false,
+      "error": "timeout waiting for coverage event"
+    },
+    {
+      "name": "fallback_critique_paper",
+      "request": "Critique this academic paper and rate it 1-10: 'Attention is all you need' by Vaswani et al.",
+      "expected_spoke": "fallback",
+      "matched_spoke": "research",
+      "delegations": [
+        "research",
+        "research"
+      ],
+      "outcome_status": "completed",
+      "duration_ms": 119535.80180299468,
+      "tool_call_count": 25,
+      "turns": 1,
+      "matched_expected": false,
+      "error": null
+    },
+    {
+      "name": "fallback_sonnet",
+      "request": "Write a sonnet about machine learning",
+      "expected_spoke": "fallback",
+      "matched_spoke": "direct",
+      "delegations": [],
+      "outcome_status": "completed",
+      "duration_ms": 6452.192461991217,
+      "tool_call_count": 0,
+      "turns": 1,
+      "matched_expected": true,
+      "error": null
+    },
+    {
+      "name": "fallback_study_plan",
+      "request": "Create a study plan for the next 6 weeks covering data structures and algorithms",
+      "expected_spoke": "fallback",
+      "matched_spoke": "workspace",
+      "delegations": [
+        "workspace",
+        "workspace"
+      ],
+      "outcome_status": "completed",
+      "duration_ms": 27258.691845985595,
+      "tool_call_count": 5,
+      "turns": 1,
+      "matched_expected": false,
+      "error": null
+    },
+    {
+      "name": "fallback_test_cases",
+      "request": "Generate test cases for this function: def add(a, b): return a + b",
+      "expected_spoke": "fallback",
+      "matched_spoke": "direct",
+      "delegations": [],
+      "outcome_status": "completed",
+      "duration_ms": 4795.150710968301,
+      "tool_call_count": 0,
+      "turns": 1,
+      "matched_expected": true,
+      "error": null
+    },
+    {
+      "name": "fallback_flask_app",
+      "request": "Build me a simple flask app that exposes a /hello endpoint",
+      "expected_spoke": "fallback",
+      "matched_spoke": "workspace",
+      "delegations": [
+        "workspace",
+        "workspace"
+      ],
+      "outcome_status": "completed",
+      "duration_ms": 24828.281886002515,
+      "tool_call_count": 9,
+      "turns": 1,
+      "matched_expected": false,
+      "error": null
+    }
+  ],
+  "pareto_report": {
+    "clusters": [
+      {
+        "count": 89,
+        "failure_count": 1,
+        "failure_rate": 0.011235955056179775,
+        "fallback_count": 2,
+        "fallback_rate": 0.02247191011235955,
+        "matched_spokes": {
+          "browser": 1,
+          "content": 1,
+          "course": 8,
+          "direct": 16,
+          "fallback": 2,
+          "knowledge": 2,
+          "memory": 15,
+          "research": 6,
+          "sandbox": 7,
+          "scheduler": 7,
+          "sysadmin": 9,
+          "workspace": 15
+        },
+        "sample_request": "[via TeamWork web UI \u2014 private DM. The user is currently viewing the chat tab. The user is NOT watching the browser right now, but delegate_browser is still available for any task that needs real browser rendering \u2014 JS-heavy pages, login flows, form filling, sites where fetch_url_content returns empty/broken content. Use it freely when HTTP tools fail.]\nInstall networkx in a sandbox and compute the shortest path between nodes A and D in a graph with edges [(A,B,1),(B,C,2),(A,C,5),(C,D,1),(B,D,4)",
+        "sample_requests": [
+          "[via TeamWork web UI \u2014 private DM. The user is currently viewing the chat tab. The user is NOT watching the browser right now, but delegate_browser is still available for any task that needs real brow",
+          "[via TeamWork web UI \u2014 private DM. The user is currently viewing the chat tab. The user is NOT watching the browser right now, but delegate_browser is still available for any task that needs real brow",
+          "[via TeamWork web UI \u2014 private DM. The user is currently viewing the chat tab. The user is NOT watching the browser right now, but delegate_browser is still available for any task that needs real brow",
+          "[via TeamWork web UI \u2014 private DM. The user is currently viewing the chat tab. The user is NOT watching the browser right now, but delegate_browser is still available for any task that needs real brow",
+          "[via TeamWork web UI \u2014 private DM. The user is currently viewing the chat tab. The user is NOT watching the browser right now, but delegate_browser is still available for any task that needs real brow"
+        ]
+      },
+      {
+        "count": 4,
+        "failure_count": 0,
+        "failure_rate": 0.0,
+        "fallback_count": 0,
+        "fallback_rate": 0.0,
+        "matched_spokes": {
+          "direct": 4
+        },
+        "sample_request": "[SCHEDULED_TASK \u2014 CRITICAL RULES: 1) Do NOT ask follow-up questions \u2014 the user is not present. 2) Do NOT use schedule_create, schedule_reminder, or any scheduling tools. 3) Do NOT ask for confirmation or clarification. 4) Just execute the task using your best judgment and respond with the result. 5) If the task is ambiguous, take the most reasonable interpretation and do it. 6) Keep your response concise \u2014 it will be delivered as a notification.] Send the user a concise morning briefing (today\u2019s",
+        "sample_requests": [
+          "[SCHEDULED_TASK \u2014 CRITICAL RULES: 1) Do NOT ask follow-up questions \u2014 the user is not present. 2) Do NOT use schedule_create, schedule_reminder, or any scheduling tools. 3) Do NOT ask for confirmation",
+          "[SCHEDULED_TASK \u2014 CRITICAL RULES: 1) Do NOT ask follow-up questions \u2014 the user is not present. 2) Do NOT use schedule_create, schedule_reminder, or any scheduling tools. 3) Do NOT ask for confirmation",
+          "[SCHEDULED_TASK \u2014 CRITICAL RULES: 1) Do NOT ask follow-up questions \u2014 the user is not present. 2) Do NOT use schedule_create, schedule_reminder, or any scheduling tools. 3) Do NOT ask for confirmation",
+          "[SCHEDULED_TASK \u2014 CRITICAL RULES: 1) Do NOT ask follow-up questions \u2014 the user is not present. 2) Do NOT use schedule_create, schedule_reminder, or any scheduling tools. 3) Do NOT ask for confirmation"
+        ]
+      },
+      {
+        "count": 1,
+        "failure_count": 1,
+        "failure_rate": 1.0,
+        "fallback_count": 0,
+        "fallback_rate": 0.0,
+        "matched_spokes": {
+          "knowledge": 1
+        },
+        "sample_request": "Please make a video presentation and a note on this: https://arxiv.org/html/2603.27116v1",
+        "sample_requests": [
+          "Please make a video presentation and a note on this: https://arxiv.org/html/2603.27116v1"
+        ]
+      }
+    ],
+    "coverage_by_spoke": {
+      "browser": 1,
+      "content": 1,
+      "course": 8,
+      "direct": 20,
+      "fallback": 2,
+      "knowledge": 3,
+      "memory": 15,
+      "research": 6,
+      "sandbox": 7,
+      "scheduler": 7,
+      "sysadmin": 9,
+      "workspace": 15
+    },
+    "decision_hint": "Fallback rate is 2.1% \u2014 existing spokes cover the long tail. Stay at L0. Phase 1 is NOT justified. Add 1-2 new spokes for the highest-impact fallback clusters if any.",
+    "failure_rate": 0.0213,
+    "fallback_rate": 0.0213,
+    "top_failures": [
+      {
+        "duration_ms": 589413.4798079613,
+        "matched_spoke": "content",
+        "outcome_status": "timeout",
+        "request": "[via TeamWork web UI \u2014 private DM. The user is currently viewing the chat tab. The user is NOT watching the browser right now, but delegate_browser is still available for any task that needs real brow",
+        "timestamp": 1775581355.146786
+      },
+      {
+        "duration_ms": 476633.8934249943,
+        "matched_spoke": "knowledge",
+        "outcome_status": "timeout",
+        "request": "Please make a video presentation and a note on this: https://arxiv.org/html/2603.27116v1",
+        "timestamp": 1775549533.005317
+      }
+    ],
+    "total_turns": 94,
+    "window_days": 14
+  }
+}

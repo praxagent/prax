@@ -1,0 +1,120 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "prax.fullname" . }}-app
+  namespace: {{ include "prax.namespace" . }}
+  labels:
+    {{- include "prax.componentLabels" (dict "component" "app" "context" $) | nindent 4 }}
+spec:
+  serviceName: {{ include "prax.fullname" . }}-app
+  replicas: {{ .Values.app.replicas }}
+  selector:
+    matchLabels:
+      {{- include "prax.componentSelectorLabels" (dict "component" "app" "context" $) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "prax.componentLabels" (dict "component" "app" "context" $) | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "prax.serviceAccountName" . }}
+      initContainers:
+        # Wait for Qdrant to be ready before starting the app
+        - name: wait-for-qdrant
+          image: curlimages/curl:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Waiting for Qdrant..."
+              until curl -sf http://{{ include "prax.fullname" . }}-qdrant:6333/healthz; do
+                sleep 2
+              done
+              echo "Qdrant is ready."
+        # Wait for Neo4j to be ready
+        - name: wait-for-neo4j
+          image: curlimages/curl:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Waiting for Neo4j..."
+              until curl -sf http://{{ include "prax.fullname" . }}-neo4j:7474/; do
+                sleep 2
+              done
+              echo "Neo4j is ready."
+      containers:
+        - name: app
+          image: {{ include "prax.image" (dict "img" .Values.images.app) }}
+          imagePullPolicy: {{ .Values.images.app.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 5001
+              protocol: TCP
+          envFrom:
+            - secretRef:
+                name: {{ include "prax.fullname" . }}-secrets
+            - configMapRef:
+                name: {{ include "prax.fullname" . }}-config
+          env:
+            # Service discovery overrides — point to Kubernetes service names
+            - name: SANDBOX_HOST
+              value: {{ include "prax.fullname" . }}-sandbox
+            - name: TEAMWORK_URL
+              value: http://{{ include "prax.fullname" . }}-teamwork:8000
+            - name: QDRANT_URL
+              value: http://{{ include "prax.fullname" . }}-qdrant:6333
+            - name: NEO4J_URI
+              value: bolt://{{ include "prax.fullname" . }}-neo4j:7687
+            - name: OLLAMA_BASE_URL
+              value: http://{{ include "prax.fullname" . }}-ollama:11434
+            - name: BROWSER_CDP_URL
+              value: http://{{ include "prax.fullname" . }}-sandbox:9223
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://{{ include "prax.fullname" . }}-tempo:4318
+            - name: GRAFANA_URL
+              value: http://{{ include "prax.fullname" . }}-grafana:3000
+          livenessProbe:
+            httpGet:
+              path: /healthz/live
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz/ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.app.resources | nindent 12 }}
+          volumeMounts:
+            - name: workspace
+              mountPath: /app/workspaces
+            - name: conversations-db
+              mountPath: /app/data
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: {{ include "prax.fullname" . }}-workspace
+  volumeClaimTemplates:
+    - metadata:
+        name: conversations-db
+        labels:
+          {{- include "prax.componentLabels" (dict "component" "app" "context" $) | nindent 10 }}
+      spec:
+        accessModes:
+          - {{ .Values.persistence.conversationsDb.accessMode }}
+        {{- if .Values.global.storageClass }}
+        storageClassName: {{ .Values.global.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.conversationsDb.size }}

@@ -1,7 +1,14 @@
 """Tests for prax.agent.claim_audit — deterministic claim grounding checks."""
 from __future__ import annotations
 
-from prax.agent.claim_audit import audit_claims, format_audit_warning
+from langchain_core.messages import AIMessage, ToolMessage
+
+from prax.agent.claim_audit import (
+    audit_claims,
+    audit_narrative_grounding,
+    audit_plan_completion,
+    format_audit_warning,
+)
 
 # ---------------------------------------------------------------------------
 # Basic claim detection
@@ -152,3 +159,161 @@ class TestFormatAuditWarning:
         result = format_audit_warning(findings)
         assert "UNGROUNDED" in result
         assert "INFORMATIONAL-SOURCED" in result
+
+
+# ---------------------------------------------------------------------------
+# Narrative grounding audit — the daily-briefing hallucination check
+# ---------------------------------------------------------------------------
+
+class TestNarrativeGrounding:
+    def _msgs(self, tool_names: list[str]) -> list:
+        """Helper: build a fake message list with ToolMessages for each name."""
+        return [
+            AIMessage(content=""),
+            *[ToolMessage(content="result", name=n, tool_call_id=f"c{i}")
+              for i, n in enumerate(tool_names)],
+        ]
+
+    def test_flags_fake_briefing_with_no_research_tools(self):
+        """The exact failure case: top news items without any research call."""
+        response = (
+            "Good morning — today's quick briefing:\n"
+            "- Top news item: supply-chain attacks remain the big cautionary tale.\n"
+            "- Top news item: agent systems are trending toward stronger orchestration.\n"
+            "- Weather: it's a sunny 72 degrees in LA today."
+        )
+        messages = self._msgs(["user_notes_read", "get_current_datetime"])
+        finding = audit_narrative_grounding(response, messages)
+        assert finding is not None
+        assert finding["missing_grounding"] is True
+        assert any("news" in p.lower() for p in finding["phrases"])
+
+    def test_accepts_briefing_when_news_plugin_called(self):
+        response = "Today's top news item: ..."
+        messages = self._msgs(["news", "get_current_datetime"])
+        assert audit_narrative_grounding(response, messages) is None
+
+    def test_accepts_briefing_when_research_spoke_called(self):
+        response = "Here are the headlines for today..."
+        messages = self._msgs(["delegate_research"])
+        assert audit_narrative_grounding(response, messages) is None
+
+    def test_accepts_briefing_when_browser_spoke_called(self):
+        response = "Morning briefing: key highlights..."
+        messages = self._msgs(["delegate_browser"])
+        assert audit_narrative_grounding(response, messages) is None
+
+    def test_passes_plain_conversational_response(self):
+        response = "Sure, I can help with that. What would you like me to do?"
+        messages = self._msgs([])
+        assert audit_narrative_grounding(response, messages) is None
+
+    def test_passes_empty_response(self):
+        assert audit_narrative_grounding("", self._msgs([])) is None
+
+    def test_detects_reports_say_pattern(self):
+        response = "Reports say the market dropped sharply this morning."
+        messages = self._msgs(["user_notes_read"])
+        finding = audit_narrative_grounding(response, messages)
+        assert finding is not None
+        assert finding["missing_grounding"] is True
+
+    def test_detects_market_claim_pattern(self):
+        response = "The S&P 500 index closed at a new high today."
+        messages = self._msgs(["get_current_datetime"])
+        finding = audit_narrative_grounding(response, messages)
+        assert finding is not None
+
+    def test_failed_tool_call_does_not_count_as_grounding(self):
+        """A tool that raised without a ToolMessage result doesn't ground claims."""
+        # Only an AIMessage with tool_calls, no resulting ToolMessage =
+        # the call failed validation, so grounding evidence is absent.
+        messages = [
+            AIMessage(content="", tool_calls=[
+                {"name": "delegate_research", "args": {}, "id": "c1"}
+            ]),
+        ]
+        response = "Top news item: something happened today."
+        finding = audit_narrative_grounding(response, messages)
+        assert finding is not None
+        assert finding["missing_grounding"] is True
+        assert "delegate_research" not in finding["called_tools"]
+
+
+# ---------------------------------------------------------------------------
+# Plan-completion alignment audit
+# ---------------------------------------------------------------------------
+
+class TestPlanCompletionAlignment:
+    """The ROP note regression: orchestrator said "Done" while the knowledge
+    spoke's reply explicitly said "it does not guarantee the synthesized
+    summary/diagram format you asked for. If you want, I can..." — the old
+    auditor missed it because there were no numeric or narrative claims to
+    flag. ``audit_plan_completion`` is the new check.
+    """
+
+    def _delegation_msg(self, name: str, content: str) -> ToolMessage:
+        return ToolMessage(content=content, name=name, tool_call_id=f"c_{name}")
+
+    def test_flags_done_lie_when_delegation_caveats(self):
+        caveat_reply = (
+            "Saved and readable.\n\nNote URL: https://example/notes/x\n\n"
+            "One caveat: I archived the page as a note from the URL, which "
+            "preserves fetched page content, but it does not guarantee the "
+            "synthesized summary/diagram format you asked for. If you want, "
+            "I can now turn that fetched content into a proper explainer "
+            "note with a concise summary and a diagram."
+        )
+        messages = [self._delegation_msg("delegate_knowledge", caveat_reply)]
+        response = "Done — I created the note here: https://example/notes/x"
+        finding = audit_plan_completion(response, messages)
+        assert finding is not None
+        assert finding["missing_grounding"] is True
+        assert "done" in finding["completion_claim"].lower()
+        assert finding["caveat_tool"] == "delegate_knowledge"
+        # The marker matched should be a caveat marker from the reply.
+        assert finding["caveat_marker"] in {
+            "one caveat", "does not guarantee", "if you want, i can",
+        }
+
+    def test_flags_here_is_the_note_with_caveat(self):
+        caveat_reply = (
+            "Wrote and published it, however, I was unable to include the "
+            "mermaid diagram you asked for — the source material didn't "
+            "have enough structural information."
+        )
+        messages = [self._delegation_msg("delegate_knowledge", caveat_reply)]
+        response = "Here's the note: https://example/notes/y"
+        finding = audit_plan_completion(response, messages)
+        assert finding is not None
+        assert "here" in finding["completion_claim"].lower()
+
+    def test_passes_clean_done_without_caveats(self):
+        clean_reply = (
+            "Saved and readable.\nNote URL: https://example/notes/x\n"
+            "The note includes a full deep-dive summary and a mermaid diagram."
+        )
+        messages = [self._delegation_msg("delegate_knowledge", clean_reply)]
+        response = "Done — I created the note here: https://example/notes/x"
+        assert audit_plan_completion(response, messages) is None
+
+    def test_passes_when_no_completion_language(self):
+        caveat_reply = "Something partial happened, if you want, I can retry."
+        messages = [self._delegation_msg("delegate_knowledge", caveat_reply)]
+        response = "Working on it — still gathering context."
+        assert audit_plan_completion(response, messages) is None
+
+    def test_ignores_non_delegation_tool_caveats(self):
+        # A caveat inside a non-delegation tool result (e.g., a sandbox
+        # listing) shouldn't trip the check — only sub-agent replies do,
+        # because the failure mode is specifically delegation hiding work.
+        caveat_reply = "could not find file x.txt"
+        messages = [
+            ToolMessage(content=caveat_reply, name="sandbox_ls",
+                        tool_call_id="c_sandbox"),
+        ]
+        response = "Done — the files are listed."
+        assert audit_plan_completion(response, messages) is None
+
+    def test_passes_empty_response(self):
+        assert audit_plan_completion("", []) is None

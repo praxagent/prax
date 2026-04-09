@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "prax.fullname" . }}-neo4j
+  namespace: {{ include "prax.namespace" . }}
+  labels:
+    {{- include "prax.componentLabels" (dict "component" "neo4j" "context" $) | nindent 4 }}
+spec:
+  serviceName: {{ include "prax.fullname" . }}-neo4j
+  replicas: {{ .Values.neo4j.replicas }}
+  selector:
+    matchLabels:
+      {{- include "prax.componentSelectorLabels" (dict "component" "neo4j" "context" $) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "prax.componentLabels" (dict "component" "neo4j" "context" $) | nindent 8 }}
+    spec:
+      containers:
+        - name: neo4j
+          image: "{{ .Values.images.neo4j.repository }}:{{ .Values.images.neo4j.tag }}"
+          imagePullPolicy: {{ .Values.images.neo4j.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 7474
+              protocol: TCP
+            - name: bolt
+              containerPort: 7687
+              protocol: TCP
+          env:
+            # NEO4J_PASSWORD must appear before NEO4J_AUTH so $(NEO4J_PASSWORD)
+            # resolves via Kubernetes dependent env var expansion.
+            - name: NEO4J_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "prax.fullname" . }}-secrets
+                  key: NEO4J_PASSWORD
+            - name: NEO4J_AUTH
+              value: "neo4j/$(NEO4J_PASSWORD)"
+            - name: NEO4J_PLUGINS
+              value: '["apoc"]'
+            - name: NEO4J_dbms_usage__report_enabled
+              value: "false"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.neo4j.resources | nindent 12 }}
+          volumeMounts:
+            - name: neo4j-data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: neo4j-data
+        labels:
+          {{- include "prax.componentLabels" (dict "component" "neo4j" "context" $) | nindent 10 }}
+      spec:
+        accessModes:
+          - {{ .Values.persistence.neo4j.accessMode }}
+        {{- if .Values.global.storageClass }}
+        storageClassName: {{ .Values.global.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.neo4j.size }}

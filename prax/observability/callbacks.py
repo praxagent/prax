@@ -119,6 +119,14 @@ class OTelLLMCallback(BaseCallbackHandler):
         # Record Prometheus metrics
         _record_metrics(model, input_tokens, output_tokens, elapsed)
 
+        # Circuit breaker: record success
+        try:
+            from prax.agent.circuit_breaker import get_breaker
+            provider = _infer_provider_from_model(model)
+            get_breaker(f"llm:{provider}").record_success()
+        except Exception:
+            pass
+
         # Complete OTel span
         span = self._spans.pop(run_id, None)
         if span:
@@ -144,6 +152,21 @@ class OTelLLMCallback(BaseCallbackHandler):
 
         # Record error metric
         _record_error_metric()
+
+        # Circuit breaker: record failure
+        try:
+            from prax.agent.circuit_breaker import get_breaker
+            # Try to infer provider from the error or span attributes
+            provider = "unknown"
+            if span:
+                try:
+                    # Best effort — span may have gen_ai.system attribute
+                    provider = "openai"  # fallback
+                except Exception:
+                    pass
+            get_breaker(f"llm:{provider}").record_failure()
+        except Exception:
+            pass
 
 
 class OTelToolCallback(BaseCallbackHandler):
@@ -233,6 +256,18 @@ def _infer_provider(serialized: dict) -> str:
     if "google" in class_str or "vertex" in class_str:
         return "google"
     if "ollama" in class_str:
+        return "ollama"
+    return "openai"
+
+
+def _infer_provider_from_model(model: str) -> str:
+    """Best-effort provider inference from model name."""
+    m = model.lower()
+    if "claude" in m or "anthropic" in m:
+        return "anthropic"
+    if "gemini" in m:
+        return "google"
+    if "qwen" in m or "llama" in m or "mistral" in m:
         return "ollama"
     return "openai"
 

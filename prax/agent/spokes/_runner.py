@@ -127,20 +127,90 @@ def run_spoke(
         parent_span_id=span.span_id,
         graph=span.ctx.graph,
         trace_id=span.trace_id,
+        live_agent_name=role_name,
     )
 
+    # Resolve the spoke's context limit from its model
+    spoke_model = cfg.get("model") or ""
+    spoke_tier = cfg.get("tier") or default_tier
+
     try:
-        result = graph.invoke(
-            {"messages": [
-                SystemMessage(content=enhanced_prompt),
-                HumanMessage(content=task),
-            ]},
-            config={"recursion_limit": effective_limit, "callbacks": [_graph_cb]},
-        )
+        # Prepare initial messages
+        messages = [
+            SystemMessage(content=enhanced_prompt),
+            HumanMessage(content=task),
+        ]
+
+        # Apply context management — ensures tool results from long
+        # spoke runs don't overflow the model's context window.
+        try:
+            from prax.agent.context_manager import prepare_context
+            messages, ctx_budget = prepare_context(
+                messages, tier=spoke_tier, model=spoke_model,
+            )
+            logger.debug(
+                "Spoke [%s] context: %d/%d tokens",
+                label, ctx_budget.total, ctx_budget.limit,
+            )
+        except Exception:
+            pass  # Context management is best-effort for spokes
+
+        # Invoke with context overflow recovery (compact and retry up to 3 times)
+        _ctx_retries = 0
+        while True:
+            try:
+                result = graph.invoke(
+                    {"messages": messages},
+                    config={"recursion_limit": effective_limit, "callbacks": [_graph_cb]},
+                )
+                break
+            except Exception as invoke_exc:
+                from langchain_core.exceptions import ContextOverflowError
+                if isinstance(invoke_exc, ContextOverflowError) and _ctx_retries < 3:
+                    _ctx_retries += 1
+                    logger.warning(
+                        "Spoke [%s] context overflow (attempt %d/3) — compacting",
+                        label, _ctx_retries,
+                    )
+                    try:
+                        from prax.services.health_telemetry import EventCategory, Severity, record_event
+                        record_event(
+                            EventCategory.CONTEXT_OVERFLOW, Severity.WARNING,
+                            component=f"spoke:{label}",
+                            details=f"Attempt {_ctx_retries}/3",
+                        )
+                    except Exception:
+                        pass
+                    try:
+                        from prax.agent.context_manager import (
+                            clear_old_tool_results,
+                            compact_history,
+                            get_context_limit,
+                            truncate_history,
+                        )
+                        shrunk = int(get_context_limit(spoke_tier, spoke_model) * (0.8 ** _ctx_retries))
+                        messages = clear_old_tool_results(messages, keep_last_n=3)
+                        messages = compact_history(messages, shrunk, tier=spoke_tier)
+                        messages = truncate_history(messages, shrunk)
+                        continue
+                    except Exception:
+                        pass
+                raise  # re-raise if not context overflow or retries exhausted
+
     except Exception as exc:
         logger.warning("Spoke [%s] failed: %s", label, exc, exc_info=True)
         span.end(status="failed", summary=str(exc)[:200])
         _finish(role_name, label=label, status="failed", start_time=_spoke_start)
+        try:
+            from prax.services.health_telemetry import EventCategory, Severity, record_event
+            record_event(
+                EventCategory.SPOKE_FAILURE, Severity.WARNING,
+                component=label,
+                details=f"{type(exc).__name__}: {str(exc)[:200]}",
+                latency_ms=((_time.monotonic() - _spoke_start) * 1000),
+            )
+        except Exception:
+            pass
         return f"Spoke agent failed: {exc}"
 
     # Log tool calls for debugging
@@ -152,6 +222,16 @@ def run_spoke(
             logger.info("Spoke [%s] completed (%d tool calls): %s", label, tool_count, msg.content[:120])
             span.end(status="completed", summary=msg.content[:200], tool_calls=tool_count)
             _finish(role_name, channel, msg.content, label=label, status="success", start_time=_spoke_start)
+            try:
+                from prax.services.health_telemetry import EventCategory, record_event
+                record_event(
+                    EventCategory.SPOKE_SUCCESS,
+                    component=label,
+                    details=f"{tool_count} tool calls",
+                    latency_ms=((_time.monotonic() - _spoke_start) * 1000),
+                )
+            except Exception:
+                pass
             return msg.content
 
     span.end(status="completed", summary="No output produced", tool_calls=tool_count)

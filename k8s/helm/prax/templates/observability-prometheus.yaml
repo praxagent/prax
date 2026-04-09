@@ -1,0 +1,61 @@
+{{- if .Values.observability.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "prax.fullname" . }}-prometheus
+  namespace: {{ include "prax.namespace" . }}
+  labels:
+    {{- include "prax.componentLabels" (dict "component" "prometheus" "context" $) | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "prax.componentSelectorLabels" (dict "component" "prometheus" "context" $) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "prax.componentLabels" (dict "component" "prometheus" "context" $) | nindent 8 }}
+    spec:
+      containers:
+        - name: prometheus
+          image: {{ .Values.observability.prometheus.image }}
+          args:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+            - "--storage.tsdb.path=/prometheus"
+            - "--storage.tsdb.retention.time={{ .Values.observability.prometheus.retention }}"
+          ports:
+            - name: http
+              containerPort: 9090
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.observability.prometheus.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus/prometheus.yml
+              subPath: prometheus.yml
+            - name: prometheus-data
+              mountPath: /prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "prax.fullname" . }}-prometheus-config
+        - name: prometheus-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "prax.fullname" . }}-prometheus
+  namespace: {{ include "prax.namespace" . }}
+  labels:
+    {{- include "prax.componentLabels" (dict "component" "prometheus" "context" $) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 9090
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "prax.componentSelectorLabels" (dict "component" "prometheus" "context" $) | nindent 4 }}
+{{- end }}

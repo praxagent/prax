@@ -216,7 +216,12 @@ class TestResourceLimits:
         old = resource.getrlimit(resource.RLIMIT_NOFILE)
         try:
             resource.setrlimit(resource.RLIMIT_NOFILE, (16, old[1]))
-            with resource_limits(max_fds=100):
+            # Use a high CPU limit (3600s) for the same reason the sibling
+            # test does: RLIMIT_CPU is a lifetime cap on the pytest
+            # process, and the 30s default would fire SIGXCPU immediately
+            # because pytest has already burned through far more than that
+            # by the time this test runs in the full suite.
+            with resource_limits(cpu_seconds=3600, max_fds=100):
                 cur = resource.getrlimit(resource.RLIMIT_NOFILE)
                 # Should keep the tighter limit (16), not loosen to 100.
                 assert cur[0] <= 16

@@ -48,11 +48,23 @@ def post_to_channel(channel: str, content: str, agent_name: str | None = None) -
     (sent directly via tw.send_message with an explicit channel_id) goes
     to the DM.  This prevents raw spoke dumps from cluttering the user's
     conversation and stealing message headers.
+
+    Attaches trace metadata so channel messages also get the trace icon.
     """
     try:
         tw = _tw()
         if tw:
-            tw.send_message(content=content, channel=channel, agent_name=agent_name)
+            # Best-effort trace metadata — same as DM path in teamwork_routes.
+            extra_data = None
+            try:
+                from prax.blueprints.teamwork_routes import _build_trace_metadata
+                extra_data = _build_trace_metadata()
+            except Exception:
+                pass
+            tw.send_message(
+                content=content, channel=channel,
+                agent_name=agent_name, extra_data=extra_data,
+            )
     except Exception:
         logger.debug("TeamWork hook: post_to_channel(%s) failed", channel, exc_info=True)
 

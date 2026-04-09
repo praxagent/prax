@@ -4,6 +4,7 @@ from __future__ import annotations
 import concurrent.futures
 import contextvars
 import logging
+from typing import Any
 
 from langchain.agents import create_agent as create_react_agent
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -328,34 +329,88 @@ def _run_spoke_or_subagent(spec: dict) -> str:
         raise
 
 
+def _normalize_task_spec(spec: Any) -> dict:
+    """Normalize common malformed task shapes into ``{task, spoke|category}``.
+
+    The LLM sometimes emits the OpenAI-internal function-call envelope
+    ``{"recipient_name": "functions.delegate_memory", "parameters": {...}}``
+    or a nested ``{"function": {"name": ..., "arguments": {...}}}`` instead
+    of the documented ``{task, spoke, category}`` shape.  This helper
+    unwraps those variants so the task still runs instead of silently
+    becoming a blank research task.
+    """
+    if not isinstance(spec, dict):
+        return {"task": str(spec)}
+
+    # OpenAI function-call envelope: {recipient_name, parameters}
+    if "recipient_name" in spec and "parameters" in spec:
+        rname = str(spec.get("recipient_name", ""))
+        params = spec.get("parameters") or {}
+        if not isinstance(params, dict):
+            params = {}
+        # "functions.delegate_browser" → spoke="browser"
+        # "functions.delegate_research" / "functions.research" → category="research"
+        short = rname.split(".")[-1]
+        if short.startswith("delegate_"):
+            target = short[len("delegate_"):]
+        else:
+            target = short
+        normalized: dict = {"task": params.get("task") or params.get("query") or params.get("description") or ""}
+        if target in _SPOKE_DELEGATES:
+            normalized["spoke"] = target
+        elif target:
+            normalized["category"] = target
+        if "name" in spec:
+            normalized["name"] = spec["name"]
+        return normalized
+
+    # Chat-completions tool-call envelope: {function: {name, arguments}}
+    if "function" in spec and isinstance(spec["function"], dict):
+        return _normalize_task_spec({
+            "recipient_name": spec["function"].get("name", ""),
+            "parameters": spec["function"].get("arguments") or {},
+        })
+
+    return spec
+
+
 @tool
 def delegate_parallel(tasks: list[dict]) -> str:
     """Run multiple independent tasks in parallel — across spokes and sub-agents.
 
-    Each task is a dict with:
+    Pass a list of task dicts in the ``tasks`` field. Each task dict MUST have:
         - task: str — self-contained description with all needed context
-        - spoke: str — (optional) spoke name: browser, content, finetune,
-          knowledge, sandbox, sysadmin.  Routes to the dedicated spoke agent.
-        - category: str — (optional, if no spoke) sub-agent category:
-          research, workspace, scheduler, codegen.
-        - name: str — (optional) human-readable identity for this task.
-          Auto-generated as ``{spoke_or_category}-{index}`` if not set.
+    And MAY have:
+        - spoke: str — one of: browser, content, course, finetune, knowledge,
+          sandbox, scheduler, sysadmin, workspace. Routes to a dedicated spoke.
+        - category: str — (if no spoke) generic sub-agent category:
+          research, workspace, scheduler, codegen. Defaults to "research".
+        - name: str — human-readable identity for this task (auto-generated
+          if omitted).
 
-    Use ``spoke`` for specialized work, ``category`` for generic sub-agent tasks.
-    If neither is set, defaults to category="research".
+    The call shape is ALWAYS ``delegate_parallel(tasks=[{...}, {...}])`` —
+    do NOT pass a single task dict, do NOT wrap tasks in ``recipient_name``
+    or ``parameters``. For a single task, use ``delegate_task`` instead.
 
     Returns a summary of all results plus an execution graph showing the
     full delegation tree with timing and status.
 
     Example:
-        delegate_parallel([
-            {"task": "Search arXiv for TurboQuant and summarize", "category": "research"},
+        delegate_parallel(tasks=[
+            {"task": "Fetch top 3 news headlines for today", "category": "research"},
+            {"task": "Get current weather for Los Angeles", "category": "research"},
             {"task": "Check all plugins for updates", "spoke": "sysadmin"},
-            {"task": "Open example.com and take a screenshot", "spoke": "browser", "name": "screenshot"},
         ])
     """
     if not tasks:
         return "No tasks provided."
+
+    # Tolerate a single dict passed instead of a list — promote to list.
+    if isinstance(tasks, dict):
+        tasks = [tasks]  # type: ignore[list-item]
+
+    # Normalize each task spec to the documented shape.
+    tasks = [_normalize_task_spec(t) for t in tasks]
 
     from prax.agent.trace import get_graph_summary, start_span
 
