@@ -2,6 +2,13 @@
 
 [← Research](README.md)
 
+> **Looking for the practical plan?**  This file covers *why*
+> external benchmarking matters (§19).  For the concrete catalog of
+> benchmarks to run — GAIA, τ-bench, SWE-bench, BrowseComp, etc. —
+> with phased adoption, cost estimates, and harness design
+> principles, see [**Prax Benchmarks — Agentic Harness Evaluation
+> Plan**](prax-benchmarks.md).
+
 ### 19. Agentic Benchmarking — External Validation
 
 **Finding:** Internal evaluation — integration tests, A/B experiments, trace analysis — validates architectural decisions within the system's own operating envelope but does not establish competitive positioning. External benchmarks provide standardized, reproducible comparisons against other agent systems on tasks designed to expose capability gaps that internal testing may not cover. An agent that passes all its own tests but fails on community benchmarks has optimized for its test distribution rather than for general capability.

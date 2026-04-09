@@ -13,7 +13,8 @@ This section summarizes empirically validated findings from academic research an
 - [Model Routing](model-routing.md) — §12-§13: Thompson Sampling, difficulty-driven routing
 - [Error & Metacognition](error-metacognition.md) — §14-§15: Multi-perspective recovery, failure profiles
 - [Active Inference](active-inference.md) — §16-§18: Self-verification, Active Inference theory, empirical validation
-- [Benchmarking](benchmarking.md) — §19: External validation with GAIA, SWE-bench
+- [Benchmarking](benchmarking.md) — §19: Why external validation matters
+- [Prax Benchmarks — Agentic Harness Evaluation Plan](prax-benchmarks.md) — The practical "what to run, in what order" catalog covering 25+ benchmarks across capability, safety/adversarial, and methodology dimensions: harness architecture (environment/scoring/control/reporting), comparative coverage tables, GAIA, τ-bench, AgentDojo, SWE-bench Verified, Terminal-Bench, BrowseComp, WebArena, TheAgentCompany, BFCL, ToolBench, SafeArena, AgentHarm, HCAST time-horizon framing, methodological pitfalls, and the HAL/Inspect-AI harness tooling recommendation
 - [Agentic To-Do Flows](agentic-todo-flows.md) — §20-§27: Where explicit plan+execute loops beat alternatives (and where they don't)
 - [Prax Changes From To-Do Research](prax-changes-from-todo-research.md) — Proposals doc mapping the to-do research findings to concrete Prax changes with priorities and sizes
 
