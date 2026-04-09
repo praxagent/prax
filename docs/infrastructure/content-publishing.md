@@ -2,110 +2,53 @@
 
 [← Infrastructure](README.md)
 
-Prax creates and manages three types of content: **notes**, **courses**, and **news briefings**. Each is stored as markdown with YAML frontmatter in the user's git-backed workspace, and can be published through two independent delivery channels.
+> **The flat notes / courses / news "Content Panel" was removed in
+> Phase 3 (2026-04-08).**  The **Library** is now the single surface
+> for notes, sequenced course-like notebooks, Kanban task boards,
+> raw captures, and generated outputs — see [`docs/library.md`](../library.md)
+> for the full design.  News briefings no longer exist as a separate
+> concept; generated briefings land in `library/outputs/`.
+>
+> This doc remains as a reference for the **Hugo + ngrok publishing
+> channel** that's still used for note pages delivered over SMS /
+> Discord (the `publish_notes()` path).
+
+Prax creates and manages two types of persistent content: **notes** (stored
+in the Library) and **courses** (legacy, still uses `workspace/courses/`
+with its own Hugo publish flow — a future PR will refactor this to write
+into the Library as sequenced notebooks).
 
 ### Content Types
 
-| Type | Storage Path | Frontmatter | Description |
-|------|-------------|-------------|-------------|
-| **Notes** | `notes/<slug>.md` | title, tags, related, created_at, updated_at | Knowledge base — research summaries, extracted papers, manual notes |
-| **Courses** | `courses/<id>/course.yaml` + lessons | title, subject, level, status, progress | Structured learning content with lessons and exercises |
-| **News** | `news/<slug>.md` | title, created_at, updated_at | Daily briefings, curated digests |
+| Type | Storage Path | Description |
+|------|-------------|-------------|
+| **Library notes** | `library/projects/{p}/notebooks/{n}/*.md` | Knowledge base pages — research, notes, references, lessons |
+| **Courses (legacy)** | `courses/<id>/course.yaml` + lessons | Structured learning content with lessons and exercises |
 
-### Two Delivery Channels
+### Hugo + ngrok publishing channel (SMS/Discord)
 
 ```mermaid
 graph TD
     subgraph Storage
-        WS[Workspace<br/>notes/*.md<br/>courses/*/course.yaml<br/>news/*.md]
+        WS[Workspace<br/>library/.../*.md<br/>courses/*/course.yaml]
     end
 
-    subgraph "Channel 1: Hugo + ngrok (SMS/Discord)"
-        WS --> Hugo[Hugo Static Site Generator]
-        Hugo --> Flask[Flask /workspaces/.../public/]
-        Flask --> ngrok[ngrok tunnel]
-        ngrok --> User1[SMS / Discord user]
-    end
-
-    subgraph "Channel 2: TeamWork API (Web UI)"
-        WS --> API[Prax REST API<br/>/teamwork/content/*]
-        API --> Proxy[TeamWork proxy<br/>/api/content/*]
-        Proxy --> React[React + react-markdown]
-        React --> User2[TeamWork browser]
-    end
+    WS --> Hugo[Hugo Static Site Generator]
+    Hugo --> Flask[Flask /workspaces/.../public/]
+    Flask --> ngrok[ngrok tunnel]
+    ngrok --> User1[SMS / Discord user]
 
     style WS fill:#f9f,stroke:#333
 ```
 
-**Channel 1 — Hugo + ngrok** (SMS/Discord): When Prax calls `publish_notes()` or `publish_news()`, it generates Hugo content files, builds the static site, and serves the HTML through Flask. ngrok provides a public URL. Users on SMS/Discord receive links like `https://abc123.ngrok.io/notes/eigenvalues/`.
+When Prax calls `publish_notes()`, it generates Hugo content files, builds
+the static site, and serves the HTML through Flask.  ngrok provides a public
+URL.  Users on SMS/Discord receive links like `https://abc123.ngrok.io/notes/eigenvalues/`.
 
-**Channel 2 — TeamWork API** (Web UI): TeamWork's "Prax's Space" panel fetches raw markdown + metadata via the REST API and renders it client-side with `react-markdown`. Hugo is not involved — no build step, no static HTML. This is instant and allows interactive features (editing, versioning, deletion) that static HTML can't support.
-
-### Prax's Space — TeamWork Content Panel
-
-The content panel is accessed via the BookOpen icon in TeamWork's left rail. It provides:
-
-**Browsing:**
-- Tabbed interface: Notes / Courses / News with item counts
-- Cross-content search (title, tags, body)
-- List view with titles, tags, dates, snippets
-- Detail view with full markdown rendering (syntax highlighting, LaTeX, tables, GFM)
-
-**Editing (notes only):**
-- Raw markdown editor — toggle between rendered view and editable textarea
-- Save commits changes to git and notifies Prax via the side chat
-- Delete with confirmation — removes the file and commits
-
-**Version History (notes only):**
-- Shows last 5 git commits that touched the note file
-- Each version displays commit hash, date, and message
-- Restore button reverts to a previous version (creates a new commit, preserving history)
-- Restoring also notifies Prax via the side chat
-
-**Side Chat & Content Context Tracking:**
-- BrowserChatSidebar appears alongside the content panel (same as browser/terminal views)
-- DM with Prax's PM agent — discuss the content, ask for edits, request new content
-- `active_view: 'content'` context tells Prax the user is browsing content
-- **Content context tracking**: When the user selects a note/course/news item, the `ContentPanel` reports which item is being viewed (`{ category, slug, title }`) via callback to `ProjectWorkspace`, which passes it to `BrowserChatSidebar`. Every message sent from the sidebar while viewing an item includes this context as `extra_data.content_context` — so when the user says "tell me about this page", Prax knows exactly which item they mean
-- Edit/restore notifications are auto-sent as messages so Prax stays in sync
-
-**How content context flows end-to-end:**
-
-```
-ContentPanel (React)
-  → onContentSelect({ category: "notes", slug: "eigenvalues", title: "Eigenvalues" })
-  → ProjectWorkspace (state)
-  → BrowserChatSidebar (contentContext prop)
-  → useSendMessage({ extra_data: { content_context: { category, slug, title } } })
-  → TeamWork POST /api/messages
-  → _forward_to_external_webhook() (includes extra_data in payload)
-  → Prax /teamwork/webhook
-  → _handle_message() extracts content_context:
-      1. Adds to tool_guidance: "Viewing: notes/eigenvalues — 'Eigenvalues'"
-      2. Fetches note content via note_service.get_note()
-      3. Injects full markdown into message context (like terminal output)
-```
-
-This follows the same pattern as terminal and browser views: Prax "sees" what the user sees without needing to call any tools. For very long notes (>6000 chars), content is truncated with a hint to use `note_read` for the full version.
-
-Without content context (user is browsing the list, not viewing a specific item), Prax receives only the generic content view guidance.
-
-### Content API
-
-**Prax endpoints** (Flask, `teamwork_routes.py`):
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/teamwork/content` | List all notes, courses, news (metadata only) |
-| GET | `/teamwork/content/<category>/<slug>` | Get single item with full content |
-| GET | `/teamwork/content/search?q=...` | Search across all content types |
-| DELETE | `/teamwork/content/notes/<slug>` | Delete a note |
-| PUT | `/teamwork/content/notes/<slug>` | Update note content/title/tags |
-| GET | `/teamwork/content/notes/<slug>/versions` | List git version history (last 5) |
-| GET | `/teamwork/content/notes/<slug>/versions/<commit>` | Get note at a specific version |
-| POST | `/teamwork/content/notes/<slug>/versions/<commit>/restore` | Restore to a specific version |
-
-**TeamWork proxy** (FastAPI, `routers/content.py`): Mirrors all Prax endpoints at `/api/content/*`.
+For direct browsing of notes, raw captures, outputs, tasks, and
+everything else, the TeamWork **Library panel** reads the markdown via
+the `/teamwork/library/*` REST API and renders it client-side — no
+Hugo involved.
 
 ### Version Control
 

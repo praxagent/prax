@@ -122,6 +122,10 @@ def get_lock(user_id: str) -> threading.Lock:
 def workspace_root(user_id: str) -> str:
     """Return the workspace root path for *user_id* (without creating it).
 
+    ``settings.workspace_dir`` is resolved to an absolute path at settings
+    load time (see ``AppSettings._absolute_workspace_dir``) — so all
+    subsequent joins are absolute regardless of process CWD.
+
     Accepts a UUID (resolved via identity service to ``usr_*`` dir) or a
     legacy phone number / ``D{discord_id}`` string (falls back to stripping
     the leading ``+``).
@@ -480,13 +484,33 @@ def _write_plan(root: str, plan: dict) -> None:
         os.remove(legacy)
 
 
-def create_plan(user_id: str, goal: str, steps: list[str]) -> dict:
-    """Create a multi-step plan for a complex request."""
+_VALID_PLAN_CONFIDENCE = {"low", "medium", "high"}
+
+
+def create_plan(
+    user_id: str,
+    goal: str,
+    steps: list[str],
+    *,
+    confidence: str = "medium",
+) -> dict:
+    """Create a multi-step plan for a complex request.
+
+    ``confidence`` is Prax's self-reported hint ("low" / "medium" /
+    "high") about how sure he is the plan is correct and complete.
+    This is a situational-awareness signal for the user — it is NOT
+    a calibrated probability and should not be used for automated
+    gating.  See ``docs/research/prax-changes-from-todo-research.md``
+    (P2) for the rationale.
+    """
+    if confidence not in _VALID_PLAN_CONFIDENCE:
+        confidence = "medium"
     with get_lock(user_id):
         root = ensure_workspace(user_id)
         plan = {
             "id": f"plan-{uuid.uuid4().hex[:6]}",
             "goal": goal,
+            "confidence": confidence,
             "steps": [
                 {"step": i + 1, "description": s, "done": False}
                 for i, s in enumerate(steps)
@@ -600,24 +624,82 @@ def get_workspace_context(user_id: str) -> str:
             pass
 
     # Load active plan if one exists.
+    #
+    # Compact rendering for large plans: when a plan has more than 6
+    # steps or its steps total more than 800 characters of description,
+    # we show a trimmed view instead of inlining everything — the goal,
+    # the current step in full, the next 2 steps brief, and a pointer
+    # to ``agent_plan_status`` for the full list.  Long plans otherwise
+    # burn a significant chunk of every turn's context on stale steps
+    # Prax has already completed.  This matches the "externalize
+    # working memory" finding in docs/research/agentic-todo-flows.md §25.
     plan = read_plan(user_id)
     if plan:
-        steps_text = []
-        done_count = 0
-        for s in plan.get("steps", []):
-            mark = "x" if s.get("done") else " "
-            if s.get("done"):
-                done_count += 1
-            steps_text.append(f"  [{mark}] {s['step']}. {s['description']}")
-        total = len(plan.get("steps", []))
-        parts.append(
-            f"\n\n## Active Plan ({done_count}/{total} done)\n"
-            f"Goal: {plan.get('goal', '(unknown)')}\n"
-            + "\n".join(steps_text)
-            + "\n\nContinue working through this plan. Mark steps done with "
-            "agent_step_done as you complete them. Do NOT respond to the user "
-            "about completed work until the relevant plan steps are actually done."
-        )
+        steps = plan.get("steps", [])
+        done_count = sum(1 for s in steps if s.get("done"))
+        total = len(steps)
+        goal = plan.get("goal", "(unknown)")
+        confidence = plan.get("confidence", "medium")
+
+        # Decide full vs compact rendering
+        total_chars = sum(len(s.get("description", "")) for s in steps)
+        PLAN_STEP_LIMIT = 6
+        PLAN_CHAR_LIMIT = 800
+        compact = total > PLAN_STEP_LIMIT or total_chars > PLAN_CHAR_LIMIT
+
+        if not compact:
+            steps_text = [
+                f"  [{'x' if s.get('done') else ' '}] {s['step']}. {s['description']}"
+                for s in steps
+            ]
+            parts.append(
+                f"\n\n## Active Plan ({done_count}/{total} done — confidence: {confidence})\n"
+                f"Goal: {goal}\n"
+                + "\n".join(steps_text)
+                + "\n\nContinue working through this plan. Mark steps done "
+                "with agent_step_done as you complete them. Do NOT respond "
+                "to the user about completed work until the relevant plan "
+                "steps are actually done."
+            )
+        else:
+            # Compact rendering
+            current_idx = next(
+                (i for i, s in enumerate(steps) if not s.get("done")),
+                total,  # all done
+            )
+            lines = [
+                f"\n\n## Active Plan ({done_count}/{total} done — confidence: {confidence})",
+                f"Goal: {goal}",
+                "",
+            ]
+            if current_idx < total:
+                current = steps[current_idx]
+                lines.append(
+                    f"Current step: [{current['step']}] {current['description']}"
+                )
+                # Show the next 2 upcoming steps briefly
+                upcoming = steps[current_idx + 1 : current_idx + 3]
+                if upcoming:
+                    lines.append("Next up:")
+                    for s in upcoming:
+                        desc = s.get("description", "")
+                        if len(desc) > 80:
+                            desc = desc[:77] + "…"
+                        lines.append(f"  - [{s['step']}] {desc}")
+                remaining = total - current_idx - 1 - len(upcoming)
+                if remaining > 0:
+                    lines.append(
+                        f"  - … and {remaining} more step(s)"
+                    )
+            else:
+                lines.append("All steps marked done. Call agent_plan_clear.")
+            lines.append("")
+            lines.append(
+                "[Plan compacted to save context. Use agent_plan_status "
+                "to see every step and their done/not-done state. Mark "
+                "steps done with agent_step_done as you complete them.]"
+            )
+            parts.append("\n".join(lines))
 
     files = list_active(user_id)
     if files:
@@ -630,6 +712,36 @@ def get_workspace_context(user_id: str) -> str:
             "Use workspace_search to find past documents in the archive "
             "and workspace_restore to bring them back."
         )
+
+    # Proactive engagement: drain the pending-engagement queue so Prax
+    # can offer to refine / expand notes the human just unlocked.  This
+    # drains once — on the next turn the queue will be empty again so
+    # Prax doesn't keep nagging.
+    try:
+        from prax.services.library_service import pop_pending_engagements
+        engagements = pop_pending_engagements(user_id)
+        if engagements:
+            lines = [
+                "\n\n## Proactive engagement — notes just unlocked for you",
+                "The user flipped `prax_may_edit` to true on the following "
+                "human-authored notes since your last turn. Read each one "
+                "and proactively offer to refine, expand, fact-check, or "
+                "add to it. Don't wait to be asked — the unlock is the ask. "
+                "Use library_note_read to pull the full content, then respond "
+                "conversationally.",
+                "",
+            ]
+            for e in engagements[:5]:
+                lines.append(
+                    f"- **{e.get('title', e.get('slug'))}** "
+                    f"(`{e.get('project')}/{e.get('notebook')}/{e.get('slug')}`) "
+                    f"— unlocked at {e.get('queued_at', '?')}"
+                )
+            if len(engagements) > 5:
+                lines.append(f"- … and {len(engagements) - 5} more")
+            parts.append("\n".join(lines))
+    except Exception:
+        pass
 
     return "".join(parts)
 

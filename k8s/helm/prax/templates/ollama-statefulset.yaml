@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "prax.fullname" . }}-ollama
+  namespace: {{ include "prax.namespace" . }}
+  labels:
+    {{- include "prax.componentLabels" (dict "component" "ollama" "context" $) | nindent 4 }}
+spec:
+  serviceName: {{ include "prax.fullname" . }}-ollama
+  replicas: {{ .Values.ollama.replicas }}
+  selector:
+    matchLabels:
+      {{- include "prax.componentSelectorLabels" (dict "component" "ollama" "context" $) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "prax.componentLabels" (dict "component" "ollama" "context" $) | nindent 8 }}
+    spec:
+      containers:
+        - name: ollama
+          image: "{{ .Values.images.ollama.repository }}:{{ .Values.images.ollama.tag }}"
+          imagePullPolicy: {{ .Values.images.ollama.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 11434
+              protocol: TCP
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.ollama.resources | nindent 12 }}
+          volumeMounts:
+            - name: ollama-models
+              mountPath: /root/.ollama
+  volumeClaimTemplates:
+    - metadata:
+        name: ollama-models
+        labels:
+          {{- include "prax.componentLabels" (dict "component" "ollama" "context" $) | nindent 10 }}
+      spec:
+        accessModes:
+          - {{ .Values.persistence.ollama.accessMode }}
+        {{- if .Values.global.storageClass }}
+        storageClassName: {{ .Values.global.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.ollama.size }}

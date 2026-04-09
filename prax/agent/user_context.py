@@ -17,6 +17,10 @@ current_user: ContextVar[User | None] = ContextVar("current_user", default=None)
 # When set, agent hooks should post responses to this channel instead of #general.
 current_channel_id: ContextVar[str | None] = ContextVar("current_channel_id", default=None)
 
+# Holds the TeamWork channel name (e.g., "general", "research", or "DM") for
+# the current request.  Used to inject channel context into the system prompt.
+current_channel_name: ContextVar[str] = ContextVar("current_channel_name", default="")
+
 # The raw user message for the current turn — used by the smart confirmation
 # gate to detect when the user explicitly requested an action.
 current_user_message: ContextVar[str] = ContextVar("current_user_message", default="")

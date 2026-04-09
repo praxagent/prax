@@ -379,16 +379,68 @@ def get_content(user_id: str) -> dict[str, Any]:
         return {"error": f"Failed to get content: {e}"}
 
 
-def screenshot(user_id: str) -> dict[str, Any]:
-    """Take a screenshot of the current page.  Returns the file path."""
+def screenshot(
+    user_id: str,
+    *,
+    full_page: bool = False,
+    filename: str | None = None,
+    save_to_workspace: bool = True,
+) -> dict[str, Any]:
+    """Take a screenshot of the current page.
+
+    By default the screenshot is saved into the user's active workspace
+    as ``screenshot-YYYYMMDD-HHMMSS-<host>.png`` so the agent can
+    deliver it with :func:`prax.agent.workspace_tools.workspace_send_file`.
+    Pass ``save_to_workspace=False`` to fall back to a temp file (useful
+    when only a local path is needed, e.g. for vision inspection).
+
+    Returns ``{path, filename, url, workspace}`` on success, or
+    ``{error: ...}`` on failure.  ``workspace`` is True when the file
+    landed in the workspace active dir.
+    """
     try:
         session = _get_session(user_id)
         if not session.page:
             return {"error": "No active browser session"}
+
+        page_url = session.page.url
+
+        if save_to_workspace:
+            # Derive a stable, human-readable filename so the delivery
+            # flow (workspace_send_file) shows something meaningful to
+            # the user instead of a random tempfile name.
+            from datetime import datetime
+            from urllib.parse import urlparse
+
+            from prax.services import workspace_service
+
+            if filename is None:
+                parsed = urlparse(page_url)
+                host = (parsed.netloc or "page").replace(":", "_")
+                ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+                filename = f"screenshot-{ts}-{host}.png"
+
+            root = workspace_service.ensure_workspace(user_id)
+            active_dir = os.path.join(root, "active")
+            os.makedirs(active_dir, exist_ok=True)
+            path = os.path.join(active_dir, filename)
+            session.page.screenshot(path=path, full_page=full_page)
+            return {
+                "path": path,
+                "filename": filename,
+                "url": page_url,
+                "workspace": True,
+            }
+
         fd, path = tempfile.mkstemp(suffix=".png", prefix="browser_")
         os.close(fd)
-        session.page.screenshot(path=path, full_page=False)
-        return {"path": path, "url": session.page.url}
+        session.page.screenshot(path=path, full_page=full_page)
+        return {
+            "path": path,
+            "filename": os.path.basename(path),
+            "url": page_url,
+            "workspace": False,
+        }
     except Exception as e:
         return {"error": f"Screenshot failed: {e}"}
 

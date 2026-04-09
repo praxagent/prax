@@ -1,0 +1,228 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: praxinstances.prax.ai
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.14.0
+spec:
+  group: prax.ai
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: PraxInstance represents a full Prax deployment for a tenant.
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - appImage
+                - sandboxImage
+                - teamworkImage
+              properties:
+                appImage:
+                  type: string
+                  description: Container image for the Prax application.
+                sandboxImage:
+                  type: string
+                  description: Container image for sandbox pods.
+                teamworkImage:
+                  type: string
+                  description: Container image for the TeamWork web UI.
+                replicas:
+                  type: integer
+                  default: 1
+                  minimum: 0
+                  description: Number of Prax app replicas.
+                sandbox:
+                  type: object
+                  properties:
+                    poolSize:
+                      type: integer
+                      default: 1
+                      minimum: 0
+                      description: Minimum number of sandbox pods to keep warm.
+                    maxPoolSize:
+                      type: integer
+                      default: 5
+                      minimum: 1
+                      description: Maximum number of sandbox pods allowed.
+                    scaleOnDemand:
+                      type: boolean
+                      default: true
+                      description: Whether to auto-scale sandbox pods on demand.
+                  default: {}
+                model:
+                  type: object
+                  properties:
+                    provider:
+                      type: string
+                      default: openai
+                      description: LLM provider name.
+                    baseModel:
+                      type: string
+                      description: Default base model identifier.
+                    tiers:
+                      type: object
+                      properties:
+                        low:
+                          type: string
+                          description: Model for low-cost/fast tasks.
+                        medium:
+                          type: string
+                          description: Model for balanced tasks.
+                        high:
+                          type: string
+                          description: Model for high-quality tasks.
+                        pro:
+                          type: string
+                          description: Model for premium tasks.
+                  default: {}
+                observability:
+                  type: object
+                  properties:
+                    enabled:
+                      type: boolean
+                      default: false
+                      description: Enable observability stack (metrics, tracing).
+                  default: {}
+                resources:
+                  type: object
+                  description: Per-component resource requests and limits.
+                  properties:
+                    app:
+                      type: object
+                      properties:
+                        requests:
+                          type: object
+                          properties:
+                            cpu:
+                              type: string
+                            memory:
+                              type: string
+                          additionalProperties: false
+                        limits:
+                          type: object
+                          properties:
+                            cpu:
+                              type: string
+                            memory:
+                              type: string
+                          additionalProperties: false
+                    sandbox:
+                      type: object
+                      properties:
+                        requests:
+                          type: object
+                          properties:
+                            cpu:
+                              type: string
+                            memory:
+                              type: string
+                          additionalProperties: false
+                        limits:
+                          type: object
+                          properties:
+                            cpu:
+                              type: string
+                            memory:
+                              type: string
+                          additionalProperties: false
+                    teamwork:
+                      type: object
+                      properties:
+                        requests:
+                          type: object
+                          properties:
+                            cpu:
+                              type: string
+                            memory:
+                              type: string
+                          additionalProperties: false
+                        limits:
+                          type: object
+                          properties:
+                            cpu:
+                              type: string
+                            memory:
+                              type: string
+                          additionalProperties: false
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum:
+                    - Pending
+                    - Running
+                    - Degraded
+                    - Failed
+                  description: High-level phase of the PraxInstance.
+                sandboxReady:
+                  type: integer
+                  description: Number of sandbox pods in Ready state.
+                sandboxTotal:
+                  type: integer
+                  description: Total number of sandbox pods (all phases).
+                activeUsers:
+                  type: integer
+                  description: Number of users with active workspaces.
+                lastHealthCheck:
+                  type: string
+                  format: date-time
+                  description: Timestamp of the last health check.
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Replicas
+          type: integer
+          jsonPath: .spec.replicas
+        - name: Sandbox Ready
+          type: integer
+          jsonPath: .status.sandboxReady
+        - name: Sandbox Total
+          type: integer
+          jsonPath: .status.sandboxTotal
+        - name: Active Users
+          type: integer
+          jsonPath: .status.activeUsers
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+  scope: Namespaced
+  names:
+    plural: praxinstances
+    singular: praxinstance
+    kind: PraxInstance
+    shortNames:
+      - pi

@@ -69,6 +69,8 @@ def build_llm(
     model: str | None = None,
     temperature: float | None = None,
     tier: str | None = None,
+    config_key: str | None = None,
+    default_tier: str | None = None,
 ) -> BaseLanguageModel:
     """Return a configured LLM instance for the requested provider.
 
@@ -79,7 +81,35 @@ def build_llm(
         tier: Model tier (low, medium, high, pro).  Resolved to a concrete
               model name via :mod:`prax.agent.model_tiers`.  Ignored if
               *model* is explicitly provided.
+        config_key: Per-component routing key (e.g., ``"context_compaction"``,
+              ``"memory_compact"``, ``"session_classifier"``).  Looks up the
+              matching entry in the LLM routing config and uses its
+              provider/model/tier/temperature values.  Explicit args
+              passed alongside take precedence over the config.
+        default_tier: Fallback tier when ``config_key`` doesn't specify one
+              and neither ``tier`` nor ``model`` is set.
     """
+    # Resolve per-component config if a routing key was supplied.
+    # Explicit args passed by the caller still win over the config.
+    if config_key:
+        try:
+            from prax.plugins.llm_config import get_component_config
+            cfg = get_component_config(config_key) or {}
+        except Exception:
+            cfg = {}
+        if provider is None:
+            provider = cfg.get("provider")
+        if model is None:
+            model = cfg.get("model")
+        if temperature is None:
+            temperature = cfg.get("temperature")
+        if tier is None:
+            tier = cfg.get("tier")
+
+    # Fall back to default_tier if still unresolved.
+    if tier is None and model is None and default_tier is not None:
+        tier = default_tier
+
     provider_name = (provider or settings.default_llm_provider).lower()
 
     # Resolve model: explicit model > tier > BASE_MODEL
@@ -123,6 +153,21 @@ def build_llm(
         callbacks = get_otel_callbacks()
     except Exception:
         callbacks = []
+
+    # Circuit breaker: fail fast if this provider has been tripping.
+    try:
+        from prax.agent.circuit_breaker import get_breaker
+        breaker = get_breaker(f"llm:{provider_name}")
+        if not breaker.is_allowed():
+            raise ConnectionError(
+                f"Circuit breaker OPEN for LLM provider '{provider_name}' — "
+                f"too many recent failures. Will retry automatically in "
+                f"{breaker.recovery_timeout:.0f}s."
+            )
+    except (ConnectionError, ImportError):
+        raise
+    except Exception:
+        pass  # Breaker system failure should never block LLM usage
 
     if provider_name == "openai":
         if not settings.openai_key:

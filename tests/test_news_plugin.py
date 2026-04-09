@@ -313,31 +313,31 @@ class TestBuildBriefingContent:
 
 
 class TestDoBriefing:
-    def test_publishes_and_returns_url(self, workspace):
+    def test_saves_to_library_outputs(self, workspace):
         sources = [{"name": "Feed1", "type": "rss", "url": "https://x.com/feed"}]
         with (
             patch(f"{_MODULE}._fetch_rss", return_value="### Feed1\n1. Article"),
             patch(
-                "prax.services.note_service.publish_news",
-                return_value={"slug": "news-briefing", "title": "News", "url": "https://example.com/news/news-briefing/"},
-            ) as mock_pub,
+                "prax.services.library_service.write_output",
+                return_value={"status": "written", "output": {"slug": "20260408-news-briefing"}},
+            ) as mock_write,
         ):
             result = _do_briefing("test_user", sources)
-        mock_pub.assert_called_once()
-        assert "https://example.com/news/news-briefing/" in result
-        assert "### Feed1" in result
+        mock_write.assert_called_once()
+        assert "20260408-news-briefing" in result
+        assert "Digest" in result
 
-    def test_falls_back_on_publish_error(self, workspace):
+    def test_falls_back_on_save_error(self, workspace):
         sources = [{"name": "Feed1", "type": "rss", "url": "https://x.com/feed"}]
         with (
             patch(f"{_MODULE}._fetch_rss", return_value="### Feed1\n1. Article"),
             patch(
-                "prax.services.note_service.publish_news",
-                return_value={"error": "NGROK not set"},
+                "prax.services.library_service.write_output",
+                side_effect=RuntimeError("disk full"),
             ),
         ):
             result = _do_briefing("test_user", sources)
-        assert "publishing failed" in result
+        assert "saving failed" in result
         assert "### Feed1" in result  # content still returned
 
 

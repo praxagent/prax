@@ -273,11 +273,22 @@ def _build_bot():
             typing_ctx = None
             logger.debug("Typing indicator failed (rate-limited?), continuing without it")
 
+        # Auto-capture any shared URLs into library/raw/.
+        from prax.services.sms_service import _maybe_auto_capture_raw
+        captured = await asyncio.to_thread(_maybe_auto_capture_raw, user_id, text_input)
+        prompt_input = text_input
+        if captured:
+            prompt_input = (
+                f"{text_input}\n\n"
+                f"[SYSTEM: captured to library/raw/ as `{captured}` — "
+                f"offer to promote it to a notebook if relevant.]"
+            )
+
         # Run the synchronous agent call in a thread pool.
         from prax.services.conversation_service import conversation_service
         try:
             response = await asyncio.to_thread(
-                conversation_service.reply, user_id, text_input
+                conversation_service.reply, user_id, prompt_input
             )
         except Exception:
             logger.exception("Agent reply failed for Discord user %s", author_id)

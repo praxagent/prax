@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "prax.fullname" . }}-qdrant
+  namespace: {{ include "prax.namespace" . }}
+  labels:
+    {{- include "prax.componentLabels" (dict "component" "qdrant" "context" $) | nindent 4 }}
+spec:
+  serviceName: {{ include "prax.fullname" . }}-qdrant
+  replicas: {{ .Values.qdrant.replicas }}
+  selector:
+    matchLabels:
+      {{- include "prax.componentSelectorLabels" (dict "component" "qdrant" "context" $) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "prax.componentLabels" (dict "component" "qdrant" "context" $) | nindent 8 }}
+    spec:
+      containers:
+        - name: qdrant
+          image: "{{ .Values.images.qdrant.repository }}:{{ .Values.images.qdrant.tag }}"
+          imagePullPolicy: {{ .Values.images.qdrant.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 6333
+              protocol: TCP
+            - name: grpc
+              containerPort: 6334
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.qdrant.resources | nindent 12 }}
+          volumeMounts:
+            - name: qdrant-storage
+              mountPath: /qdrant/storage
+  volumeClaimTemplates:
+    - metadata:
+        name: qdrant-storage
+        labels:
+          {{- include "prax.componentLabels" (dict "component" "qdrant" "context" $) | nindent 10 }}
+      spec:
+        accessModes:
+          - {{ .Values.persistence.qdrant.accessMode }}
+        {{- if .Values.global.storageClass }}
+        storageClassName: {{ .Values.global.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.qdrant.size }}

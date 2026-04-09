@@ -106,18 +106,30 @@ def get_project(user_id: str, project_id: str) -> dict:
     """Read a project's full metadata."""
     with get_lock(user_id):
         root = ensure_workspace(user_id)
-        return _read_project(_project_dir(root, project_id))
+        data = _read_project(_project_dir(root, project_id))
+    try:
+        from prax.services import access_log
+        access_log.touch(user_id, "project", project_id)
+    except Exception:
+        pass
+    return data
 
 
 def list_projects(user_id: str) -> list[dict]:
-    """List all projects with summary info."""
+    """List all projects with summary info.
+
+    Sorted by most-recently-accessed first, then created_at desc.
+    """
+    from prax.services import access_log
+
     with get_lock(user_id):
         root = ensure_workspace(user_id)
         projects_root = _projects_dir(root)
         results = []
         if not os.path.isdir(projects_root):
             return results
-        for entry in sorted(os.listdir(projects_root)):
+        access_map = access_log.get_all(user_id, "project")
+        for entry in os.listdir(projects_root):
             project_path = os.path.join(projects_root, entry)
             if not os.path.isdir(project_path):
                 continue
@@ -131,9 +143,15 @@ def list_projects(user_id: str) -> list[dict]:
                     "notes_count": len(data.get("notes", [])),
                     "links_count": len(data.get("links", [])),
                     "sources_count": len(data.get("sources", [])),
+                    "created_at": data.get("created_at", ""),
+                    "accessed_at": access_map.get(data["id"], ""),
                 })
             except Exception:
                 continue
+        results.sort(
+            key=lambda p: (p["accessed_at"], p.get("created_at", "")),
+            reverse=True,
+        )
         return results
 
 

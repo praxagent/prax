@@ -240,6 +240,9 @@ services:
     volumes:
       - ./observability/promtail.yaml:/etc/promtail/config.yaml:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Docker log files — Promtail uses the socket for discovery but
+      # needs the actual log files to read container output.
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
     depends_on:
       - loki
 

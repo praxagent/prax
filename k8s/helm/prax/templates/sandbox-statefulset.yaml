@@ -1,0 +1,105 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "prax.fullname" . }}-sandbox
+  namespace: {{ include "prax.namespace" . }}
+  labels:
+    {{- include "prax.componentLabels" (dict "component" "sandbox" "context" $) | nindent 4 }}
+spec:
+  serviceName: {{ include "prax.fullname" . }}-sandbox-headless
+  replicas: {{ .Values.sandbox.replicas }}
+  selector:
+    matchLabels:
+      {{- include "prax.componentSelectorLabels" (dict "component" "sandbox" "context" $) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "prax.componentLabels" (dict "component" "sandbox" "context" $) | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "prax.serviceAccountName" . }}
+      # Spread sandbox pods across nodes for multi-user scaling
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    {{- include "prax.componentSelectorLabels" (dict "component" "sandbox" "context" $) | nindent 20 }}
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: sandbox
+          image: {{ include "prax.image" (dict "img" .Values.images.sandbox) }}
+          imagePullPolicy: {{ .Values.images.sandbox.pullPolicy }}
+          ports:
+            - name: opencode
+              containerPort: 4096
+              protocol: TCP
+            - name: chrome-cdp
+              containerPort: 9223
+              protocol: TCP
+          env:
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "prax.fullname" . }}-secrets
+                  key: ANTHROPIC_KEY
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "prax.fullname" . }}-secrets
+                  key: OPENAI_KEY
+            - name: CLAUDE_CODE_DISABLE_NONINTERACTIVE_CHECK
+              value: "1"
+          livenessProbe:
+            httpGet:
+              path: /global/health
+              port: opencode
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /global/health
+              port: opencode
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.sandbox.resources | nindent 12 }}
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspaces
+            - name: agent-configs
+              mountPath: /root/.claude
+              subPath: claude
+            - name: agent-configs
+              mountPath: /root/.codex
+              subPath: codex
+            - name: agent-configs
+              mountPath: /root/.config/opencode
+              subPath: opencode
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: {{ include "prax.fullname" . }}-workspace
+  volumeClaimTemplates:
+    - metadata:
+        name: agent-configs
+        labels:
+          {{- include "prax.componentLabels" (dict "component" "sandbox" "context" $) | nindent 10 }}
+      spec:
+        accessModes:
+          - {{ .Values.persistence.agentConfigs.accessMode }}
+        {{- if .Values.global.storageClass }}
+        storageClassName: {{ .Values.global.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.agentConfigs.size }}

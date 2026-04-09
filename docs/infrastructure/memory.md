@@ -11,10 +11,12 @@ Prax has a two-layer, research-grounded memory system inspired by human cognitio
   - [Vector Store (Qdrant)](#vector-store-qdrant)
   - [Knowledge Graph (Neo4j)](#knowledge-graph-neo4j)
   - [Hybrid Retrieval (RRF Fusion)](#hybrid-retrieval-rrf-fusion)
+- [Knowledge Graph Namespaces](#knowledge-graph-namespaces)
 - [Consolidation Pipeline](#consolidation-pipeline)
 - [Memory Decay (Ebbinghaus Forgetting Curve)](#memory-decay-ebbinghaus-forgetting-curve)
 - [Embedding Providers](#embedding-providers)
 - [Agent Tools](#agent-tools)
+- [AST Code Analysis](#ast-code-analysis)
 - [Configuration Reference](#configuration-reference)
 - [Deployment](#deployment)
 - [Graceful Degradation](#graceful-degradation)
@@ -350,6 +352,91 @@ where `k = 60` (standard constant from Cormack et al., 2009) and `weight_i` come
 
 ---
 
+## Knowledge Graph Namespaces
+
+The Neo4j instance contains two logically separate graph spaces:
+
+```
+Same Neo4j Instance
+├── Memory Graph (existing)              ← about the USER
+│   ├── (:Entity)                        ← people, topics, projects from conversations
+│   ├── (:TemporalEvent)                 ← time-stamped events
+│   ├── (:CausalLink)                    ← cause/effect relationships
+│   └── [:RELATES_TO, :PARTICIPATED_IN]  ← memory relationships
+│
+└── Knowledge Graph (new)                ← about the WORLD
+    ├── (:KnowledgeConcept)              ← concepts from documents/papers/code
+    ├── (:KnowledgeDocument)             ← source documents
+    ├── [:KNOWLEDGE_RELATES]             ← concept-to-concept relations
+    ├── [:EXTRACTED_FROM]                 ← document-to-concept provenance
+    └── [:REFERENCES_ENTITY]             ← cross-namespace links to memory
+```
+
+### Why separate namespaces?
+
+If document concepts were stored as regular `(:Entity)` nodes, a user who uploads 50 papers would have their conversational memory flooded with thousands of extracted entities. "What do I know about Alice?" would return paper concepts alongside actual user facts. Separate labels ensure:
+
+- **Memory queries** (`(:Entity)`) return only conversational facts — fast and focused
+- **Knowledge queries** (`(:KnowledgeConcept)`) return only document-extracted concepts
+- **Cross-links** (`[:REFERENCES_ENTITY]`) connect the two when genuinely relevant
+
+### Namespaces within the knowledge graph
+
+Each `KnowledgeConcept` has a `namespace` field that organizes knowledge by source:
+
+| Namespace | Contents | Created by |
+|-----------|----------|-----------|
+| `papers` | Academic papers, research articles | `knowledge_ingest` on PDFs |
+| `docs` | Documentation, guides, READMEs | `knowledge_ingest` on markdown |
+| `codebase` | Code structure, modules, APIs | AST tools or `knowledge_ingest` on code |
+| `uploads` | User-uploaded files | `knowledge_ingest` on workspace files |
+| Custom | User-defined | `knowledge_ingest(namespace="...")` |
+
+### Tools
+
+| Tool | What it does |
+|------|-------------|
+| `knowledge_ingest` | Extract concepts and relations from a document using LLM, store in namespace |
+| `knowledge_search` | Search concepts across namespaces (or within a specific one) |
+| `knowledge_namespaces` | List all namespaces with concept counts — helps Prax know what's available |
+| `knowledge_connect` | Link a knowledge concept to a memory entity (cross-namespace) |
+
+### Query patterns
+
+```
+"What does that paper say about attention?" → knowledge graph (namespace: papers)
+"What do I know about Alice?"               → memory graph (Entity nodes)
+"Connect my notes with what the research says" → cross-namespace join via REFERENCES_ENTITY
+```
+
+### Data flow
+
+```mermaid
+flowchart TD
+    DOC[User uploads document] --> INGEST[knowledge_ingest]
+    INGEST --> LLM[LLM extracts concepts + relations]
+    LLM --> KG[(Knowledge Graph<br/>:KnowledgeConcept)]
+
+    CONV[User conversation] --> CONSOL[Consolidation pipeline]
+    CONSOL --> MG[(Memory Graph<br/>:Entity)]
+
+    KG -.->|REFERENCES_ENTITY| MG
+    KG --> KSEARCH[knowledge_search]
+    MG --> RECALL[memory recall]
+```
+
+### Implementation
+
+- Same Neo4j driver as the memory graph (shared connection pool)
+- Separate indexes on `(:KnowledgeConcept {user_id, namespace, name})`
+- All queries filter by `user_id` (multi-tenant isolation maintained)
+- `ingest_document()` uses a low-tier LLM to extract concepts — keeps costs down
+- `delete_namespace()` cleans up all concepts/relations in a namespace
+
+See [knowledge_graph.py](../../prax/services/memory/knowledge_graph.py) and [knowledge_tools.py](../../prax/agent/knowledge_tools.py).
+
+---
+
 ## Consolidation Pipeline
 
 Converts episodic conversation traces into durable memories.
@@ -358,8 +445,11 @@ Converts episodic conversation traces into durable memories.
 
 | Trigger | When |
 |---------|------|
-| **Scheduled** | Every `MEMORY_CONSOLIDATION_INTERVAL` seconds (default: 3600 = 1 hour) |
+| **Auto (per-turn)** | Orchestrator calls `maybe_consolidate(user_id)` after every turn; runs the full pipeline once every 5 turns per user |
+| **Scheduled** | Every `MEMORY_CONSOLIDATION_INTERVAL` seconds (default: 3600 = 1 hour) — _historical, prefer the per-turn auto trigger_ |
 | **Manual** | Agent calls `memory_consolidate` tool |
+
+> **History note:** Before April 2026, consolidation was documented as "scheduled" but never actually wired up — the function existed but had no callers, so memory stayed empty even though the infrastructure was in place. This was fixed by adding a per-turn auto-consolidation hook in `prax/services/memory_service.py:maybe_consolidate()` invoked from the orchestrator's turn-end block. Frequency is bounded by `_CONSOLIDATE_EVERY_N_TURNS = 5` to amortize the LLM extraction cost.
 
 ### Pipeline steps
 
@@ -717,6 +807,70 @@ The memory system follows Prax's pattern of graceful degradation:
 | Memory profile not started | Prax starts normally, memory context injection returns empty |
 
 No crashes, no retries, no memory accumulation from failed connections.
+
+---
+
+## Pipeline Coverage Telemetry
+
+Phase 0 of the [pipeline evolution roadmap](../PIPELINE_EVOLUTION_TODO.md) instruments every orchestrator turn so we can measure where the existing spoke library actually fails. The data feeds a Pareto chart that tells us whether to build the L1 dynamic escape hatch or just add more spokes.
+
+### Storage and restart robustness
+
+| Aspect | Detail |
+|---|---|
+| **On-disk file** | `{workspace_dir}/.pipeline_coverage.jsonl` — append-only JSONL, ~250 bytes per event |
+| **In-memory ring buffer** | Bounded at 5000 events for fast clustering during the session |
+| **Embeddings on disk** | **Not persisted** — stripped on write to keep the file ~60× smaller |
+| **Embeddings on read** | Re-computed lazily at report time via the existing memory embedder |
+| **Restart** | On first access after restart, `_init()` loads events from disk; lazy re-embed runs once on the first report call and caches results |
+| **Partial writes** | Corrupt JSON lines from a process killed mid-write are skipped via try/except |
+| **Auto-prune** | Every 100 turns, `prune_old_events()` rewrites the file to drop entries older than 30 days; called from the orchestrator's turn-end block (no separate scheduler) |
+| **Test mode** | `set_test_mode(True)` routes events to `.pipeline_coverage_harness.jsonl` so harness data never pollutes real telemetry |
+
+### What's recorded per turn
+
+```json
+{
+  "timestamp": 1743638400.0,
+  "user_id": "alice",
+  "request": "Make me a note about gradient descent",
+  "matched_spoke": "knowledge",
+  "delegations": ["knowledge"],
+  "outcome_status": "completed",
+  "tool_call_count": 3,
+  "duration_ms": 2156
+}
+```
+
+The `embedding` field is present in memory but **stripped on disk** to keep the file ~60× smaller. This means a 5000-event store is ~1.3MB instead of ~75MB.
+
+### API endpoints
+
+- `GET /teamwork/pipeline-coverage` — full Pareto report with `total_turns`, `fallback_rate`, `clusters`, `top_failures`, `coverage_by_spoke`, `decision_hint`
+- `GET /teamwork/pipeline-coverage/events` — raw events (without embeddings)
+- `POST /teamwork/pipeline-coverage/test-mode` — toggle test mode for the coverage harness
+
+### Why this isn't part of the memory system proper
+
+Pipeline coverage is **observability about Prax**, not memory **for Prax**. It lives in the workspace dir alongside the other telemetry files (`.health_telemetry.jsonl`, `.access_log.json`) and is gated by the same `HEALTH_MONITOR_ENABLED` toggle. It doesn't write to STM, LTM, or the knowledge graph — those are for user-facing memory.
+
+See [pipeline-composition.md](../research/pipeline-composition.md) for the research that motivated this and [PIPELINE_EVOLUTION_TODO.md](../PIPELINE_EVOLUTION_TODO.md) for the phased roadmap.
+
+## AST Code Analysis
+
+The sysadmin and self-improve spokes have access to tree-sitter based AST parsing tools that provide structural code understanding:
+
+| Tool | What it does |
+|------|-------------|
+| `code_structure` | Parse a file and return classes, functions, imports, decorators — without reading the entire file content |
+| `code_dependencies` | Map import dependencies across a directory, detect circular imports, find hub files |
+| `code_search_ast` | Search for functions/classes/methods by name using AST (not text grep — won't match comments or variable names) |
+
+These tools complement the knowledge graph: `code_structure` provides real-time AST analysis for specific files, while `knowledge_ingest` on a codebase creates a persistent, queryable graph of the overall architecture.
+
+Supports: Python, JavaScript, TypeScript. Requires `tree-sitter` (installed as a dependency).
+
+See [ast_tools.py](../../prax/agent/ast_tools.py).
 
 ---
 

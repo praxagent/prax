@@ -91,7 +91,7 @@ sequenceDiagram
     TW->>WH: POST webhook (content, channel_id,<br/>active_view, extra_data)
 
     WH->>WH: Build view context
-    Note over WH: View-specific behavior:<br/>browser → "PAIRING in shared browser"<br/>terminal → "PAIRING in shared terminal"<br/>content → "browsing Prax's Space"<br/>+ fetch screen state if applicable
+    Note over WH: View-specific behavior:<br/>browser → "PAIRING in shared browser"<br/>terminal → "PAIRING in shared terminal"<br/>content → "browsing the Library"<br/>+ fetch screen state if applicable
 
     alt active_view = "browser"
         WH->>TW: GET /api/browser/info
@@ -101,10 +101,12 @@ sequenceDiagram
         WH->>TW: GET /api/terminal/{project}/recent
         TW-->>WH: Last ~50 terminal lines
         Note over WH: Prepend: "[TERMINAL SCREEN — last 50 lines]"
-    else active_view = "content"
-        Note over WH: Extract extra_data.content_context<br/>{category, slug, title}
-        WH->>WH: note_service.get_note(slug)
-        Note over WH: Prepend: "[CONTENT PANEL — viewing this note]<br/>Title + full markdown content"
+    else active_view = "library"
+        Note over WH: Extract extra_data.content_context<br/>{project, notebook, slug, title}
+        WH->>WH: library_service.get_note(...)
+        Note over WH: Prepend: "[LIBRARY ITEM — viewing this note]<br/>Title + full markdown content"
+    else active_view = "home"
+        Note over WH: No extra context needed — Prax knows<br/>the user is on the project dashboard
     end
 
     WH->>WH: Set ContextVars (channel_id, active_view)
@@ -126,36 +128,34 @@ Every message from TeamWork includes an `active_view` field indicating which pan
 |---------------|---------------|----------|
 | `"browser"` | Live browser info + screencast status | Uses `delegate_browser` exclusively — user watches the browser in real-time |
 | `"terminal"` | Last ~50 terminal output lines | Uses `sandbox_shell` — executes commands immediately, no confirmation |
-| `"content"` | Full note content injected (like terminal output) + item metadata | Discusses content immediately — no tool call needed to see what user sees |
+| `"library"` | Full library item content injected (when viewing a specific note) + item metadata | Uses `library_*` tools; discusses the item immediately without re-reading |
+| `"home"` | Active project dashboard visible | Uses `library_projects_list` + `library_tasks_list` when asked for status |
 | `"chat"` | No special context | Default behavior with all tools available |
 | other | No special context | View label shown but no behavior change |
 
-#### Content Context Tracking
+#### Library item context tracking
 
-When the user is viewing a specific item in Prax's Space (content panel), the frontend passes the selected item's metadata through the full stack:
+When the user is viewing a specific note in the Library, the frontend passes the selected item's metadata through the full stack:
 
 ```
-ContentPanel.onContentSelect({ category, slug, title })
+LibraryPanel (note selection)
   → ProjectWorkspace (holds state)
   → BrowserChatSidebar (contentContext prop)
-  → POST /api/messages { extra_data: { content_context: {...} } }
+  → POST /api/messages { extra_data: { content_context: {project, notebook, slug, title} } }
   → TeamWork forwards extra_data in webhook payload
   → Prax extracts content_context, injects into tool_guidance:
-      "The user is currently viewing: notes/eigenvalues — 'Eigenvalues'"
+      "The user is currently viewing a library item: personal/health/sleep-tips — 'Sleep tips'"
 ```
 
-This means when the user says "tell me about this page" or "update this note", Prax knows which item they're referring to without the user needing to name it.
+This means when the user says "refine this" or "add a section about X", Prax knows exactly which note they mean without the user needing to name it.  For very long notes, content is truncated with a hint to use `library_note_read` for the full version.
 
-When the viewed item is a note, Prax also fetches the full note content via `note_service.get_note()` and injects it into the message context — exactly like terminal output is injected for terminal view. This means Prax can immediately discuss the note content without calling any tools. For very long notes (>6000 chars), content is truncated with a hint to use `note_read` for the full version.
+#### Direct-edit acknowledgment
 
-#### Edit Notifications
-
-When the user edits or restores a note directly in the content panel, a notification message is auto-sent in the DM channel:
-
-- **Edit**: `[I just edited the note "Eigenvalues" directly. Please use the updated version going forward.]`
-- **Restore**: `[I restored the note "Eigenvalues" to an older version (a1b2c3d4). Please use the restored version going forward.]`
-
-Prax's content view tool guidance tells the agent to acknowledge these as completed actions rather than instructions.
+When the user edits a note directly in the Library panel, Prax's
+library view tool guidance tells the agent to treat bracketed meta
+notes like `[I just edited this]` as completed actions rather than
+instructions — the user is informing Prax of a state change, not
+asking for one.
 
 ### Sandbox Code Execution Flow
 

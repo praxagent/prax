@@ -533,20 +533,41 @@ def todo_remove(item_ids: list[int]) -> str:
 
 
 @tool
-def agent_plan(goal: str, steps: list[str]) -> str:
+def agent_plan(goal: str, steps: list[str], confidence: str = "medium") -> str:
     """Break a complex request into a numbered plan of steps.
 
-    Use this when a user's request requires multiple tool calls or sequential
-    actions.  Write out the steps FIRST, then work through them one by one,
-    calling agent_step_done after each.
+    **This is YOUR private to-do list.**  Use this when a user's request
+    requires multiple tool calls or sequential actions.  Write out the
+    steps FIRST, then work through them one by one, calling
+    agent_step_done after each.  Call agent_plan_clear when done.
+
+    ⚠️ **Do NOT put these steps on the user's Library Kanban.**  The
+    Library Kanban (``library_task_add`` and friends) is the user's
+    project management board for work items that live for days or
+    weeks — shipping a feature, planning a trip, finishing a book.
+    Your ephemeral within-turn tool-calling sequence belongs here in
+    ``agent_plan``, not there.  The two systems are kept apart on
+    purpose: mixing them clutters the user's board with phantom tasks
+    and wastes context re-loading Kanban metadata on every turn.
+
+    Only add something to the Library Kanban when the user explicitly
+    asks for it to be tracked there.
 
     Args:
         goal: One-line summary of what the user wants.
         steps: Ordered list of discrete actions to take.
+        confidence: Self-reported hint about how sure you are the plan is
+            correct and complete.  One of ``"low"``, ``"medium"``, or
+            ``"high"``.  Use ``"low"`` when the request is ambiguous or
+            you are guessing at steps, ``"medium"`` for normal cases, and
+            ``"high"`` only when the task is routine and well-understood.
+            This is NOT calibrated — it's a situational-awareness cue
+            shown as a colored dot in the user's chat view so they know
+            when to pay extra attention.  Default: ``"medium"``.
     """
     user_id = _get_user_id()
-    plan = workspace_service.create_plan(user_id, goal, steps)
-    lines = [f"Plan created: {plan['goal']}"]
+    plan = workspace_service.create_plan(user_id, goal, steps, confidence=confidence)
+    lines = [f"Plan created: {plan['goal']} (confidence: {plan.get('confidence', 'medium')})"]
     for s in plan["steps"]:
         lines.append(f"  {s['step']}. [ ] {s['description']}")
 
@@ -584,7 +605,7 @@ def agent_plan_status() -> str:
     plan = workspace_service.read_plan(_get_user_id())
     if not plan:
         return "No active plan."
-    lines = [f"Goal: {plan['goal']}"]
+    lines = [f"Goal: {plan['goal']} (confidence: {plan.get('confidence', 'medium')})"]
     for s in plan["steps"]:
         check = "x" if s["done"] else " "
         lines.append(f"  {s['step']}. [{check}] {s['description']}")
