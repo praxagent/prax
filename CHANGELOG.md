@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/praxagent/prax/compare/v0.13.0...v0.14.0) (2026-04-10)
+
+
+### Features
+
+* add spaces, evals ([#27](https://github.com/praxagent/prax/issues/27)) ([5502c71](https://github.com/praxagent/prax/commit/5502c715a745a1a9b64936fc09095bcf0d3104ac))
+
 ## [0.13.0](https://github.com/praxagent/prax/compare/v0.12.0...v0.13.0) (2026-04-09)
 
 
