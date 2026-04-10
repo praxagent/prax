@@ -10,11 +10,12 @@ Prax uses a hub-and-spoke model: the orchestrator holds ~24 core tools (workspac
 
 ```mermaid
 graph TB
-    Prax["Prax Orchestrator\n~24 tools"]
+    Prax["Prax Orchestrator\n~26 tools"]
 
     Prax --> Core["Core\nsearch, datetime, URL fetch, image analysis"]
     Prax --> Workspace["Workspace\nfiles, todos, planning"]
     Prax --> Courses["Courses\ncreate, tutor, publish"]
+    Prax --> Meta["Meta\nself_upgrade_tier, run_python"]
 
     Prax -->|delegate_browser| Browser["Browser Spoke"]
     Prax -->|delegate_content_editor| Content["Content Editor\nsub-hub"]
@@ -69,6 +70,12 @@ graph LR
     Sandbox --> abort["sandbox_abort"]
     Sandbox --> search["sandbox_search"]
     Sandbox --> install["sandbox_install"]
+    Sandbox --> dshot["desktop_screenshot"]
+    Sandbox --> dclick["desktop_click"]
+    Sandbox --> dtype["desktop_type"]
+    Sandbox --> dkey["desktop_key"]
+    Sandbox --> dwin["desktop_list_windows"]
+    Sandbox --> dopen["desktop_open"]
     style Sandbox fill:#4A90D9,color:#fff
 ```
 
@@ -175,8 +182,8 @@ graph LR
 | `prax/agent/course_author_agent.py` | Content author sub-agent: produces rich course materials (mermaid, code, LaTeX) via iterative sandbox drafting |
 | `prax/agent/tools.py` | Kernel tool wrappers (search, datetime, fetch_url) — reader tools migrated to plugins |
 | `prax/agent/plugin_tools.py` | 17 plugin management tools: plugin CRUD, catalog, prompt CRUD, LLM config, source_read/list |
-| `prax/agent/workspace_tools.py` | 24 workspace tools: notes, files, links, todos, task planning, instructions, conversation history/search, system status, diff-aware patch |
-| `prax/agent/sandbox_tools.py` | 7 sandbox tools for code execution sessions |
+| `prax/agent/workspace_tools.py` | 26 workspace tools: notes, files, links, todos, task planning, instructions, conversation history/search, system status, diff-aware patch, self_upgrade_tier, run_python |
+| `prax/agent/sandbox_tools.py` | 16 sandbox tools: code execution sessions + 6 desktop interaction tools (xdotool/scrot) |
 | `prax/agent/scheduler_tools.py` | 9 scheduler tools: recurring cron + one-time reminders |
 | `prax/agent/finetune_tools.py` | 8 fine-tuning tools (harvest, train, verify, promote, rollback) |
 | `prax/agent/codegen_tools.py` | 10 self-improvement tools (worktree, edit, test, lint, verify, deploy, PR) |

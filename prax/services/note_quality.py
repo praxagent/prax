@@ -19,7 +19,7 @@ import threading
 
 logger = logging.getLogger(__name__)
 
-MAX_REVISIONS = 3
+MAX_REVISIONS = 5
 
 # ---------------------------------------------------------------------------
 # Heuristic checks — cheap pattern matching
@@ -124,6 +124,9 @@ Reject (approved=false) if ANY of these are true:
    duplicated variables, raw HTML)
 6. Content is too shallow to count as a "deep dive" (just definitions, no walkthrough)
 7. Content lacks explanatory prose — reads like bullet points or copied text
+8. Too shallow — content merely defines concepts without explaining them,
+   providing examples, or building intuition. A deep dive must go deeper
+   than what a reader could find in a dictionary or glossary entry.
 
 Approve (approved=true) only if the note:
 - Is clearly synthesized prose with the author's voice
@@ -152,7 +155,7 @@ def llm_review(title: str, content: str) -> dict | None:
         llm = build_llm(
             provider=cfg.get("provider"),
             model=cfg.get("model"),
-            tier=cfg.get("tier") or "low",
+            tier=cfg.get("tier") or "medium",
             temperature=cfg.get("temperature") or 0.2,
         )
         # Truncate very long content to stay within budget.

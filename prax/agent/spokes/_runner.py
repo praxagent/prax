@@ -32,7 +32,10 @@ def run_spoke(
     system_prompt: str,
     tools: list,
     config_key: str,
-    default_tier: str = "low",
+    # Spokes call tools — low tier is unreliable for tool selection.
+    # Individual spokes can still override to "low" via their delegation
+    # function if they truly don't need tools (none currently do).
+    default_tier: str = "medium",
     role_name: str | None = None,
     channel: str | None = None,
     recursion_limit: int = 80,

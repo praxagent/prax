@@ -14,6 +14,7 @@ This section summarizes empirically validated findings from academic research an
 - [Error & Metacognition](error-metacognition.md) — §14-§15: Multi-perspective recovery, failure profiles
 - [Active Inference](active-inference.md) — §16-§18: Self-verification, Active Inference theory, empirical validation
 - [Benchmarking](benchmarking.md) — §19: Why external validation matters
+- [Eval Status — 2026-04-09](eval-status-2026-04-09.md) — Current state of the GAIA eval cycle: 4 tasks, 14 runs, 38% pass rate, 4 systemic fixes shipped, what to pick up next
 - [Prax Benchmarks — Agentic Harness Evaluation Plan](prax-benchmarks.md) — The practical "what to run, in what order" catalog covering 25+ benchmarks across capability, safety/adversarial, and methodology dimensions: harness architecture (environment/scoring/control/reporting), comparative coverage tables, GAIA, τ-bench, AgentDojo, SWE-bench Verified, Terminal-Bench, BrowseComp, WebArena, TheAgentCompany, BFCL, ToolBench, SafeArena, AgentHarm, HCAST time-horizon framing, methodological pitfalls, and the HAL/Inspect-AI harness tooling recommendation
 - [Agentic To-Do Flows](agentic-todo-flows.md) — §20-§27: Where explicit plan+execute loops beat alternatives (and where they don't)
 - [Prax Changes From To-Do Research](prax-changes-from-todo-research.md) — Proposals doc mapping the to-do research findings to concrete Prax changes with priorities and sizes

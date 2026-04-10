@@ -191,11 +191,17 @@ def library_create_space():
 
 @teamwork_routes.route("/teamwork/library/spaces/<space>", methods=["DELETE"])
 def library_delete_space(space: str):
-    """Delete an empty space."""
+    """Delete a space.  Tasks are always deleted.
+
+    Query param ``?archive_notes=true`` moves notebooks/notes to
+    library/archive/ before deleting the space.  Without it, notes
+    are permanently deleted.
+    """
     try:
         from prax.services import library_service
         user_id = _get_teamwork_user_id()
-        result = library_service.delete_space(user_id, space)
+        archive = request.args.get("archive_notes", "").lower() in ("true", "1", "yes")
+        result = library_service.delete_space(user_id, space, archive_notes=archive)
         if "error" in result:
             return jsonify({"error": result["error"]}), 400
         return jsonify(result)
@@ -523,7 +529,9 @@ def library_generate_space_cover(space: str):
         user_id = _get_teamwork_user_id()
         data = request.get_json(silent=True) or {}
         result = library_service.generate_space_cover(
-            user_id, space, prompt_hint=data.get("prompt_hint", ""),
+            user_id, space,
+            prompt_hint=data.get("prompt_hint", ""),
+            dark_mode=data.get("dark_mode", True),
         )
         if "error" in result:
             return jsonify({"error": result["error"]}), 400
@@ -533,6 +541,478 @@ def library_generate_space_cover(space: str):
         return jsonify({"error": "Failed to generate cover"}), 500
 
 
+def _space_conversation_key(space_slug: str) -> int:
+    """Derive a stable conversation_key from a space slug."""
+    return int(abs(hash(f"space:{space_slug}")) % (10**15))
+
+
+# --- Space files (per-space reference-file store) ---
+
+@teamwork_routes.route(
+    "/teamwork/library/spaces/<space>/files", methods=["GET"],
+)
+def library_list_space_files(space: str):
+    """List uploaded files in a space."""
+    try:
+        from prax.services import library_service
+        user_id = _get_teamwork_user_id()
+        files = library_service.list_space_files(user_id, space)
+        return jsonify({"files": files})
+    except Exception:
+        logger.exception("Failed to list space files")
+        return jsonify({"files": []}), 500
+
+
+@teamwork_routes.route(
+    "/teamwork/library/spaces/<space>/files", methods=["POST"],
+)
+def library_upload_space_file(space: str):
+    """Upload a file to a space (multipart/form-data)."""
+    try:
+        from prax.services import library_service
+        user_id = _get_teamwork_user_id()
+        if "file" not in request.files:
+            return jsonify({"error": "No file provided"}), 400
+        f = request.files["file"]
+        if not f.filename:
+            return jsonify({"error": "Empty filename"}), 400
+        data = f.read()
+        # 50 MB cap
+        if len(data) > 50 * 1024 * 1024:
+            return jsonify({"error": "File too large (max 50 MB)"}), 413
+        result = library_service.save_space_file(
+            user_id, space, f.filename, data, f.content_type or "",
+        )
+        if "error" in result:
+            return jsonify({"error": result["error"]}), 400
+        return jsonify(result), 201
+    except Exception:
+        logger.exception("Failed to upload space file")
+        return jsonify({"error": "Failed to upload file"}), 500
+
+
+@teamwork_routes.route(
+    "/teamwork/library/spaces/<space>/files/<filename>", methods=["GET"],
+)
+def library_get_space_file(space: str, filename: str):
+    """Download / serve a file from a space."""
+    try:
+        from flask import send_file
+
+        from prax.services import library_service
+        user_id = _get_teamwork_user_id()
+        result = library_service.get_space_file(user_id, space, filename)
+        if result is None:
+            return jsonify({"error": "File not found"}), 404
+        path, mime_type = result
+        return send_file(str(path), mimetype=mime_type)
+    except Exception:
+        logger.exception("Failed to serve space file")
+        return jsonify({"error": "Failed to serve file"}), 500
+
+
+@teamwork_routes.route(
+    "/teamwork/library/spaces/<space>/files/<filename>", methods=["DELETE"],
+)
+def library_delete_space_file(space: str, filename: str):
+    """Delete a file from a space."""
+    try:
+        from prax.services import library_service
+        user_id = _get_teamwork_user_id()
+        deleted = library_service.delete_space_file(user_id, space, filename)
+        if not deleted:
+            return jsonify({"error": "File not found"}), 404
+        return jsonify({"status": "deleted"})
+    except Exception:
+        logger.exception("Failed to delete space file")
+        return jsonify({"error": "Failed to delete file"}), 500
+
+
+# --- Wiki (per-space knowledge base with auto-linking) ---
+
+@teamwork_routes.route("/teamwork/library/spaces/<space>/wiki", methods=["GET"])
+def library_list_wiki(space: str):
+    """List wiki entries for a space."""
+    try:
+        from prax.services import library_service
+        user_id = _get_teamwork_user_id()
+        notes = library_service.list_notes(
+            user_id, space, library_service.WIKI_NOTEBOOK_SLUG,
+        )
+        return jsonify({"entries": notes if isinstance(notes, list) else []})
+    except Exception:
+        logger.exception("Failed to list wiki entries")
+        return jsonify({"entries": []})
+
+
+@teamwork_routes.route("/teamwork/library/spaces/<space>/wiki", methods=["POST"])
+def library_create_wiki_entry(space: str):
+    """Create a wiki entry. Auto-creates the Wiki notebook if needed."""
+    try:
+        from prax.services import library_service
+        user_id = _get_teamwork_user_id()
+        data = request.get_json(silent=True) or {}
+        # Ensure the wiki notebook exists
+        library_service.ensure_wiki_notebook(user_id, space)
+        result = library_service.create_note(
+            user_id,
+            title=data.get("title", ""),
+            content=data.get("content", ""),
+            project=space,
+            notebook=library_service.WIKI_NOTEBOOK_SLUG,
+            author=data.get("author", "human"),
+            tags=data.get("tags") or None,
+        )
+        if "error" in result:
+            return jsonify({"error": result["error"]}), 400
+        # Auto-link: scan all wiki entries for cross-references
+        library_service.auto_link_wiki_entries(user_id, space)
+        return jsonify(result), 201
+    except Exception:
+        logger.exception("Failed to create wiki entry")
+        return jsonify({"error": "Failed to create wiki entry"}), 500
+
+
+@teamwork_routes.route("/teamwork/library/spaces/<space>/wiki/<slug>", methods=["GET"])
+def library_get_wiki_entry(space: str, slug: str):
+    """Fetch a single wiki entry."""
+    try:
+        from prax.services import library_service
+        user_id = _get_teamwork_user_id()
+        note = library_service.get_note(
+            user_id, space, library_service.WIKI_NOTEBOOK_SLUG, slug,
+        )
+        if note is None:
+            return jsonify({"error": "Not found"}), 404
+        return jsonify(note)
+    except Exception:
+        logger.exception("Failed to fetch wiki entry")
+        return jsonify({"error": "Failed to fetch wiki entry"}), 500
+
+
+@teamwork_routes.route("/teamwork/library/spaces/<space>/wiki/<slug>", methods=["PATCH"])
+def library_update_wiki_entry(space: str, slug: str):
+    """Update a wiki entry. Runs auto-link scan after save."""
+    try:
+        from prax.services import library_service
+        user_id = _get_teamwork_user_id()
+        data = request.get_json(silent=True) or {}
+        result = library_service.update_note(
+            user_id,
+            project=space,
+            notebook=library_service.WIKI_NOTEBOOK_SLUG,
+            slug=slug,
+            content=data.get("content"),
+            title=data.get("title"),
+            editor=data.get("editor", "human"),
+            override_permission=True,
+        )
+        if "error" in result:
+            return jsonify({"error": result["error"]}), 400
+        # Auto-link after every edit
+        library_service.auto_link_wiki_entries(user_id, space)
+        return jsonify(result)
+    except Exception:
+        logger.exception("Failed to update wiki entry")
+        return jsonify({"error": "Failed to update wiki entry"}), 500
+
+
+@teamwork_routes.route("/teamwork/library/spaces/<space>/wiki/<slug>", methods=["DELETE"])
+def library_delete_wiki_entry(space: str, slug: str):
+    """Delete a wiki entry."""
+    try:
+        from prax.services import library_service
+        user_id = _get_teamwork_user_id()
+        result = library_service.delete_note(
+            user_id, space, library_service.WIKI_NOTEBOOK_SLUG, slug,
+        )
+        if "error" in result:
+            return jsonify({"error": result["error"]}), 400
+        return jsonify(result)
+    except Exception:
+        logger.exception("Failed to delete wiki entry")
+        return jsonify({"error": "Failed to delete wiki entry"}), 500
+
+
+# --- Flashcards (per-space decks with spaced-repetition cards) ---
+
+@teamwork_routes.route("/teamwork/library/spaces/<space>/flashcards", methods=["GET"])
+def library_list_flashcard_decks(space: str):
+    """List all flashcard decks in a space."""
+    try:
+        from prax.services import library_service
+        user_id = _get_teamwork_user_id()
+        decks = library_service.list_flashcard_decks(user_id, space)
+        return jsonify({"decks": decks})
+    except Exception:
+        logger.exception("Failed to list flashcard decks")
+        return jsonify({"decks": []})
+
+
+@teamwork_routes.route("/teamwork/library/spaces/<space>/flashcards", methods=["POST"])
+def library_create_flashcard_deck(space: str):
+    """Create a new flashcard deck."""
+    try:
+        from prax.services import library_service
+        user_id = _get_teamwork_user_id()
+        data = request.get_json(silent=True) or {}
+        title = data.get("title", "")
+        if not title:
+            return jsonify({"error": "title is required"}), 400
+        result = library_service.create_flashcard_deck(
+            user_id, space, title=title, slug=data.get("slug"),
+        )
+        if "error" in result:
+            return jsonify({"error": result["error"]}), 400
+        return jsonify(result), 201
+    except Exception:
+        logger.exception("Failed to create flashcard deck")
+        return jsonify({"error": "Failed to create flashcard deck"}), 500
+
+
+@teamwork_routes.route("/teamwork/library/spaces/<space>/flashcards/<deck_slug>", methods=["GET"])
+def library_get_flashcard_deck(space: str, deck_slug: str):
+    """Fetch a single flashcard deck with all cards."""
+    try:
+        from prax.services import library_service
+        user_id = _get_teamwork_user_id()
+        deck = library_service.get_flashcard_deck(user_id, space, deck_slug)
+        if deck is None:
+            return jsonify({"error": "Not found"}), 404
+        return jsonify(deck)
+    except Exception:
+        logger.exception("Failed to fetch flashcard deck")
+        return jsonify({"error": "Failed to fetch flashcard deck"}), 500
+
+
+@teamwork_routes.route("/teamwork/library/spaces/<space>/flashcards/<deck_slug>", methods=["DELETE"])
+def library_delete_flashcard_deck(space: str, deck_slug: str):
+    """Delete a flashcard deck and all its cards."""
+    try:
+        from prax.services import library_service
+        user_id = _get_teamwork_user_id()
+        deleted = library_service.delete_flashcard_deck(user_id, space, deck_slug)
+        if not deleted:
+            return jsonify({"error": "Not found"}), 404
+        return jsonify({"deleted": True})
+    except Exception:
+        logger.exception("Failed to delete flashcard deck")
+        return jsonify({"error": "Failed to delete flashcard deck"}), 500
+
+
+@teamwork_routes.route("/teamwork/library/spaces/<space>/flashcards/<deck_slug>/cards", methods=["POST"])
+def library_add_flashcard(space: str, deck_slug: str):
+    """Add one or more cards to a deck.
+
+    Send ``{"front": ..., "back": ...}`` for a single card, or
+    ``{"cards": [{...}, ...]}`` for bulk creation.
+    """
+    try:
+        from prax.services import library_service
+        user_id = _get_teamwork_user_id()
+        data = request.get_json(silent=True) or {}
+        # Bulk path
+        if "cards" in data:
+            results = library_service.add_flashcards_bulk(
+                user_id, space, deck_slug, data["cards"],
+            )
+            if results and "error" in results[0]:
+                return jsonify({"error": results[0]["error"]}), 404
+            return jsonify({"cards": results}), 201
+        # Single card path
+        front = data.get("front", "")
+        back = data.get("back", "")
+        if not front or not back:
+            return jsonify({"error": "front and back are required"}), 400
+        result = library_service.add_flashcard(
+            user_id, space, deck_slug,
+            front=front, back=back, tags=data.get("tags"),
+        )
+        if "error" in result:
+            return jsonify({"error": result["error"]}), 404
+        return jsonify(result), 201
+    except Exception:
+        logger.exception("Failed to add flashcard")
+        return jsonify({"error": "Failed to add flashcard"}), 500
+
+
+@teamwork_routes.route("/teamwork/library/spaces/<space>/flashcards/<deck_slug>/cards/<card_id>", methods=["PATCH"])
+def library_update_flashcard(space: str, deck_slug: str, card_id: str):
+    """Update a flashcard's fields."""
+    try:
+        from prax.services import library_service
+        user_id = _get_teamwork_user_id()
+        data = request.get_json(silent=True) or {}
+        card = library_service.update_flashcard(
+            user_id, space, deck_slug, card_id,
+            front=data.get("front"),
+            back=data.get("back"),
+            tags=data.get("tags"),
+            confidence=data.get("confidence"),
+            last_reviewed=data.get("last_reviewed"),
+        )
+        if card is None:
+            return jsonify({"error": "Not found"}), 404
+        return jsonify(card)
+    except Exception:
+        logger.exception("Failed to update flashcard")
+        return jsonify({"error": "Failed to update flashcard"}), 500
+
+
+@teamwork_routes.route("/teamwork/library/spaces/<space>/flashcards/<deck_slug>/cards/<card_id>", methods=["DELETE"])
+def library_delete_flashcard(space: str, deck_slug: str, card_id: str):
+    """Delete a flashcard from a deck."""
+    try:
+        from prax.services import library_service
+        user_id = _get_teamwork_user_id()
+        deleted = library_service.delete_flashcard(
+            user_id, space, deck_slug, card_id,
+        )
+        if not deleted:
+            return jsonify({"error": "Not found"}), 404
+        return jsonify({"deleted": True})
+    except Exception:
+        logger.exception("Failed to delete flashcard")
+        return jsonify({"error": "Failed to delete flashcard"}), 500
+
+
+@teamwork_routes.route("/teamwork/library/spaces/<space>/chat/history", methods=["GET"])
+def library_space_chat_history(space: str):
+    """Return the conversation history for a space's scoped chat."""
+    try:
+        from prax.conversation_memory import retrieve_dict
+        from prax.settings import settings
+
+        space_key = _space_conversation_key(space)
+        history = retrieve_dict(settings.database_name, space_key)
+        if not history:
+            return jsonify({"messages": []})
+        # Filter to user + assistant messages (skip system messages
+        # and strip the [SPACE CONTEXT ...] prefix from user messages
+        # so the UI shows clean text).
+        clean: list[dict] = []
+        for msg in history:
+            role = msg.get("role")
+            content = msg.get("content", "")
+            if role == "user":
+                # Strip the space context prefix
+                if "]\n\n" in content:
+                    content = content.split("]\n\n", 1)[-1]
+                clean.append({"role": "user", "text": content})
+            elif role == "assistant":
+                clean.append({"role": "assistant", "text": content})
+        return jsonify({"messages": clean})
+    except Exception:
+        logger.exception("Failed to load space chat history")
+        return jsonify({"messages": []})
+
+
+@teamwork_routes.route("/teamwork/library/spaces/<space>/chat", methods=["POST"])
+def library_space_chat(space: str):
+    """Space-scoped chat — separate conversation context per space.
+
+    Each space gets its own conversation history via a dedicated
+    ``conversation_key``, so messages here don't pollute the user's
+    main Prax DM.  The space's name and description are injected as
+    context so Prax knows which space the user is working in.
+    """
+    try:
+        from prax.agent.orchestrator import ConversationAgent
+        from prax.services import library_service
+        from prax.services.conversation_service import ConversationService
+
+        user_id = _get_teamwork_user_id()
+        data = request.get_json(silent=True) or {}
+        message = data.get("message", "")
+        if not message.strip():
+            return jsonify({"error": "Empty message"}), 400
+
+        # Load full space metadata + contents for context injection.
+        # Prax needs to see what's IN the space (notebooks, notes,
+        # tasks) to be useful — not just the name.
+        space_meta = library_service.get_space(user_id, space) or {}
+        space_name = space_meta.get("name", space)
+        space_desc = space_meta.get("description", "")
+
+        # Build a content summary so Prax knows what exists
+        notebooks = space_meta.get("notebooks", [])
+        nb_lines = []
+        for nb in notebooks:
+            notes = nb.get("notes", [])
+            note_titles = [n.get("title") or n.get("slug") for n in notes[:10]]
+            status_str = ""
+            if nb.get("sequenced"):
+                done = sum(1 for n in notes if n.get("status") == "done")
+                status_str = f" ({done}/{len(notes)} done)"
+            nb_lines.append(
+                f"  - Notebook \"{nb.get('name')}\"{status_str}: "
+                + (", ".join(note_titles) if note_titles else "(empty)")
+            )
+
+        from prax.services import library_tasks
+        task_list = library_tasks.list_tasks(user_id, space)
+        task_lines = []
+        if isinstance(task_list, list) and task_list:
+            for t in task_list[:15]:
+                task_lines.append(
+                    f"  - [{t.get('column', '?')}] {t.get('title', '?')}"
+                )
+
+        context_parts = [
+            f"[SPACE CONTEXT — you are chatting inside the \"{space_name}\" space.",
+            "The user is viewing this space right now. Use 'space' not 'project'.",
+            "TASK CREATION RULES:\n"
+            "- When creating tasks, ALWAYS link them to relevant notes "
+            "by mentioning the note title in the task description.\n"
+            "- Create tasks ONE AT A TIME with separate library_task_add "
+            "calls. Do NOT claim you created N tasks unless you made N "
+            "separate tool calls and each one returned a task ID.\n"
+            "- After creating tasks, report EXACTLY how many you "
+            "created with their actual titles — do not round up or "
+            "fabricate a count.",
+        ]
+        if space_desc:
+            context_parts.append(f"Description: {space_desc}")
+        if nb_lines:
+            context_parts.append("Notebooks:\n" + "\n".join(nb_lines))
+        if task_lines:
+            context_parts.append("Tasks:\n" + "\n".join(task_lines))
+        else:
+            context_parts.append("Tasks: none yet.")
+        context_parts.append(
+            "TOOL ROUTING: To operate on this space, use "
+            "delegate_knowledge and include the space slug in your "
+            "task description. Examples:\n"
+            f'  - Add a task: delegate_knowledge("Add a task titled '
+            f"'Practice verbs' to the Kanban in space {space}\")\n"
+            f'  - Create a notebook: delegate_knowledge("Create a '
+            f"notebook called 'Vocabulary' in space {space}\")\n"
+            f'  - List tasks: delegate_knowledge("List all tasks in '
+            f'space {space}")\n'
+            f'  - Update a note: delegate_knowledge("Update note X in '
+            f"space {space}\")\n"
+            "Do NOT ask the user which space — you're already in it. "
+            "Do NOT say 'project' — say 'space'. The knowledge spoke "
+            "has all library tools: library_task_add, library_note_create, "
+            "library_notebook_create, library_tasks_list, etc.]"
+        )
+        context = "\n".join(context_parts) + "\n\n"
+
+        space_key = _space_conversation_key(space)
+
+        agent = ConversationAgent(tier="medium")
+        svc = ConversationService(agent=agent)
+        response = svc.reply(
+            user_id,
+            context + message,
+            conversation_key=space_key,
+        )
+        return jsonify({"response": response})
+    except Exception:
+        logger.exception("Space chat failed for %s", space)
+        return jsonify({"error": "Chat failed"}), 500
+
+
 @teamwork_routes.route("/teamwork/library/spaces/<space>", methods=["PATCH"])
 def library_update_space(space: str):
     """Update space metadata (status, kind, description, etc.)."""
@@ -540,6 +1020,12 @@ def library_update_space(space: str):
         from prax.services import library_service
         user_id = _get_teamwork_user_id()
         data = request.get_json(silent=True) or {}
+        theme_hue = data.get("theme_hue")
+        if theme_hue is not None:
+            try:
+                theme_hue = int(theme_hue)
+            except (TypeError, ValueError):
+                theme_hue = None
         result = library_service.update_space(
             user_id,
             space,
@@ -551,6 +1037,7 @@ def library_update_space(space: str):
             pinned=data.get("pinned"),
             tasks_enabled=data.get("tasks_enabled"),
             reminder_channel=data.get("reminder_channel"),
+            theme_hue=theme_hue,
         )
         if "error" in result:
             return jsonify({"error": result["error"]}), 400

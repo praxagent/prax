@@ -148,7 +148,6 @@ def delegate_memory(task: str) -> str:
         system_prompt=prompt,
         tools=build_tools(),
         config_key="subagent_memory",
-        default_tier="low",
         role_name=None,
         channel=None,
         recursion_limit=20,

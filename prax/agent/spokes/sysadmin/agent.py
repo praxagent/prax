@@ -145,7 +145,6 @@ def delegate_sysadmin(task: str) -> str:
         system_prompt=prompt,
         tools=build_tools(),
         config_key="subagent_sysadmin",
-        default_tier="low",
         role_name="Sysadmin",
         channel=None,  # sysadmin results go back to orchestrator, not a channel
         recursion_limit=80,

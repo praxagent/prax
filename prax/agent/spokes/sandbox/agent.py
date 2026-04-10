@@ -143,7 +143,6 @@ def delegate_sandbox(task: str) -> str:
             system_prompt=prompt,
             tools=build_tools(),
             config_key="subagent_sandbox",
-            default_tier="low",
             role_name="Sandbox Agent",
             channel="engineering",
             recursion_limit=80,

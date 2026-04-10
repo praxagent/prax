@@ -131,7 +131,10 @@ def run_reviewer(
         )
     except Exception as exc:
         logger.warning("Reviewer agent failed: %s", exc, exc_info=True)
-        return f"APPROVED\n\nReviewer failed ({exc}) — publishing as-is."
+        return (
+            "REVISE\n\nReview system encountered an error. Content has not been "
+            "quality-checked. Revise for completeness and depth before publishing."
+        )
 
     for msg in reversed(result.get("messages", [])):
         if isinstance(msg, AIMessage) and msg.content:
@@ -139,4 +142,7 @@ def run_reviewer(
             logger.info("Reviewer agent completed (pass %d): %s", pass_number, review[:120])
             return review
 
-    return "APPROVED\n\nReviewer produced no output — publishing as-is."
+    return (
+        "REVISE\n\nReviewer produced no output. Content has not been "
+        "quality-checked. Revise for completeness and depth before publishing."
+    )
