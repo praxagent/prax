@@ -126,9 +126,10 @@ def workspace_root(user_id: str) -> str:
     load time (see ``AppSettings._absolute_workspace_dir``) — so all
     subsequent joins are absolute regardless of process CWD.
 
-    Accepts a UUID (resolved via identity service to ``usr_*`` dir) or a
-    legacy phone number / ``D{discord_id}`` string (falls back to stripping
-    the leading ``+``).
+    All new users go through ``resolve_user()`` which assigns a UUID and a
+    ``usr_*`` workspace directory.  The legacy fallback (phone numbers,
+    ``D{discord_id}``) is only used for pre-existing directories — it will
+    NOT create new phone-number-named directories.
     """
     try:
         from prax.services.identity_service import get_user
@@ -137,9 +138,18 @@ def workspace_root(user_id: str) -> str:
             return os.path.join(settings.workspace_dir, user.workspace_dir)
     except Exception:
         pass
-    # Legacy fallback: phone number or D{discord_id}
+    # Legacy fallback — only for pre-existing directories.
+    # Refuses to create new directories named after phone numbers or raw IDs;
+    # callers must go through resolve_user() for new users.
     safe_id = user_id.lstrip("+")
-    return os.path.join(settings.workspace_dir, safe_id)
+    legacy_path = os.path.join(settings.workspace_dir, safe_id)
+    if not os.path.isdir(legacy_path):
+        logger.warning(
+            "workspace_root called with unresolvable user_id %s and no "
+            "existing legacy directory — caller should use resolve_user() first",
+            user_id[:12],
+        )
+    return legacy_path
 
 
 def ensure_workspace(user_id: str) -> str:

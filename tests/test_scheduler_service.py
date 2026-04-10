@@ -265,14 +265,26 @@ class TestOnFire:
 
         sent_messages = []
 
-        # Mock conversation_service.reply
+        # _on_fire creates a fresh ConversationAgent + ConversationService
+        # per-run (for medium-tier reliability), so we mock at the class
+        # level rather than the singleton.
         class FakeConvoService:
-            def reply(self, user_id, prompt):
+            def __init__(self, **_kwargs):
+                pass
+            def reply(self, user_id, prompt, **_kwargs):
                 return f"Reply to: {prompt}"
 
+        class FakeAgent:
+            def __init__(self, **_kwargs):
+                pass
+
         monkeypatch.setattr(
-            "prax.services.conversation_service.conversation_service",
-            FakeConvoService(),
+            "prax.agent.orchestrator.ConversationAgent",
+            FakeAgent,
+        )
+        monkeypatch.setattr(
+            "prax.services.conversation_service.ConversationService",
+            FakeConvoService,
         )
         monkeypatch.setattr(
             sched_running, "send_sms",

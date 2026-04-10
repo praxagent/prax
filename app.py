@@ -13,7 +13,7 @@ from prax.blueprints.textchat_routes import textchat_routes
 from prax.blueprints.user_routes import user_routes
 from prax.conversation_memory import init_database
 from prax.services.discord_service import start_bot as start_discord_bot
-from prax.services.identity_service import init_identity_db, migrate_legacy_users
+from prax.services.identity_service import init_identity_db, migrate_legacy_users, reconcile_workspace_dir
 from prax.services.scheduler_service import init_scheduler
 from prax.settings import settings
 from prax.token_management import get_encoding_for_model
@@ -89,6 +89,19 @@ def create_app():
     init_database(settings.database_name)
     init_identity_db()
     migrate_legacy_users()
+
+    # Fail fast if running in Docker without PRAX_USER_ID — the sandbox
+    # mounts break without it (no user isolation, wrong paths).
+    if settings.running_in_docker and not settings.prax_user_id:
+        raise RuntimeError(
+            "PRAX_USER_ID is required when running in Docker. "
+            "Set it in .env to your workspace directory name "
+            "(e.g. PRAX_USER_ID=usr_abc12345). "
+            "This determines which user's workspace the sandbox mounts."
+        )
+
+    # Ensure the identity service's workspace_dir matches PRAX_USER_ID
+    reconcile_workspace_dir()
 
     # In debug mode Werkzeug spawns a reloader process + a child process.
     # Both the parent and child would otherwise call init_scheduler() and

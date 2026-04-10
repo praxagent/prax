@@ -25,6 +25,8 @@ services:
       # Override WORKSPACE_DIR from .env — inside the container the mount
       # point is always /app/workspaces regardless of the host path.
       - WORKSPACE_DIR=./workspaces
+      # User identity — sandbox scoped to this user's workspace.
+      - PRAX_USER_ID=${PRAX_USER_ID:-}
       # TeamWork integration — Prax controls TeamWork as an external agent.
       - TEAMWORK_URL=http://teamwork:8000
       - TEAMWORK_API_KEY=${TEAMWORK_API_KEY:-}
@@ -77,15 +79,20 @@ services:
       - OPENAI_API_KEY=${OPENAI_KEY}
       - CLAUDE_CODE_DISABLE_NONINTERACTIVE_CHECK=1
     volumes:
-      - ${WORKSPACE_DIR:-../workspaces}:/workspaces
+      # User-scoped workspace — only this user's folder is mounted.
+      # PRAX_USER_ID must be set in .env (e.g. usr_abc12345).
+      - ${WORKSPACE_DIR:-../workspaces}/${PRAX_USER_ID}:/workspace
       # Full repo mount — coding agents (Claude Code, Codex, OpenCode) need
       # read-write access to the codebase for self-improvement tasks.
       # Secrets are passed via environment vars, not .env.
       - .:/source
-      # Coding agent configs — stored in workspace so they survive rebuilds.
-      - ${WORKSPACE_DIR:-../workspaces}/.claude:/root/.claude
-      - ${WORKSPACE_DIR:-../workspaces}/.codex:/root/.codex
-      - ${WORKSPACE_DIR:-../workspaces}/.opencode:/root/.config/opencode
+      # Persist the sandbox home directory inside the user's workspace.
+      # Desktop customizations, downloads, shell history, installed packages,
+      # browser profiles, and configs all survive container rebuilds.
+      - ${WORKSPACE_DIR:-../workspaces}/${PRAX_USER_ID}/.sandbox/home:/root
+      - ${WORKSPACE_DIR:-../workspaces}/${PRAX_USER_ID}/.sandbox/claude:/root/.claude
+      - ${WORKSPACE_DIR:-../workspaces}/${PRAX_USER_ID}/.sandbox/codex:/root/.codex
+      - ${WORKSPACE_DIR:-../workspaces}/${PRAX_USER_ID}/.sandbox/opencode:/root/.config/opencode
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:4096/global/health"]
       interval: 5s
@@ -117,6 +124,7 @@ services:
       - SANDBOX_CONTAINER=${SANDBOX_CONTAINER:-prax-sandbox-1}
       - CHROME_CDP_HOST=sandbox
       - CHROME_CDP_PORT=9223
+      - DESKTOP_VNC_URL=http://sandbox:6080
       - CORS_ORIGINS=["http://localhost:3000","http://localhost:5173"]
       # Prax app URL — required for plugin management proxy.
       - PRAX_URL=http://app:5001

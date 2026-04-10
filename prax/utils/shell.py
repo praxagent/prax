@@ -27,7 +27,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _APP_WORKSPACE_PREFIX = "/app/workspaces/"
-_SANDBOX_WORKSPACE_PREFIX = "/workspaces/"
+# User-scoped sandbox mount: /workspace (singular) is the user's own folder.
+_SANDBOX_WORKSPACE_PREFIX = "/workspace/"
 
 
 def _get_settings():
@@ -59,17 +60,39 @@ def _find_sandbox_container():
 # ---------------------------------------------------------------------------
 
 def to_sandbox_path(path: str | None) -> str | None:
-    """Translate an app-container path to the sandbox-container equivalent."""
+    """Translate an app-container path to the sandbox-container equivalent.
+
+    The sandbox mounts a single user's workspace at ``/workspace/``.
+    App-container paths like ``/app/workspaces/{user_id}/foo`` become
+    ``/workspace/foo`` (the user_id prefix is stripped because the mount
+    is already user-scoped).
+    """
     if not path:
         return path
-    # /app/workspaces/user/... → /workspaces/user/...
+
+    settings = _get_settings()
+    user_id = settings.prax_user_id
+
+    # /app/workspaces/{user_id}/foo → /workspace/foo
     if path.startswith(_APP_WORKSPACE_PREFIX):
-        return _SANDBOX_WORKSPACE_PREFIX + path[len(_APP_WORKSPACE_PREFIX):]
-    # Relative ./workspaces/... (settings default)
-    ws_dir = os.path.abspath(_get_settings().workspace_dir)
+        rest = path[len(_APP_WORKSPACE_PREFIX):]
+        if user_id and rest.startswith(user_id + "/"):
+            rest = rest[len(user_id) + 1:]
+        elif user_id and rest == user_id:
+            rest = ""
+        return _SANDBOX_WORKSPACE_PREFIX + rest if rest else _SANDBOX_WORKSPACE_PREFIX.rstrip("/")
+
+    # Resolve relative/absolute host paths
+    ws_dir = os.path.abspath(settings.workspace_dir)
     abs_path = os.path.abspath(path)
     if abs_path.startswith(ws_dir + os.sep):
-        return _SANDBOX_WORKSPACE_PREFIX + abs_path[len(ws_dir) + 1:]
+        rest = abs_path[len(ws_dir) + 1:]
+        # Strip user_id prefix — sandbox mount is user-scoped
+        if user_id and rest.startswith(user_id + os.sep):
+            rest = rest[len(user_id) + 1:]
+        elif user_id and rest == user_id:
+            rest = ""
+        return _SANDBOX_WORKSPACE_PREFIX + rest if rest else _SANDBOX_WORKSPACE_PREFIX.rstrip("/")
     if abs_path == ws_dir:
         return _SANDBOX_WORKSPACE_PREFIX.rstrip("/")
     return path

@@ -168,7 +168,6 @@ def delegate_browser(task: str) -> str:
             system_prompt=prompt,
             tools=build_tools(),
             config_key="subagent_browser",
-            default_tier="low",
             role_name="Browser Agent",
             channel="browser",
             recursion_limit=60,

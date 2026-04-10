@@ -93,7 +93,6 @@ def delegate_course(task: str) -> str:
         system_prompt=prompt,
         tools=build_tools(),
         config_key="subagent_course",
-        default_tier="low",
         role_name=None,
         channel=None,
         recursion_limit=15,

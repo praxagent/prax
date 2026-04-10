@@ -37,7 +37,9 @@ without risking their own writing being overwritten.
 from __future__ import annotations
 
 import logging
+import mimetypes
 import re
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -319,12 +321,29 @@ def create_space(
         "pinned": bool(pinned),
         "tasks_enabled": bool(tasks_enabled),
         "reminder_channel": reminder_channel,
+        # Color theme — a hue value (0–360) that shifts the accent
+        # color for this space.  0 = red, 40 = amber, 155 = emerald,
+        # 200 = sky, 240 = indigo (default), 270 = violet, 350 = rose.
+        # null/empty = use the global default (indigo).
+        "theme_hue": None,
         "created_at": now,
         "updated_at": now,
     }
     (proj_dir / SPACE_META).write_text(yaml.safe_dump(meta, sort_keys=False), encoding="utf-8")
     rebuild_index(user_id)
-    logger.info("library: created project %s for user %s", slug, user_id)
+    logger.info("library: created space %s for user %s", slug, user_id)
+
+    # Auto-generate a cover image for the new space if enabled.
+    # Toggle via AUTO_GENERATE_COVER env var (default: true).
+    import os
+    auto_cover = os.environ.get("AUTO_GENERATE_COVER", "true").lower() not in ("false", "0", "no")
+    if auto_cover:
+        try:
+            generate_space_cover(user_id, slug)
+            logger.info("library: auto-generated cover for space %s", slug)
+        except Exception:
+            logger.debug("Auto-generate cover failed for %s (non-fatal)", slug, exc_info=True)
+
     return {"status": "created", "project": meta}
 
 
@@ -344,11 +363,18 @@ def update_space(
     pinned: bool | None = None,
     tasks_enabled: bool | None = None,
     reminder_channel: str | None = None,
+    theme_hue: int | None = None,
 ) -> dict[str, Any]:
-    """Update any subset of project metadata fields."""
+    """Update any subset of space metadata fields.
+
+    ``theme_hue`` is an integer 0–360 representing the accent hue for
+    this space.  When set, the UI shifts all accent colors to this hue
+    while the user is inside the space.  Pass ``-1`` to clear (revert
+    to the global default).
+    """
     proj_dir = _space_path(user_id, project)
     if not proj_dir.exists():
-        return {"error": f"Project '{project}' not found"}
+        return {"error": f"Space '{project}' not found"}
     meta_file = proj_dir / SPACE_META
     try:
         meta = yaml.safe_load(meta_file.read_text(encoding="utf-8")) or {}
@@ -375,6 +401,11 @@ def update_space(
         meta["pinned"] = bool(pinned)
     if tasks_enabled is not None:
         meta["tasks_enabled"] = bool(tasks_enabled)
+    if theme_hue is not None:
+        if theme_hue < 0:
+            meta["theme_hue"] = None  # clear → use global default
+        else:
+            meta["theme_hue"] = max(0, min(360, int(theme_hue)))
 
     meta["updated_at"] = _now_iso()
     meta_file.write_text(yaml.safe_dump(meta, sort_keys=False), encoding="utf-8")
@@ -509,12 +540,37 @@ def get_space(user_id: str, project: str) -> dict | None:
     cover_name = _find_cover_filename(proj_dir)
     if cover_name:
         meta["cover_image"] = cover_name
-    nb_dir = proj_dir / NOTEBOOKS_DIR
-    meta["notebook_count"] = sum(1 for n in nb_dir.iterdir() if n.is_dir()) if nb_dir.exists() else 0
-    notes = list_notes(user_id, project=project)
-    meta["note_count"] = len(notes)
-    done = sum(1 for n in notes if n.get("status") == "done")
-    meta["progress_percent"] = round(100 * done / len(notes)) if notes else 0
+    # Include full notebook + note metadata so the SpacePage can render
+    # without a second round-trip.  Same shape as get_tree() per-space.
+    notebooks: list[dict] = []
+    for nb in list_notebooks(user_id, project):
+        nb_notes = list_notes(user_id, project, nb["slug"])
+        done = sum(1 for n in nb_notes if n.get("status") == "done")
+        nb_entry = {
+            **nb,
+            "progress_percent": round(100 * done / len(nb_notes)) if nb_notes else 0,
+            "notes": [
+                {
+                    "slug": n.get("slug"),
+                    "title": n.get("title"),
+                    "author": n.get("author", "prax"),
+                    "prax_may_edit": n.get("prax_may_edit", False),
+                    "tags": n.get("tags", []),
+                    "wikilinks": n.get("wikilinks", []),
+                    "lesson_order": n.get("lesson_order", 0),
+                    "status": n.get("status", "todo"),
+                    "updated_at": n.get("updated_at"),
+                }
+                for n in nb_notes
+            ],
+        }
+        notebooks.append(nb_entry)
+    meta["notebooks"] = notebooks
+    meta["notebook_count"] = len(notebooks)
+    all_notes = [n for nb in notebooks for n in nb["notes"]]
+    meta["note_count"] = len(all_notes)
+    done_total = sum(1 for n in all_notes if n.get("status") == "done")
+    meta["progress_percent"] = round(100 * done_total / len(all_notes)) if all_notes else 0
     return meta
 
 
@@ -603,6 +659,7 @@ def generate_space_cover(
     user_id: str,
     project: str,
     prompt_hint: str = "",
+    dark_mode: bool = True,  # kept for API compat but ignored
 ) -> dict[str, Any]:
     """Generate a cover image for ``project`` via the image-gen API.
 
@@ -636,7 +693,9 @@ def generate_space_cover(
     if prompt_hint:
         prompt_parts.append(f"Style hint: {prompt_hint}.")
     prompt_parts.append(
-        "Abstract, modern, soft gradient background, no text, no "
+        "Abstract, modern illustration with medium-toned colors that "
+        "work on both light and dark backgrounds. Avoid pure white or "
+        "pure black areas. Soft gradient background, no text, no "
         "people, no logos. 16:9 aspect ratio."
     )
     full_prompt = " ".join(prompt_parts)
@@ -652,7 +711,7 @@ def generate_space_cover(
         response = client.images.generate(
             model=model,
             prompt=full_prompt,
-            size="1792x1024",
+            size="1536x1024",
             n=1,
         )
         # OpenAI client returns either URL or base64 data depending on
@@ -718,18 +777,53 @@ def list_spaces(user_id: str) -> list[dict]:
     return projects
 
 
-def delete_space(user_id: str, project: str) -> dict[str, Any]:
-    """Delete an empty project. Refuses if it still has notebooks."""
+def delete_space(
+    user_id: str,
+    project: str,
+    *,
+    archive_notes: bool = False,
+) -> dict[str, Any]:
+    """Delete a space and its tasks.
+
+    If ``archive_notes`` is True, all notes from every notebook in the
+    space are moved to ``library/archive/`` before the space directory
+    is deleted.  This preserves the intellectual content while removing
+    the organizational container.
+
+    Tasks (``.tasks.yaml``) are always deleted with the space — they're
+    ephemeral work-tracking, not knowledge worth preserving.
+    """
     proj = _space_path(user_id, project)
     if not proj.exists():
-        return {"error": f"Project '{project}' not found"}
-    nb_dir = proj / NOTEBOOKS_DIR
-    if nb_dir.exists() and any(n.is_dir() for n in nb_dir.iterdir()):
-        return {"error": f"Project '{project}' still has notebooks — empty it first"}
-    # Remove the (empty) notebooks dir and meta, then the project dir.
+        return {"error": f"Space '{project}' not found"}
+
+    archived_count = 0
+    if archive_notes:
+        # Move every note to library/archive/ before nuking the dir
+        for nb in list_notebooks(user_id, project):
+            for note in list_notes(user_id, project, nb["slug"]):
+                note_data = get_note(user_id, project, nb["slug"], note["slug"])
+                if note_data:
+                    archive_capture(
+                        user_id,
+                        title=note_data["meta"].get("title") or note["slug"],
+                        content=note_data.get("content", ""),
+                        tags=note_data["meta"].get("tags") or [],
+                    )
+                    archived_count += 1
+
     import shutil
     shutil.rmtree(proj)
-    return {"status": "deleted", "project": project}
+    rebuild_index(user_id)
+    logger.info(
+        "library: deleted space %s for user %s (archived %d notes)",
+        project, user_id, archived_count,
+    )
+    return {
+        "status": "deleted",
+        "project": project,
+        "archived_notes": archived_count,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1958,6 +2052,96 @@ def delete_archive(user_id: str, slug: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Wiki — per-space knowledge base with auto-linking
+# ---------------------------------------------------------------------------
+#
+# Wiki entries are stored as notes in a notebook named "Wiki" (slug
+# "wiki") inside each space.  The notebook is created lazily on the
+# first wiki entry.  This reuses all existing note infrastructure
+# (wikilinks, backlinks, graph, search, health check).
+
+WIKI_NOTEBOOK_NAME = "Wiki"
+WIKI_NOTEBOOK_SLUG = "wiki"
+
+
+def ensure_wiki_notebook(user_id: str, space_slug: str) -> dict:
+    """Create the Wiki notebook in a space if it doesn't exist yet."""
+    existing = get_notebook(user_id, space_slug, WIKI_NOTEBOOK_SLUG)
+    if existing:
+        return existing
+    result = create_notebook(
+        user_id, space_slug, WIKI_NOTEBOOK_NAME,
+        description="Deep reference material — concepts, specs, guides. "
+        "The source of truth for this space.",
+    )
+    if "error" in result:
+        return result
+    return result.get("notebook", result)
+
+
+def auto_link_wiki_entries(user_id: str, space_slug: str) -> int:
+    """Scan wiki entries and add [[wikilinks]] where titles are mentioned.
+
+    For each wiki note, checks whether the body mentions the TITLE of
+    any other wiki note in the same notebook.  If it does and no
+    ``[[slug]]`` link already exists, inserts the link inline (wraps
+    the first occurrence of the title in ``[[slug|title]]``).
+
+    Returns the number of notes that were updated.
+    """
+    notes = list_notes(user_id, space_slug, WIKI_NOTEBOOK_SLUG)
+    if len(notes) < 2:
+        return 0
+
+    # Build a title → slug lookup
+    title_map: list[tuple[str, str]] = []
+    for n in notes:
+        title = n.get("title") or ""
+        slug = n.get("slug") or ""
+        if title and slug:
+            title_map.append((title, slug))
+
+    updated = 0
+    for note_meta in notes:
+        slug = note_meta.get("slug", "")
+        full = get_note(user_id, space_slug, WIKI_NOTEBOOK_SLUG, slug)
+        if not full:
+            continue
+        body = full.get("content", "")
+        changed = False
+        for other_title, other_slug in title_map:
+            if other_slug == slug:
+                continue  # don't self-link
+            # Skip if already linked
+            if f"[[{other_slug}]]" in body or f"[[{other_slug}|" in body:
+                continue
+            # Case-insensitive search for the title
+            import re as _re
+            pattern = _re.compile(_re.escape(other_title), _re.IGNORECASE)
+            if pattern.search(body):
+                # Replace the FIRST occurrence with a wikilink
+                body = pattern.sub(
+                    f"[[{other_slug}|{other_title}]]",
+                    body,
+                    count=1,
+                )
+                changed = True
+        if changed:
+            update_note(
+                user_id,
+                project=space_slug,
+                notebook=WIKI_NOTEBOOK_SLUG,
+                slug=slug,
+                content=body,
+                editor="prax",
+                override_permission=True,
+            )
+            updated += 1
+
+    return updated
+
+
+# ---------------------------------------------------------------------------
 # Refine — LLM-powered note improvement
 # ---------------------------------------------------------------------------
 
@@ -2310,3 +2494,310 @@ def _persist_health_report(user_id: str, report: dict) -> None:
         )
     except Exception:
         logger.exception("library: failed to persist health report")
+
+
+# ---------------------------------------------------------------------------
+# Flashcards — per-space decks stored in flashcards.yaml
+# ---------------------------------------------------------------------------
+
+FLASHCARDS_FILE = "flashcards.yaml"
+
+
+def _flashcards_path(user_id: str, space: str) -> Path:
+    return _space_path(user_id, space) / FLASHCARDS_FILE
+
+
+def _load_flashcards(user_id: str, space: str) -> dict:
+    """Load the flashcards.yaml for a space, returning {'decks': [...]}."""
+    path = _flashcards_path(user_id, space)
+    if path.exists():
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and "decks" in data:
+                return data
+        except yaml.YAMLError:
+            logger.warning("library: corrupt flashcards.yaml in %s/%s", user_id, space)
+    return {"decks": []}
+
+
+def _save_flashcards(user_id: str, space: str, data: dict) -> None:
+    """Write the flashcards.yaml for a space."""
+    path = _flashcards_path(user_id, space)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
+
+def list_flashcard_decks(user_id: str, space: str) -> list[dict]:
+    """List all flashcard decks in a space (without card bodies)."""
+    data = _load_flashcards(user_id, space)
+    result = []
+    for deck in data["decks"]:
+        result.append({
+            "slug": deck["slug"],
+            "title": deck["title"],
+            "created_at": deck.get("created_at"),
+            "updated_at": deck.get("updated_at"),
+            "card_count": len(deck.get("cards", [])),
+        })
+    return result
+
+
+def get_flashcard_deck(user_id: str, space: str, deck_slug: str) -> dict | None:
+    """Get a specific deck with all its cards."""
+    data = _load_flashcards(user_id, space)
+    for deck in data["decks"]:
+        if deck["slug"] == deck_slug:
+            return deck
+    return None
+
+
+def create_flashcard_deck(
+    user_id: str, space: str, title: str, slug: str | None = None,
+) -> dict:
+    """Create a new empty flashcard deck."""
+    data = _load_flashcards(user_id, space)
+    deck_slug = slug or _slugify(title)
+    # Check for duplicate slug
+    for deck in data["decks"]:
+        if deck["slug"] == deck_slug:
+            return {"error": f"Deck '{deck_slug}' already exists"}
+    now = _now_iso()
+    new_deck: dict[str, Any] = {
+        "slug": deck_slug,
+        "title": title,
+        "created_at": now,
+        "updated_at": now,
+        "cards": [],
+    }
+    data["decks"].append(new_deck)
+    _save_flashcards(user_id, space, data)
+    return new_deck
+
+
+def delete_flashcard_deck(user_id: str, space: str, deck_slug: str) -> bool:
+    """Delete a deck and all its cards. Returns True if found and deleted."""
+    data = _load_flashcards(user_id, space)
+    original_len = len(data["decks"])
+    data["decks"] = [d for d in data["decks"] if d["slug"] != deck_slug]
+    if len(data["decks"]) == original_len:
+        return False
+    _save_flashcards(user_id, space, data)
+    return True
+
+
+def add_flashcard(
+    user_id: str,
+    space: str,
+    deck_slug: str,
+    front: str,
+    back: str,
+    tags: list[str] | None = None,
+) -> dict:
+    """Add a card to a deck. Returns the new card dict or error dict."""
+    data = _load_flashcards(user_id, space)
+    for deck in data["decks"]:
+        if deck["slug"] == deck_slug:
+            now = _now_iso()
+            card: dict[str, Any] = {
+                "id": uuid.uuid4().hex[:8],
+                "front": front,
+                "back": back,
+                "tags": tags or [],
+                "created_at": now,
+                "last_reviewed": None,
+                "confidence": 0,
+            }
+            deck.setdefault("cards", []).append(card)
+            deck["updated_at"] = now
+            _save_flashcards(user_id, space, data)
+            return card
+    return {"error": f"Deck '{deck_slug}' not found"}
+
+
+def update_flashcard(
+    user_id: str,
+    space: str,
+    deck_slug: str,
+    card_id: str,
+    front: str | None = None,
+    back: str | None = None,
+    tags: list[str] | None = None,
+    confidence: int | None = None,
+    last_reviewed: str | None = None,
+) -> dict | None:
+    """Update a card's fields. Returns updated card or None if not found."""
+    data = _load_flashcards(user_id, space)
+    for deck in data["decks"]:
+        if deck["slug"] == deck_slug:
+            for card in deck.get("cards", []):
+                if card["id"] == card_id:
+                    if front is not None:
+                        card["front"] = front
+                    if back is not None:
+                        card["back"] = back
+                    if tags is not None:
+                        card["tags"] = tags
+                    if confidence is not None:
+                        card["confidence"] = confidence
+                    if last_reviewed is not None:
+                        card["last_reviewed"] = last_reviewed
+                    deck["updated_at"] = _now_iso()
+                    _save_flashcards(user_id, space, data)
+                    return card
+            return None
+    return None
+
+
+def delete_flashcard(
+    user_id: str, space: str, deck_slug: str, card_id: str,
+) -> bool:
+    """Delete a card from a deck. Returns True if found and deleted."""
+    data = _load_flashcards(user_id, space)
+    for deck in data["decks"]:
+        if deck["slug"] == deck_slug:
+            original_len = len(deck.get("cards", []))
+            deck["cards"] = [
+                c for c in deck.get("cards", []) if c["id"] != card_id
+            ]
+            if len(deck["cards"]) == original_len:
+                return False
+            deck["updated_at"] = _now_iso()
+            _save_flashcards(user_id, space, data)
+            return True
+    return False
+
+
+def add_flashcards_bulk(
+    user_id: str,
+    space: str,
+    deck_slug: str,
+    cards: list[dict],
+) -> list[dict]:
+    """Add multiple cards at once. Each dict has front, back, tags.
+
+    Returns list of created card dicts, or a single-element list with
+    an error dict if the deck is not found.
+    """
+    data = _load_flashcards(user_id, space)
+    for deck in data["decks"]:
+        if deck["slug"] == deck_slug:
+            now = _now_iso()
+            created = []
+            for item in cards:
+                card: dict[str, Any] = {
+                    "id": uuid.uuid4().hex[:8],
+                    "front": item.get("front", ""),
+                    "back": item.get("back", ""),
+                    "tags": item.get("tags") or [],
+                    "created_at": now,
+                    "last_reviewed": None,
+                    "confidence": 0,
+                }
+                deck.setdefault("cards", []).append(card)
+                created.append(card)
+            deck["updated_at"] = now
+            _save_flashcards(user_id, space, data)
+            return created
+    return [{"error": f"Deck '{deck_slug}' not found"}]
+
+
+# ---------------------------------------------------------------------------
+# Space files — per-space file store for reference material
+# ---------------------------------------------------------------------------
+
+_FILES_DIR = "files"
+
+
+def _sanitize_filename(filename: str) -> str:
+    """Strip path traversal characters and collapse to a flat filename."""
+    # Remove any directory components and null bytes
+    name = filename.replace("\x00", "")
+    name = Path(name).name  # strips leading dirs / ..
+    # Extra safety: remove any remaining .. or /
+    name = name.replace("..", "").replace("/", "").replace("\\", "")
+    return name.strip() or "unnamed"
+
+
+def _files_dir(user_id: str, space: str) -> Path:
+    return _space_path(user_id, space) / _FILES_DIR
+
+
+def list_space_files(user_id: str, space: str) -> list[dict]:
+    """List all uploaded files in a space.
+
+    Returns ``[{name, size, mime_type, uploaded_at}]``.
+    """
+    d = _files_dir(user_id, space)
+    if not d.exists():
+        return []
+    results: list[dict] = []
+    for p in sorted(d.iterdir()):
+        if not p.is_file():
+            continue
+        mt, _ = mimetypes.guess_type(p.name)
+        results.append({
+            "name": p.name,
+            "size": p.stat().st_size,
+            "mime_type": mt or "application/octet-stream",
+            "uploaded_at": datetime.fromtimestamp(
+                p.stat().st_mtime, tz=UTC,
+            ).isoformat(),
+        })
+    return results
+
+
+def save_space_file(
+    user_id: str,
+    space: str,
+    filename: str,
+    data: bytes,
+    mime_type: str = "",
+) -> dict:
+    """Save an uploaded file to the space's files directory.
+
+    Returns file metadata on success.
+    """
+    proj_dir = _space_path(user_id, space)
+    if not proj_dir.exists():
+        return {"error": f"Space '{space}' not found"}
+    safe_name = _sanitize_filename(filename)
+    d = _files_dir(user_id, space)
+    d.mkdir(parents=True, exist_ok=True)
+    dest = d / safe_name
+    dest.write_bytes(data)
+    mt = mime_type or mimetypes.guess_type(safe_name)[0] or "application/octet-stream"
+    logger.info(
+        "library: saved file %s for space %s (%s, %d bytes)",
+        safe_name, space, mt, len(data),
+    )
+    return {
+        "name": safe_name,
+        "size": len(data),
+        "mime_type": mt,
+        "uploaded_at": datetime.fromtimestamp(
+            dest.stat().st_mtime, tz=UTC,
+        ).isoformat(),
+    }
+
+
+def get_space_file(
+    user_id: str, space: str, filename: str,
+) -> tuple[Path, str] | None:
+    """Return ``(path, mime_type)`` for a stored file, or ``None``."""
+    safe_name = _sanitize_filename(filename)
+    p = _files_dir(user_id, space) / safe_name
+    if not p.is_file():
+        return None
+    mt, _ = mimetypes.guess_type(safe_name)
+    return p, mt or "application/octet-stream"
+
+
+def delete_space_file(user_id: str, space: str, filename: str) -> bool:
+    """Delete a file from the space. Returns ``True`` if deleted."""
+    safe_name = _sanitize_filename(filename)
+    p = _files_dir(user_id, space) / safe_name
+    if not p.is_file():
+        return False
+    p.unlink()
+    logger.info("library: deleted file %s from space %s", safe_name, space)
+    return True

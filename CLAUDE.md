@@ -65,6 +65,13 @@ docs/                   # Documentation (architecture, agents, guides, research)
 - Never rename a library function without also updating its callers
   in tests, routes, and agent tools — the codebase has no runtime
   coverage net for a broken import until you hit it in production
+- **Never spike benchmarks.**  When an eval reveals a weakness, the
+  fix in the system prompt or code must be an **abstraction of the
+  problem class** — not a specific example from the failed task.  If
+  someone who knows the benchmark reads the system prompt, they must
+  NOT be able to tell which tasks failed.  The instruction should
+  improve Prax on all queries in the class, not just the ones in
+  the eval set.
 
 ## To-do systems — the wall
 

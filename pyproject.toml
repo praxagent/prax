@@ -60,6 +60,7 @@ dependencies = [
     "tree-sitter-python>=0.25.0",
     "tree-sitter-javascript>=0.25.0",
     "tree-sitter-typescript>=0.23.2",
+    "datasets>=4.8.4",
 ]
 
 [project.optional-dependencies]

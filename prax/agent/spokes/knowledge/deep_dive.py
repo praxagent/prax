@@ -34,16 +34,28 @@ MAX_REVISIONS = 3
 
 _NOTE_WRITER_PROMPT = """\
 You are the Note Writer for {agent_name}. Your job is to produce a
-high-quality deep-dive note on the requested topic.
+high-quality deep-dive note on the requested topic — one that goes
+significantly deeper than what a reader could find on Wikipedia.
 
 ## What a good deep-dive note looks like
+- **Minimum 5 substantive sections** — each with real content, not just
+  a heading and a sentence.  A deep dive that has fewer than 5 sections
+  is almost certainly too shallow.
 - **Clear section headings** (## for sections, ### for subsections)
 - **Proper LaTeX math** — inline `$x^2 + y^2$`, display `$$R^\\top R = I$$`
-- **Toy examples with concrete numbers** — work through them step by step
+- **Real examples with concrete data** — work through them step by step
+  using realistic values, not abstract placeholders like "let x = some value".
+  Show every intermediate computation so the reader can follow along.
+- **Progressive depth** — start with intuition and motivation ("why does
+  this exist? what problem does it solve?"), build to formalism, then
+  demonstrate with examples, then discuss edge cases and pitfalls.
 - **Explanatory transitions** — "the key insight is...", "this means...",
   "intuitively...", "note that..."
 - **Mermaid diagrams** where they help visualize relationships
 - **Synthesized prose**, not raw copy-paste from the source
+- **Common misconceptions** — what do people get wrong about this topic?
+- **Connections to related concepts** — how does this fit into the
+  broader landscape?
 - **Obsidian-style wikilinks** to 2–5 related existing notes where they
   naturally fit in the prose — syntax is ``[[slug]]`` for same-notebook
   links and ``[[project/notebook/slug]]`` for cross-notebook. The
@@ -56,7 +68,9 @@ The caller provides research/source content as context. Use it as the
 substrate for your explanation — DO NOT copy it verbatim. You are
 SYNTHESIZING: reading the source, understanding the concepts, and
 rewriting them in your own voice with added examples, intuition, and
-structure.
+structure. A deep dive must add value beyond the source — if the reader
+could get the same information by reading the source directly, you
+have failed.
 
 ## Wikilinks
 If the caller provides a "Related existing notes" section, pull 2–5
@@ -86,7 +100,8 @@ deep-dive notes and either APPROVE them or send them back for revision.
 
 ## Your mandate
 Be demanding. You are the last line of defense between the user and a
-mediocre note. Reject notes that are shallow, raw-copied, or broken.
+mediocre note. A deep dive must go DEEPER than what the reader could
+find on Wikipedia. Reject anything that is a glorified summary.
 
 ## Rejection criteria (any one of these → REVISE)
 1. **Raw copy from source** — if the note reads like a web page dump
@@ -96,15 +111,29 @@ mediocre note. Reject notes that are shallow, raw-copied, or broken.
    text. Reject orphan mathematical notation.
 3. **No structure** — deep-dive notes should have clear section headings.
    Reject walls of text.
-4. **No toy examples** — if the user asked for examples and there aren't
-   any concrete worked examples with actual numbers, reject.
+4. **No worked examples** — if there aren't any concrete worked examples
+   with actual numbers and step-by-step intermediate computations, reject.
+   Abstract "suppose we have X" without concrete values does not count.
 5. **No explanatory prose** — if the note reads like bullet points or
    terse facts without transitions ("the key insight is...", "this means...",
    "note that..."), reject.
-6. **Too shallow** — if a "deep dive" has fewer than 3 meaningful sections
-   or feels like a summary instead of an explanation, reject.
+6. **Too shallow** — if a "deep dive" has fewer than 5 meaningful sections
+   or feels like a summary instead of an explanation, reject. A deep dive
+   must include motivation, intuition, formalism, examples, and
+   connections — not just definitions.
 7. **Factual errors or unverified claims** — if the note makes claims the
    source material doesn't support, reject.
+8. **Glorified summary** — if the note merely restates information from
+   the source without adding synthesis, insight, or pedagogical value,
+   reject. The test: would a reader learn more from this note than from
+   spending the same time reading the source directly? If not, reject.
+9. **No motivation or "why"** — if the note jumps straight into definitions
+   without explaining why the concept exists or what problem it solves,
+   reject. Context and motivation are not optional.
+10. **Missing progressive depth** — the note should build understanding
+    from intuitive to formal. If it starts with formal definitions and
+    never provides intuition, or if every section is at the same shallow
+    level of depth, reject.
 
 ## Soft criteria (flag as "Should Improve", don't reject for these alone)
 - **No wikilinks** — when the writer had access to a "Related existing
@@ -119,8 +148,10 @@ mediocre note. Reject notes that are shallow, raw-copied, or broken.
 
 ## Approval
 If none of the rejection criteria apply and the note is a genuine deep
-dive, approve it. Don't nitpick style — if the content is solid and the
-structure is clear, approve.
+dive that teaches the reader something they could not easily learn
+elsewhere, approve it. Don't nitpick style — if the content is solid and
+the structure is clear, approve. But do NOT approve out of fatigue or
+because "it's mostly fine" — the reader deserves real depth.
 
 ## Output format
 Start your response with EXACTLY one of:
@@ -293,14 +324,19 @@ def _note_reviewer(draft: str, published_url: str | None, pass_number: int) -> s
         )
     except Exception as exc:
         logger.warning("Note reviewer failed: %s", exc, exc_info=True)
-        # If the reviewer dies, don't block publication — approve with a note.
-        return f"APPROVED\n\nReviewer failed ({exc}) — publishing as-is."
+        return (
+            "REVISE\n\nReview system encountered an error. Content has not been "
+            "quality-checked. Revise for completeness and depth before publishing."
+        )
 
     for msg in reversed(result.get("messages", [])):
         if isinstance(msg, AIMessage) and msg.content:
             return msg.content
 
-    return "APPROVED\n\nReviewer produced no output — publishing as-is."
+    return (
+        "REVISE\n\nReviewer produced no output. Content has not been "
+        "quality-checked. Revise for completeness and depth before publishing."
+    )
 
 
 def _note_publisher(
