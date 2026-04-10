@@ -196,3 +196,38 @@ class TestTreeShape:
         assert "spaces" in tree
         assert "projects" not in tree
         assert len(tree["spaces"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# Space theme_hue
+# ---------------------------------------------------------------------------
+
+class TestSpaceTheme:
+    def _setup(self, ws):
+        library_service.create_space(USER, "Themed Space")
+
+    def test_default_theme_hue_is_none(self, ws):
+        self._setup(ws)
+        meta = library_service.get_space(USER, "themed-space")
+        assert meta is not None
+        assert meta.get("theme_hue") is None
+
+    def test_update_theme_hue(self, ws):
+        self._setup(ws)
+        result = library_service.update_space(USER, "themed-space", theme_hue=200)
+        assert result["status"] == "updated"
+        meta = library_service.get_space(USER, "themed-space")
+        assert meta["theme_hue"] == 200
+
+    def test_update_theme_hue_clamped(self, ws):
+        self._setup(ws)
+        library_service.update_space(USER, "themed-space", theme_hue=999)
+        meta = library_service.get_space(USER, "themed-space")
+        assert meta["theme_hue"] == 360
+
+    def test_clear_theme_hue(self, ws):
+        self._setup(ws)
+        library_service.update_space(USER, "themed-space", theme_hue=155)
+        library_service.update_space(USER, "themed-space", theme_hue=-1)
+        meta = library_service.get_space(USER, "themed-space")
+        assert meta.get("theme_hue") is None

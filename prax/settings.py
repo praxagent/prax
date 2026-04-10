@@ -64,6 +64,11 @@ class AppSettings(BaseSettings):
     # Workspace
     workspace_dir: str = Field(default="../workspaces", alias="WORKSPACE_DIR")
 
+    # User identity — which user this Prax instance serves.
+    # When set, the sandbox mounts only this user's workspace folder
+    # and all sandbox-persistent data lives inside it.
+    prax_user_id: str = Field(default="", alias="PRAX_USER_ID")
+
     # Runtime environment
     running_in_docker: bool = Field(default=False, alias="RUNNING_IN_DOCKER")
 

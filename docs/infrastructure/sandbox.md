@@ -41,6 +41,61 @@ EXPOSE 4096
 CMD ["opencode", "serve", "--hostname", "0.0.0.0", "--port", "4096"]
 ```
 
+### VS Code
+
+VS Code is installed in the sandbox via the Microsoft apt repository. It runs on the VNC desktop (Xvfb + Fluxbox) alongside Chromium and any other GUI apps. Prax can launch it with `desktop_open("code /workspace")` and interact with it programmatically via the desktop tools (screenshot, click, type). Users can also open VS Code directly from the noVNC iframe in TeamWork's Desktop tab.
+
+This makes four coding environments available in the sandbox: **VS Code**, **Claude Code**, **Codex**, and **OpenCode**.
+
+### Desktop Interaction Tools
+
+Prax has 6 tools for computer-use — programmatic control of the sandbox's graphical desktop via `xdotool` and `scrot`:
+
+| Tool | What It Does |
+|------|-------------|
+| `desktop_screenshot` | Capture the current desktop as a PNG. Returns the file path. |
+| `desktop_click` | Click at (x, y) coordinates. Supports left/right/middle button and double-click. |
+| `desktop_type` | Type text via simulated keystrokes with configurable delay. |
+| `desktop_key` | Press key combinations (e.g., `ctrl+s`, `alt+F4`, `Return`, `Tab`). |
+| `desktop_list_windows` | List all open windows with their titles and positions. |
+| `desktop_open` | Launch a GUI application in the background on DISPLAY :99. |
+
+These tools let Prax interact with any GUI application — VS Code, Chromium, file managers, or anything installed via `sandbox_install`. The typical pattern is a **screenshot-analyze-act loop**: take a screenshot, analyze what's on screen, click or type to interact, then screenshot again to verify the result.
+
+See [Desktop](desktop.md) for a deep dive on the VNC desktop architecture and computer-use patterns.
+
+### Package Tracking
+
+When Prax installs packages via `sandbox_install()`, each package name is logged to `/root/.installed_packages`. This manifest is a simple newline-delimited list of apt package names.
+
+On container rebuild, the entrypoint script reads this manifest and reinstalls any packages that aren't already present in the base image. This means user-installed packages survive `docker compose up --build` — no manual intervention needed. The manifest itself persists because `/root` is volume-mounted to the user's `.sandbox/home/` directory.
+
+### User-Scoped Mounts
+
+The sandbox mounts only the current user's workspace folder, not the entire workspaces directory:
+
+```yaml
+# docker-compose.yml (sandbox service)
+volumes:
+  - ${WORKSPACE_DIR}/${PRAX_USER_ID}:/workspace     # user's workspace files
+  - ${WORKSPACE_DIR}/${PRAX_USER_ID}/.sandbox/home:/root  # persistent home dir
+```
+
+Key points:
+
+- **`/workspace`** (singular) is the user's workspace root inside the sandbox. This is different from the app container's `/app/workspaces` which holds all users.
+- **`PRAX_USER_ID`** in `.env` controls which user's workspace is mounted. Must be set before `docker compose up`.
+- **`.sandbox/`** lives inside the user's workspace directory at `{workspace}/{user_id}/.sandbox/`. It holds persistent home directory contents — browser profiles, shell history, installed package manifests, coding agent configs, and desktop customizations.
+- Sub-mounts pin specific config directories: `.sandbox/claude` for Claude Code, `.sandbox/codex` for Codex, `.sandbox/opencode` for OpenCode.
+
+### tmux Persistence
+
+The sandbox sets `$SHELL` to `tmux-shell.sh`, a wrapper that attaches to (or creates) a persistent tmux session named `prax`. This means:
+
+- **Terminal state survives WebSocket reconnects.** Refreshing TeamWork's terminal tab, switching devices, or losing connection doesn't lose your shell history or running processes.
+- **The entrypoint creates the session** on container start (`tmux new-session -d -s prax`). The tmux-shell wrapper attaches to it on each new terminal connection.
+- **All terminal connections share the same session.** Multiple TeamWork tabs see the same terminal. This is intentional — the sandbox is single-user.
+
 ### Alternatives Evaluated
 
 | Option | Verdict |

@@ -5,6 +5,7 @@ Prax runs on a stack of containerized services: a Flask app, an always-on Docker
 ## Contents
 
 - [Sandbox](sandbox.md) — Docker + OpenCode code execution, solution reuse, budget control
+- [Desktop](desktop.md) — VNC desktop environment, computer-use tools (xdotool + scrot), VS Code, browser unification
 - [Browser](browser.md) — Playwright automation, persistent profiles, VNC login, CDP vs Playwright
 - [Content Publishing](content-publishing.md) — Notes, courses, news — Hugo vs TeamWork API, editing, versioning
 - [Observability](observability.md) — Traces, metrics, Grafana LGTM stack, execution graphs

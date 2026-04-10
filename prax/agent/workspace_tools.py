@@ -824,6 +824,58 @@ def request_extended_budget(reason: str, additional_calls: int = 20) -> str:
     )
 
 
+@tool
+def self_upgrade_tier(tier: str = "high") -> str:
+    """Upgrade your own intelligence tier when you're stuck or need more capability.
+
+    Call this IMMEDIATELY when:
+    - A task is failing or producing poor results
+    - You're uncertain how to proceed
+    - The problem requires complex reasoning or planning
+    - You've tried an approach and it didn't work
+
+    Args:
+        tier: Target tier — "high" (recommended) or "pro" (for critical tasks).
+    """
+    from prax.plugins.llm_config import update_component_config
+    if tier not in ("medium", "high", "pro"):
+        return f"Invalid tier '{tier}'. Use 'medium', 'high', or 'pro'."
+    update_component_config("orchestrator", tier=tier)
+    return f"Orchestrator upgraded to {tier} tier. The upgrade takes effect on your next turn."
+
+
+@tool
+def run_python(code: str, packages: str = "") -> str:
+    """Execute Python code in the sandbox. Use this when no existing tool does what you need.
+
+    This is your swiss-army knife. If you don't have a tool for something, WRITE PYTHON.
+    The code runs in the sandbox container with full access to the filesystem, network,
+    and any installed packages.
+
+    Args:
+        code: Python code to execute. Can be a one-liner or a full script.
+        packages: Space-separated pip packages to install first (e.g. "requests beautifulsoup4").
+    """
+    from prax.services.sandbox_service import run_shell
+    commands = []
+    if packages.strip():
+        commands.append(f"pip install -q {packages}")
+    # Write code to a temp file and execute it for proper multi-line support
+    import hashlib
+    script_hash = hashlib.md5(code.encode()).hexdigest()[:8]
+    script_path = f"/tmp/prax_script_{script_hash}.py"
+    commands.append(f"cat > {script_path} << 'PRAX_PYTHON_EOF'\n{code}\nPRAX_PYTHON_EOF")
+    commands.append(f"python3 {script_path}")
+    full_cmd = " && ".join(commands)
+    result = run_shell(full_cmd, timeout=120)
+    stdout = result.get("stdout", "")
+    stderr = result.get("stderr", "")
+    exit_code = result.get("exit_code", -1)
+    if exit_code != 0:
+        return f"Exit code {exit_code}\nstdout: {stdout[-1000:]}\nstderr: {stderr[-1000:]}"
+    return stdout[-2000:] if stdout else "(no output)"
+
+
 def build_workspace_tools():
     """Return tools that the orchestrator needs directly in its reasoning loop.
 
@@ -844,6 +896,8 @@ def build_workspace_tools():
         # Meta / reasoning
         think, request_extended_budget,
         read_logs, system_status,
+        # Resourcefulness — self-upgrade and ad-hoc code execution
+        self_upgrade_tier, run_python,
     ]
 
     return tools

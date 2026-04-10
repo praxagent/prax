@@ -57,11 +57,25 @@ class TestProjects:
         result = library_service.delete_space(user, "temp")
         assert result["status"] == "deleted"
 
-    def test_delete_nonempty_project_refused(self, user):
+    def test_delete_nonempty_space_succeeds(self, user):
+        """Deleting a space with notebooks works (removes everything)."""
         library_service.create_space(user, "Temp")
         library_service.create_notebook(user, "temp", "Something")
         result = library_service.delete_space(user, "temp")
-        assert "error" in result
+        assert result["status"] == "deleted"
+        assert library_service.get_space(user, "temp") is None
+
+    def test_delete_space_with_archive(self, user):
+        """archive_notes=True moves notes to archive before deleting."""
+        library_service.create_space(user, "Archivable")
+        library_service.create_notebook(user, "archivable", "Stuff")
+        library_service.create_note(user, "Keep this", "content", "archivable", "stuff")
+        result = library_service.delete_space(user, "archivable", archive_notes=True)
+        assert result["status"] == "deleted"
+        assert result["archived_notes"] == 1
+        # The note should be in the archive now
+        archive = library_service.list_archive(user)
+        assert any(a["title"] == "Keep this" for a in archive)
 
 
 # ---------------------------------------------------------------------------

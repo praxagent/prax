@@ -111,11 +111,21 @@ class ConversationAgent:
         cfg = get_component_config("orchestrator")
         # Runtime model override takes precedence over config and constructor args
         effective_model = _model_override or model or cfg.get("model")
+        # The orchestrator is the ONLY place where "should I use a tool?"
+        # decisions are made.  The low tier (nano) is too weak for reliable
+        # tool selection — it skips tools and answers from training data
+        # (confirmed by GAIA eval: 0 tool calls on low, correct tool use
+        # on medium; and the 2026-04-09 daily briefing failure where the
+        # low-tier orchestrator hallucinated with 0 tool calls).
+        #
+        # Default to medium.  Text-only pipelines (memory compaction,
+        # session classification, entity extraction, note quality) stay
+        # on low — they don't call tools.
         self.llm = build_llm(
             provider=provider or cfg.get("provider"),
             model=effective_model,
             temperature=temperature if temperature is not None else cfg.get("temperature"),
-            tier=tier or cfg.get("tier") or "low",
+            tier=tier or cfg.get("tier") or "medium",
         )
         self.checkpoint_mgr = CheckpointManager()
         self.tools = get_registered_tools()
@@ -129,17 +139,32 @@ class ConversationAgent:
         from prax.plugins.loader import get_plugin_loader
         return get_plugin_loader().version
 
+    # Cache which users' plugin dirs have been registered this process
+    # lifetime so we don't re-scan + re-load 40+ seconds of plugins on
+    # every single message.
+    _registered_plugin_dirs: set[str] = set()
+
     def _register_workspace_plugins(self, user_id: str) -> None:
-        """Tell the plugin loader about this user's workspace plugins directory."""
+        """Tell the plugin loader about this user's workspace plugins directory.
+
+        Only runs load_all() the FIRST time a user's plugins dir is
+        seen.  Subsequent calls for the same user skip the expensive
+        re-scan.  Hot-reload still works via ``_rebuild_if_needed``
+        which checks the version counter.
+        """
         try:
             from prax.plugins.loader import get_plugin_loader
             from prax.services.workspace_service import get_workspace_plugins_dir
             plugins_dir = get_workspace_plugins_dir(user_id)
-            if plugins_dir:
-                logger.info("Registering workspace plugins from %s", plugins_dir)
-                loader = get_plugin_loader()
-                loader.add_workspace_plugins_dir(plugins_dir)
-                loader.load_all()
+            if not plugins_dir:
+                return
+            if plugins_dir in ConversationAgent._registered_plugin_dirs:
+                return  # already loaded this process lifetime
+            logger.info("Registering workspace plugins from %s (first time)", plugins_dir)
+            loader = get_plugin_loader()
+            loader.add_workspace_plugins_dir(plugins_dir)
+            loader.load_all()
+            ConversationAgent._registered_plugin_dirs.add(plugins_dir)
         except Exception:
             logger.warning("Could not register workspace plugins for %s", user_id, exc_info=True)
 

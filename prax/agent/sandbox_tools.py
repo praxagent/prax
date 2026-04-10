@@ -256,9 +256,154 @@ def sandbox_rebuild(dockerfile_content: str | None = None) -> str:
     return f"Sandbox rebuilt and restarted successfully (image: {result['image']})."
 
 
+# ---------------------------------------------------------------------------
+# Desktop interaction (computer-use via xdotool)
+# ---------------------------------------------------------------------------
+
+@tool
+def desktop_screenshot() -> str:
+    """Take a screenshot of the sandbox Linux desktop.
+
+    Returns the file path to the screenshot image (PNG) saved in the
+    sandbox workspace.  Use this to see what's on the desktop before
+    clicking or typing.
+    """
+    import time
+
+    from prax.utils.shell import run_command
+    fname = f"/tmp/screenshot_{int(time.time())}.png"
+    try:
+        result = run_command(
+            ["sh", "-c", f"DISPLAY=:99 scrot -o {fname} && echo {fname}"],
+            timeout=10,
+        )
+        if result.get("exit_code", 1) != 0:
+            return f"Screenshot failed: {result.get('stderr', 'unknown error')}"
+        return f"Screenshot saved to {fname}"
+    except Exception as e:
+        return f"Screenshot failed: {e}"
+
+
+@tool
+def desktop_click(x: int, y: int, button: str = "left", clicks: int = 1) -> str:
+    """Click at a specific position on the sandbox desktop.
+
+    Args:
+        x: X coordinate (pixels from left)
+        y: Y coordinate (pixels from top)
+        button: Mouse button — "left", "right", or "middle"
+        clicks: Number of clicks (1 for single, 2 for double)
+    """
+    from prax.utils.shell import run_command
+    button_map = {"left": "1", "middle": "2", "right": "3"}
+    btn = button_map.get(button, "1")
+    repeat = f"--repeat {clicks}" if clicks > 1 else ""
+    try:
+        result = run_command(
+            ["sh", "-c", f"DISPLAY=:99 xdotool mousemove {x} {y} click {repeat} {btn}"],
+            timeout=10,
+        )
+        if result.get("exit_code", 1) != 0:
+            return f"Click failed: {result.get('stderr', 'unknown error')}"
+        return f"Clicked ({button}, {clicks}x) at ({x}, {y})"
+    except Exception as e:
+        return f"Click failed: {e}"
+
+
+@tool
+def desktop_type(text: str, delay_ms: int = 12) -> str:
+    """Type text on the sandbox desktop (simulates keyboard input).
+
+    Args:
+        text: Text to type.  For special keys use desktop_key instead.
+        delay_ms: Delay between keystrokes in milliseconds.
+    """
+    from prax.utils.shell import run_command
+    # Escape single quotes for shell
+    safe_text = text.replace("'", "'\\''")
+    try:
+        result = run_command(
+            ["sh", "-c", f"DISPLAY=:99 xdotool type --delay {delay_ms} '{safe_text}'"],
+            timeout=30,
+        )
+        if result.get("exit_code", 1) != 0:
+            return f"Type failed: {result.get('stderr', 'unknown error')}"
+        return f"Typed {len(text)} characters"
+    except Exception as e:
+        return f"Type failed: {e}"
+
+
+@tool
+def desktop_key(keys: str) -> str:
+    """Press keyboard keys/shortcuts on the sandbox desktop.
+
+    Args:
+        keys: Key combination using xdotool syntax.
+              Examples: "Return", "ctrl+s", "alt+F4", "super",
+              "ctrl+shift+t", "Tab", "Escape", "BackSpace"
+    """
+    from prax.utils.shell import run_command
+    try:
+        result = run_command(
+            ["sh", "-c", f"DISPLAY=:99 xdotool key {keys}"],
+            timeout=10,
+        )
+        if result.get("exit_code", 1) != 0:
+            return f"Key press failed: {result.get('stderr', 'unknown error')}"
+        return f"Pressed: {keys}"
+    except Exception as e:
+        return f"Key press failed: {e}"
+
+
+@tool
+def desktop_list_windows() -> str:
+    """List all open windows on the sandbox desktop.
+
+    Returns window ID, title, and position for each window.
+    """
+    from prax.utils.shell import run_command
+    try:
+        result = run_command(
+            ["sh", "-c", "DISPLAY=:99 xdotool search --name '' getwindowname %@ 2>/dev/null || true"],
+            timeout=10,
+        )
+        stdout = result.get("stdout", "").strip()
+        if not stdout:
+            return "No windows open on the desktop."
+        return f"Open windows:\n{stdout}"
+    except Exception as e:
+        return f"Window list failed: {e}"
+
+
+@tool
+def desktop_open(command: str) -> str:
+    """Launch an application on the sandbox desktop.
+
+    The command runs in the background on DISPLAY :99.
+    Examples: "code /workspace", "firefox", "nautilus /workspace"
+
+    Args:
+        command: Shell command to launch the application.
+    """
+    from prax.utils.shell import run_command
+    try:
+        result = run_command(
+            ["sh", "-c", f"DISPLAY=:99 {command} &>/dev/null & echo $!"],
+            timeout=10,
+        )
+        if result.get("exit_code", 1) != 0:
+            return f"Launch failed: {result.get('stderr', 'unknown error')}"
+        pid = result.get("stdout", "").strip()
+        return f"Launched: {command} (PID {pid})"
+    except Exception as e:
+        return f"Launch failed: {e}"
+
+
 def build_sandbox_tools() -> list:
     return [
         sandbox_shell, sandbox_start, sandbox_message, sandbox_review,
         sandbox_finish, sandbox_abort, sandbox_search, sandbox_execute,
         sandbox_install, sandbox_rebuild,
+        desktop_screenshot, desktop_click, desktop_type, desktop_key,
+        desktop_list_windows, desktop_open,
     ]

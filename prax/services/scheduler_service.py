@@ -221,12 +221,25 @@ def _on_fire(user_id: str, schedule_id: str, prompt: str, channel: str | None = 
     The prompt is processed through the agent so it can use tools (search,
     fetch, summarize, etc.).  The [SCHEDULED_TASK] prefix tells the agent
     not to ask follow-up questions and not to use scheduling tools.
+
+    Uses a **medium-tier** agent instead of the default low tier because
+    scheduled tasks (a) always need tool use (news, search, weather) and
+    (b) run unattended — there's no user present to notice and retry if
+    the low-tier model skips tools and hallucinates.  The daily briefing
+    failure on 2026-04-09 was caused by the low-tier model generating a
+    hallucinated briefing with 0 tool calls.
     """
     logger.info("Schedule fired: user=%s id=%s channel=%s", user_id, schedule_id, channel)
     try:
-        from prax.services.conversation_service import conversation_service
+        from prax.agent.orchestrator import ConversationAgent
+        from prax.services.conversation_service import ConversationService
 
-        response = conversation_service.reply(
+        # Build a medium-tier agent for this scheduled run — the default
+        # low-tier singleton is too unreliable for unattended tool use.
+        scheduled_agent = ConversationAgent(tier="medium")
+        svc = ConversationService(agent=scheduled_agent)
+
+        response = svc.reply(
             user_id,
             f"[SCHEDULED_TASK — CRITICAL RULES: "
             f"1) Do NOT ask follow-up questions — the user is not present. "

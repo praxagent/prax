@@ -101,7 +101,6 @@ def delegate_finetune(task: str) -> str:
         system_prompt=prompt,
         tools=build_tools(),
         config_key="subagent_finetune",
-        default_tier="low",
         role_name="Finetune Agent",
         channel=None,
         recursion_limit=30,

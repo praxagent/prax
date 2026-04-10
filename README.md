@@ -37,11 +37,25 @@ Includes [**TeamWork**](https://github.com/praxagent/teamwork) — a Slack-like 
 ```bash
 git clone https://github.com/praxagent/prax.git && cd prax
 git clone https://github.com/praxagent/teamwork.git ../teamwork  # web UI
-cp .env-example .env                      # configure (at minimum: OPENAI_KEY)
+cp .env-example .env                      # configure (see below)
 docker compose up --build                 # builds app + sandbox + TeamWork, starts everything
 ```
 
-This brings up Prax, the always-on sandbox (with LaTeX, ffmpeg, poppler, pandoc, headless Chrome), [TeamWork](https://github.com/praxagent/teamwork) web UI, and ngrok — all wired together. Open **http://localhost:3000** to access TeamWork.
+**Required `.env` settings** (at minimum):
+
+| Variable | What | Example |
+|----------|------|---------|
+| `OPENAI_KEY` | OpenAI API key (or set `ANTHROPIC_KEY` for Claude) | `sk-...` |
+| `PRAX_USER_ID` | Your workspace directory name — the sandbox mounts only this user's folder for isolation. Pick any slug. | `usr_alice`, `myworkspace` |
+
+```env
+OPENAI_KEY=sk-...
+PRAX_USER_ID=usr_alice
+```
+
+Prax will **refuse to start** without `PRAX_USER_ID` when running in Docker. On first run it creates the workspace directory and associates it with your identity automatically.
+
+This brings up Prax, the always-on sandbox (with VS Code, LaTeX, ffmpeg, poppler, pandoc, Chrome, and a full Linux desktop), [TeamWork](https://github.com/praxagent/teamwork) web UI, and ngrok — all wired together. Open **http://localhost:3000** to access TeamWork.
 
 #### With observability (Grafana + Tempo + Prometheus + Loki)
 
@@ -150,6 +164,8 @@ Prax is a multi-channel AI assistant powered by a LangGraph ReAct agent. It conn
 | **Documents** | PDF extraction (arXiv, URLs, attachments), web page summaries, YouTube transcripts, LaTeX compilation, URL-to-note / PDF-to-note / arXiv-to-note pipelines |
 | **Research** | Research projects (group notes, links, sources), RSS/Atom feed subscriptions, conversation history search across sessions |
 | **Code** | Always-on Docker sandbox with [OpenCode](https://opencode.ai/), auto-installs packages, multi-model support, round-based budget control |
+| **Linux Desktop** | Full graphical desktop (Xvfb + Fluxbox + noVNC) accessible via VNC. Prax can launch GUI apps (VS Code, Chromium), interact with them programmatically (screenshot, click, type), and install software. Users see everything through TeamWork's Desktop tab |
+| **Self-Upgrading** | Prax auto-escalates his intelligence tier when stuck. If he doesn't have a tool, he writes Python. If that fails, he uses the desktop. Never gives up |
 | **Scheduling** | Cron jobs (YAML), one-time reminders, timezone-aware delivery |
 | **Browser** | Playwright automation, persistent login profiles, VNC for manual login, credential management |
 | **Self-improvement** | Hot-swappable plugin system (sandbox + auto-rollback), self-modifying code via PRs, QLoRA fine-tuning on conversation history |
@@ -193,7 +209,7 @@ Agent delegation (spoke agents, sub-hubs), self-improving fine-tuning (vLLM + Un
 
 ### [Infrastructure](docs/infrastructure/README.md)
 
-Docker sandbox with OpenCode, Playwright browser automation (CDP + Playwright, VNC login, persistent profiles), Grafana observability stack (Tempo traces, Prometheus metrics, Loki logs — `--profile observability`), two-layer memory system (STM + LTM with Qdrant, Neo4j, hybrid retrieval), and Docker Compose configuration.
+Docker sandbox with OpenCode, VNC desktop environment with computer-use tools (xdotool + scrot), Playwright browser automation (CDP + Playwright, VNC login, persistent profiles), Grafana observability stack (Tempo traces, Prometheus metrics, Loki logs — `--profile observability`), two-layer memory system (STM + LTM with Qdrant, Neo4j, hybrid retrieval), and Docker Compose configuration.
 
 ### [Security](docs/security/README.md)
 
@@ -246,7 +262,7 @@ Resolved failures stay as permanent regression guards — every fix adds a test 
 
 ## Coding Agents
 
-The sandbox container has three coding agents installed: **Claude Code** (Anthropic), **Codex** (OpenAI), and **OpenCode** (multi-provider). Prax uses these for self-improvement tasks — bug fixes, refactors, new features.
+The sandbox container has three coding agents installed: **Claude Code** (Anthropic), **Codex** (OpenAI), and **OpenCode** (multi-provider). **VS Code** is also installed on the sandbox desktop for interactive editing via the VNC display. Prax uses these for self-improvement tasks — bug fixes, refactors, new features.
 
 ### Setup
 

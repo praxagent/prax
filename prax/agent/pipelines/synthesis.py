@@ -92,10 +92,10 @@ class PipelineResult:
             )
         if self.status == "exhausted":
             return (
-                f"{item_kind} published after {self.passes} revision cycle(s) "
-                f"(reviewer did not fully approve).\n\n"
+                f"**Quality Warning:** {item_kind} published after {self.passes} revision cycle(s) "
+                f"(reviewer did not fully approve — content may not meet quality standards).\n\n"
                 f"**{self.title}**\n{self.url}\n\n"
-                f"Last review feedback:\n{self.last_review[:500]}"
+                f"Last review feedback (unresolved):\n{self.last_review[:500]}"
             )
         if self.status == "research_failed":
             return f"Research phase failed: {self.error}"
@@ -261,7 +261,15 @@ class SynthesisPipeline:
                 url = pub["url"]
 
         # --- Exhausted ---
-        self._status(f"Published after {self.max_revisions} revision cycles: {url}")
+        logger.warning(
+            "Pipeline exhausted %d revision cycles without approval for '%s'. "
+            "Publishing with quality warning. Last review: %s",
+            self.max_revisions, title, review[:300],
+        )
+        self._status(
+            f"Published after {self.max_revisions} revision cycles "
+            f"WITHOUT reviewer approval: {url}"
+        )
         return PipelineResult(
             status="exhausted",
             title=title,

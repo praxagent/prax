@@ -22,7 +22,7 @@ graph TB
     Prax -->|delegate_browser| Browser[Browser Agent<br/>16 tools: CDP + Playwright]
     Prax -->|delegate_content_editor| Content[Content Editor<br/>sub-hub: research → write → review]
     Prax -->|delegate_sysadmin| Sysadmin[Sysadmin Agent<br/>30+ tools: plugins, config, source]
-    Prax -->|delegate_sandbox| Sandbox[Sandbox Agent<br/>9 tools: Docker + OpenCode]
+    Prax -->|delegate_sandbox| Sandbox[Sandbox Agent<br/>16 tools: Docker + OpenCode + Desktop]
     Prax -->|delegate_finetune| Finetune[Finetune Agent<br/>8 tools: LoRA pipeline]
     Prax -->|delegate_knowledge| Knowledge[Knowledge Agent<br/>13 tools: notes + projects]
     Prax -->|delegate_research| Research[Research Agent<br/>web search + plugins + professor]
@@ -52,7 +52,7 @@ graph TB
 | **Browser** | `delegate_browser` | 16: CDP read/act + Playwright navigate/click/fill/login/VNC | Web navigation, page reading, login flows, screenshots |
 | **Content Editor** | `delegate_content_editor` | Sub-hub: blog pipeline (research → write → review) or course author mode | Blog posts, publication-quality content, and course module content |
 | **Sysadmin** | `delegate_sysadmin` | 30+: plugin mgmt, prompts, LLM config, source, workspace sync | Plugin install/update, config changes, self-improvement |
-| **Sandbox** | `delegate_sandbox` | 9: session lifecycle, archive, package management | Code execution in isolated Docker containers |
+| **Sandbox** | `delegate_sandbox` | 16: session lifecycle, archive, package management, 6 desktop tools | Code execution in isolated Docker containers + GUI desktop interaction |
 | **Finetune** | `delegate_finetune` | 8: harvest, train, verify, promote, rollback | LoRA fine-tuning pipeline (requires FINETUNE_ENABLED) |
 | **Knowledge** | `delegate_knowledge` | 13: note CRUD, search, linking, URL/PDF-to-note, project management | Notes, knowledge graph, research projects |
 | **Research** | `delegate_research` | Web search, URL fetch, datetime, reader plugins, multi_model_query | Multi-source investigation with citations; professor escalation for hard questions |
@@ -272,6 +272,7 @@ The orchestrator keeps tools that are **conversational** (require back-and-forth
 - **Courses** — tutoring is conversational; the orchestrator IS the tutor (6 tools)
 - **Scheduling** — cron jobs, reminders (9 tools)
 - **URL handling** — lightweight `fetch_url_content` (no browser needed)
+- **Resourcefulness** — `self_upgrade_tier` (auto-escalate to a more capable model when stuck) and `run_python` (execute arbitrary Python in the sandbox when no existing tool fits)
 - **Routing decisions** — choosing which spoke to delegate to
 - **Spoke delegation** — 6 spoke tools + 2 generic sub-agent tools + 1 research delegate + 1 vision tool
 

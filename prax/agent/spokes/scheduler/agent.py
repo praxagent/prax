@@ -57,7 +57,6 @@ def delegate_scheduler(task: str) -> str:
         system_prompt=prompt,
         tools=build_tools(),
         config_key="subagent_scheduler",
-        default_tier="low",
         role_name=None,
         channel=None,
         recursion_limit=10,

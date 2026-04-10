@@ -28,6 +28,15 @@ On startup you'll see:
 Starting Prax — provider=openai model=gpt-4o temperature=0.7 encoding=o200k_base
 ```
 
+## Required Configuration
+
+These `.env` settings are **required** for Docker Compose deployments:
+
+| Variable | Purpose |
+|----------|---------|
+| `OPENAI_KEY` or `ANTHROPIC_KEY` | At least one LLM provider API key |
+| `PRAX_USER_ID` | Your workspace directory name (e.g. `usr_alice`). The sandbox mounts only this folder for user isolation. Pick any slug — Prax creates the directory and associates it with your identity on first run. **Prax refuses to start without this.** |
+
 ## Memory System Setup
 
 Prax has a two-layer memory system. **Short-term memory (STM)** works out of the box with no extra infrastructure. **Long-term memory (LTM)** requires Qdrant and Neo4j.

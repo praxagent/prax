@@ -277,6 +277,48 @@ def get_identities(user_id: str) -> list[dict]:
 # Migration — import existing phone/Discord users
 # ---------------------------------------------------------------------------
 
+def reconcile_workspace_dir() -> None:
+    """Ensure the active user's workspace_dir matches PRAX_USER_ID.
+
+    Called on startup.  If the user already exists in the identity DB but
+    their ``workspace_dir`` doesn't match the ``PRAX_USER_ID`` env var
+    (e.g. first deploy after setting the var, or a migration), update it
+    so the Docker volume mount and the identity service agree.
+    """
+    prax_user_id = settings.prax_user_id
+    if not prax_user_id:
+        return
+
+    # Find the user that TeamWork will resolve to
+    phone = getattr(settings, "teamwork_user_phone", "")
+    if phone:
+        user = get_user_by_identity("sms", phone)
+    else:
+        user = get_user_by_identity("teamwork", "default")
+
+    if user and user.workspace_dir != prax_user_id:
+        logger.info(
+            "Reconciling workspace_dir: %s → %s (to match PRAX_USER_ID)",
+            user.workspace_dir, prax_user_id,
+        )
+        conn = _connect()
+        try:
+            conn.execute(
+                "UPDATE users SET workspace_dir = ? WHERE id = ?",
+                (prax_user_id, user.id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        # Create a symlink from the old dir to the new one if needed
+        old_dir = os.path.join(settings.workspace_dir, user.workspace_dir)
+        new_dir = os.path.join(settings.workspace_dir, prax_user_id)
+        if os.path.isdir(old_dir) and not os.path.exists(new_dir):
+            os.symlink(os.path.abspath(old_dir), new_dir)
+            logger.info("Symlinked workspace %s → %s", old_dir, new_dir)
+
+
 def migrate_legacy_users() -> int:
     """Import users from env-var-based identity maps (PHONE_TO_NAME_MAP, etc).
 

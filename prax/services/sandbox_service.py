@@ -236,8 +236,7 @@ def _send_opencode_message(session: SandboxSession, message: str, model: str | N
 
     # Build workspace path instruction based on mode.
     if settings.sandbox_persistent:
-        safe_id = session.user_id.lstrip("+")
-        workspace_path = f"/workspaces/{safe_id}/active"
+        workspace_path = "/workspace/active"
         instructions = f"{_OPENCODE_INSTRUCTIONS} The user's files are at {workspace_path}. Work there."
     else:
         instructions = f"{_OPENCODE_INSTRUCTIONS} The user's project files are mounted at /workspace."
@@ -541,9 +540,66 @@ def install_package(package_name: str) -> dict:
         stderr = (output[1] or b"").decode(errors="replace")
         if exit_code != 0:
             return {"error": f"apt-get failed (exit {exit_code}): {stderr[-500:]}"}
+        # Track installed package in a manifest for rebuild reproducibility.
+        # The manifest lives in the persistent home dir so it survives rebuilds.
+        try:
+            container.exec_run(
+                ["sh", "-c", f'echo "{package_name}" >> /root/.installed_packages'],
+            )
+        except Exception:
+            pass  # best-effort tracking
         return {"installed": package_name, "output": stdout[-300:]}
     except Exception as e:
         return {"error": str(e)}
+
+
+def _track_installed_packages(command: str, exit_code: int) -> None:
+    """Best-effort: detect install commands and log packages to manifests.
+
+    Covers apt, pip, and npm global installs run via sandbox_shell / run_python.
+    Manifests live in /root/ (persisted) and the entrypoint restores them on rebuild.
+    """
+    if exit_code != 0:
+        return
+    try:
+        import docker
+        client = docker.from_env()
+        containers = client.containers.list(
+            filters={"label": "com.docker.compose.service=sandbox"}
+        )
+        if not containers:
+            return
+        container = containers[0]
+
+        # apt-get install / apt install
+        m = re.search(r"(?:apt-get|apt)\s+install\s+(?:-\S+\s+)*(.+)", command)
+        if m:
+            pkgs = re.findall(r"[a-zA-Z0-9][a-zA-Z0-9._+:-]+", m.group(1))
+            for pkg in pkgs:
+                container.exec_run(["sh", "-c", f'echo "{pkg}" >> /root/.installed_packages'])
+            return
+
+        # pip install / pip3 install
+        m = re.search(r"pip3?\s+install\s+(?:-\S+\s+)*(.+)", command)
+        if m:
+            pkgs = re.findall(r"[a-zA-Z0-9][a-zA-Z0-9._-]+", m.group(1))
+            # Filter out flags and paths
+            pkgs = [p for p in pkgs if not p.startswith("-") and "/" not in p]
+            for pkg in pkgs:
+                container.exec_run(["sh", "-c", f'echo "{pkg}" >> /root/.installed_pip_packages'])
+            return
+
+        # npm install -g
+        m = re.search(r"npm\s+(?:install|i)\s+(?:.*-g|.*--global)\s*(.+)", command)
+        if not m:
+            m = re.search(r"npm\s+(?:install|i)\s+(.+?)(?:\s+-g|\s+--global)", command)
+        if m:
+            pkgs = re.findall(r"[a-zA-Z0-9@][a-zA-Z0-9._/@-]+", m.group(1))
+            pkgs = [p for p in pkgs if not p.startswith("-")]
+            for pkg in pkgs:
+                container.exec_run(["sh", "-c", f'echo "{pkg}" >> /root/.installed_npm_packages'])
+    except Exception:
+        pass  # best-effort
 
 
 def run_shell(command: str, timeout: int = 60) -> dict:
@@ -561,6 +617,8 @@ def run_shell(command: str, timeout: int = 60) -> dict:
             ["sh", "-c", command],
             timeout=timeout,
         )
+        # Track install commands for rebuild reproducibility
+        _track_installed_packages(command, result.returncode)
         return {
             "stdout": (result.stdout or "")[:10000],
             "stderr": (result.stderr or "")[:5000],
