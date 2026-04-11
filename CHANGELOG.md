@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/praxagent/prax/compare/v0.14.0...v0.15.0) (2026-04-11)
+
+
+### Features
+
+* give Prax a desktop ([44e97c6](https://github.com/praxagent/prax/commit/44e97c6bbab8ec571f6f99370709865d6fd00d06))
+
 ## [0.14.0](https://github.com/praxagent/prax/compare/v0.13.0...v0.14.0) (2026-04-10)
 
 
