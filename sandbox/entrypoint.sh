@@ -56,10 +56,9 @@ fi
 export PATH="/opt/prax-venv/bin:$PATH"
 
 # ── code-server (web-based VS Code on port 8443) ──
-if command -v code-server &>/dev/null; then
-  code-server --bind-addr 0.0.0.0:8443 --auth none --disable-telemetry /workspace &>/dev/null &
-  echo "code-server available at http://0.0.0.0:8443"
-fi
+# Disabled by default to save ~200MB RAM. Start manually:
+#   code-server --bind-addr 0.0.0.0:8443 --auth none --disable-telemetry /workspace &
+# Or ask Prax: "launch code-server"
 
 # ── Linux Desktop (Xvfb + Fluxbox + noVNC) ──
 # ONE Chrome instance serves both:
@@ -115,6 +114,9 @@ XFWM
   xfce4-panel &>/dev/null &
   xfdesktop &>/dev/null &
   x11vnc -display :99 -forever -shared -nopw -rfbport 5900 -q &>/dev/null &
+
+  # Clipboard bridge — WebSocket server syncing X11 clipboard with browser
+  python3 /usr/local/bin/clipboard-bridge.py &>/dev/null &
 
   # noVNC — web-based VNC client on port 6080
   NOVNC_DIR=$(find /usr -name "vnc.html" -printf "%h" -quit 2>/dev/null || echo "")

@@ -19,13 +19,16 @@ export NEO4J_server_memory_heap_max__size=256m
 export NEO4J_server_memory_pagecache_size=64m
 export NEO4J_dbms_usage__report_enabled=false
 export NEO4J_server_directories_data=/data/neo4j
-# Reset the password on every start so stale data dirs don't cause auth failures.
-# neo4j-admin set-initial-password only works on fresh DBs; for existing ones
-# we wipe the auth file so NEO4J_AUTH takes effect on next start.
-if [ -d /data/neo4j/dbms ]; then
-  rm -f /data/neo4j/dbms/auth.ini /data/neo4j/dbms/auth 2>/dev/null
-  echo "Reset Neo4j auth to match NEO4J_PASSWORD"
-fi
+# Set the initial password. On a fresh DB this creates the admin user.
+# On an existing DB this is a no-op (password already set), but if auth
+# is mismatched we reset ONLY the "system" database (which stores auth
+# credentials and roles). The "neo4j" database (user data — entities,
+# relations, knowledge graph) is NEVER touched by this reset.
+$NEO4J_HOME/bin/neo4j-admin dbms set-initial-password "${NEO4J_PASSWORD:-prax-memory}" 2>/dev/null || {
+  echo "Neo4j password mismatch — resetting auth (system DB only, user data is safe)..."
+  rm -rf /data/neo4j/databases/system /data/neo4j/transactions/system 2>/dev/null
+  $NEO4J_HOME/bin/neo4j-admin dbms set-initial-password "${NEO4J_PASSWORD:-prax-memory}" 2>/dev/null
+}
 $NEO4J_HOME/bin/neo4j console 2>&1 | sed 's/^/[neo4j] /' &
 
 # ── TeamWork ────────────────────────────────────────────────────────
