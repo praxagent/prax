@@ -272,7 +272,7 @@ The orchestrator keeps tools that are **conversational** (require back-and-forth
 - **Courses** — tutoring is conversational; the orchestrator IS the tutor (6 tools)
 - **Scheduling** — cron jobs, reminders (9 tools)
 - **URL handling** — lightweight `fetch_url_content` (no browser needed)
-- **Resourcefulness** — `self_upgrade_tier` (auto-escalate to a more capable model when stuck) and `run_python` (execute arbitrary Python in the sandbox when no existing tool fits)
+- **Resourcefulness** — `self_upgrade_tier` (auto-escalate to a more capable model when stuck), `run_python` (execute arbitrary Python in the sandbox when no existing tool fits), and `review_my_traces` (self-reflection — pull recent execution traces and send them to a HIGH-tier LLM for honest feedback on failures, efficiency, and improvements)
 - **Routing decisions** — choosing which spoke to delegate to
 - **Spoke delegation** — 6 spoke tools + 2 generic sub-agent tools + 1 research delegate + 1 vision tool
 

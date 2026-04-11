@@ -1,0 +1,71 @@
+name: prax
+
+services:
+  prax:
+    build:
+      context: .
+      dockerfile: Dockerfile.lite
+      additional_contexts:
+        teamwork: ${TEAMWORK_PATH:-../teamwork}
+    entrypoint: ["bash", "scripts/entrypoint-lite.sh"]
+    ports:
+      - "3000:8000"   # TeamWork web UI
+      - "8000:8000"   # TeamWork API (for Vite dev proxy)
+      - "5001:5001"   # Prax API
+      - "4040:4040"   # ngrok dashboard (optional)
+    env_file: .env
+    environment:
+      - PRAX_USER_ID=${PRAX_USER_ID:-}
+      - TEAMWORK_API_KEY=${TEAMWORK_API_KEY:-}
+      - TEAMWORK_USER_PHONE=${TEAMWORK_USER_PHONE:-}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-prax-memory}
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN:-}
+      - SANDBOX_HOST=sandbox
+    group_add: ["0"]
+    volumes:
+      - ${WORKSPACE_DIR:-../workspaces}:/app/workspaces
+      # Service data stored in the user's workspace — visible, portable, backed up.
+      - ${WORKSPACE_DIR:-../workspaces}/${PRAX_USER_ID}/.services/qdrant:/data/qdrant
+      - ${WORKSPACE_DIR:-../workspaces}/${PRAX_USER_ID}/.services/neo4j:/data/neo4j
+      - ${WORKSPACE_DIR:-../workspaces}/${PRAX_USER_ID}/.services/teamwork:/data/teamwork
+      - ./conversations.db:/app/conversations.db
+      - ./logs:/app/logs
+      # Dev mounts
+      - ./prax:/app/prax
+      - ./app.py:/app/app.py
+      - ./scripts:/app/scripts
+      - ./.git:/app/.git:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      sandbox:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:5001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+
+  sandbox:
+    build:
+      context: ./sandbox
+      dockerfile: Dockerfile
+    image: prax-sandbox:latest
+    restart: unless-stopped
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_KEY}
+      - OPENAI_API_KEY=${OPENAI_KEY}
+      - CLAUDE_CODE_DISABLE_NONINTERACTIVE_CHECK=1
+    volumes:
+      - ${WORKSPACE_DIR:-../workspaces}/${PRAX_USER_ID}:/workspace
+      - .:/source
+      - ${WORKSPACE_DIR:-../workspaces}/${PRAX_USER_ID}/.sandbox/home:/root
+      - ${WORKSPACE_DIR:-../workspaces}/${PRAX_USER_ID}/.sandbox/claude:/root/.claude
+      - ${WORKSPACE_DIR:-../workspaces}/${PRAX_USER_ID}/.sandbox/codex:/root/.codex
+      - ${WORKSPACE_DIR:-../workspaces}/${PRAX_USER_ID}/.sandbox/opencode:/root/.config/opencode
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4096/global/health"]
+      interval: 5s
+      timeout: 3s
+      start_period: 15s
+      retries: 5

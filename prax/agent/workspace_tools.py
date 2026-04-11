@@ -1,7 +1,9 @@
 """LangChain tool wrappers for the git-backed workspace."""
 from __future__ import annotations
 
+import json
 import logging as _logging
+import os
 
 from langchain_core.tools import tool
 
@@ -849,17 +851,17 @@ def run_python(code: str, packages: str = "") -> str:
     """Execute Python code in the sandbox. Use this when no existing tool does what you need.
 
     This is your swiss-army knife. If you don't have a tool for something, WRITE PYTHON.
-    The code runs in the sandbox container with full access to the filesystem, network,
-    and any installed packages.
+    The code runs in the sandbox's scratch venv (/opt/prax-venv) with full access to
+    the filesystem, network, and any installed packages.
 
     Args:
         code: Python code to execute. Can be a one-liner or a full script.
-        packages: Space-separated pip packages to install first (e.g. "requests beautifulsoup4").
+        packages: Space-separated packages to install first (e.g. "requests beautifulsoup4").
     """
     from prax.services.sandbox_service import run_shell
     commands = []
     if packages.strip():
-        commands.append(f"pip install -q {packages}")
+        commands.append(f"uv pip install -q {packages}")
     # Write code to a temp file and execute it for proper multi-line support
     import hashlib
     script_hash = hashlib.md5(code.encode()).hexdigest()[:8]
@@ -874,6 +876,113 @@ def run_python(code: str, packages: str = "") -> str:
     if exit_code != 0:
         return f"Exit code {exit_code}\nstdout: {stdout[-1000:]}\nstderr: {stderr[-1000:]}"
     return stdout[-2000:] if stdout else "(no output)"
+
+
+@tool
+def review_my_traces(count: int = 5, focus: str = "") -> str:
+    """Pull your recent execution traces and send them to a HIGH-tier LLM for advice.
+
+    Use this when:
+    - A task failed and you want to understand why
+    - You want to improve your approach to a type of task
+    - The user says you did something wrong and you want to learn from it
+    - You're stuck and want a second opinion on your strategy
+
+    The HIGH-tier model reviews your traces and returns concrete advice on
+    what went wrong, what you did well, and how to improve.
+
+    Args:
+        count: Number of recent traces to review (default 5, max 20).
+        focus: Optional focus area (e.g. "desktop tasks", "why did I fail", "efficiency").
+    """
+    from prax.agent.trace import _active_graphs, _load_persisted_graphs
+
+    _load_persisted_graphs()
+
+    count = min(max(count, 1), 20)
+
+    # Get recent completed traces, newest first
+    graphs = sorted(
+        [g for g in _active_graphs.values() if g.to_dict().get("status") == "completed"],
+        key=lambda g: g.to_dict()["nodes"][0]["started_at"] if g.to_dict()["nodes"] else "",
+        reverse=True,
+    )[:count]
+
+    if not graphs:
+        return "No recent traces found to review."
+
+    # Format traces for the reviewer
+    traces_text = "\n\n---\n\n".join(
+        json.dumps(g.to_dict(), indent=2, default=str) for g in graphs
+    )
+
+    focus_instruction = ""
+    if focus:
+        focus_instruction = f"\n\nThe agent specifically wants advice about: {focus}"
+
+    review_prompt = f"""You are reviewing execution traces from an AI agent called Prax.
+Each trace shows: what the user asked, which tools/spokes were used, what succeeded,
+what failed, how long things took, and the final result.
+
+Analyze these {len(graphs)} recent traces and provide concrete, actionable advice:
+
+1. **Patterns**: What patterns do you see (good or bad)?
+2. **Failures**: What went wrong and why? How could it be avoided?
+3. **Efficiency**: Where did the agent waste time or make unnecessary tool calls?
+4. **Improvements**: What specific changes to behavior would improve results?
+5. **Strengths**: What did the agent do well that should be continued?
+
+Be specific — reference actual trace IDs, tool names, and durations.
+Don't be gentle — the agent needs honest feedback to improve.{focus_instruction}
+
+TRACES:
+
+{traces_text}"""
+
+    # Use HIGH tier for the review
+    from prax.agent.model_tiers import build_llm
+    reviewer = build_llm(tier="high", temperature=0.3)
+    try:
+        response = reviewer.invoke(review_prompt)
+        advice = response.content
+
+        # Append to the persistent self-improvement log in the user's workspace
+        try:
+            uid = current_user_id.get() or "unknown"
+            root = workspace_service.workspace_root(uid)
+            log_path = os.path.join(root, "self-improvement-log.md")
+            from datetime import UTC, datetime
+            timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+            trace_ids = ", ".join(g.trace_id[:8] for g in graphs)
+            entry = (
+                f"\n---\n\n"
+                f"## Review — {timestamp}\n\n"
+                f"**Traces reviewed:** {trace_ids}\n"
+            )
+            if focus:
+                entry += f"**Focus:** {focus}\n"
+            entry += f"\n{advice}\n"
+
+            # Create file with header if it doesn't exist
+            if not os.path.exists(log_path):
+                with open(log_path, "w") as f:
+                    f.write(
+                        "# Prax Self-Improvement Log\n\n"
+                        "This log is maintained by Prax. Each entry is a review of recent\n"
+                        "execution traces by a high-tier LLM, with concrete advice on what\n"
+                        "went wrong, what went well, and how to improve.\n\n"
+                        "Items marked with `ACTION:` are things Prax wants to fix (or wants\n"
+                        "help fixing). Check in on this file periodically.\n"
+                    )
+            with open(log_path, "a") as f:
+                f.write(entry)
+            _logging.getLogger(__name__).info("Appended trace review to %s", log_path)
+        except Exception:
+            _logging.getLogger(__name__).debug("Failed to write self-improvement log", exc_info=True)
+
+        return advice
+    except Exception as e:
+        return f"Trace review failed: {e}"
 
 
 def build_workspace_tools():
@@ -898,6 +1007,8 @@ def build_workspace_tools():
         read_logs, system_status,
         # Resourcefulness — self-upgrade and ad-hoc code execution
         self_upgrade_tier, run_python,
+        # Self-reflection — review own traces for improvement
+        review_my_traces,
     ]
 
     return tools

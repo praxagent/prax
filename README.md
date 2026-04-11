@@ -32,13 +32,12 @@ Includes [**TeamWork**](https://github.com/praxagent/teamwork) — a Slack-like 
 
 ## Quick Start
 
-### Docker Compose (recommended)
+### Docker Compose
 
 ```bash
 git clone https://github.com/praxagent/prax.git && cd prax
 git clone https://github.com/praxagent/teamwork.git ../teamwork  # web UI
 cp .env-example .env                      # configure (see below)
-docker compose up --build                 # builds app + sandbox + TeamWork, starts everything
 ```
 
 **Required `.env` settings** (at minimum):
@@ -55,7 +54,23 @@ PRAX_USER_ID=usr_alice
 
 Prax will **refuse to start** without `PRAX_USER_ID` when running in Docker. On first run it creates the workspace directory and associates it with your identity automatically.
 
-This brings up Prax, the always-on sandbox (with VS Code, LaTeX, ffmpeg, poppler, pandoc, Chrome, and a full Linux desktop), [TeamWork](https://github.com/praxagent/teamwork) web UI, and ngrok — all wired together. Open **http://localhost:3000** to access TeamWork.
+#### Lite mode (recommended for laptops)
+
+```bash
+docker compose -f docker-compose.lite.yml up --build
+```
+
+**2 containers.** Bundles Prax + TeamWork + Qdrant + Neo4j + ngrok into a single image alongside the sandbox. Uses ~2-3GB RAM total. Best for local development and resource-constrained machines.
+
+#### Full mode (recommended for servers)
+
+```bash
+docker compose up --build
+```
+
+**8+ containers.** Each service runs independently — mirrors a production/k8s deployment. Better for debugging, scaling, and when you have RAM to spare.
+
+Both modes expose the same UI at **http://localhost:3000** and use the same sandbox image. The full mode additionally exposes individual service ports (Qdrant 6333, Neo4j 7474, etc.) for direct access.
 
 #### With observability (Grafana + Tempo + Prometheus + Loki)
 

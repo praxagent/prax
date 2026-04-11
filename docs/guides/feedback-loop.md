@@ -245,3 +245,26 @@ prax/
 | `/teamwork/failures/{id}/resolve` | POST | Mark failure as resolved |
 | `/teamwork/eval/run` | POST | Run eval (single or suite) |
 | `/teamwork/eval/results` | GET | View eval results |
+
+## Self-Reflection: `review_my_traces`
+
+In addition to the external feedback loop above, Prax can proactively review his own execution traces. The `review_my_traces(count, focus)` tool:
+
+1. Pulls the N most recent completed execution traces from memory
+2. Sends them to a HIGH-tier LLM with a structured review prompt
+3. Returns concrete, actionable advice on failures, efficiency, patterns, and improvements
+
+**When Prax uses it:**
+- After a task fails and he wants to understand why
+- When the user says he did something wrong
+- Proactively to identify patterns and improve his approach
+- When stuck on a class of problems (e.g. `review_my_traces(10, focus="desktop tasks")`)
+
+**What the reviewer analyzes:**
+- Tool selection patterns (good and bad)
+- Wasted steps and unnecessary tool calls
+- Duration and efficiency
+- Failure root causes
+- What worked well and should be continued
+
+This creates a fast inner loop for self-improvement that doesn't require user feedback — Prax can reflect on his own performance anytime. The system prompt encourages proactive use.
