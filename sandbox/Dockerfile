@@ -16,6 +16,7 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
     xvfb x11vnc xfce4 xterm dbus-x11 \
     novnc websockify \
     xdotool scrot imagemagick psmisc \
+    xsel python3-websockets \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
@@ -42,6 +43,7 @@ COPY opencode.json /opt/opencode.json
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY tmux-shell.sh /usr/local/bin/tmux-shell.sh
+COPY clipboard-bridge.py /usr/local/bin/clipboard-bridge.py
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/tmux-shell.sh
 
 # Set tmux-shell as the default shell so terminal WebSocket connections
@@ -51,8 +53,8 @@ ENV SHELL=/usr/local/bin/tmux-shell.sh
 # commands (sandbox_shell, terminal sessions) can interact with the desktop.
 ENV DISPLAY=:99
 
-# 4096 = OpenCode serve, 9223 = CDP proxy, 6080 = noVNC web desktop, 8443 = code-server
-EXPOSE 4096 9223 6080 8443
+# 4096 = OpenCode serve, 9223 = CDP proxy, 6080 = noVNC web desktop, 6090 = clipboard bridge, 8443 = code-server
+EXPOSE 4096 9223 6080 6090 8443
 
 HEALTHCHECK --interval=3s --timeout=2s --start-period=15s --retries=5 \
     CMD curl -sf http://localhost:4096/global/health > /dev/null || exit 1

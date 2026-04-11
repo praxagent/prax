@@ -75,8 +75,9 @@ Every interaction follows this cycle:
 - **Chromium** — already running on the desktop with CDP on port 9222.
   Do NOT launch another Chrome.  To open a URL on the desktop, use
   ``sandbox_shell("chromium-browser --app=http://... &")``.
-- **code-server** — web-based VS Code, already running on port 8443.
-  Open it in the desktop Chrome: ``sandbox_shell("chromium-browser http://localhost:8443 &")``
+- **code-server** — web-based VS Code on port 8443. NOT started by default (saves RAM).
+  To launch: ``sandbox_shell("code-server --bind-addr 0.0.0.0:8443 --auth none --disable-telemetry /workspace &")``
+  Then open in desktop Chrome: ``sandbox_shell("chromium-browser http://localhost:8443 &")``
 - **xterm** — terminal emulator.  Launch with ``desktop_open("xterm")``.
 - **XFCE4** — desktop environment with taskbar, file manager, and app menu.
 
