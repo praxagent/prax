@@ -211,7 +211,9 @@ class AppSettings(BaseSettings):
     # Set to false to disable for minimal RAM / lightweight deployments.
     health_monitor_enabled: bool = Field(default=True, alias="HEALTH_MONITOR_ENABLED")
 
-    # TeamWork integration (web UI)
+    # TeamWork integration (web UI) — disabled by default for standalone use.
+    # Docker Compose sets TEAMWORK_ENABLED=true automatically.
+    teamwork_enabled: bool = Field(default=False, alias="TEAMWORK_ENABLED")
     teamwork_url: str = Field(default="", alias="TEAMWORK_URL")  # e.g. "http://teamwork:8000"
     teamwork_api_key: str = Field(default="", alias="TEAMWORK_API_KEY")
     teamwork_user_phone: str = Field(default="", alias="TEAMWORK_USER_PHONE")

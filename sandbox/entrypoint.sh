@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 # Start Chromium headless for browser screencast, then launch opencode-ai.
-set -e
 
 # Persistent browser profile — stored in /root (persisted via volume mount)
 # so sessions, cookies, and localStorage survive container rebuilds.
@@ -49,6 +48,13 @@ if command -v tmux &>/dev/null; then
     tmux new-session -d -s prax -c /source
 fi
 
+# ── Scratch Python venv (for Prax to pip install into freely) ──
+if [ ! -d /opt/prax-venv ]; then
+  uv venv /opt/prax-venv --python python3 2>/dev/null
+  echo "Created scratch venv at /opt/prax-venv"
+fi
+export PATH="/opt/prax-venv/bin:$PATH"
+
 # ── code-server (web-based VS Code on port 8443) ──
 if command -v code-server &>/dev/null; then
   code-server --bind-addr 0.0.0.0:8443 --auth none --disable-telemetry /workspace &>/dev/null &
@@ -65,7 +71,49 @@ if command -v Xvfb &>/dev/null; then
   export DISPLAY=:99
   Xvfb :99 -screen 0 1920x1080x24 &>/dev/null &
   sleep 0.5
-  startxfce4 &>/dev/null &
+  # XFCE4 desktop — dbus session + individual components
+  eval "$(dbus-launch --sh-syntax)" 2>/dev/null
+  export DBUS_SESSION_BUS_ADDRESS
+
+  # Seed default configs on first run only — don't overwrite user customizations.
+  mkdir -p /root/.config/xfce4/helpers /root/.config/xfce4/xfconf/xfce-perchannel-xml /root/.local/share/applications
+
+  [ ! -f /root/.local/share/applications/defaults.list ] && cat > /root/.local/share/applications/defaults.list <<'DEFAULTS'
+[Default Applications]
+x-scheme-handler/http=chromium-browser.desktop
+x-scheme-handler/https=chromium-browser.desktop
+text/html=chromium-browser.desktop
+DEFAULTS
+
+  [ ! -f /root/.Xresources ] && cat > /root/.Xresources <<'XRES'
+xterm*faceName: DejaVu Sans Mono
+xterm*faceSize: 14
+xterm*background: #1e1e2e
+xterm*foreground: #cdd6f4
+xterm*cursorColor: #f5e0dc
+xterm*scrollBar: false
+xterm*saveLines: 10000
+XRES
+
+  xrdb -merge /root/.Xresources 2>/dev/null || true
+
+  XFCE_TERM=xterm
+  [ ! -f /root/.config/xfce4/helpers.rc ] && echo "TerminalEmulator=$XFCE_TERM" > /root/.config/xfce4/helpers.rc
+
+  [ ! -f /root/.config/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml ] && cat > /root/.config/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml <<'XFWM'
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfwm4" version="1.0">
+  <property name="general" type="empty">
+    <property name="theme" type="string" value="Default"/>
+    <property name="button_layout" type="string" value="O|HMC"/>
+  </property>
+</channel>
+XFWM
+
+  xfwm4 &>/dev/null &
+  sleep 0.3
+  xfce4-panel &>/dev/null &
+  xfdesktop &>/dev/null &
   x11vnc -display :99 -forever -shared -nopw -rfbport 5900 -q &>/dev/null &
 
   # noVNC — web-based VNC client on port 6080

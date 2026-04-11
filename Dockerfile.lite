@@ -1,16 +1,20 @@
-# Prax — consolidated single-container image.
+# Prax Lite — resource-constrained single-container deployment.
 # Bundles: Flask app, TeamWork (FastAPI + React), Qdrant, Neo4j, ngrok.
 #
 # Build:
-#   docker compose build prax
-# The compose file sets additional_contexts so the TeamWork repo is available.
+#   docker compose -f docker-compose.lite.yml build prax
+#
+# Differences from the full Dockerfile:
+#   - Uses musl Qdrant binaries (more portable, no glibc dep)
+#   - Includes APOC plugin jar directly (no auto-download at runtime)
+#   - Designed for laptop deployments with limited RAM
 #
 # Architecture: supports both amd64 and arm64 via TARGETARCH.
 
 # ─────────────────────────────────────────────────────────────────────
 # Stage 1: Build TeamWork React frontend
 # ─────────────────────────────────────────────────────────────────────
-FROM node:22-slim AS frontend-build
+FROM node:22-slim AS teamwork-frontend
 
 WORKDIR /build/frontend
 
@@ -27,7 +31,7 @@ RUN npx vite build
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Stage 2: Combined Prax image
+# Stage 2: Combined Prax Lite image
 # ─────────────────────────────────────────────────────────────────────
 FROM python:3.13-slim
 
@@ -65,24 +69,27 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
 
 # ── 2. Java 17 headless (for Neo4j) ─────────────────────────────────
 RUN apt-get update -qq \
-    && apt-get install -y --no-install-recommends openjdk-17-jre-headless \
+    && apt-get install -y --no-install-recommends default-jre-headless \
     && rm -rf /var/lib/apt/lists/*
 
-# ── 3. Neo4j Community 5.x ──────────────────────────────────────────
+# ── 3. Neo4j Community 5.x + APOC plugin ────────────────────────────
 ENV NEO4J_HOME=/opt/neo4j
-RUN curl -sSL "https://neo4j.com/artifact.php?name=neo4j-community-5.26.4-unix.tar.gz" \
+RUN curl -sSL "https://dist.neo4j.org/neo4j-community-5.26.4-unix.tar.gz" \
     -o /tmp/neo4j.tar.gz \
     && mkdir -p /opt/neo4j \
     && tar xzf /tmp/neo4j.tar.gz --strip-components=1 -C /opt/neo4j \
     && rm /tmp/neo4j.tar.gz \
     # Accept license, disable telemetry
     && echo "server.directories.data=/data/neo4j" >> $NEO4J_HOME/conf/neo4j.conf \
-    && echo "dbms.usage_report.enabled=false" >> $NEO4J_HOME/conf/neo4j.conf
+    && echo "dbms.usage_report.enabled=false" >> $NEO4J_HOME/conf/neo4j.conf \
+    # Download APOC plugin (5.26.x compatible)
+    && curl -sSL "https://github.com/neo4j/apoc/releases/download/5.26.0/apoc-5.26.0-core.jar" \
+       -o $NEO4J_HOME/plugins/apoc-5.26.0-core.jar
 
-# ── 4. Qdrant binary ────────────────────────────────────────────────
+# ── 4. Qdrant binary (musl — more portable) ─────────────────────────
 RUN QDRANT_ARCH="" \
-    && if [ "$TARGETARCH" = "arm64" ]; then QDRANT_ARCH="aarch64-unknown-linux-gnu"; \
-       else QDRANT_ARCH="x86_64-unknown-linux-gnu"; fi \
+    && if [ "$TARGETARCH" = "arm64" ]; then QDRANT_ARCH="aarch64-unknown-linux-musl"; \
+       else QDRANT_ARCH="x86_64-unknown-linux-musl"; fi \
     && curl -sSL "https://github.com/qdrant/qdrant/releases/download/v1.13.2/qdrant-${QDRANT_ARCH}.tar.gz" \
        -o /tmp/qdrant.tar.gz \
     && tar xzf /tmp/qdrant.tar.gz -C /usr/local/bin/ \
@@ -93,7 +100,7 @@ RUN QDRANT_ARCH="" \
 RUN NGROK_ARCH="" \
     && if [ "$TARGETARCH" = "arm64" ]; then NGROK_ARCH="arm64"; \
        else NGROK_ARCH="amd64"; fi \
-    && curl -sSL "https://ngrok-agent.s3.amazonaws.com/ngrok-v3-stable-linux-${NGROK_ARCH}.tgz" \
+    && curl -sSL "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-${NGROK_ARCH}.tgz" \
        | tar xz -C /usr/local/bin
 
 # ── 6. uv ───────────────────────────────────────────────────────────
@@ -104,15 +111,7 @@ RUN git config --global --add safe.directory '*'
 
 WORKDIR /app
 
-# ── 8. Install TeamWork Python package ──────────────────────────────
-COPY --from=teamwork src/ /build/teamwork/src/
-COPY --from=teamwork pyproject.toml /build/teamwork/pyproject.toml
-COPY --from=teamwork README.md /build/teamwork/README.md
-# Copy the built frontend into the package's static dir
-COPY --from=frontend-build /build/src/teamwork/static/ /build/teamwork/src/teamwork/static/
-RUN pip install --no-cache-dir /build/teamwork && rm -rf /build/teamwork
-
-# ── 9. Install Prax Python app ──────────────────────────────────────
+# ── 8. Install Prax Python app ──────────────────────────────────────
 RUN mkdir /app/logs
 
 COPY pyproject.toml uv.lock README.md ./
@@ -120,16 +119,24 @@ RUN uv sync --frozen --no-dev
 
 COPY . .
 
-# ── 10. Patchright + NLTK ───────────────────────────────────────────
+# ── 9. Install TeamWork Python package ──────────────────────────────
+COPY --from=teamwork src/ /build/teamwork/src/
+COPY --from=teamwork pyproject.toml /build/teamwork/pyproject.toml
+COPY --from=teamwork README.md /build/teamwork/README.md
+# Copy the built frontend into the package's static dir
+COPY --from=teamwork-frontend /build/src/teamwork/static/ /build/teamwork/src/teamwork/static/
+RUN pip install --no-cache-dir /build/teamwork && rm -rf /build/teamwork
+
+# ── 10. Patchright + NLTK ──────────────────────────────────────────
 RUN uv run patchright install chromium
 RUN uv run python -m nltk.downloader punkt
 
 # ── Data directories ────────────────────────────────────────────────
 RUN mkdir -p /data/qdrant /data/neo4j /data/teamwork
 
-EXPOSE 5001 8000 4040 6333 6334 7474 7687
+EXPOSE 3000 5001 4040 6333 7474 7687
 
 ENV FLASK_APP=app.py
 ENV FLASK_RUN_HOST=0.0.0.0
 
-ENTRYPOINT ["bash", "scripts/entrypoint-combined.sh"]
+ENTRYPOINT ["bash", "scripts/entrypoint-lite.sh"]

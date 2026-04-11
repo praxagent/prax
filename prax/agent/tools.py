@@ -116,8 +116,8 @@ def build_default_tools():
         + build_codegen_tools_for_main_agent()
         # Sub-agent delegation (delegate_task, delegate_parallel)
         + build_subagent_tools()
-        # All spoke delegation tools (browser, content, course, finetune,
-        # knowledge, memory, sandbox, scheduler, sysadmin, workspace)
+        # All spoke delegation tools (browser, content, course, desktop,
+        # finetune, knowledge, memory, sandbox, scheduler, sysadmin, workspace)
         + build_all_spoke_tools()
         # Research delegation
         + build_research_tools()

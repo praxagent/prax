@@ -38,6 +38,7 @@ def build_all_spoke_tools() -> list:
     from prax.agent.spokes.browser import build_spoke_tools as browser_spoke
     from prax.agent.spokes.content import build_spoke_tools as content_spoke
     from prax.agent.spokes.course import build_spoke_tools as course_spoke
+    from prax.agent.spokes.desktop import build_spoke_tools as desktop_spoke
     from prax.agent.spokes.finetune import build_spoke_tools as finetune_spoke
     from prax.agent.spokes.knowledge import build_spoke_tools as knowledge_spoke
     from prax.agent.spokes.sandbox import build_spoke_tools as sandbox_spoke
@@ -49,6 +50,7 @@ def build_all_spoke_tools() -> list:
         *browser_spoke(),
         *content_spoke(),
         *course_spoke(),
+        *desktop_spoke(),
         *finetune_spoke(),
         *knowledge_spoke(),
         *sandbox_spoke(),

@@ -277,8 +277,8 @@ def desktop_screenshot() -> str:
             ["sh", "-c", f"DISPLAY=:99 scrot -o {fname} && echo {fname}"],
             timeout=10,
         )
-        if result.get("exit_code", 1) != 0:
-            return f"Screenshot failed: {result.get('stderr', 'unknown error')}"
+        if result.returncode != 0:
+            return f"Screenshot failed: {result.stderr or 'unknown error'}"
         return f"Screenshot saved to {fname}"
     except Exception as e:
         return f"Screenshot failed: {e}"
@@ -303,8 +303,8 @@ def desktop_click(x: int, y: int, button: str = "left", clicks: int = 1) -> str:
             ["sh", "-c", f"DISPLAY=:99 xdotool mousemove {x} {y} click {repeat} {btn}"],
             timeout=10,
         )
-        if result.get("exit_code", 1) != 0:
-            return f"Click failed: {result.get('stderr', 'unknown error')}"
+        if result.returncode != 0:
+            return f"Click failed: {result.stderr or 'unknown error'}"
         return f"Clicked ({button}, {clicks}x) at ({x}, {y})"
     except Exception as e:
         return f"Click failed: {e}"
@@ -326,8 +326,8 @@ def desktop_type(text: str, delay_ms: int = 12) -> str:
             ["sh", "-c", f"DISPLAY=:99 xdotool type --delay {delay_ms} '{safe_text}'"],
             timeout=30,
         )
-        if result.get("exit_code", 1) != 0:
-            return f"Type failed: {result.get('stderr', 'unknown error')}"
+        if result.returncode != 0:
+            return f"Type failed: {result.stderr or 'unknown error'}"
         return f"Typed {len(text)} characters"
     except Exception as e:
         return f"Type failed: {e}"
@@ -348,8 +348,8 @@ def desktop_key(keys: str) -> str:
             ["sh", "-c", f"DISPLAY=:99 xdotool key {keys}"],
             timeout=10,
         )
-        if result.get("exit_code", 1) != 0:
-            return f"Key press failed: {result.get('stderr', 'unknown error')}"
+        if result.returncode != 0:
+            return f"Key press failed: {result.stderr or 'unknown error'}"
         return f"Pressed: {keys}"
     except Exception as e:
         return f"Key press failed: {e}"
@@ -367,7 +367,7 @@ def desktop_list_windows() -> str:
             ["sh", "-c", "DISPLAY=:99 xdotool search --name '' getwindowname %@ 2>/dev/null || true"],
             timeout=10,
         )
-        stdout = result.get("stdout", "").strip()
+        stdout = (result.stdout or "").strip()
         if not stdout:
             return "No windows open on the desktop."
         return f"Open windows:\n{stdout}"
@@ -380,7 +380,7 @@ def desktop_open(command: str) -> str:
     """Launch an application on the sandbox desktop.
 
     The command runs in the background on DISPLAY :99.
-    Examples: "code /workspace", "firefox", "nautilus /workspace"
+    Examples: "code-server", "xterm", "thunar /workspace"
 
     Args:
         command: Shell command to launch the application.
@@ -388,12 +388,12 @@ def desktop_open(command: str) -> str:
     from prax.utils.shell import run_command
     try:
         result = run_command(
-            ["sh", "-c", f"DISPLAY=:99 {command} &>/dev/null & echo $!"],
+            ["bash", "-c", f"DISPLAY=:99 {command} >/dev/null 2>&1 & echo $!"],
             timeout=10,
         )
-        if result.get("exit_code", 1) != 0:
-            return f"Launch failed: {result.get('stderr', 'unknown error')}"
-        pid = result.get("stdout", "").strip()
+        if result.returncode != 0:
+            return f"Launch failed: {result.stderr or 'unknown error'}"
+        pid = (result.stdout or "").strip()
         return f"Launched: {command} (PID {pid})"
     except Exception as e:
         return f"Launch failed: {e}"

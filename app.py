@@ -120,13 +120,28 @@ def create_app():
         init_scheduler()
         start_discord_bot()
 
-    # Initialize TeamWork integration if configured
-    if settings.teamwork_url:
+    # Initialize TeamWork integration if configured.
+    # In lite mode all services share a container and TeamWork may still
+    # be starting when Prax reaches this point.  Retry with backoff.
+    if settings.teamwork_enabled and settings.teamwork_url:
         try:
+            import time as _time
+
             from prax.services.teamwork_service import get_teamwork_client
             tw = get_teamwork_client()
-            # Build the webhook URL from our own address
-            webhook_url = "http://app:5001/teamwork/webhook"
+            # Wait for TeamWork to be reachable (up to ~30s)
+            for _attempt in range(15):
+                try:
+                    import requests as _req
+                    _req.get(f"{settings.teamwork_url}/health", timeout=2)
+                    break
+                except Exception:
+                    logger.info("Waiting for TeamWork (%s)...", settings.teamwork_url)
+                    _time.sleep(2)
+            # Build the webhook URL — use localhost in lite mode (same container),
+            # "app" hostname in multi-container mode.
+            _webhook_host = "localhost" if settings.teamwork_url.startswith("http://localhost") else "app"
+            webhook_url = f"http://{_webhook_host}:5001/teamwork/webhook"
             # Use the real user's workspace if a phone number is configured,
             # so the file browser and workspace tools see the same files as SMS/Discord.
             workspace_dir = (settings.teamwork_user_phone or "").lstrip("+") or None

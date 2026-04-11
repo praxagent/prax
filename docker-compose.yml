@@ -1,73 +1,69 @@
 name: prax
 
 services:
-  ngrok:
-    image: ngrok/ngrok:latest
-    command: http app:5001
-    environment:
-      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+  # ── Prax (all-in-one: Flask + TeamWork + Qdrant + Neo4j + ngrok) ──
+  prax:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      additional_contexts:
+        teamwork: ${TEAMWORK_PATH:-../teamwork}
     ports:
-      - "4040:4040"
-
-  app:
-    build: .
-    entrypoint: ["bash", "scripts/entrypoint.sh"]
-    ports:
-      - "5001:5001"
+      - "3000:8000"   # TeamWork web UI
+      - "8000:8000"   # TeamWork API (for Vite dev proxy)
+      - "5001:5001"   # Prax API
+      - "4040:4040"   # ngrok dashboard
     env_file: .env
     environment:
-      - NGROK_API_URL=http://ngrok:4040
+      # Overrides applied by entrypoint-combined.sh, but also set here
+      # so `docker compose config` shows the full picture.
       - RUNNING_IN_DOCKER=true
+      - TEAMWORK_ENABLED=true
       - SANDBOX_HOST=sandbox
-      # Playwright connects to the sandbox Chrome instead of launching its own.
-      # This unifies the agent's browser with TeamWork's screencast.
       - BROWSER_CDP_URL=http://sandbox:9223
       # Override WORKSPACE_DIR from .env — inside the container the mount
       # point is always /app/workspaces regardless of the host path.
       - WORKSPACE_DIR=./workspaces
       # User identity — sandbox scoped to this user's workspace.
       - PRAX_USER_ID=${PRAX_USER_ID:-}
-      # TeamWork integration — Prax controls TeamWork as an external agent.
-      - TEAMWORK_URL=http://teamwork:8000
-      - TEAMWORK_API_KEY=${TEAMWORK_API_KEY:-}
-      - TEAMWORK_USER_PHONE=${TEAMWORK_USER_PHONE:-}
-      # Memory infrastructure — overrides .env when running in Docker.
-      - QDRANT_URL=http://qdrant:6333
-      - NEO4J_URI=bolt://neo4j:7687
-      # Ollama — when EMBEDDING_PROVIDER=ollama, embeddings use this endpoint.
-      - OLLAMA_BASE_URL=http://ollama:11434
+      # Ollama — only used when EMBEDDING_PROVIDER=ollama (local-llm profile).
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
       # OTel exporter — sends traces to Tempo when observability is enabled.
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4318
       - GRAFANA_URL=${GRAFANA_URL:-http://localhost:3001}
+    # Grant Docker socket access for sandbox exec.
+    # GID 0 = root group, which owns the socket on macOS Docker Desktop.
+    group_add: ["0"]
     volumes:
+      - ${WORKSPACE_DIR:-../workspaces}:/app/workspaces
       - ./conversations.db:/app/conversations.db
       - ./static:/app/static
       - ./logs:/app/logs
-      - ${WORKSPACE_DIR:-../workspaces}:/app/workspaces
+      # Persistent data for embedded services.
+      - ${WORKSPACE_DIR:-../workspaces}/.qdrant:/data/qdrant
+      - ${WORKSPACE_DIR:-../workspaces}/.neo4j:/data/neo4j
+      - ${WORKSPACE_DIR:-../workspaces}/.teamwork:/data/teamwork
+      # Docker socket — required for sandbox exec.
+      # SECURITY: grants host Docker access — use only in trusted environments.
+      - /var/run/docker.sock:/var/run/docker.sock
       # Dev: mount source for live reload without rebuilding the image.
       - ./prax:/app/prax
       - ./app.py:/app/app.py
-      - ./config.py:/app/config.py:ro
+      - ./scripts:/app/scripts
       # Git repo — required for self-improve worktree isolation.
       - ./.git:/app/.git:ro
       - ./tests:/app/tests:ro
-      # Required for sandbox package installation (docker exec).
-      # SECURITY: grants host Docker access — use only in trusted environments.
-      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
-      ngrok:
-        condition: service_started
       sandbox:
         condition: service_healthy
-      teamwork:
-        condition: service_healthy
-      qdrant:
-        condition: service_started
-      neo4j:
-        condition: service_started
-      ollama:
-        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:5001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
+  # ── Sandbox (coding agents + Chrome + desktop) ────────────────────
   sandbox:
     build:
       context: ./sandbox
@@ -80,15 +76,10 @@ services:
       - CLAUDE_CODE_DISABLE_NONINTERACTIVE_CHECK=1
     volumes:
       # User-scoped workspace — only this user's folder is mounted.
-      # PRAX_USER_ID must be set in .env (e.g. usr_abc12345).
       - ${WORKSPACE_DIR:-../workspaces}/${PRAX_USER_ID}:/workspace
-      # Full repo mount — coding agents (Claude Code, Codex, OpenCode) need
-      # read-write access to the codebase for self-improvement tasks.
-      # Secrets are passed via environment vars, not .env.
+      # Full repo mount — coding agents need read-write access for self-improvement.
       - .:/source
-      # Persist the sandbox home directory inside the user's workspace.
-      # Desktop customizations, downloads, shell history, installed packages,
-      # browser profiles, and configs all survive container rebuilds.
+      # Persist sandbox home inside the user's workspace.
       - ${WORKSPACE_DIR:-../workspaces}/${PRAX_USER_ID}/.sandbox/home:/root
       - ${WORKSPACE_DIR:-../workspaces}/${PRAX_USER_ID}/.sandbox/claude:/root/.claude
       - ${WORKSPACE_DIR:-../workspaces}/${PRAX_USER_ID}/.sandbox/codex:/root/.codex
@@ -100,91 +91,11 @@ services:
       start_period: 15s
       retries: 5
 
-  # ---- TeamWork (web UI for Prax) ----
-  # Slack-like interface: chat, file browser, task board, terminal.
-  # Prax controls it via the external agent API.
-  # Single container — API + bundled React frontend served by FastAPI.
-
-  teamwork:
-    build:
-      context: ${TEAMWORK_PATH:-../teamwork}
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    # Grant Docker socket access for terminal (exec into sandbox).
-    # GID 0 = root group, which owns the socket on macOS Docker Desktop.
-    group_add: ["0"]
-    ports:
-      - "3000:8000"
-      - "8000:8000"
-    environment:
-      - DATABASE_URL=sqlite+aiosqlite:///data/vteam.db
-      - WORKSPACE_PATH=/workspace
-      - HOST_WORKSPACE_PATH=${HOST_WORKSPACE_PATH:-}
-      - EXTERNAL_API_KEY=${TEAMWORK_API_KEY:-}
-      - SANDBOX_CONTAINER=${SANDBOX_CONTAINER:-prax-sandbox-1}
-      - CHROME_CDP_HOST=sandbox
-      - CHROME_CDP_PORT=9223
-      - DESKTOP_VNC_URL=http://sandbox:6080
-      - CORS_ORIGINS=["http://localhost:3000","http://localhost:5173"]
-      # Prax app URL — required for plugin management proxy.
-      - PRAX_URL=http://app:5001
-    volumes:
-      - ${WORKSPACE_DIR:-../workspaces}/.teamwork:/app/data
-      - ${WORKSPACE_DIR:-../workspaces}:/workspace
-      - /var/run/docker.sock:/var/run/docker.sock
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-
-  # ---- Memory Infrastructure ----
-  # Qdrant (vector store) and Neo4j (graph DB) for long-term memory.
-  # Always on — Prax is nothing without his memory.
-
-  qdrant:
-    image: qdrant/qdrant:v1.13.2
-    restart: unless-stopped
-    ports:
-      - "6333:6333"   # HTTP API
-      - "6334:6334"   # gRPC
-    volumes:
-      - ${WORKSPACE_DIR:-../workspaces}/.qdrant:/qdrant/storage
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:6333/healthz"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 5s
-
-  neo4j:
-    image: neo4j:5-community
-    restart: unless-stopped
-    environment:
-      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:-prax-memory}
-      - NEO4J_PLUGINS=["apoc"]
-      - NEO4J_dbms_usage__report_enabled=false
-    ports:
-      - "7474:7474"   # Browser UI
-      - "7687:7687"   # Bolt protocol
-    volumes:
-      - ${WORKSPACE_DIR:-../workspaces}/.neo4j:/data
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:7474/"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-
-  # ---- Ollama (local embeddings + LLM) ----
-  # Local inference — embeddings and/or chat models without sending data
-  # to external APIs. Set LLM_PROVIDER=ollama to use for chat,
-  # EMBEDDING_PROVIDER=ollama to use for embeddings.
-  # The configured model is auto-pulled on first start.
-
+  # ── Ollama (local embeddings + LLM) ───────────────────────────────
+  # Optional — start with: docker compose --profile local-llm up
   ollama:
     image: ollama/ollama:latest
+    profiles: ["local-llm"]
     restart: unless-stopped
     ports:
       - "11434:11434"
@@ -201,6 +112,7 @@ services:
   # configured embedding model so users don't have to do it manually.
   ollama-init:
     image: curlimages/curl:latest
+    profiles: ["local-llm"]
     depends_on:
       ollama:
         condition: service_healthy
@@ -213,7 +125,7 @@ services:
         echo ""
         echo "Model pull complete."
 
-  # ---- Observability Stack ----
+  # ── Observability Stack ───────────────────────────────────────────
   # Start with: COMPOSE_PROFILES=observability docker compose up
   # Or: docker compose --profile observability up
 
@@ -248,8 +160,6 @@ services:
     volumes:
       - ./observability/promtail.yaml:/etc/promtail/config.yaml:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      # Docker log files — Promtail uses the socket for discovery but
-      # needs the actual log files to read container output.
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
     depends_on:
       - loki
