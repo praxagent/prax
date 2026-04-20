@@ -41,9 +41,13 @@ docs/                   # Documentation (architecture, agents, guides, research)
 - Settings are Pydantic fields with env var aliases in `prax/settings.py`
 - Plugin tools are loaded from `prax/plugins/tools/` and wrapped with governance
 - Sub-agents (spokes) live in `prax/agent/spokes/` — browser, content,
-  course, finetune, knowledge, memory, research, sandbox, scheduler,
-  sysadmin, workspace.  The orchestrator delegates to them via the
-  `delegate_<spoke>` tools.
+  course, desktop, finetune, knowledge, memory, research, sandbox,
+  scheduler, sysadmin, **tasks**, workspace.  The orchestrator
+  delegates to them via the `delegate_<spoke>` tools.  The
+  orchestrator itself carries ~42 tools (delegations + kernel +
+  planning + meta) — well under the ~50-tool accuracy threshold
+  Anthropic documents.  When adding tools, prefer spoke-internal
+  placement over orchestrator-level.
 - The Library (projects → notebooks → notes, Kanban, archive, inbox,
   outputs) lives in `prax/services/library_service.py` +
   `prax/services/library_tasks.py`.  Storage is at
@@ -55,6 +59,42 @@ docs/                   # Documentation (architecture, agents, guides, research)
   through `prax/services/url_reader.py` which uses the Jina Reader
   API.  Set `JINA_API_KEY` in `.env` for paid-tier quota; free tier
   works without a key.
+- **Edit-with-linter:** `workspace_save` / `workspace_patch` run a
+  language-aware syntax check (AST parse for .py, JSON/YAML/TOML
+  decoders) and reject broken writes *before* they hit disk.  See
+  `prax/agent/workspace_tools.py:_validate_syntax`.
+- **Architectural layer linter** (`scripts/check_layers.py`) runs as
+  part of `make ci` and catches cross-layer imports — plugins must
+  route through the capability gateway; services must not import
+  agent modules (except the `llm_factory` / `user_context` carve-
+  outs); services must not import blueprints.  Grandfathered
+  violations live in an `ALLOWLIST`; new code must not add to it.
+- **Task runner** (`prax/services/task_runner_service.py`,
+  opt-in via `TASK_RUNNER_ENABLED=true`) watches the Library Kanban
+  and top-level todo list every ~5 minutes for items with
+  `assignees=["prax"]` and spawns a synthetic orchestrator turn per
+  pickup.  Respects the agent_plan/Kanban wall — Prax's internal
+  plan stays ephemeral; only the user-created task gets updated.
+  Management tools (`task_runner_status` / `pause` / `resume`) live
+  in the `tasks` spoke.
+- **Per-space session progress** survives the context-window
+  boundary: `progress_read(slug)` at session start,
+  `progress_append(slug, outcome, open_threads)` at session end.
+  Bounded by construction (≤6000 chars, 3-section structure with
+  LLM compaction when full).  Detail files in
+  `workspaces/{user}/library/spaces/{slug}/.progress/` are *not*
+  auto-loaded — fetch on demand via `progress_detail(slug, date)`.
+- **Trace introspection** — `trace_search(query, top_k)` does
+  semantic search over past execution traces (embeds `trigger` +
+  top span summaries into a Qdrant collection
+  `prax_trace_summaries`; lazy-indexed on first call per process).
+  `trace_detail(trace_id)` fetches the full structured record of
+  a specific trace.  Both tools degrade gracefully when Qdrant
+  isn't available (lite deployments).  Prefer over
+  `review_my_traces` when you want structured data rather than a
+  reviewer-LLM narrative; prefer over `conversation_search` when
+  you want semantic task-similarity rather than keyword matching.
+  See `prax/services/trace_search_service.py`.
 
 ## Rules
 

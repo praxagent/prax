@@ -44,6 +44,7 @@ def build_all_spoke_tools() -> list:
     from prax.agent.spokes.sandbox import build_spoke_tools as sandbox_spoke
     from prax.agent.spokes.scheduler import build_spoke_tools as scheduler_spoke
     from prax.agent.spokes.sysadmin import build_spoke_tools as sysadmin_spoke
+    from prax.agent.spokes.tasks import build_spoke_tools as tasks_spoke
     from prax.agent.spokes.workspace import build_spoke_tools as workspace_spoke
 
     return [
@@ -56,5 +57,6 @@ def build_all_spoke_tools() -> list:
         *sandbox_spoke(),
         *scheduler_spoke(),
         *sysadmin_spoke(),
+        *tasks_spoke(),
         *workspace_spoke(),
     ]

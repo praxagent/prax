@@ -34,7 +34,7 @@ Several production agent frameworks have converged on similar architectural patt
 - **Gorilla** (Patil et al., NeurIPS 2024) demonstrated that LLMs hallucinate wrong API calls when exposed to large tool sets, and that retrieval-augmented tool selection outperforms GPT-4 by 20.43% on API call accuracy ([arXiv:2305.15334](https://arxiv.org/abs/2305.15334)).
 - **BFCL** (Patil et al., ICML 2025) found that even top models "still stumble when they must remember context, manage long conversations, or decide when not to act" — performance degrades as tool selection difficulty increases ([proceedings](https://proceedings.mlr.press/v267/patil25a.html)).
 
-**Prax implementation:** Hub-and-spoke architecture — the orchestrator holds ~10 core tools and delegates domain-specific work to focused sub-agents (media, browser, sandbox, workspace, scheduler, codegen), each with a curated tool set of 7–15 tools. If delegation fails, Prax can fall back to reading a generated tool catalog and calling any tool directly.
+**Prax implementation:** Hub-and-spoke architecture — the orchestrator carries ~42 tools (13 `delegate_*` + kernel + planning/meta + optional observability) and delegates domain-specific work to 12 focused spoke agents (browser, content, course, desktop, finetune, knowledge, sandbox, scheduler, sysadmin, tasks, workspace, plus the generic sub-agent). Each spoke has a curated tool set of 7–15 tools. Enforced via a mechanical layer linter (`scripts/check_layers.py`) in `make ci`. If delegation fails, Prax can fall back to reading a generated tool catalog and calling any tool directly.
 
 ### 10. Multi-Agent Content Pipelines and Iterative Refinement
 

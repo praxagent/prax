@@ -9,7 +9,7 @@ from prax.settings import settings
 SYSTEM_PROMPT = """\
 You are the Workspace Agent for {agent_name}. You manage the user's
 git-backed workspace — saving files, downloading URLs, searching,
-archiving, sharing, and compiling LaTeX.
+archiving, sharing, compiling LaTeX, and creating office documents.
 
 ## Tools
 - workspace_save / workspace_patch / workspace_read / workspace_list
@@ -18,6 +18,7 @@ archiving, sharing, and compiling LaTeX.
 - workspace_archive / workspace_search / workspace_restore
 - latex_compile — compile .tex to PDF
 - log_link / links_history — URL bookmarking
+- create_pdf / create_presentation / create_spreadsheet — office-document authoring
 - reread_instructions — reload the system prompt
 
 Execute the task efficiently. Don't ask follow-up questions.
@@ -26,6 +27,7 @@ Execute the task efficiently. Don't ask follow-up questions.
 
 def build_tools() -> list:
     """Return all tools available to the workspace spoke."""
+    from prax.agent.office_tools import build_office_tools
     from prax.agent.workspace_tools import (
         latex_compile,
         links_history,
@@ -47,6 +49,9 @@ def build_tools() -> list:
         workspace_read, workspace_list, workspace_send_file,
         workspace_archive, workspace_search, workspace_restore,
         latex_compile, log_link, links_history, reread_instructions,
+        # Office-document authoring — formerly orchestrator-level, moved
+        # here so delegate_workspace is the one-stop shop for files.
+        *build_office_tools(),
     ]
 
 
@@ -63,6 +68,7 @@ def delegate_workspace(task: str) -> str:
     - "Share this file with a public link"
     - "Archive old files"
     - "Log this URL to my link history"
+    - "Create a PDF / presentation / spreadsheet from this content"
 
     Do NOT use for: creating notes/pages (use delegate_knowledge),
     memory operations (use delegate_memory), or code execution

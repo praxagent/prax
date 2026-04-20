@@ -419,8 +419,12 @@ def _write_todos(user_id: str, todos: list[dict]) -> None:
     git_commit(root, "Update todos")
 
 
-def add_todo(user_id: str, task: str) -> dict:
-    """Add a task to the user's todo list."""
+def add_todo(user_id: str, task: str, *, assignee: str = "user") -> dict:
+    """Add a task to the user's todo list.
+
+    ``assignee`` defaults to "user" (human handles it). Pass "prax" to
+    let the task-runner auto-pick it up when ``task_runner_enabled``.
+    """
     with get_lock(user_id):
         ensure_workspace(user_id)
         todos = _read_todos(user_id)
@@ -428,6 +432,7 @@ def add_todo(user_id: str, task: str) -> dict:
             "id": len(todos) + 1,
             "task": task,
             "done": False,
+            "assignee": assignee,
             "created_at": datetime.now(UTC).isoformat(),
         }
         todos.append(entry)

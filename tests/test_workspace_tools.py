@@ -115,6 +115,137 @@ def test_workspace_restore(monkeypatch):
     assert calls == ["paper.md"]
 
 
+class TestEditWithLinter:
+    """Syntax validation gates writes — broken edits never hit disk."""
+
+    def _module(self):
+        return importlib.reload(importlib.import_module('prax.agent.workspace_tools'))
+
+    def test_valid_python_saves(self, monkeypatch):
+        module = self._module()
+        ws = importlib.import_module('prax.services.workspace_service')
+        calls = []
+        monkeypatch.setattr(ws, 'save_file', lambda uid, fn, content: calls.append(fn))
+        current_user_id.set('+10000000000')
+        result = module.workspace_save.invoke({
+            "filename": "ok.py", "content": "def f():\n    return 1\n",
+        })
+        assert "Saved" in result
+        assert calls == ["ok.py"]
+
+    def test_broken_python_rejected(self, monkeypatch):
+        module = self._module()
+        ws = importlib.import_module('prax.services.workspace_service')
+        calls = []
+        monkeypatch.setattr(ws, 'save_file', lambda uid, fn, content: calls.append(fn))
+        current_user_id.set('+10000000000')
+        result = module.workspace_save.invoke({
+            "filename": "broken.py", "content": "def f(:\n    return 1\n",
+        })
+        assert "Rejected" in result
+        assert "syntax error" in result.lower()
+        assert calls == []  # never reached disk
+
+    def test_valid_json_saves(self, monkeypatch):
+        module = self._module()
+        ws = importlib.import_module('prax.services.workspace_service')
+        calls = []
+        monkeypatch.setattr(ws, 'save_file', lambda uid, fn, content: calls.append(fn))
+        current_user_id.set('+10000000000')
+        result = module.workspace_save.invoke({
+            "filename": "ok.json", "content": '{"a": 1, "b": [2, 3]}',
+        })
+        assert "Saved" in result
+        assert calls == ["ok.json"]
+
+    def test_broken_json_rejected(self, monkeypatch):
+        module = self._module()
+        ws = importlib.import_module('prax.services.workspace_service')
+        calls = []
+        monkeypatch.setattr(ws, 'save_file', lambda uid, fn, content: calls.append(fn))
+        current_user_id.set('+10000000000')
+        result = module.workspace_save.invoke({
+            "filename": "broken.json", "content": '{"a": 1, "b": [2, 3',
+        })
+        assert "Rejected" in result
+        assert "JSON" in result
+        assert calls == []
+
+    def test_valid_yaml_saves(self, monkeypatch):
+        module = self._module()
+        ws = importlib.import_module('prax.services.workspace_service')
+        calls = []
+        monkeypatch.setattr(ws, 'save_file', lambda uid, fn, content: calls.append(fn))
+        current_user_id.set('+10000000000')
+        result = module.workspace_save.invoke({
+            "filename": "config.yaml", "content": "foo: 1\nbar:\n  - a\n  - b\n",
+        })
+        assert "Saved" in result
+
+    def test_broken_yaml_rejected(self, monkeypatch):
+        module = self._module()
+        ws = importlib.import_module('prax.services.workspace_service')
+        calls = []
+        monkeypatch.setattr(ws, 'save_file', lambda uid, fn, content: calls.append(fn))
+        current_user_id.set('+10000000000')
+        # Unclosed flow mapping — yaml.safe_load raises.
+        result = module.workspace_save.invoke({
+            "filename": "broken.yml", "content": "foo: {a: 1, b: 2\n",
+        })
+        assert "Rejected" in result
+        assert calls == []
+
+    def test_markdown_passes_through(self, monkeypatch):
+        module = self._module()
+        ws = importlib.import_module('prax.services.workspace_service')
+        calls = []
+        monkeypatch.setattr(ws, 'save_file', lambda uid, fn, content: calls.append(fn))
+        current_user_id.set('+10000000000')
+        # Even "syntactically-broken-looking" markdown saves fine.
+        result = module.workspace_save.invoke({
+            "filename": "notes.md", "content": "# Title\n\n```python\ndef f(:",
+        })
+        assert "Saved" in result
+        assert calls == ["notes.md"]
+
+    def test_patch_rejected_when_result_broken(self, monkeypatch):
+        module = self._module()
+        ws = importlib.import_module('prax.services.workspace_service')
+        saves = []
+        monkeypatch.setattr(
+            ws, 'read_file',
+            lambda uid, fn: "def f():\n    return 1\n",
+        )
+        monkeypatch.setattr(ws, 'save_file', lambda uid, fn, content: saves.append(content))
+        current_user_id.set('+10000000000')
+        # Patch that would introduce a syntax error.
+        result = module.workspace_patch.invoke({
+            "filename": "broken.py",
+            "old_text": "def f():",
+            "new_text": "def f(:",
+        })
+        assert "Rejected" in result
+        assert saves == []
+
+    def test_patch_allowed_when_result_valid(self, monkeypatch):
+        module = self._module()
+        ws = importlib.import_module('prax.services.workspace_service')
+        saves = []
+        monkeypatch.setattr(
+            ws, 'read_file',
+            lambda uid, fn: "def f():\n    return 1\n",
+        )
+        monkeypatch.setattr(ws, 'save_file', lambda uid, fn, content: saves.append(content))
+        current_user_id.set('+10000000000')
+        result = module.workspace_patch.invoke({
+            "filename": "ok.py",
+            "old_text": "return 1",
+            "new_text": "return 2",
+        })
+        assert "Patched" in result
+        assert saves and "return 2" in saves[0]
+
+
 def test_missing_user_id_falls_back(monkeypatch):
     module = importlib.reload(importlib.import_module('prax.agent.workspace_tools'))
     ws = importlib.import_module('prax.services.workspace_service')

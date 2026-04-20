@@ -204,3 +204,53 @@ If you see a `Tool X starting` log with no matching `Tool X finished`, it's almo
 - Add logging around `get_lock()` calls (the lock itself doesn't log)
 - Check whether the tool's execution path calls any service that acquires the lock
 - The fix is always the same: release the lock before calling into the service
+
+### Adding a spoke
+
+Prefer spokes over adding tools directly to the orchestrator — the
+orchestrator's tool count is kept under Anthropic's ~50-tool
+accuracy threshold (~42 today). Every new top-level tool erodes
+that margin.
+
+**Minimum spoke skeleton** (see `prax/agent/spokes/tasks/` for a
+fresh reference implementation):
+
+```
+prax/agent/spokes/<name>/
+  __init__.py        # exports build_spoke_tools
+  agent.py           # SYSTEM_PROMPT, build_tools(), delegate_<name>(), build_spoke_tools()
+```
+
+Steps:
+
+1. Create the folder and copy the shape from an existing spoke
+   (`tasks` is the smallest; `workspace` is a good fuller example).
+2. Implement `build_tools()` returning the spoke's internal tool
+   list — these are the tools the sub-agent can use, not the
+   orchestrator.
+3. Implement `@tool def delegate_<name>(task: str)` that calls
+   `run_spoke(...)` with the right `config_key`, system prompt, and
+   tool list.
+4. Register in `prax/agent/spokes/__init__.py` —
+   `build_all_spoke_tools()` imports and concatenates the spoke's
+   `build_spoke_tools()`.
+5. Remove any tools that used to be orchestrator-level but belong in
+   this spoke.
+
+### Architectural boundaries (mechanical)
+
+`scripts/check_layers.py` runs in `make ci` and enforces:
+
+- **Plugin isolation.** Code under `prax/plugins/tools/**` must not
+  import `prax.services.*` or `prax.agent.*`. Go through the
+  capability gateway (`prax.plugins.capabilities`).
+- **No reverse dep.** `prax/services/**` must not import
+  `prax.agent.*`.  Two carve-outs: `prax.agent.llm_factory` and
+  `prax.agent.user_context` — both should eventually move out of
+  `prax.agent`.
+- **Services are HTTP-agnostic.** `prax/services/**` must not import
+  `prax.blueprints.*`.
+
+If your change hits one of these, the CI output points you at the
+allowlist. Either fix the import or (if it's genuine debt) add to
+`ALLOWLIST` with a comment explaining why.

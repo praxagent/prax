@@ -399,11 +399,135 @@ def desktop_open(command: str) -> str:
         return f"Launch failed: {e}"
 
 
+# ---------------------------------------------------------------------------
+# File viewer — windowed read with line numbers
+# ---------------------------------------------------------------------------
+#
+# SWE-agent ACI design: reading a full file with `cat` floods context and
+# loses position. Return exactly one window at a time (100 lines is the
+# validated Goldilocks number), with line numbers prepended so the agent
+# can target edits without counting. Last-viewed position is remembered
+# per (user, path) so `sandbox_scroll` is a one-liner.
+
+_VIEW_WINDOW = 100
+_VIEW_MAX_WINDOW = 300
+_VIEW_STATE: dict[tuple[str, str], int] = {}
+
+
+def _view_lines(path: str, start: int, count: int) -> dict:
+    """Return line-numbered slice + file metadata via a single shell round-trip."""
+    start = max(1, start)
+    end = start + count - 1
+    # awk: print NR-prefixed lines in range; then END block prints total line count.
+    cmd = (
+        f"awk -v s={start} -v e={end} "
+        f"'NR>=s && NR<=e {{printf \"%6d  %s\\n\", NR, $0}} "
+        f"END {{print \"---TOTAL:\" NR}}' "
+        f"{_shell_quote(path)}"
+    )
+    result = sandbox_service.run_shell(cmd, timeout=15)
+    return result
+
+
+def _shell_quote(arg: str) -> str:
+    return "'" + arg.replace("'", "'\\''") + "'"
+
+
+def _parse_view_output(raw: str) -> tuple[str, int]:
+    """Split the tail `---TOTAL:N` marker off the rendered output."""
+    total = 0
+    lines = raw.splitlines()
+    body_lines = []
+    for line in lines:
+        if line.startswith("---TOTAL:"):
+            try:
+                total = int(line.split(":", 1)[1].strip())
+            except ValueError:
+                total = 0
+        else:
+            body_lines.append(line)
+    return "\n".join(body_lines), total
+
+
+@tool
+def sandbox_view(path: str, start_line: int = 1, window: int = 100) -> str:
+    """View a file in the sandbox as a line-numbered window.
+
+    Prefer this over `cat` — `cat` floods context and loses your position.
+    This shows exactly `window` lines (default 100, max 300) starting at
+    `start_line`, with line numbers prepended so you can target edits
+    precisely. The last-viewed position is remembered per path, so
+    sandbox_scroll(path) picks up where you left off.
+
+    Args:
+        path: Absolute path inside the sandbox (e.g. /workspace/app.py).
+        start_line: First line to show (1-indexed). Default 1.
+        window: Number of lines in the view (default 100, capped at 300).
+    """
+    window = max(10, min(window, _VIEW_MAX_WINDOW))
+    start_line = max(1, start_line)
+    result = _view_lines(path, start_line, window)
+    if "error" in result:
+        return f"Sandbox error reading {path}: {result['error']}"
+    if result.get("exit_code", 0) != 0:
+        stderr = (result.get("stderr") or "").strip()
+        exit_code = result["exit_code"]
+        return f"Failed to read {path}: {stderr or f'unknown error (exit {exit_code})'}"
+    body, total = _parse_view_output(result.get("stdout") or "")
+    if total == 0 and not body:
+        return f"{path} is empty or does not exist."
+    end_line = min(start_line + window - 1, total)
+    _VIEW_STATE[(_get_user_id(), path)] = end_line
+    header = (
+        f"{path} — lines {start_line}-{end_line} of {total} "
+        f"({'end of file' if end_line >= total else 'sandbox_scroll to continue'})"
+    )
+    return f"{header}\n{body}"
+
+
+@tool
+def sandbox_scroll(path: str, direction: str = "down", window: int = 100) -> str:
+    """Scroll the sandbox_view one window up or down in a file.
+
+    Uses the last-viewed position for `path`. If you haven't viewed the
+    file yet, starts at line 1 (down) or reports it.
+
+    Args:
+        path: Absolute path inside the sandbox.
+        direction: "down" (default) or "up".
+        window: Lines per window (default 100, capped at 300).
+    """
+    window = max(10, min(window, _VIEW_MAX_WINDOW))
+    last_end = _VIEW_STATE.get((_get_user_id(), path), 0)
+    if direction == "up":
+        start = max(1, last_end - window - window + 1)
+    else:
+        start = max(1, last_end + 1)
+    return sandbox_view.invoke({"path": path, "start_line": start, "window": window})
+
+
+@tool
+def sandbox_goto(path: str, line: int, window: int = 100) -> str:
+    """Jump the sandbox_view to a specific line in a file.
+
+    Centers the window around `line` so you can see surrounding context.
+
+    Args:
+        path: Absolute path inside the sandbox.
+        line: Line number to center the view on (1-indexed).
+        window: Lines per window (default 100, capped at 300).
+    """
+    window = max(10, min(window, _VIEW_MAX_WINDOW))
+    start = max(1, line - window // 2)
+    return sandbox_view.invoke({"path": path, "start_line": start, "window": window})
+
+
 def build_sandbox_tools() -> list:
     return [
         sandbox_shell, sandbox_start, sandbox_message, sandbox_review,
         sandbox_finish, sandbox_abort, sandbox_search, sandbox_execute,
         sandbox_install, sandbox_rebuild,
+        sandbox_view, sandbox_scroll, sandbox_goto,
         desktop_screenshot, desktop_click, desktop_type, desktop_key,
         desktop_list_windows, desktop_open,
     ]

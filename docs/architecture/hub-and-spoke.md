@@ -2,7 +2,7 @@
 
 [← Architecture](README.md)
 
-Prax uses a hub-and-spoke model: the orchestrator holds ~24 core tools (workspace, scheduling, courses) and delegates domain-specific work to focused spoke agents.  This keeps the orchestrator's context lean — [research shows](#9-tool-overload-and-selection-degradation) that tool selection accuracy degrades significantly past 20–50 tools.
+Prax uses a hub-and-spoke model: the orchestrator holds ~44 tools (kernel + planning/meta + trace introspection + `delegate_*` per spoke) and delegates domain-specific work to focused spoke agents.  This keeps the orchestrator's context lean — [research shows](../research/production-patterns.md#9-tool-overload-and-selection-degradation) that tool selection accuracy degrades significantly past 20–50 tools, with Anthropic documenting a hard cliff around 50.
 
 > **Fallback:** If a delegated agent fails or can't handle the task, Prax can read the full tool catalog from a generated markdown file and call any tool directly. The spoke system is the fast path; direct tool access is the safety net.
 
@@ -10,19 +10,23 @@ Prax uses a hub-and-spoke model: the orchestrator holds ~24 core tools (workspac
 
 ```mermaid
 graph TB
-    Prax["Prax Orchestrator\n~26 tools"]
+    Prax["Prax Orchestrator\n~42 tools"]
 
-    Prax --> Core["Core\nsearch, datetime, URL fetch, image analysis"]
-    Prax --> Workspace["Workspace\nfiles, todos, planning"]
-    Prax --> Courses["Courses\ncreate, tutor, publish"]
-    Prax --> Meta["Meta\nself_upgrade_tier, run_python"]
+    Prax --> Core["Kernel\nsearch, datetime, URL fetch, sandbox_shell"]
+    Prax --> Planning["Planning/Meta\nagent_plan, progress_*, user_notes, think, run_python, review_my_traces, trace_search, trace_detail"]
+    Prax --> Obs["Observability (opt-in)\nobs_query_logs/metrics/traces"]
 
-    Prax -->|delegate_browser| Browser["Browser Spoke"]
+    Prax -->|delegate_browser| Browser["Browser Spoke\n+ analyze_image + browser_verify"]
     Prax -->|delegate_content_editor| Content["Content Editor\nsub-hub"]
+    Prax -->|delegate_course| Course["Course Spoke"]
+    Prax -->|delegate_desktop| Desktop["Desktop Spoke"]
     Prax -->|delegate_sysadmin| Sysadmin["Sysadmin\nsub-hub"]
-    Prax -->|delegate_sandbox| Sandbox["Sandbox Spoke"]
+    Prax -->|delegate_sandbox| Sandbox["Sandbox Spoke\n+ sandbox_view/scroll/goto"]
     Prax -->|delegate_finetune| Finetune["Finetune Spoke"]
     Prax -->|delegate_knowledge| Knowledge["Knowledge Spoke"]
+    Prax -->|delegate_scheduler| Scheduler["Scheduler Spoke"]
+    Prax -->|delegate_tasks| Tasks["Tasks Spoke\ntodos + task_runner mgmt"]
+    Prax -->|delegate_workspace| Workspace["Workspace Spoke\n+ create_pdf/presentation/spreadsheet"]
     Prax -->|delegate_research| Research["Research Spoke\n+ Professor capability"]
     Prax -->|delegate_task| Generic["Generic Sub-Agent"]
 
@@ -33,11 +37,44 @@ graph TB
     style Content fill:#E8543E,color:#fff
     style Sysadmin fill:#E8543E,color:#fff
     style Sandbox fill:#F5A623,color:#fff
+    style Course fill:#F5A623,color:#fff
+    style Desktop fill:#F5A623,color:#fff
     style Finetune fill:#F5A623,color:#fff
     style Knowledge fill:#F5A623,color:#fff
+    style Scheduler fill:#F5A623,color:#fff
+    style Tasks fill:#F5A623,color:#fff
+    style Workspace fill:#F5A623,color:#fff
     style Research fill:#F5A623,color:#fff
     style Generic fill:#F5A623,color:#fff
 ```
+
+#### Background work — the task runner
+
+The hub/spoke diagram above captures *synchronous* delegations. Prax
+also has a **background task runner**
+(`prax/services/task_runner_service.py`, opt-in via
+`TASK_RUNNER_ENABLED=true`) that polls every ~5 min for work
+assigned to Prax on either the Library Kanban (`assignees: ["prax"]`)
+or the top-level todo list (`assignee="prax"`). Each pickup spawns a
+synthetic orchestrator turn that runs to completion. Management
+tools (`task_runner_status` / `pause` / `resume`) live in the
+`tasks` spoke. Respects the agent_plan/Kanban wall — Prax's internal
+plan stays ephemeral; only the user-created task gets updated.
+
+#### Layer enforcement
+
+`scripts/check_layers.py` runs as part of `make ci` and enforces
+mechanical boundaries:
+
+- Plugins must not import `prax.services.*` or `prax.agent.*` — they
+  go through the capability gateway.
+- Services must not import `prax.agent.*` (except the `llm_factory`
+  / `user_context` infrastructure carve-outs).
+- Services must not import `prax.blueprints.*` (services are
+  HTTP-agnostic).
+
+Grandfathered violations live in an `ALLOWLIST` in the linter itself;
+new code must not add to it.
 
 #### Media Agent
 

@@ -191,7 +191,11 @@ def delegate_content_editor(
 
 
 def build_spoke_tools() -> list:
-    """Return the delegation tool for the main agent."""
-    from prax.agent.office_tools import build_office_tools
+    """Return the delegation tool for the main agent.
 
-    return [delegate_content_editor, *build_office_tools()]
+    Office-document tools (create_pdf/presentation/spreadsheet) are
+    NOT re-exported here — they live in the workspace spoke now.
+    Keeping orchestrator tool count below the ~50-tool degradation
+    threshold that Anthropic documents for tool selection accuracy.
+    """
+    return [delegate_content_editor]
