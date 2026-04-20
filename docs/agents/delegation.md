@@ -17,14 +17,19 @@ Key infrastructure that makes this work:
 
 ```mermaid
 graph TB
-    User([User]) --> Prax[Prax Orchestrator<br/>~24 core tools]
+    User([User]) --> Prax[Prax Orchestrator<br/>~42 tools total]
 
-    Prax -->|delegate_browser| Browser[Browser Agent<br/>16 tools: CDP + Playwright]
+    Prax -->|delegate_browser| Browser[Browser Agent<br/>CDP + Playwright + analyze_image + browser_verify]
     Prax -->|delegate_content_editor| Content[Content Editor<br/>sub-hub: research → write → review]
+    Prax -->|delegate_course| Course[Course Agent]
+    Prax -->|delegate_desktop| Desktop[Desktop Agent]
     Prax -->|delegate_sysadmin| Sysadmin[Sysadmin Agent<br/>30+ tools: plugins, config, source]
-    Prax -->|delegate_sandbox| Sandbox[Sandbox Agent<br/>16 tools: Docker + OpenCode + Desktop]
+    Prax -->|delegate_sandbox| Sandbox[Sandbox Agent<br/>Docker + OpenCode + Desktop + sandbox_view/scroll/goto]
     Prax -->|delegate_finetune| Finetune[Finetune Agent<br/>8 tools: LoRA pipeline]
     Prax -->|delegate_knowledge| Knowledge[Knowledge Agent<br/>13 tools: notes + projects]
+    Prax -->|delegate_scheduler| Scheduler[Scheduler Agent]
+    Prax -->|delegate_tasks| Tasks[Tasks Agent<br/>todos + task_runner mgmt]
+    Prax -->|delegate_workspace| Workspace[Workspace Agent<br/>files + LaTeX + create_pdf/presentation/spreadsheet]
     Prax -->|delegate_research| Research[Research Agent<br/>web search + plugins + professor]
     Prax -->|delegate_task| Generic[Generic Sub-Agent<br/>category-routed]
 
@@ -49,12 +54,17 @@ graph TB
 
 | Spoke | Delegation Tool | Tools | Purpose |
 |-------|----------------|-------|---------|
-| **Browser** | `delegate_browser` | 16: CDP read/act + Playwright navigate/click/fill/login/VNC | Web navigation, page reading, login flows, screenshots |
+| **Browser** | `delegate_browser` | CDP read/act + Playwright navigate/click/fill/login/VNC + `analyze_image` + `browser_verify` | Web navigation, page reading, login flows, screenshots, E2E flow verification, image analysis |
 | **Content Editor** | `delegate_content_editor` | Sub-hub: blog pipeline (research → write → review) or course author mode | Blog posts, publication-quality content, and course module content |
+| **Course** | `delegate_course` | Course authoring + publish | Course creation and tutoring |
+| **Desktop** | `delegate_desktop` | Desktop automation (xdotool / Chrome DevTools Protocol) | GUI tasks in the sandbox desktop |
 | **Sysadmin** | `delegate_sysadmin` | 30+: plugin mgmt, prompts, LLM config, source, workspace sync | Plugin install/update, config changes, self-improvement |
-| **Sandbox** | `delegate_sandbox` | 16: session lifecycle, archive, package management, 6 desktop tools | Code execution in isolated Docker containers + GUI desktop interaction |
+| **Sandbox** | `delegate_sandbox` | Session lifecycle, archive, package management, 6 desktop tools, `sandbox_view` / `sandbox_scroll` / `sandbox_goto` (SWE-agent-style line-numbered file viewer) | Code execution in isolated Docker containers + GUI desktop interaction |
 | **Finetune** | `delegate_finetune` | 8: harvest, train, verify, promote, rollback | LoRA fine-tuning pipeline (requires FINETUNE_ENABLED) |
 | **Knowledge** | `delegate_knowledge` | 13: note CRUD, search, linking, URL/PDF-to-note, project management | Notes, knowledge graph, research projects |
+| **Scheduler** | `delegate_scheduler` | Cron + one-shot reminders | Schedule creation, reminder management |
+| **Tasks** | `delegate_tasks` | `todo_*` + `task_runner_status`/`pause`/`resume` | Top-level todo list + background task-runner control |
+| **Workspace** | `delegate_workspace` | File CRUD, download, archive, search, LaTeX, sharing, `create_pdf`/`create_presentation`/`create_spreadsheet` | Git-backed workspace file operations and office-document authoring |
 | **Research** | `delegate_research` | Web search, URL fetch, datetime, reader plugins, multi_model_query | Multi-source investigation with citations; professor escalation for hard questions |
 | **Generic** | `delegate_task(category=...)` | Category-routed (research, workspace, scheduler, codegen) | Ad-hoc delegation for categories without a dedicated spoke |
 

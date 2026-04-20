@@ -397,6 +397,10 @@ def _load_all_users() -> None:
     prevents the same schedule from being registered N times — historically
     this caused N-fold duplicate SMS deliveries when migrate_legacy_users()
     accumulated stale symlinks across container rebuilds.
+
+    Also registers the task_runner poll job per user when
+    ``task_runner_enabled`` — so every user with a workspace gets
+    their assigned Kanban/todo tasks auto-picked-up.
     """
     ws = Path(settings.workspace_dir)
     if not ws.exists():
@@ -404,8 +408,6 @@ def _load_all_users() -> None:
     seen_resolved: set[Path] = set()
     for user_dir in sorted(ws.iterdir()):
         if not user_dir.is_dir():
-            continue
-        if not (user_dir / "schedules.yaml").exists():
             continue
         try:
             resolved = user_dir.resolve()
@@ -418,8 +420,14 @@ def _load_all_users() -> None:
             )
             continue
         seen_resolved.add(resolved)
-        with _lock:
-            _sync_user_jobs(user_dir.name)
+        # Recurring schedules + reminders (opt-in via schedules.yaml).
+        if (user_dir / "schedules.yaml").exists():
+            with _lock:
+                _sync_user_jobs(user_dir.name)
+        # Task runner polling — opt-in via settings, per-user.
+        if settings.task_runner_enabled:
+            from prax.services import task_runner_service
+            task_runner_service.register_user(_scheduler, user_dir.name)
 
 
 def init_scheduler() -> None:

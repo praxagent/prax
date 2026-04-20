@@ -206,10 +206,25 @@ class AppSettings(BaseSettings):
     # Observability (OTel tracing, Prometheus metrics, Grafana dashboards)
     observability_enabled: bool = Field(default=False, alias="OBSERVABILITY_ENABLED")
     grafana_url: str = Field(default="", alias="GRAFANA_URL")  # e.g. "http://localhost:3001"
+    # LGTM datasource endpoints — populated by docker-compose in full mode,
+    # empty in lite mode.  The obs_* agent tools degrade gracefully when
+    # these are empty ("observability not available in this deployment mode").
+    loki_url: str = Field(default="", alias="LOKI_URL")  # e.g. "http://loki:3100"
+    prometheus_url: str = Field(default="", alias="PROMETHEUS_URL")  # e.g. "http://prometheus:9090"
+    tempo_url: str = Field(default="", alias="TEMPO_URL")  # e.g. "http://tempo:3200"
 
     # Health monitoring watchdog — periodic self-checks every N turns.
     # Set to false to disable for minimal RAM / lightweight deployments.
     health_monitor_enabled: bool = Field(default=True, alias="HEALTH_MONITOR_ENABLED")
+
+    # Task runner — background worker that picks up Kanban and todo
+    # items assigned to Prax and executes them via a synthetic
+    # orchestrator turn.  Opt-in per deployment.  Polls every
+    # ``task_runner_interval_minutes`` minutes.
+    task_runner_enabled: bool = Field(default=False, alias="TASK_RUNNER_ENABLED")
+    task_runner_interval_minutes: int = Field(
+        default=5, alias="TASK_RUNNER_INTERVAL_MINUTES",
+    )
 
     # TeamWork integration (web UI) — disabled by default for standalone use.
     # Docker Compose sets TEAMWORK_ENABLED=true automatically.

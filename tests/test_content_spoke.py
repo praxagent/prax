@@ -3,16 +3,28 @@ from unittest.mock import MagicMock, patch
 
 
 def test_build_spoke_tools_returns_delegate():
-    """The content spoke exports delegation + office tools."""
+    """The content spoke now exports only the delegation tool.
+
+    Office-document tools (create_pdf/presentation/spreadsheet) moved
+    to the workspace spoke to keep the orchestrator under the
+    ~50-tool accuracy threshold. They're still reachable via
+    delegate_workspace.
+    """
     from prax.agent.spokes.content import build_spoke_tools
 
     tools = build_spoke_tools()
     names = {t.name for t in tools}
-    assert "delegate_content_editor" in names
+    assert names == {"delegate_content_editor"}
+
+
+def test_office_tools_available_via_workspace_spoke():
+    """create_pdf/presentation/spreadsheet are inside the workspace spoke."""
+    from prax.agent.spokes.workspace.agent import build_tools
+
+    names = {t.name for t in build_tools()}
+    assert "create_pdf" in names
     assert "create_presentation" in names
     assert "create_spreadsheet" in names
-    assert "create_pdf" in names
-    assert len(tools) == 4
 
 
 def test_content_spoke_registered():

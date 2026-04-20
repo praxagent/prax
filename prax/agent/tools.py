@@ -15,10 +15,10 @@ from langchain_core.tools import tool
 
 from prax.agent.codegen_tools import build_codegen_tools_for_main_agent
 from prax.agent.doctor import build_doctor_tools
+from prax.agent.obs_tools import build_obs_tools
 from prax.agent.research_agent import build_research_tools
 from prax.agent.spokes import build_all_spoke_tools
 from prax.agent.subagent import build_subagent_tools
-from prax.agent.vision_tools import build_vision_tools
 from prax.agent.workspace_tools import build_workspace_tools
 from prax.helpers_functions import background_search
 
@@ -121,8 +121,8 @@ def build_default_tools():
         + build_all_spoke_tools()
         # Research delegation
         + build_research_tools()
-        # Vision (conditional)
-        + build_vision_tools()
         # Diagnostics
         + build_doctor_tools()
+        # Observability — only when the LGTM stack is configured
+        + build_obs_tools()
     )

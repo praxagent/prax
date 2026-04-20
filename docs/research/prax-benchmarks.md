@@ -35,9 +35,11 @@ eval spend so no single benchmark dominates decisions.
 ## The shape of a good Prax benchmark
 
 Prax is a multi-channel AI assistant with a hub-and-spoke architecture:
-11 spokes (browser, content, course, finetune, knowledge, memory,
-research, sandbox, scheduler, sysadmin, workspace), an orchestrator
-with a planning loop, a verification/audit layer, and ~97 tools
+12 spokes (browser, content, course, desktop, finetune, knowledge,
+research, sandbox, scheduler, sysadmin, tasks, workspace) plus a
+generic sub-agent, an orchestrator with a planning loop (~42 tools
+at the orchestrator level, well under Anthropic's ~50-tool accuracy
+threshold), a verification/audit layer, and ~97 tools system-wide
 routed through a governance wrapper.  A useful benchmark for Prax
 must hit **at least two** of these dimensions:
 

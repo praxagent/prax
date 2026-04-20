@@ -107,8 +107,12 @@ def build_tools() -> list:
     """Return all tools available to the browser spoke agent."""
     from prax.agent.browser_tools import build_browser_tools
     from prax.agent.cdp_tools import build_cdp_tools
+    from prax.agent.vision_tools import build_vision_tools
 
-    return build_cdp_tools() + build_browser_tools()
+    # Vision (analyze_image) lives here — browser work regularly needs
+    # to inspect screenshots or images from a page, so it's a natural
+    # tool for the browser spoke rather than an orchestrator-level one.
+    return build_cdp_tools() + build_browser_tools() + build_vision_tools()
 
 
 # ---------------------------------------------------------------------------

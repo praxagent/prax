@@ -22,6 +22,47 @@ def _get_user_id() -> str:
     return uid
 
 
+def _validate_syntax(filename: str, content: str) -> str | None:
+    """Check content syntax based on filename extension.
+
+    Returns None when valid or when the extension is not one we validate;
+    returns an error message when syntax is broken. Agent-facing writes
+    are gated on this so a syntactically broken edit never reaches disk.
+    """
+    ext = os.path.splitext(filename)[1].lower()
+    try:
+        if ext == ".py":
+            import ast
+            try:
+                ast.parse(content, filename=filename)
+            except SyntaxError as e:
+                return f"Python syntax error at line {e.lineno}: {e.msg}"
+        elif ext == ".json":
+            try:
+                json.loads(content)
+            except json.JSONDecodeError as e:
+                return f"JSON decode error at line {e.lineno}, col {e.colno}: {e.msg}"
+        elif ext in (".yaml", ".yml"):
+            import yaml
+            try:
+                yaml.safe_load(content)
+            except yaml.YAMLError as e:
+                return f"YAML parse error: {e}"
+        elif ext == ".toml":
+            try:
+                import tomllib
+            except ImportError:
+                return None
+            try:
+                tomllib.loads(content)
+            except tomllib.TOMLDecodeError as e:
+                return f"TOML decode error: {e}"
+    except Exception as e:
+        _ws_logger.debug("Syntax validator error for %s: %s", filename, e)
+        return None
+    return None
+
+
 def _auto_advance_plan_step() -> None:
     """Mark the next incomplete plan step as done after a workspace write.
 
@@ -77,8 +118,19 @@ def user_notes_read() -> str:
 
 @tool
 def workspace_save(filename: str, content: str) -> str:
-    """Save a file to the active workspace. Use for markdown notes, extracted content, etc."""
+    """Save a file to the active workspace. Use for markdown notes, extracted content, etc.
+
+    Files with recognised syntax (.py, .json, .yaml/.yml, .toml) are
+    syntax-checked before writing. A syntactically broken file is
+    rejected and the file on disk is not modified.
+    """
     try:
+        syntax_err = _validate_syntax(filename, content)
+        if syntax_err:
+            return (
+                f"Rejected save of {filename}: {syntax_err}. "
+                "The file on disk was not modified. Fix the syntax error and retry."
+            )
         uid = _get_user_id()
         workspace_service.save_file(uid, filename, content)
 
@@ -175,6 +227,13 @@ def workspace_patch(filename: str, old_text: str, new_text: str) -> str:
         if count > 1:
             return f"old_text appears {count} times in {filename}. Provide more context to make it unique."
         patched = content.replace(old_text, new_text, 1)
+        syntax_err = _validate_syntax(filename, patched)
+        if syntax_err:
+            return (
+                f"Rejected patch of {filename}: {syntax_err}. "
+                "The patched content would have broken syntax. "
+                "Review old_text/new_text and retry. File on disk unchanged."
+            )
         workspace_service.save_file(_get_user_id(), filename, patched)
         return f"Patched {filename}: replaced {len(old_text)} chars with {len(new_text)} chars."
     except FileNotFoundError:
@@ -482,14 +541,27 @@ def reread_instructions() -> str:
 
 
 @tool
-def todo_add(task: str) -> str:
+def todo_add(task: str, assignee: str = "user") -> str:
     """Add an item to the user's personal to-do list.
 
     Call this when the user says things like "add X to my to-do list",
     "remind me to X" (if it's a task, not a timed reminder), or "I need to X".
+
+    Args:
+        task: The task description.
+        assignee: "user" (default — human handles it) or "prax" — Prax
+            will pick it up automatically when the background task
+            runner is enabled.  Set to "prax" ONLY when the user asks
+            you to do the task yourself in the background (phrases like
+            "can you handle this for me", "pick this up later", "add
+            this to your queue").  Otherwise leave as "user".
     """
-    entry = workspace_service.add_todo(_get_user_id(), task)
-    return f"Added #{entry['id']}: {entry['task']}"
+    assignee = (assignee or "user").strip().lower() or "user"
+    if assignee not in ("user", "prax"):
+        assignee = "user"
+    entry = workspace_service.add_todo(_get_user_id(), task, assignee=assignee)
+    suffix = f" (assigned to {assignee})" if assignee == "prax" else ""
+    return f"Added #{entry['id']}: {entry['task']}{suffix}"
 
 
 @tool
@@ -532,6 +604,75 @@ def todo_remove(item_ids: list[int]) -> str:
     if "error" in result:
         return result["error"]
     return f"Removed. {result['remaining']} items remaining."
+
+
+@tool
+def progress_read(space_slug: str) -> str:
+    """Read the rolling session progress log for a Library space.
+
+    Call this at the START of working on a space when the context doesn't
+    already make clear what was done last time. Returns a bounded
+    (<=6000 chars) file with three sections: an Archive paragraph
+    summarising older work, the last ~10 session outcomes, and any
+    Open threads the previous session left for you.
+
+    This is the single source of truth for "where did we leave off?" —
+    do NOT try to infer state from the space's notes or code alone.
+    """
+    try:
+        from prax.services import progress_service
+        return progress_service.read_progress(_get_user_id(), space_slug)
+    except Exception as e:
+        return f"Failed to read progress for {space_slug}: {e}"
+
+
+@tool
+def progress_append(
+    space_slug: str,
+    outcome: str,
+    open_threads: list[str] | None = None,
+    detail: str = "",
+) -> str:
+    """Log the end-of-session outcome for work done in a Library space.
+
+    Call this at most ONCE per turn, at the END of a session that made
+    meaningful progress on the space. `outcome` is a one-line summary
+    (e.g. "shipped the login form; 3 tests failing on password reset").
+    `open_threads` overwrites the list of things the next session
+    should pick up first — pass a complete list (or empty to clear).
+    `detail` (optional) is stashed to a per-session detail file for
+    later retrieval via progress_detail; do NOT repeat it in `outcome`.
+
+    The file is bounded by construction: old entries are auto-compacted
+    into an Archive paragraph when the file grows past the cap. Don't
+    worry about polluting context — it cannot.
+    """
+    try:
+        from prax.services import progress_service
+        return progress_service.append_progress(
+            _get_user_id(),
+            space_slug,
+            outcome=outcome,
+            open_threads=open_threads,
+            detail=detail or None,
+        )
+    except Exception as e:
+        return f"Failed to append progress to {space_slug}: {e}"
+
+
+@tool
+def progress_detail(space_slug: str, date: str) -> str:
+    """Read the per-session detail file(s) for a given date in a space.
+
+    `date` must be YYYY-MM-DD. Use this only when the one-line outcome
+    in progress_read is not enough and you need the fuller notes from
+    that session. Not auto-loaded — progressive disclosure.
+    """
+    try:
+        from prax.services import progress_service
+        return progress_service.read_session_detail(_get_user_id(), space_slug, date)
+    except Exception as e:
+        return f"Failed to read session detail: {e}"
 
 
 @tool
@@ -998,8 +1139,11 @@ def build_workspace_tools():
         user_notes_update, user_notes_read,
         # Planning — the orchestrator manages its own plan
         agent_plan, agent_step_done, agent_plan_status, agent_plan_clear,
-        # Todo — lightweight, frequently called inline
-        todo_add, todo_list, todo_complete, todo_remove,
+        # Per-space session progress — survives context-window boundary
+        progress_read, progress_append, progress_detail,
+        # (Todo tools moved to the tasks spoke — delegate_tasks.  The
+        # orchestrator no longer carries them inline; this keeps its
+        # tool count under Anthropic's ~50-tool accuracy threshold.)
         # Conversation awareness
         conversation_history, conversation_search,
         # Meta / reasoning
@@ -1010,5 +1154,12 @@ def build_workspace_tools():
         # Self-reflection — review own traces for improvement
         review_my_traces,
     ]
+
+    # Trace introspection — semantic lookup of past traces + detail fetch.
+    # Loaded here rather than in a spoke because they're called by the
+    # orchestrator at the start of complex turns ("have I done this
+    # before?"), not domain-scoped work.
+    from prax.agent.trace_tools import trace_detail, trace_search
+    tools.extend([trace_search, trace_detail])
 
     return tools
