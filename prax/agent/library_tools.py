@@ -597,6 +597,8 @@ def library_create_learning_space(
     description: str = "",
     target_date: str = "",
     notebook_name: str = "Lessons",
+    target_space: str = "",
+    expand: bool = True,
 ) -> str:
     """Create a learning space — a Library space with a sequenced notebook.
 
@@ -605,6 +607,13 @@ def library_create_learning_space(
     ordered learning effort.  The result is a normal Library space
     with ``kind="learning"`` that works with all the standard library
     tools (notes, tasks, refine, wikilinks, graph view, etc.).
+
+    **If the user is already inside a space** (i.e., the trigger
+    contained a ``[SPACE CONTEXT — you are chatting inside the "X"
+    space]`` banner, or they said "here" / "in this space" / "this
+    space"), you MUST pass that slug as ``target_space`` so the
+    course is added inside the user's current space rather than
+    being dumped into a brand-new one.
 
     **After creating the space, suggest to the user that you add 3–5
     practice tasks to the space's Kanban board** (via
@@ -625,6 +634,16 @@ def library_create_learning_space(
         notebook_name: Name of the sequenced notebook.  Defaults to
             ``"Lessons"``.  Use ``"Modules"`` or ``"Chapters"`` if that
             fits better.
+        target_space: Slug of an existing space to add the sequenced
+            notebook + lessons into, instead of creating a new space.
+            Required when the user is already inside a space.
+        expand: If true (default), each lesson body is drafted by an
+            LLM in a background thread pool right after the space is
+            created.  Lessons appear as drafting placeholders and are
+            replaced with real ~250–450 word bodies over the next
+            ~30–90 seconds (depending on lesson count).  Set false to
+            create stubs only — useful when the caller wants to write
+            lesson bodies itself.
     """
     module_list: list[dict] = []
     if modules:
@@ -641,18 +660,31 @@ def library_create_learning_space(
         description=description,
         target_date=target_date or None,
         notebook_name=notebook_name,
+        target_space=target_space,
+        expand=expand,
     )
     if "error" in result:
         return result["error"]
     lessons_created = len(result.get("lessons", []))
     space_slug = result["project"]["slug"]
     notebook_slug = result["notebook"]["slug"]
+    drafting = result.get("expanding")
+    if drafting:
+        tail = (
+            f"Drafting {lessons_created} lesson body/bodies in the background — "
+            "they will populate over the next ~30–90 seconds. The user can "
+            "refresh the lesson view to see them appear. Surface this honestly: "
+            "the lessons are NOT yet written, they are being drafted."
+        )
+    else:
+        tail = (
+            "Lessons are stubs (expand=false). Use library_note_mark to mark "
+            "lessons done as you complete them, or library_note_update to flesh them out."
+        )
     return (
         f"Created learning space **{result['project']['name']}** "
         f"(`{space_slug}`) with sequenced notebook `{notebook_slug}` "
-        f"and {lessons_created} lesson(s).\n"
-        f"Use library_note_mark to mark lessons done as you complete them, "
-        f"or library_note_update to flesh them out."
+        f"and {lessons_created} lesson(s).\n{tail}"
     )
 
 

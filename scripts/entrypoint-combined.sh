@@ -5,7 +5,10 @@ set -e
 mkdir -p /data/qdrant /data/neo4j /data/teamwork /app/logs
 
 # ── Start Qdrant in background ───────────────────────────────────────
-qdrant --storage-path /data/qdrant --http-port 6333 --grpc-port 6334 &
+QDRANT__STORAGE__STORAGE_PATH=/data/qdrant \
+QDRANT__SERVICE__HTTP_PORT=6333 \
+QDRANT__SERVICE__GRPC_PORT=6334 \
+qdrant &
 echo "[prax] Qdrant starting on :6333"
 
 # ── Start Neo4j in background ────────────────────────────────────────
@@ -20,7 +23,7 @@ $NEO4J_HOME/bin/neo4j console &
 echo "[prax] Neo4j starting on :7474/:7687"
 
 # ── Start TeamWork in background ─────────────────────────────────────
-DATABASE_URL="sqlite+aiosqlite:///data/teamwork/vteam.db" \
+DATABASE_URL="sqlite+aiosqlite:////data/teamwork/vteam.db" \
 WORKSPACE_PATH=/app/workspaces \
 EXTERNAL_API_KEY="${TEAMWORK_API_KEY:-}" \
 SANDBOX_CONTAINER="${SANDBOX_CONTAINER:-prax-sandbox-1}" \

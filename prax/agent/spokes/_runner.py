@@ -132,6 +132,12 @@ def run_spoke(
         trace_id=span.trace_id,
         live_agent_name=role_name,
     )
+    _cbs: list = [_graph_cb]
+    try:
+        from prax.observability.callbacks import get_otel_callbacks
+        _cbs.extend(get_otel_callbacks())
+    except Exception:
+        pass
 
     # Resolve the spoke's context limit from its model
     spoke_model = cfg.get("model") or ""
@@ -164,7 +170,7 @@ def run_spoke(
             try:
                 result = graph.invoke(
                     {"messages": messages},
-                    config={"recursion_limit": effective_limit, "callbacks": [_graph_cb]},
+                    config={"recursion_limit": effective_limit, "callbacks": _cbs},
                 )
                 break
             except Exception as invoke_exc:

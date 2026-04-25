@@ -126,6 +126,24 @@ XFWM
     echo "Desktop + noVNC available at http://0.0.0.0:6080/vnc.html"
   fi
 
+  # ── Prax Tab Cast extension ──
+  # Rewrite the placeholder signaling host in the bundled extension so
+  # it points at TeamWork inside the compose network.  Defaults to the
+  # compose service name `prax:8000` — override with PRAX_CAST_SIGNALING_HOST.
+  CAST_HOST="${PRAX_CAST_SIGNALING_HOST:-prax:8000}"
+  if [ -f /opt/prax-cast-ext/offscreen.js ]; then
+    sed -i "s|__PRAX_CAST_SIGNALING_HOST__|${CAST_HOST}|g" /opt/prax-cast-ext/offscreen.js
+  fi
+
+  # Chromium caches the compiled service worker script for unpacked
+  # extensions.  When the extension source changes on disk (i.e. we
+  # rebuild the sandbox image), Chrome keeps using the stale cached
+  # script, which leaves the offscreen document in a broken "partial"
+  # extension context (missing chrome.tabCapture, chrome.tabs, etc.).
+  # Wipe only the SW scratch state — cookies, storage, profile prefs
+  # in $PROFILE_DIR/Default all stay intact.
+  rm -rf "$PROFILE_DIR/Default/Service Worker" 2>/dev/null || true
+
   # Single Chrome — non-headless (visible on desktop) + CDP enabled
   # (accessible from the Browser tab).  Both views see the same browser.
   chromium-browser \
@@ -135,6 +153,8 @@ XFWM
     --disable-blink-features=AutomationControlled \
     --disable-popup-blocking \
     --disable-features=BlockThirdPartyCookies \
+    --load-extension=/opt/prax-cast-ext \
+    --remote-allow-origins=* \
     --user-agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36" \
     --remote-debugging-port=9222 \
     --user-data-dir="$PROFILE_DIR" \

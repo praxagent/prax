@@ -20,7 +20,7 @@ from prax.agent.action_policy import (
 def test_known_tools_classified():
     assert get_risk_level("sandbox_execute") is RiskLevel.MEDIUM
     assert get_risk_level("workspace_send_file") is RiskLevel.MEDIUM
-    assert get_risk_level("browser_open") is RiskLevel.MEDIUM
+    assert get_risk_level("browser_navigate") is RiskLevel.MEDIUM
     assert get_risk_level("arxiv_search") is RiskLevel.MEDIUM
     assert get_risk_level("note_create") is RiskLevel.MEDIUM
     # LOW tools are anything not explicitly mapped — but let's verify
@@ -43,7 +43,7 @@ def test_high_risk_requires_confirmation():
 def test_low_risk_no_confirmation():
     # LOW-risk tools are not in the map, so they get MEDIUM by default.
     # Explicitly test a MEDIUM tool — it should NOT require confirmation.
-    assert requires_confirmation("browser_open") is False
+    assert requires_confirmation("browser_navigate") is False
     assert requires_confirmation("arxiv_search") is False
     # Unknown tools default to MEDIUM, so no confirmation either.
     assert requires_confirmation("workspace_read") is False

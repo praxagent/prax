@@ -122,7 +122,7 @@ Automates web interactions via Playwright with persistent profiles and credentia
 
 ```mermaid
 graph LR
-    Browser["🌐 Browser Agent"] --> open["browser_open"]
+    Browser["🌐 Browser Agent"] --> open["browser_navigate"]
     Browser --> read["browser_read_page"]
     Browser --> shot["browser_screenshot"]
     Browser --> click["browser_click"]

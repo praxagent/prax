@@ -45,7 +45,7 @@ typing into focused fields.  CDP is faster because it sends raw WebSocket
 commands with no abstraction overhead.
 
 ### Reliable path — Playwright tools (use when CDP isn't enough)
-- **browser_open** — navigate with auto-wait + JS rendering + login wall detection
+- **browser_navigate** — navigate the shared Chrome with auto-wait + JS rendering + login wall detection (drives the same tab the user is watching when BROWSER_CDP_URL is set)
 - **browser_fill** — reliable form filling (handles focus, clear, type)
 - **browser_click** — click by CSS selector with auto-wait
 - **browser_find** — query elements by CSS selector
@@ -57,7 +57,7 @@ commands with no abstraction overhead.
   of X" requests: navigates to a URL, takes a screenshot, and delivers it
   to the user's current channel in one call.  Use this whenever the user
   asks for a screenshot of a specific URL instead of chaining
-  browser_open → browser_screenshot → workspace_send_file manually.
+  browser_navigate → browser_screenshot → workspace_send_file manually.
 - **browser_read_page** — full page text content
 
 Use Playwright for: login flows, form filling, waiting for elements to appear,
@@ -78,7 +78,7 @@ interactions where reliability matters more than speed.
 1. **Read first.** Before acting, use ``sandbox_browser_read("text")`` or
    ``sandbox_browser_read("url")`` to understand what's currently on screen.
 2. **Navigate with CDP** by default: ``sandbox_browser_act("navigate", url)``.
-   Fall back to ``browser_open`` if the page needs JS rendering or login detection.
+   Fall back to ``browser_navigate`` if the page needs JS rendering or login detection.
 3. **Click by visible text** when possible: ``sandbox_browser_act("click", "Sign in")``.
    Fall back to Playwright's ``browser_click`` for CSS/XPath selectors with auto-wait.
 4. **Login walls:** If you detect a login page, check ``browser_credentials`` first.
@@ -94,7 +94,7 @@ interactions where reliability matters more than speed.
 - If you take a screenshot, include the file path so the orchestrator can share it.
 - **Pace yourself.** Some sites (Hacker News, Reddit, etc.) rate-limit rapid requests.
   If a page returns an error or "Sorry" message, wait a moment and retry with
-  ``browser_open`` (Playwright) instead of CDP — it waits for full page load.
+  ``browser_navigate`` (Playwright) instead of CDP — it waits for full page load.
   Don't rapid-fire multiple navigations back-to-back without reading results first.
 """
 

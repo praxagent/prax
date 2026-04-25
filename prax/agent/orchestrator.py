@@ -571,10 +571,21 @@ class ConversationAgent:
 
         # Start a checkpointed turn for this user.
         turn = self.checkpoint_mgr.start_turn(uid or "anonymous")
+        # OTel/Prometheus callbacks: attach at the invocation level (not just
+        # on the LLM instance) so both LLM and tool events dispatch through
+        # LangChain's CallbackManager for the full chain.  Attaching them
+        # only via ``ChatModel(callbacks=...)`` at LLM construction misses
+        # tool-level events and can be skipped by LangGraph's runnable.
+        _cbs: list = [_graph_cb]
+        try:
+            from prax.observability.callbacks import get_otel_callbacks
+            _cbs.extend(get_otel_callbacks())
+        except Exception:
+            pass
         config = {
             **self.checkpoint_mgr.graph_config(turn),
             "recursion_limit": effective_limit,
-            "callbacks": [_graph_cb],
+            "callbacks": _cbs,
         }
 
         # Set Prax to working status so the UI shows him active.

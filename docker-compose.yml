@@ -30,7 +30,7 @@ services:
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
       # OTel exporter — sends traces to Tempo when observability is enabled.
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4318
-      - GRAFANA_URL=${GRAFANA_URL:-http://localhost:3001}
+      - GRAFANA_URL=${GRAFANA_URL:-http://localhost:3002}
     # Grant Docker socket access for sandbox exec.
     # GID 0 = root group, which owns the socket on macOS Docker Desktop.
     group_add: ["0"]
@@ -39,10 +39,10 @@ services:
       - ./conversations.db:/app/conversations.db
       - ./static:/app/static
       - ./logs:/app/logs
-      # Persistent data for embedded services.
-      - ${WORKSPACE_DIR:-../workspaces}/.qdrant:/data/qdrant
-      - ${WORKSPACE_DIR:-../workspaces}/.neo4j:/data/neo4j
-      - ${WORKSPACE_DIR:-../workspaces}/.teamwork:/data/teamwork
+      # Persistent data for embedded services — scoped per-user.
+      - ${WORKSPACE_DIR:-../workspaces}/${PRAX_USER_ID}/.services/qdrant:/data/qdrant
+      - ${WORKSPACE_DIR:-../workspaces}/${PRAX_USER_ID}/.services/neo4j:/data/neo4j
+      - ${WORKSPACE_DIR:-../workspaces}/${PRAX_USER_ID}/.services/teamwork:/data/teamwork
       # Docker socket — required for sandbox exec.
       # SECURITY: grants host Docker access — use only in trusted environments.
       - /var/run/docker.sock:/var/run/docker.sock
@@ -179,7 +179,11 @@ services:
       - "9090:9090"
 
   # Grafana — unified dashboards (traces + logs + metrics)
-  # Port 3001 since TeamWork already uses 3000.
+  # Bound to host port 3002 so it doesn't conflict with `tailscale serve
+  # --https=3001`, which binds :3001 on the tailnet interface for remote
+  # HTTPS access.  Laptop users hit https://<host>.ts.net:3001/ (served
+  # by tailscaled and proxied to localhost:3002); local-only users hit
+  # http://localhost:3002 directly.
   grafana:
     image: grafana/grafana:11.5.2
     profiles: ["observability"]
@@ -192,7 +196,7 @@ services:
       - ./observability/grafana/provisioning:/etc/grafana/provisioning
       - grafana-data:/var/lib/grafana
     ports:
-      - "3001:3000"
+      - "3002:3000"
     depends_on:
       - tempo
       - loki

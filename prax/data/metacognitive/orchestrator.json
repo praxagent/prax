@@ -5,7 +5,7 @@
       "pattern_id": "graph_CalledProcessError",
       "description": "Graph invocation failed: CalledProcessError: Command '['git', 'commit', '-m', 'Step 3 done: Present the plan concisely to ']'",
       "category": "",
-      "confidence": 0.4078894281377949,
+      "confidence": 0.16736857743108963,
       "occurrences": 1,
       "last_seen": 1775581018.1893287,
       "compensating_instruction": "Previous runs hit CalledProcessError \u2014 verify tool args before calling."
@@ -14,7 +14,7 @@
       "pattern_id": "graph_DDGSException",
       "description": "Graph invocation failed: DDGSException: ConnectError: ConnectError('error sending request for url (https://leta.mullvad.",
       "category": "",
-      "confidence": 0.65,
+      "confidence": 0.2953085374373749,
       "occurrences": 2,
       "last_seen": 1775752570.775745,
       "compensating_instruction": "Previous runs hit DDGSException \u2014 verify tool args before calling."
@@ -23,10 +23,19 @@
       "pattern_id": "graph_BadRequestError",
       "description": "Graph invocation failed: BadRequestError: Error code: 400 - {'error': {'message': \"An assistant message with 'tool_calls' ",
       "category": "",
-      "confidence": 0.65,
+      "confidence": 0.29530863923469775,
       "occurrences": 2,
       "last_seen": 1775752571.356395,
       "compensating_instruction": "Previous runs hit BadRequestError \u2014 verify tool args before calling."
+    },
+    "graph_RuntimeError": {
+      "pattern_id": "graph_RuntimeError",
+      "description": "Graph invocation failed: RuntimeError: cannot schedule new futures after shutdown",
+      "category": "",
+      "confidence": 0.5,
+      "occurrences": 1,
+      "last_seen": 1777081523.8928776,
+      "compensating_instruction": "Previous runs hit RuntimeError \u2014 verify tool args before calling."
     }
   }
 }

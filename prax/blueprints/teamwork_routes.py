@@ -981,8 +981,8 @@ def library_space_chat(space: str):
             context_parts.append("Tasks: none yet.")
         context_parts.append(
             "TOOL ROUTING: To operate on this space, use "
-            "delegate_knowledge and include the space slug in your "
-            "task description. Examples:\n"
+            "delegate_knowledge and ALWAYS include the space slug "
+            f'`{space}` in your task description. Examples:\n'
             f'  - Add a task: delegate_knowledge("Add a task titled '
             f"'Practice verbs' to the Kanban in space {space}\")\n"
             f'  - Create a notebook: delegate_knowledge("Create a '
@@ -991,10 +991,18 @@ def library_space_chat(space: str):
             f'space {space}")\n'
             f'  - Update a note: delegate_knowledge("Update note X in '
             f"space {space}\")\n"
+            f'  - Build a course/learning sequence: delegate_knowledge('
+            f'"Create a learning course with modules X, Y, Z INSIDE '
+            f'the existing space {space} — pass target_space=\'{space}\' '
+            f'to library_create_learning_space so it is added to this '
+            f'space, NOT a brand-new one")\n'
             "Do NOT ask the user which space — you're already in it. "
-            "Do NOT say 'project' — say 'space'. The knowledge spoke "
-            "has all library tools: library_task_add, library_note_create, "
-            "library_notebook_create, library_tasks_list, etc.]"
+            "Do NOT create a new space unless the user explicitly "
+            "asks for one. Do NOT say 'project' — say 'space'. The "
+            "knowledge spoke has all library tools: library_task_add, "
+            "library_note_create, library_notebook_create, "
+            "library_create_learning_space (pass target_space for "
+            f"in-place courses), library_tasks_list, etc.]"
         )
         context = "\n".join(context_parts) + "\n\n"
 

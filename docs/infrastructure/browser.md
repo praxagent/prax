@@ -103,7 +103,7 @@ sequenceDiagram
     participant YAML as sites.yaml
 
     U->>A: "What does this tweet say? https://x.com/user/status/123"
-    A->>BW: browser_open(user_id, "https://x.com/user/status/123")
+    A->>BW: browser_navigate(user_id, "https://x.com/user/status/123")
     BW->>PW: page.goto(url)
     PW-->>BW: Page loaded (login wall)
     BW-->>A: {content: "Log in to X..."}
@@ -120,7 +120,7 @@ sequenceDiagram
     BW->>PW: page.click("button[type=submit]")
     PW-->>BW: Logged in
 
-    A->>BW: browser_open(user_id, "https://x.com/user/status/123")
+    A->>BW: browser_navigate(user_id, "https://x.com/user/status/123")
     BW->>PW: page.goto(url)
     PW-->>BW: Full tweet content
     BW-->>A: {title: "X", content: "The tweet says..."}
@@ -144,7 +144,7 @@ sequenceDiagram
     participant Disk as Profile Dir
 
     U->>A: "Read this tweet" (sends x.com link)
-    A->>BW: browser_open(url)
+    A->>BW: browser_navigate(url)
     BW-->>A: {login_required: true, login_hint: "..."}
 
     A->>U: "x.com needs login. I'll open a browser for you."
@@ -166,7 +166,7 @@ sequenceDiagram
     BW-->>A: {status: "login_saved"}
 
     A->>U: "Login saved! Let me read that tweet now."
-    A->>BW: browser_open(url)
+    A->>BW: browser_navigate(url)
     BW->>PW: launch_persistent_context(profile_dir, headless=True)
     Note over PW: Reuses saved cookies — no login wall
     PW-->>BW: Full tweet content
@@ -224,7 +224,7 @@ The `aliases` field lets the agent match `twitter.com` URLs to `x.com` credentia
 
 | Tool | What It Does |
 |------|-------------|
-| `browser_open` | Navigate to a URL, wait for JS to render, return page text (detects login walls) |
+| `browser_navigate` | Navigate to a URL, wait for JS to render, return page text (detects login walls) |
 | `browser_read_page` | Get the current page's text content |
 | `browser_screenshot` | Take a PNG screenshot of the current page |
 | `browser_click` | Click an element by CSS selector |

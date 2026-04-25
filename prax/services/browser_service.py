@@ -76,6 +76,55 @@ _SUPPRESS_AUTOMATION_ARGS = [
 ]
 
 
+def _resolve_cdp_ws_url(cdp_url: str) -> str | None:
+    """Fetch Chrome's browser-level WebSocket URL from /json/version.
+
+    Chrome rejects DevTools HTTP requests whose ``Host`` header isn't a
+    loopback address (DNS-rebinding protection), so Playwright's default
+    discovery fails with HTTP 500 when ``cdp_url`` is a hostname like
+    ``http://sandbox:9223``.  Override the header to ``127.0.0.1`` to
+    get the ``webSocketDebuggerUrl``, then rewrite its host back so the
+    connection actually targets the sandbox.
+    """
+    # WS URLs bypass discovery entirely — pass through.
+    if cdp_url.startswith(("ws://", "wss://")):
+        return cdp_url
+
+    import re
+    from urllib.parse import urlparse, urlunparse
+
+    import httpx
+
+    parsed = urlparse(cdp_url)
+    host = parsed.hostname
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    if not host:
+        return None
+
+    try:
+        with httpx.Client(timeout=3) as client:
+            resp = client.get(
+                f"{cdp_url.rstrip('/')}/json/version",
+                headers={"Host": f"127.0.0.1:{port}"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as exc:
+        logger.warning("CDP /json/version lookup failed at %s: %s", cdp_url, exc)
+        return None
+
+    ws_url = data.get("webSocketDebuggerUrl")
+    if not ws_url:
+        logger.warning("CDP /json/version returned no webSocketDebuggerUrl: %s", data)
+        return None
+
+    # Chrome reports the URL with a loopback host (since that's what we
+    # asked for with the Host override).  Rewrite it back to the real
+    # hostname so the WebSocket actually connects to the sandbox.
+    ws_parsed = urlparse(ws_url)
+    return urlunparse(ws_parsed._replace(netloc=f"{host}:{port}"))
+
+
 def _human_delay(page: Any, action: str) -> None:
     """Pause for a random human-like interval before/after an action."""
     lo, hi = _TIMING.get(action, (0.3, 1.0))
@@ -139,13 +188,24 @@ class BrowserSession:
 
         Returns True on success. On failure, logs and returns False so the
         caller can fall back to launching a standalone browser.
+
+        Chrome's DevTools HTTP endpoint rejects requests whose ``Host`` header
+        isn't a loopback address (DNS-rebinding protection), so Playwright's
+        default ``connect_over_cdp("http://sandbox:9223")`` gets a 500 back
+        from ``/json/version``.  We resolve the browser WebSocket URL
+        ourselves with a ``Host: 127.0.0.1`` override, then pass the raw WS
+        URL to Playwright — which skips HTTP discovery entirely.
         """
         cdp_url = settings.browser_cdp_url
         if not cdp_url:
             return False
 
+        ws_url = _resolve_cdp_ws_url(cdp_url)
+        if not ws_url:
+            return False
+
         try:
-            self._browser = self._pw.chromium.connect_over_cdp(cdp_url)
+            self._browser = self._pw.chromium.connect_over_cdp(ws_url)
             self._cdp = True
 
             # Use the browser's default context (the sandbox Chrome's context).

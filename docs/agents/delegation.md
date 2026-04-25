@@ -112,7 +112,7 @@ graph LR
     Prax[Orchestrator] -->|"delegate_browser('read this tweet')"| BA[Browser Agent]
 
     BA -->|Fast path| CDP[sandbox_browser_read<br/>sandbox_browser_act]
-    BA -->|Reliable path| PW[browser_open<br/>browser_fill<br/>browser_click<br/>...]
+    BA -->|Reliable path| PW[browser_navigate<br/>browser_fill<br/>browser_click<br/>...]
     BA -->|Login flow| Login[browser_credentials<br/>browser_login<br/>browser_request_login]
 
     CDP --> Chrome[Sandbox Chrome<br/>shared with TeamWork]

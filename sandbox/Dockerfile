@@ -26,6 +26,17 @@ RUN apt-get update -qq \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/chromium /usr/bin/chromium-browser
 
+# Debian's /etc/chromium.d/extensions injects --load-extension= with an
+# empty value (the `ls -dm /usr/share/chromium/extensions/*` glob expands
+# to nothing on a fresh install).  In Chromium 147 that empty flag runs
+# before our own --load-extension=/opt/prax-cast-ext and prevents the
+# MV3 service worker from registering — the offscreen document loads
+# but background.js never runs, so chrome.runtime.sendMessage fails with
+# "Receiving end does not exist".  Keep --enable-remote-extensions,
+# drop the broken load-extension injection.
+RUN echo 'export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --enable-remote-extensions"' \
+      > /etc/chromium.d/extensions
+
 # ── code-server (web-based VS Code, works on amd64 + arm64) ──
 RUN curl -fsSL https://code-server.dev/install.sh | sh
 
@@ -44,6 +55,7 @@ COPY opencode.json /opt/opencode.json
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY tmux-shell.sh /usr/local/bin/tmux-shell.sh
 COPY clipboard-bridge.py /usr/local/bin/clipboard-bridge.py
+COPY cast-ext/ /opt/prax-cast-ext/
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/tmux-shell.sh
 
 # Set tmux-shell as the default shell so terminal WebSocket connections

@@ -73,6 +73,10 @@ def create_app():
 
     logging.getLogger("werkzeug").addFilter(_HealthFilter())
 
+    # Quiet third-party INFO chatter that fires on tight polling loops.
+    for noisy in ("httpx", "httpcore"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
     logger = logging.getLogger(__name__)
     logger.info(
         "Starting %s — provider=%s default_model=%s temperature=%s encoding=%s",
