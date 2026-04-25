@@ -111,7 +111,7 @@ SCENARIOS: list[Scenario] = [
     Scenario("browser_hn",
              "Read the latest post on hackernews",
              "browser"),
-    Scenario("browser_open",
+    Scenario("browser_navigate",
              "Open https://example.com and tell me what you see",
              "browser"),
 

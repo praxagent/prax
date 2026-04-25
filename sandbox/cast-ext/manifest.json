@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "Prax Tab Cast",
+  "version": "1.0.0",
+  "description": "Captures the active Chrome tab's audio+video and streams it to TeamWork's BrowserPanel for remote viewing.",
+  "permissions": ["tabCapture", "offscreen", "tabs", "activeTab"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Prax Tab Cast — start/stop casting current tab"
+  },
+  "commands": {
+    "toggle-cast": {
+      "suggested_key": { "default": "Ctrl+Shift+K" },
+      "description": "Toggle audio+video capture of the current tab"
+    }
+  }
+}

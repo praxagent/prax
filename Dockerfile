@@ -63,9 +63,9 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && sed -i 's/rights="none" pattern="PDF"/rights="read|write" pattern="PDF"/' /etc/ImageMagick-6/policy.xml 2>/dev/null || true
 
-# ── 2. Java 17 headless (for Neo4j) ─────────────────────────────────
+# ── 2. Java 21 headless (for Neo4j) ─────────────────────────────────
 RUN apt-get update -qq \
-    && apt-get install -y --no-install-recommends openjdk-17-jre-headless \
+    && apt-get install -y --no-install-recommends openjdk-21-jdk-headless \
     && rm -rf /var/lib/apt/lists/*
 
 # ── 3. Neo4j Community 5.x ──────────────────────────────────────────
@@ -93,7 +93,7 @@ RUN QDRANT_ARCH="" \
 RUN NGROK_ARCH="" \
     && if [ "$TARGETARCH" = "arm64" ]; then NGROK_ARCH="arm64"; \
        else NGROK_ARCH="amd64"; fi \
-    && curl -sSL "https://ngrok-agent.s3.amazonaws.com/ngrok-v3-stable-linux-${NGROK_ARCH}.tgz" \
+    && curl -fsSL "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-${NGROK_ARCH}.tgz" \
        | tar xz -C /usr/local/bin
 
 # ── 6. uv ───────────────────────────────────────────────────────────

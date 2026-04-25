@@ -163,6 +163,12 @@ def _run_subagent(task: str, category: str) -> str:
         graph=span.ctx.graph,
         trace_id=span.trace_id,
     )
+    _cbs: list = [_graph_cb]
+    try:
+        from prax.observability.callbacks import get_otel_callbacks
+        _cbs.extend(get_otel_callbacks())
+    except Exception:
+        pass
 
     try:
         result = subgraph.invoke(
@@ -172,7 +178,7 @@ def _run_subagent(task: str, category: str) -> str:
             ]},
             config={
                 "recursion_limit": get_recursion_limit(30),
-                "callbacks": [_graph_cb],
+                "callbacks": _cbs,
             },
         )
     except Exception as exc:

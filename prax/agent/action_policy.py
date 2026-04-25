@@ -125,7 +125,7 @@ _MEDIUM: set[str] = {
     # outbound file delivery — user asked for it, don't gate it
     "workspace_send_file",
     # external reads
-    "browser_open",
+    "browser_navigate",
     "browser_read_page",
     "browser_screenshot",
     "browser_page_screenshot",

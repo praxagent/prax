@@ -68,9 +68,11 @@ docker compose -f docker-compose.lite.yml up --build
 docker compose up --build
 ```
 
-**8+ containers.** Each service runs independently — mirrors a production/k8s deployment. Better for debugging, scaling, and when you have RAM to spare.
+**2 containers by default** (`prax` + `sandbox`). Uses the full `Dockerfile` (JDK 21, glibc Qdrant binary) — more memory headroom for Neo4j's JVM and faster GC, suited to servers. Same bundled layout as lite: Prax + TeamWork + Qdrant + Neo4j + ngrok all run inside the `prax` container. Opt-in profiles add services alongside: `--profile local-llm` starts Ollama, `--profile observability` starts Grafana + Tempo + Prometheus + Loki (see below).
 
-Both modes expose the same UI at **http://localhost:3000** and use the same sandbox image. The full mode additionally exposes individual service ports (Qdrant 6333, Neo4j 7474, etc.) for direct access.
+Both modes expose the same UI at **http://localhost:3000** and publish the same host ports (3000, 5001, 8000, 4040). Qdrant and Neo4j run inside the `prax` container and are not published to the host by default — if you want direct access, add a `ports:` entry (`6333:6333`, `7474:7474`) to `docker-compose.yml` or use `docker compose exec prax ...`.
+
+> **Older Ubuntu?** If `docker compose up` fails with `the classic builder doesn't support additional contexts, set DOCKER_BUILDKIT=1 to use BuildKit`, install the buildx plugin: `sudo apt install docker-buildx`. BuildKit then becomes the default and the build proceeds. As a one-shot alternative, prefix the command: `DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1 docker compose up --build`.
 
 #### With observability (Grafana + Tempo + Prometheus + Loki)
 
@@ -82,7 +84,7 @@ This adds the full observability suite alongside the core services:
 
 | Service | Port | Purpose |
 |---------|------|---------|
-| **Grafana** | [localhost:3001](http://localhost:3001) | Dashboards — traces, logs, metrics (login: admin / prax) |
+| **Grafana** | [localhost:3002](http://localhost:3002) | Dashboards — traces, logs, metrics (login: admin / prax) |
 | **Tempo** | 4318 | Distributed tracing backend (receives OTLP spans from Prax) |
 | **Prometheus** | [localhost:9090](http://localhost:9090) | Metrics scraping and storage |
 | **Loki** | 3100 | Log aggregation (fed by Promtail) |
@@ -94,13 +96,15 @@ Grafana comes pre-provisioned with Tempo, Loki, and Prometheus datasources plus 
 
 #### Memory, Ollama, and core services
 
-Memory infrastructure (Qdrant, Neo4j) and Ollama run as first-class services — always on with `docker compose up`. Prax is nothing without his memory.
+Qdrant and Neo4j are **bundled inside the `prax` container** and start automatically on `docker compose up` — data persists to `workspaces/<PRAX_USER_ID>/.services/{qdrant,neo4j,teamwork}` so it survives restarts and rebuilds, and is scoped per user. Prax talks to them over localhost inside the container; they're not published to the host by default. Prax is nothing without his memory.
 
-| Service | Port | Purpose |
-|---------|------|---------|
-| **Qdrant** | [localhost:6333](http://localhost:6333) | Vector store for semantic memory retrieval (dense + sparse) |
-| **Neo4j** | [localhost:7474](http://localhost:7474) | Knowledge graph for entity/relation memory (login: neo4j / prax-memory) |
-| **Ollama** | [localhost:11434](http://localhost:11434) | Local LLM and embedding inference (model auto-pulled on first start) |
+Ollama is opt-in: start it with `docker compose --profile local-llm up` to run a separate Ollama container that Prax reaches at `http://ollama:11434` inside the Docker network.
+
+| Service | How it runs | Host port | Purpose |
+|---------|-------------|-----------|---------|
+| **Qdrant** | embedded in `prax` container | — (internal) | Vector store for semantic memory retrieval (dense + sparse) |
+| **Neo4j** | embedded in `prax` container | — (internal, login: neo4j / prax-memory) | Knowledge graph for entity/relation memory |
+| **Ollama** | separate container, profile `local-llm` | [localhost:11434](http://localhost:11434) | Local LLM and embedding inference (model auto-pulled on first start) |
 
 `MEMORY_ENABLED=true` is the default. Set to `false` to disable memory even when the services are running. See [Memory System](#memory-system) for details.
 
@@ -114,11 +118,11 @@ The configured embedding model is auto-pulled when the Ollama container starts. 
 
 #### Developer mode
 
-The default `docker-compose.yml` volume-mounts `./prax`, `./app.py`, and `./config.py` into the app container. Python/prompt changes take effect with a container restart — no image rebuild needed:
+The default `docker-compose.yml` volume-mounts `./prax`, `./app.py`, and `./scripts` into the `prax` container. Python/prompt changes take effect with a container restart — no image rebuild needed:
 
 ```bash
 # Edit prax/ or prompts locally, then:
-docker compose restart app
+docker compose restart prax
 ```
 
 For **frontend (TeamWork)** changes, run the Vite dev server locally instead of rebuilding the TeamWork image:
@@ -143,9 +147,40 @@ The frontend never talks to Prax directly — TeamWork is the middleman. So Vite
 **When you need a full rebuild** (dependency changes in `pyproject.toml` or `package.json`):
 
 ```bash
-docker compose up --build app        # Prax only
-docker compose up --build teamwork   # TeamWork only
-docker compose up --build            # everything
+docker compose up --build prax       # Prax image only (TeamWork, Qdrant, Neo4j are bundled into it)
+docker compose up --build sandbox    # Sandbox image only
+docker compose up --build            # both
+```
+
+#### Remote access (Tailscale / HTTPS)
+
+Accessing Prax from another machine works fine, but the **Desktop** and **Browser** tabs in TeamWork need a WebSocket to noVNC / CDP, and browsers only allow those from a **secure context** — HTTPS or `localhost`. Opening `http://<remote-host>:3000` directly will fail with `noVNC requires a secure context (TLS)` in the console and `Connection closed (code: 1006)` from `rfb.js`.
+
+Two easy fixes:
+
+**Tailscale Serve** — front Prax with HTTPS via a MagicDNS cert (recommended):
+
+```bash
+# One-time: enable HTTPS on your tailnet (admin console → DNS → HTTPS Certificates)
+sudo tailscale serve --bg --https=443 http://localhost:3000
+# Visit: https://<machine>.<tailnet>.ts.net/
+```
+
+Point the proxy at `3000` (TeamWork UI), not `5001` — the Desktop/Browser WS endpoints are served by TeamWork via same-origin `/api/desktop/...` and `/api/browser/...` paths, so a single HTTPS mapping covers everything. To tear it down: `sudo tailscale serve --https=443 off`.
+
+If you've also started the **observability** profile, add a second mapping so dashboard links from the Observability tab resolve from the laptop. Note that Grafana binds the **host** port `3002` — it's the **tailnet** port that's `3001`, proxied to `localhost:3002`:
+
+```bash
+sudo tailscale serve --bg --https=3001 http://localhost:3002
+```
+
+The Observability panel derives Grafana's host from `window.location`, so `https://<machine>.<tailnet>.ts.net:3001/` is what it'll link to automatically — no env var needed. Binding Grafana to a *different* host port than the one Tailscale serves on avoids a `0.0.0.0:3001` vs tailnet-IP `:3001` conflict that would otherwise block `docker compose up grafana`.
+
+**SSH tunnel** — works without touching Tailscale config, since browsers treat `localhost` as a secure context even over plain HTTP:
+
+```bash
+ssh -L 3000:localhost:3000 <remote-host>
+# Visit: http://localhost:3000/
 ```
 
 ### Local development

@@ -34,7 +34,7 @@ prax/
       workspace.py         # workspace_save, workspace_read, etc.
       sandbox.py           # sandbox_start, sandbox_message, etc.
       scheduler.py         # schedule_create, reminder, etc.
-      browser.py           # browser_open, browser_click, etc.
+      browser.py           # browser_navigate, browser_click, etc.
       custom/              # Agent-created tools land here
         weather_v2.py
         stock_lookup.py

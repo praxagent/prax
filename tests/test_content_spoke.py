@@ -196,7 +196,7 @@ def test_writer_tools_are_minimal():
     names = {t.name for t in tools}
     assert "background_search_tool" in names
     assert "fetch_url_content" in names
-    assert "browser_open" not in names
+    assert "browser_navigate" not in names
     assert "note_create" not in names
 
 

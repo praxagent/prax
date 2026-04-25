@@ -9,7 +9,7 @@ Every tool is classified by risk level at the governance layer:
 | Risk | Behavior | Examples |
 |------|----------|---------|
 | **HIGH** | Blocked on first call; requires user confirmation | `sandbox_execute`, `workspace_send_file`, `browser_click`, `plugin_write`, `schedule_create` |
-| **MEDIUM** | Executes immediately; logged to audit trail | `note_create`, `browser_open`, `arxiv_search`, `course_publish` |
+| **MEDIUM** | Executes immediately; logged to audit trail | `note_create`, `browser_navigate`, `arxiv_search`, `course_publish` |
 | **LOW** | Executes immediately; logged | `note_list`, `todo_add`, `workspace_read`, `get_current_datetime` |
 
 Risk levels are declared at the tool definition site via `@risk_tool(risk=RiskLevel.HIGH)` and enforced centrally in `tool_registry.get_registered_tools()`.

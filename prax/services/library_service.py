@@ -413,6 +413,132 @@ def update_space(
     return {"status": "updated", "project": meta}
 
 
+_LESSON_DRAFTING_PLACEHOLDER = (
+    "_Prax is drafting this lesson in the background — refresh in a "
+    "minute to see the content. (If it doesn't appear, ask Prax to "
+    "`refine` or `expand` this lesson.)_"
+)
+
+
+def _expand_lesson_one(
+    user_id: str,
+    project_slug: str,
+    notebook_slug: str,
+    lesson_slug: str,
+    *,
+    course_title: str,
+    subject: str,
+    lesson_title: str,
+    lesson_idx: int,
+    total: int,
+    sibling_titles: list[str],
+) -> None:
+    """Draft a single lesson body via LLM and write it to the note.
+
+    Runs inside a worker thread.  Logs and swallows exceptions so one
+    failure can't take down the rest of the fan-out.
+    """
+    try:
+        from prax.agent.llm_factory import build_llm
+        from prax.agent.user_context import current_user_id
+        current_user_id.set(user_id)
+
+        prior_block = (
+            "\n".join(f"  {i + 1}. {t}" for i, t in enumerate(sibling_titles[:lesson_idx]))
+            if lesson_idx > 0
+            else "  (none — this is the first lesson)"
+        )
+        upcoming_block = (
+            "\n".join(
+                f"  {lesson_idx + i + 2}. {t}"
+                for i, t in enumerate(sibling_titles[lesson_idx + 1:])
+            )
+            if lesson_idx < total - 1
+            else "  (none — this is the last lesson)"
+        )
+
+        prompt = (
+            f"You are drafting lesson {lesson_idx + 1} of {total} for a course on {subject}.\n\n"
+            f"Course title: {course_title}\n"
+            f"Lesson title: {lesson_title}\n\n"
+            f"Prior lessons (already covered, do not repeat):\n{prior_block}\n\n"
+            f"Upcoming lessons (do not preempt):\n{upcoming_block}\n\n"
+            "Write a focused 250–450 word lesson body in markdown. Include:\n"
+            "- A 1–2 sentence overview of what this lesson covers\n"
+            "- 3–5 key concepts as a bulleted list, each with a short explanation\n"
+            "- A `## Practice` section with 2–3 concrete exercises or reflection prompts\n\n"
+            "Don't repeat the lesson title as a heading — the title is shown above the content.\n"
+            "Don't use placeholder phrases like \"this lesson covers\" — get straight to substance.\n"
+            "Stay under ~450 words."
+        )
+        llm = build_llm(config_key="library_lesson_draft", default_tier="medium")
+        result = llm.invoke(prompt)
+        body = (result.content if hasattr(result, "content") else str(result)).strip()
+        if not body:
+            return
+        update_note(
+            user_id, project_slug, notebook_slug, lesson_slug,
+            content=body, editor="prax",
+        )
+        logger.info(
+            "library: drafted lesson %s/%s (%d/%d)",
+            project_slug, lesson_slug, lesson_idx + 1, total,
+        )
+    except Exception:
+        logger.exception(
+            "library: failed to draft lesson %s/%s", project_slug, lesson_slug,
+        )
+
+
+def expand_lesson_stubs(
+    user_id: str,
+    project_slug: str,
+    notebook_slug: str,
+    *,
+    course_title: str,
+    subject: str,
+    lessons: list[dict],
+    max_workers: int = 4,
+) -> None:
+    """Fan out lesson-body LLM drafts in a background daemon thread.
+
+    Returns immediately.  Inside the spawned thread, a
+    :class:`ThreadPoolExecutor` drafts up to ``max_workers`` lessons
+    concurrently — each one writes its result back via
+    :func:`update_note` when it completes, so the frontend sees them
+    fill in progressively on the next refetch.
+
+    LLM rate-limit safety comes from ``max_workers`` (default 4).
+    """
+    if not lessons:
+        return
+
+    titles = [lesson.get("title") or "" for lesson in lessons]
+
+    def _runner() -> None:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="lesson-draft") as pool:
+            for idx, lesson in enumerate(lessons):
+                pool.submit(
+                    _expand_lesson_one,
+                    user_id, project_slug, notebook_slug, lesson.get("slug", ""),
+                    course_title=course_title,
+                    subject=subject,
+                    lesson_title=lesson.get("title") or "",
+                    lesson_idx=idx,
+                    total=len(lessons),
+                    sibling_titles=titles,
+                )
+
+    import contextvars
+    import threading
+    ctx = contextvars.copy_context()
+    threading.Thread(
+        target=ctx.run, args=(_runner,), daemon=True,
+        name=f"expand-lessons-{project_slug}",
+    ).start()
+
+
 def create_learning_space(
     user_id: str,
     subject: str,
@@ -422,6 +548,8 @@ def create_learning_space(
     description: str = "",
     target_date: str | None = None,
     notebook_name: str = "Lessons",
+    target_space: str = "",
+    expand: bool = True,
 ) -> dict[str, Any]:
     """Create a new learning project with a sequenced Lessons notebook.
 
@@ -450,16 +578,23 @@ def create_learning_space(
     created note metadata), and ``status``.
     """
     project_title = title or subject.strip() or "Untitled course"
-    proj_result = create_space(
-        user_id,
-        name=project_title,
-        description=description or f"Learning project: {subject}",
-        kind="learning",
-        target_date=target_date,
-    )
-    if "error" in proj_result:
-        return proj_result
-    project_slug = proj_result["project"]["slug"]
+    if target_space:
+        existing = get_space(user_id, target_space)
+        if existing is None:
+            return {"error": f"target_space '{target_space}' does not exist"}
+        proj_result = {"project": existing}
+        project_slug = existing["slug"]
+    else:
+        proj_result = create_space(
+            user_id,
+            name=project_title,
+            description=description or f"Learning project: {subject}",
+            kind="learning",
+            target_date=target_date,
+        )
+        if "error" in proj_result:
+            return proj_result
+        project_slug = proj_result["project"]["slug"]
 
     nb_result = create_notebook(
         user_id,
@@ -482,9 +617,12 @@ def create_learning_space(
             mod_body_parts.append("## Topics\n")
             for t in module["topics"]:
                 mod_body_parts.append(f"- {t}")
-        mod_body_parts.append(
-            "\n\n_This lesson is a stub — ask Prax to expand it or write your own._"
-        )
+        if expand:
+            mod_body_parts.append("\n\n" + _LESSON_DRAFTING_PLACEHOLDER)
+        else:
+            mod_body_parts.append(
+                "\n\n_This lesson is a stub — ask Prax to expand it or write your own._"
+            )
         note_result = create_note(
             user_id,
             title=mod_title,
@@ -510,11 +648,21 @@ def create_learning_space(
         "library: created learning project %s with %d lessons for user %s",
         project_slug, len(lessons), user_id,
     )
+
+    if expand and lessons:
+        expand_lesson_stubs(
+            user_id, project_slug, notebook_slug,
+            course_title=project_title,
+            subject=subject,
+            lessons=lessons,
+        )
+
     return {
         "status": "created",
         "project": proj_result["project"],
         "notebook": nb_result["notebook"],
         "lessons": lessons,
+        "expanding": bool(expand and lessons),
     }
 
 

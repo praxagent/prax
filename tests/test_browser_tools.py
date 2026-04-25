@@ -4,7 +4,7 @@ import importlib
 from prax.agent.user_context import current_user_id
 
 
-def test_browser_open(monkeypatch):
+def test_browser_navigate(monkeypatch):
     module = importlib.reload(importlib.import_module("prax.agent.browser_tools"))
     svc = importlib.import_module("prax.services.browser_service")
 
@@ -14,12 +14,12 @@ def test_browser_open(monkeypatch):
     )
     current_user_id.set("+10000000000")
 
-    result = module.browser_open.invoke({"url": "https://example.com"})
+    result = module.browser_navigate.invoke({"url": "https://example.com"})
     assert "Test Page" in result
     assert "Page content" in result
 
 
-def test_browser_open_login_hint(monkeypatch):
+def test_browser_navigate_login_hint(monkeypatch):
     module = importlib.reload(importlib.import_module("prax.agent.browser_tools"))
     svc = importlib.import_module("prax.services.browser_service")
 
@@ -32,7 +32,7 @@ def test_browser_open_login_hint(monkeypatch):
     )
     current_user_id.set("+10000000000")
 
-    result = module.browser_open.invoke({"url": "https://x.com"})
+    result = module.browser_navigate.invoke({"url": "https://x.com"})
     assert "browser_request_login" in result
 
 

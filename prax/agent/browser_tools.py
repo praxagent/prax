@@ -16,9 +16,12 @@ def _get_user_id() -> str:
 
 
 @tool
-def browser_open(url: str) -> str:
-    """Open a URL in the browser and return the page content.
+def browser_navigate(url: str) -> str:
+    """Navigate the shared Chrome to a URL and return the page content.
 
+    When ``BROWSER_CDP_URL`` is configured (the default in Docker), this
+    drives the same Chrome instance the user is watching in TeamWork's
+    Browser tab — so navigation is visible to the user in real time.
     Handles JavaScript-heavy sites (Twitter/X, SPAs, etc.) by waiting
     for the page to render.  If the site requires login, use
     browser_credentials to get stored credentials, then browser_fill
@@ -299,7 +302,7 @@ def browser_profiles() -> str:
 
 def build_browser_tools() -> list:
     return [
-        browser_open, browser_read_page, browser_screenshot,
+        browser_navigate, browser_read_page, browser_screenshot,
         browser_page_screenshot,
         browser_click, browser_fill, browser_press, browser_find,
         browser_credentials, browser_login, browser_close,

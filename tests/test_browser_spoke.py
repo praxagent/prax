@@ -23,7 +23,7 @@ def test_build_tools_includes_cdp_and_playwright():
     assert "sandbox_browser_act" in names
 
     # Playwright tools (spot-check)
-    assert "browser_open" in names
+    assert "browser_navigate" in names
     assert "browser_fill" in names
     assert "browser_click" in names
     assert "browser_credentials" in names
@@ -40,7 +40,7 @@ def test_browser_tools_not_on_orchestrator():
     assert "delegate_browser" in names
 
     # Should NOT have direct browser tools
-    assert "browser_open" not in names
+    assert "browser_navigate" not in names
     assert "browser_fill" not in names
     assert "sandbox_browser_read" not in names
     assert "sandbox_browser_act" not in names
@@ -91,7 +91,7 @@ def test_subagent_category_browser_falls_back_to_defaults():
 
     # Browser-specific tools should NOT be here — they're on the spoke
     assert "sandbox_browser_read" not in names
-    assert "browser_open" not in names
+    assert "browser_navigate" not in names
 
 
 def test_spoke_runner_handles_no_tools():

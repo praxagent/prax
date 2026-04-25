@@ -70,6 +70,26 @@
   - **Ollama:** The image doesn't have `curl` or `wget`. The healthcheck uses bash's `/dev/tcp`. Ensure the compose file has the correct healthcheck.
   - **Sandbox:** OpenCode requires auth if `OPENCODE_SERVER_PASSWORD` is set but the healthcheck doesn't pass credentials. Check that the entrypoint seeds the OpenCode config on first run.
 
+- **Desktop / Browser tabs stuck or `Connection closed (code: 1006)` in the console:**
+  The sandbox's `websockify` (port 6080) and CDP socat bridge (9223) stay listening even when the underlying Xvfb / x11vnc / Chromium processes die at startup — the sandbox entrypoint backgrounds them with `&>/dev/null`, so failures are silent and the container still reports healthy. Verify the desktop processes are actually running:
+  ```bash
+  docker compose exec sandbox ps -ef | grep -E 'Xvfb|x11vnc|chromium' | grep -v grep
+  ```
+  If any are missing, restart the sandbox — most commonly a stale X11 lockfile (`/tmp/.X11-unix/X99`) from an unclean shutdown blocks Xvfb:
+  ```bash
+  docker compose restart sandbox
+  ```
+  To confirm the upstream WS is actually working after a restart, test from inside the `prax` container:
+  ```bash
+  docker compose exec prax python3 -c "
+  import asyncio, websockets
+  async def t():
+      async with websockets.connect('ws://sandbox:6080/websockify', subprotocols=['binary']) as ws:
+          print('recv:', await asyncio.wait_for(ws.recv(), 3))
+  asyncio.run(t())"
+  ```
+  A healthy response starts with the RFB protocol version (`RFB 003.008`). `ConnectionClosedError ... 1011 Failed to connect to downstream server` means websockify is up but x11vnc (port 5900) is not.
+
 - **`.env` visible inside sandbox at `/source/.env`:**
   The full repo is bind-mounted at `/source/` for coding agents. Secrets are passed via environment variables, not `.env`. The `.env` file inside the sandbox is a copy of the host file — coding agents can read it but API keys are already in the environment anyway.
 
