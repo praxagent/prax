@@ -36,7 +36,8 @@ This starts four core services:
 | **app** | Flask app (port 5001), `.env` injected, Docker socket for sandbox management |
 | **sandbox** | Always-on OpenCode sandbox with Python, LaTeX, ffmpeg, poppler, pandoc, headless Chrome. Shares `./workspaces` volume. |
 | **teamwork** | Web UI (port 3000) — Slack-like chat, Kanban board, terminal, browser screencast, execution graphs |
-| **ngrok** | Tunnel to app:5001. Prax can serve files via public URLs. |
+| **ngrok** | Tunnel to app:5001. Forwards the Twilio webhook routes (`/transcribe`, `/sms`) and the gated `/shared/<token>` endpoint to the public internet — only files/courses/notes registered in `workspaces/{user}/.shares.json` are reachable through it. |
+| **tailscale** *(opt-in)* | Userspace `tailscaled` sidecar that joins your tailnet and serves TeamWork (`:443`) + Grafana (`:3001`) over MagicDNS HTTPS. Activated by setting `TS_AUTHKEY` + `COMPOSE_PROFILES=tailscale` in `.env`; silently skipped otherwise. State persists in a Docker volume so the node identity survives restarts. |
 
 The app waits for the sandbox and TeamWork health checks before starting. Environment detection is automatic — `RUNNING_IN_DOCKER=true` and `SANDBOX_HOST=sandbox` are set by compose.
 
@@ -51,7 +52,7 @@ This adds five services (Tempo :4318, Loki :3100, Promtail, Prometheus :9090, Gr
 **Runtime capabilities in Docker mode:**
 - `sandbox_install("package")` — apt-get install inside the running sandbox
 - `sandbox_rebuild()` — Prax edits the Dockerfile, rebuilds the image, and restarts the container
-- `workspace_share_file("path/to/file.mp4")` — publish a file with a public ngrok URL
+- `workspace_share_file("path/to/file.mp4")` — publish a single file at a public ngrok URL (explicit user consent only — file is added to the share registry; revoke via `workspace_unshare_file(token)`, audit via `workspace_list_shares()`)
 
 ### Standalone (without compose)
 

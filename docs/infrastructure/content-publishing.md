@@ -9,9 +9,12 @@
 > for the full design.  News briefings no longer exist as a separate
 > concept; generated briefings land in `library/outputs/`.
 >
-> This doc remains as a reference for the **Hugo + ngrok publishing
-> channel** that's still used for note pages delivered over SMS /
-> Discord (the `publish_notes()` path).
+> **Publishing model change (2026-04-25).**  Hugo-rendered courses and
+> notes are no longer auto-exposed via the public ngrok tunnel.  They
+> are served by **TeamWork** (port 8000) for local / Tailscale / SSH
+> access, and only the specific pages the user explicitly opts to share
+> are routed through ngrok via the gated share registry.  See "Two
+> serving paths" below for the full architecture.
 
 Prax creates and manages two types of persistent content: **notes** (stored
 in the Library) and **courses** (legacy, still uses `workspace/courses/`
@@ -25,7 +28,7 @@ into the Library as sequenced notebooks).
 | **Library notes** | `library/projects/{p}/notebooks/{n}/*.md` | Knowledge base pages — research, notes, references, lessons |
 | **Courses (legacy)** | `courses/<id>/course.yaml` + lessons | Structured learning content with lessons and exercises |
 
-### Hugo + ngrok publishing channel (SMS/Discord)
+### Two serving paths — local (default) and public (opt-in)
 
 ```mermaid
 graph TD
@@ -34,16 +37,42 @@ graph TD
     end
 
     WS --> Hugo[Hugo Static Site Generator]
-    Hugo --> Flask[Flask /workspaces/.../public/]
-    Flask --> ngrok[ngrok tunnel]
-    ngrok --> User1[SMS / Discord user]
+    Hugo --> SitePublic[courses/_site/public/]
+
+    SitePublic --> TWRouter[TeamWork content router<br/>:8000/courses/, :8000/notes/]
+    TWRouter --> Local[User over local network /<br/>Tailscale / SSH tunnel]
+
+    SitePublic --> FlaskRoute[Flask /courses/, /notes/<br/>:5001 — registry-gated]
+    FlaskRoute --> Registry{In .shares.json?}
+    Registry -- yes --> Ngrok[ngrok tunnel]
+    Registry -- no --> 404[404]
+    Ngrok --> External[SMS / Discord recipient]
 
     style WS fill:#f9f,stroke:#333
+    style Registry fill:#ffd,stroke:#333
 ```
 
-When Prax calls `publish_notes()`, it generates Hugo content files, builds
-the static site, and serves the HTML through Flask.  ngrok provides a public
-URL.  Users on SMS/Discord receive links like `https://abc123.ngrok.io/notes/eigenvalues/`.
+**Local path (always on).**  The Hugo build runs whenever Prax calls
+`publish_notes()` or `course_publish()`.  The output is served by the
+TeamWork content router (`teamwork/routers/content.py`) at
+`http://localhost:8000/notes/<slug>/` and `/courses/<id>/`.  TeamWork is
+bound to the host network only — it is **not** exposed via the ngrok
+tunnel — so this path has no authentication and reach is controlled by
+network position.  The user-facing URL is whatever
+`TEAMWORK_BASE_URL` points to: `http://localhost:8000` by default,
+`https://<host>.<tailnet>.ts.net` for Tailscale users.
+
+**Public path (opt-in).**  When the user explicitly says "share this
+publicly", `course_publish(public=True)` or `save_and_publish(public=True)`
+adds an entry to `workspaces/{user}/.shares.json` (the share registry —
+see [`prax/services/share_registry.py`](../../prax/services/share_registry.py)).
+The Flask `/courses/<id>/` and `/notes/<slug>/` routes are
+**registry-gated**: they return 404 unless the slug has an entry.  When
+the registry hits, ngrok serves the page at
+`https://<your-domain>.ngrok-free.app/notes/<slug>/`.  The same
+registry powers per-file shares (`workspace_share_file`); use
+`workspace_list_shares` to enumerate active shares and
+`workspace_unshare_file` to revoke by token.
 
 For direct browsing of notes, raw captures, outputs, tasks, and
 everything else, the TeamWork **Library panel** reads the markdown via

@@ -144,6 +144,34 @@ XFWM
   # in $PROFILE_DIR/Default all stay intact.
   rm -rf "$PROFILE_DIR/Default/Service Worker" 2>/dev/null || true
 
+  # Pin the prax-cast extension to Chrome's toolbar so the user can
+  # invoke it from the Desktop (noVNC) tab with a single click — the
+  # only reliable path for invocation, since keyboard shortcuts get
+  # intercepted by the host browser before reaching noVNC.  The
+  # extension ID is the SHA-derived ID for an unpacked extension
+  # loaded from /opt/prax-cast-ext (deterministic for that path).
+  PREFS="$PROFILE_DIR/Default/Preferences"
+  CAST_EXT_ID="mlkmhebdodnjnpmhmfagcjokmijmembn"
+  mkdir -p "$PROFILE_DIR/Default"
+  python3 - "$PREFS" "$CAST_EXT_ID" <<'PY' || true
+import json, os, sys
+prefs_path, ext_id = sys.argv[1], sys.argv[2]
+try:
+    with open(prefs_path) as f:
+        prefs = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError):
+    prefs = {}
+exts = prefs.setdefault('extensions', {})
+pinned = exts.setdefault('pinned_extensions', [])
+if ext_id not in pinned:
+    pinned.append(ext_id)
+    with open(prefs_path, 'w') as f:
+        json.dump(prefs, f)
+    print(f"[prax-cast] pinned {ext_id} in {prefs_path}")
+else:
+    print(f"[prax-cast] already pinned in {prefs_path}")
+PY
+
   # Single Chrome — non-headless (visible on desktop) + CDP enabled
   # (accessible from the Browser tab).  Both views see the same browser.
   chromium-browser \

@@ -83,7 +83,7 @@ def serve_static(path):
 def serve_shared_file(token, filename):
     """Serve a file that Prax has explicitly published via a share token.
 
-    Only files published with workspace_service.publish_file() are accessible.
+    Only files registered in a user's share registry are accessible.
     The token is a random UUID — files cannot be guessed or enumerated.
     """
     import os
@@ -95,14 +95,13 @@ def serve_shared_file(token, filename):
     directory = os.path.dirname(file_path)
     return send_from_directory(directory, os.path.basename(file_path))
 
-@main_routes.route('/courses/')
-@main_routes.route('/courses/<path:path>')
-def serve_course_site(path=''):
-    """Serve Hugo-generated static course pages.
 
-    Course pages are public (shared via ngrok links) so no auth is needed.
-    We scan all user workspaces to find which one has a built Hugo site
-    containing the requested path.
+def _serve_hugo_path(path: str):
+    """Locate and serve a file from any user's Hugo public/ directory.
+
+    Shared between the public (registry-gated) routes here and the
+    unauthenticated TeamWork content router.  Lives here so the public
+    routes don't have to import TeamWork code.
     """
     import os
 
@@ -112,11 +111,9 @@ def serve_course_site(path=''):
     if not public_dir:
         return "Page not found.", 404
 
-    # Serve index.html for directory paths.
     file_path = os.path.join(public_dir, path)
     if os.path.isdir(file_path):
         file_path = os.path.join(file_path, "index.html")
-        path = os.path.join(path, "index.html")
 
     if not os.path.isfile(file_path):
         return "Page not found.", 404
@@ -125,18 +122,47 @@ def serve_course_site(path=''):
     return send_from_directory(directory, os.path.basename(file_path))
 
 
+@main_routes.route('/courses/')
+@main_routes.route('/courses/<path:path>')
+def serve_course_site(path=''):
+    """Serve Hugo-generated course pages — registry-gated.
+
+    The public ngrok-fronted Flask app only exposes courses that the user
+    has explicitly registered with course_publish(public=True).  Local
+    /tailscale/SSH access goes through TeamWork's content router (see
+    teamwork/routers/content.py), which is not exposed via ngrok and so
+    doesn't need this gate.
+    """
+    from prax.services import share_registry
+
+    course_id = path.split("/", 1)[0] if path else ""
+    if not course_id or not share_registry.is_course_public_globally(course_id):
+        return "Page not found.", 404
+    return _serve_hugo_path(path)
+
+
 @main_routes.route('/notes/')
 @main_routes.route('/notes/<path:path>')
 def serve_notes(path=''):
-    """Serve notes — redirects into the Hugo site's notes section."""
-    return serve_course_site(f"notes/{path}" if path else "notes/")
+    """Serve Hugo notes — registry-gated like /courses/."""
+    from prax.services import share_registry
+
+    note_slug = path.split("/", 1)[0] if path else ""
+    if not note_slug or not share_registry.is_note_public_globally(note_slug):
+        return "Page not found.", 404
+    return _serve_hugo_path(f"notes/{path}")
 
 
 @main_routes.route('/news/')
 @main_routes.route('/news/<path:path>')
 def serve_news(path=''):
-    """Serve news briefings — redirects into the Hugo site's news section."""
-    return serve_course_site(f"news/{path}" if path else "news/")
+    """Serve news briefings — registry-gated under the 'note' kind."""
+    from prax.services import share_registry
+
+    slug = path.split("/", 1)[0] if path else ""
+    if not slug or not share_registry.is_note_public_globally(f"news/{slug}"):
+        return "Page not found.", 404
+    return _serve_hugo_path(f"news/{path}")
 
 
 @main_routes.route('/transcribe', methods=['POST'])

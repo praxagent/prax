@@ -179,11 +179,10 @@ services:
       - "9090:9090"
 
   # Grafana — unified dashboards (traces + logs + metrics)
-  # Bound to host port 3002 so it doesn't conflict with `tailscale serve
-  # --https=3001`, which binds :3001 on the tailnet interface for remote
-  # HTTPS access.  Laptop users hit https://<host>.ts.net:3001/ (served
-  # by tailscaled and proxied to localhost:3002); local-only users hit
-  # http://localhost:3002 directly.
+  # Bound to host port 3002 so it doesn't conflict with the tailscale
+  # sidecar (which binds :3001 on the tailnet interface for remote HTTPS
+  # access).  Laptop users hit https://<host>.ts.net:3001/ via the
+  # sidecar; local-only users hit http://localhost:3002 directly.
   grafana:
     image: grafana/grafana:11.5.2
     profiles: ["observability"]
@@ -202,6 +201,57 @@ services:
       - loki
       - prometheus
 
+  # ── Tailscale sidecar (private HTTPS access from your laptop) ─────
+  # Opt-in.  To enable, add to .env:
+  #   TS_AUTHKEY=tskey-auth-...        (reusable, NON-ephemeral, pre-approved
+  #                                     — get one from
+  #                                     https://login.tailscale.com/admin/settings/keys
+  #                                     ephemeral keys count against the free
+  #                                     tier's 1,000-min/month minute budget)
+  #   COMPOSE_PROFILES=tailscale       (compose reads this from .env, so the
+  #                                     sidecar starts automatically with
+  #                                     `docker compose up`; without it the
+  #                                     service is silently skipped)
+  # Kernel TUN mode — required so `tailscale serve` can dial upstream
+  # services on the docker network (e.g. prax:8000).  In userspace mode
+  # the serve proxy lives inside netstack and can't reach 172.x docker
+  # IPs.  Needs cap_add NET_ADMIN + /dev/net/tun on the host (standard
+  # on Linux; Docker Desktop on macOS has it too).
+  # State lives in a Docker volume so the node identity survives restarts
+  # and re-registers as the same device (avoids burning device slots).
+  # Routes:  https://<host>.ts.net/      → prax:8000 (TeamWork UI)
+  #          https://<host>.ts.net:3001/ → grafana:3000 (Observability)
+  tailscale:
+    image: tailscale/tailscale:latest
+    profiles: ["tailscale"]
+    # Container hostname is intentionally NOT set to ${TS_HOSTNAME}: doing
+    # that would put `<eth0-ip> prax` in this container's /etc/hosts and
+    # shadow Docker's DNS entry for the `prax` service — outbound proxy
+    # dials to prax:8000 would loop back to the sidecar itself and 502.
+    # Tailnet hostname is controlled by TS_HOSTNAME below; the Docker-level
+    # name doesn't need to match.
+    hostname: tailscale-sidecar
+    cap_add:
+      - net_admin
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY:?TS_AUTHKEY is required when the tailscale profile is active — see https://login.tailscale.com/admin/settings/keys}
+      - TS_HOSTNAME=${TS_HOSTNAME:-prax}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_SERVE_CONFIG=/config/serve-config.json
+      - TS_EXTRA_ARGS=${TS_EXTRA_ARGS:-}
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - ./tailscale/serve-config.json:/config/serve-config.json:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "tailscale", "status", "--peers=false"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
 volumes:
   # Observability data — ephemeral, fine as Docker volumes.
   # All persistent data (memory, models, agent configs) lives in WORKSPACE_DIR.
@@ -209,3 +259,5 @@ volumes:
   loki-data:
   prometheus-data:
   grafana-data:
+  # Tailscale node state — keeps the same device identity across restarts.
+  tailscale-state:

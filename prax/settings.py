@@ -232,6 +232,11 @@ class AppSettings(BaseSettings):
     teamwork_url: str = Field(default="", alias="TEAMWORK_URL")  # e.g. "http://teamwork:8000"
     teamwork_api_key: str = Field(default="", alias="TEAMWORK_API_KEY")
     teamwork_user_phone: str = Field(default="", alias="TEAMWORK_USER_PHONE")
+    # User-facing base URL for TeamWork — what Prax pastes into chat when
+    # surfacing course/note links.  Defaults to the local Docker port mapping;
+    # users on Tailscale should set this to https://<host>.<tailnet>.ts.net so
+    # links work from their laptop without rewriting.
+    teamwork_base_url: str = Field(default="http://localhost:8000", alias="TEAMWORK_BASE_URL")
 
     # Discord
     discord_bot_token: str | None = Field(default=None, alias="DISCORD_BOT_TOKEN")

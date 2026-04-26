@@ -55,7 +55,7 @@ plugin management, configuration, source inspection, and self-maintenance tasks.
 
 ### Workspace sync
 - **workspace_set_remote** / **workspace_push** — configure and push to remote git
-- **workspace_share_file** / **workspace_unshare_file** — share workspace files
+- **workspace_share_file** / **workspace_unshare_file** / **workspace_list_shares** — share workspace files via public ngrok URL (only on explicit user request, typically for SMS/Discord); list and revoke active shares
 
 ### Complex fixes (sub-delegation)
 - **delegate_self_improve** — delegate bug fixes in Prax's own code to the

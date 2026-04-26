@@ -175,7 +175,12 @@ class TestNoteServiceSaveAndPublishContract:
         assert "url" in result
         assert result["title"] == "Contract Test"
 
-    def test_graceful_degradation_when_ngrok_missing(self, monkeypatch, tmp_path):
+    def test_url_is_teamwork_local_by_default(self, monkeypatch, tmp_path):
+        """save_and_publish always returns a TeamWork-served URL — no ngrok required.
+
+        The Hugo render goes through TeamWork (reachable via local network /
+        Tailscale / SSH).  Public ngrok exposure is opt-in via ``public=True``.
+        """
         from prax.services import note_service
 
         workspace = tmp_path / "workspace"
@@ -184,8 +189,13 @@ class TestNoteServiceSaveAndPublishContract:
         monkeypatch.setattr(note_service, "ensure_workspace", lambda uid: str(workspace))
         monkeypatch.setattr(note_service, "get_lock", _FakeLock)
         monkeypatch.setattr(note_service, "git_commit", lambda *a, **kw: None)
+        monkeypatch.setattr(
+            note_service,
+            "publish_notes",
+            lambda uid, base_url, slug=None: {"url": f"{base_url}/notes/{slug}/"},
+        )
 
-        # ngrok not configured — should save locally without error.
+        # ngrok intentionally unconfigured — should still produce a valid URL.
         monkeypatch.setattr(
             "prax.utils.ngrok.get_ngrok_url",
             lambda: None,
@@ -195,7 +205,8 @@ class TestNoteServiceSaveAndPublishContract:
         assert "error" not in result
         assert "slug" in result
         assert "title" in result
-        assert "saved locally" in result["url"]
+        assert result["url"].startswith("http://localhost:8000/notes/")
+        assert "public_url" not in result  # default is private
 
 
 # ---------------------------------------------------------------------------

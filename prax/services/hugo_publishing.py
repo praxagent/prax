@@ -37,6 +37,14 @@ baseURL = "{base_url}"
 languageCode = "en-us"
 title = "{site_title}"
 
+# Relative URLs let the same built site be served from multiple gateways
+# (TeamWork on localhost / Tailscale, plus an optional ngrok tunnel for
+# pages registered as public).  Without this, internal asset and nav
+# links would be hardcoded to baseURL and break when accessed via any
+# other origin.
+relativeURLs = true
+canonifyURLs = false
+
 [markup]
   [markup.goldmark]
     [markup.goldmark.renderer]

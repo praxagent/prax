@@ -154,7 +154,7 @@ flowchart LR
 | `simple_save_no_delegation` | Verifies simple tasks don't over-delegate | ~$0.003 | 30s |
 | `graceful_missing_capability` | Truthfulness guardrails (real-time data) | ~$0.002 | 45s |
 | `linked_workspace_files` | Three cross-referenced workspace files | ~$0.005 | 90s |
-| `note_without_ngrok` | NGROK graceful degradation | ~$0.012 | 90s |
+| `note_without_ngrok` | Note creation works without ngrok (URL falls back to TeamWork-served `TEAMWORK_BASE_URL`) | ~$0.012 | 90s |
 
 **Active Inference integration tests** (`test_active_inference.py`) — verify that the Active Inference pipeline (§17) produces real trace artifacts with a live LLM:
 

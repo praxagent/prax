@@ -6,8 +6,9 @@
 
 - Python 3.13 (managed via [uv](https://github.com/astral-sh/uv)).
 - **At least one messaging channel:**
-  - **Twilio** (Voice + SMS) — requires a Twilio account, verified phone number, and ngrok for webhooks. Paid per message/minute.
+  - **Twilio** (Voice + SMS) — requires a Twilio account, verified phone number, and ngrok for webhooks (Twilio's servers must reach Prax from the public internet, which the local Tailscale sidecar can't provide). Paid per message/minute.
   - **Discord** (text + attachments) — requires a Discord bot token (free). No ngrok needed — connects via WebSocket.
+- **Optional, recommended for remote access:** Tailscale account + a reusable, non-ephemeral auth key. Lets you reach TeamWork over HTTPS from your laptop without exposing the host's network or installing `tailscaled` on the server. See [Configuration → Remote access](../security/configuration.md#remote-access-tailscale-sidecar).
 - OpenAI (or alternate LLM) credentials.
 - Java 11+ (for `opendataloader-pdf` PDF extraction).
 - Docker (for sandbox code execution).

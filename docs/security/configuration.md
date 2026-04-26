@@ -20,7 +20,11 @@ Key fields:
 | `AGENT_NAME` | Display name for the agent across all channels, greetings, and prompts | `Prax` |
 | `PHONE_TO_NAME_MAP` | JSON: `{"+15551234567": "Alice"}` — whitelists callers | `None` |
 | `PHONE_TO_EMAIL_MAP` | JSON: `{"+15551234567": "alice@example.com"}` | `None` |
-| `NGROK_URL` | HTTPS base URL from ngrok | `None` |
+| `NGROK_URL` | HTTPS base URL from ngrok — Twilio webhooks + opt-in shares only (course/note pages no longer auto-publish here) | `None` |
+| `TEAMWORK_BASE_URL` | User-facing base URL Prax pastes into chat for course/note links | `http://localhost:8000` |
+| `TS_AUTHKEY` | Tailscale reusable, **non-ephemeral**, pre-approved auth key — enables the Tailscale sidecar | `None` |
+| `TS_HOSTNAME` | Tailnet hostname for the sidecar (becomes `<hostname>.<tailnet>.ts.net`) | `prax` |
+| `COMPOSE_PROFILES` | Set to `tailscale` to activate the sidecar; without this it's silently skipped | *(unset)* |
 | `WORKSPACE_DIR` | Path to workspace root | `./workspaces` |
 | **Sandbox** | | |
 | `SANDBOX_IMAGE` | Docker image for sandbox | `prax-sandbox:latest` |
@@ -180,7 +184,13 @@ The Discord bot starts automatically if `DISCORD_BOT_TOKEN` is set. You'll see `
 
 ### Option C: Twilio (Voice + SMS)
 
-Requires a Twilio account and ngrok for webhook forwarding.
+Requires a Twilio account and ngrok for webhook forwarding — Twilio's
+servers must reach Prax's `/transcribe` and `/sms` routes from the public
+internet, so ngrok is the supported tunnel for this flow.  (Course/note
+publishing and per-file shares no longer ride on this tunnel by default —
+they're served by TeamWork on the local network unless the user
+explicitly opts a specific page into the share registry.  See
+[`docs/infrastructure/content-publishing.md`](../infrastructure/content-publishing.md).)
 
 1. Start the Flask server locally (see Running below).
 2. In another terminal, run ngrok against the Flask port (default 5001):
@@ -193,6 +203,37 @@ Requires a Twilio account and ngrok for webhook forwarding.
 5. Under **Messaging** set **A Message Comes In** to `Webhook` with URL `https://<ngrok-domain>/sms` using POST.
 
 > **Note:** US phone numbers require A2P 10DLC registration for SMS. Consider a toll-free number or use Discord to avoid this entirely.
+
+### Remote access (Tailscale sidecar)
+
+To access TeamWork and Grafana from another machine without exposing the
+host's network, opt into the dockerized Tailscale sidecar.  Without
+`TS_AUTHKEY` + `COMPOSE_PROFILES=tailscale` in `.env`, the sidecar is
+silently skipped — there's no opt-out flag to set.
+
+1. Generate a key at <https://login.tailscale.com/admin/settings/keys>.
+   Pick **Reusable ✓**, **Ephemeral ✗**, **Pre-approved ✓** — non-ephemeral
+   keys avoid the free tier's 1,000-min/month minute budget that would
+   otherwise count container restarts as fresh ephemeral nodes.
+2. Add to `.env`:
+   ```
+   TS_AUTHKEY=tskey-auth-...
+   TS_HOSTNAME=prax
+   COMPOSE_PROFILES=tailscale
+   TEAMWORK_BASE_URL=https://prax.<your-tailnet>.ts.net
+   ```
+3. `docker compose up -d` — the sidecar joins the tailnet automatically.
+   Visit `https://prax.<tailnet>.ts.net/` for TeamWork and
+   `https://prax.<tailnet>.ts.net:3001/` for Grafana.
+
+The sidecar runs in userspace mode (no `/dev/net/tun` on the host) and
+persists state in a Docker volume so the node identity survives restarts
+— each restart re-registers as the same device, so it doesn't churn
+your tailnet's device count.
+
+If you already run `tailscaled` directly on the host and don't want a
+sidecar, the original `make tailscale-up` / `make tailscale-down` /
+`make tailscale-status` Makefile targets still work as a fallback.
 
 ## Database
 
@@ -214,4 +255,4 @@ The server listens on `0.0.0.0:5001` (configurable via `.env`). The scheduler st
 - **Gunicorn**: `uv run gunicorn 'app:app' --bind 0.0.0.0:5001 --workers 2 --threads 4`
 - **Environment**: copy `.env` to the server, point `LOG_PATH`/`DATABASE_NAME` to persistent volumes.
 - **Docker**: see `Dockerfile` and `docker-compose.yml` in the repo root. The app container needs `/var/run/docker.sock` mounted for sandbox functionality.
-- **TLS / DNS**: terminate TLS via ngrok (dev) or a reverse proxy (Nginx/Cloudflare/etc.).
+- **TLS / DNS**: for inbound from your own laptops, prefer the Tailscale sidecar (HTTPS via MagicDNS, see Remote access above).  For inbound from external services that aren't on your tailnet (e.g. Twilio webhooks), terminate TLS via ngrok (dev) or a reverse proxy (Nginx/Cloudflare/etc.).
