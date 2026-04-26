@@ -234,6 +234,78 @@ class TestUserNotesCompaction:
         assert "Update user notes" in result.stdout
         assert "Compact user notes" in result.stdout
 
+    def test_compaction_promotes_durable_dropped_candidates(self, ws_dir, monkeypatch):
+        promoted = []
+        monkeypatch.setattr(
+            workspace_service,
+            "_promote_user_notes_ltm_candidates",
+            lambda _user_id, candidates: promoted.extend(candidates),
+        )
+        content = "preferences:\n" + "\n".join([
+            "- User prefers architectural explanations with tradeoffs and concrete failure modes.",
+            *[f"- preference-item-{i:03d}" for i in range(100)],
+        ]) + "\n"
+
+        workspace_service.save_user_notes(USER, content)
+
+        assert promoted
+        assert "architectural explanations" in promoted[0][0]
+        assert "preference" in promoted[0][2]
+
+    def test_compaction_does_not_promote_duplicates_or_junk(self, ws_dir, monkeypatch):
+        promoted = []
+        monkeypatch.setattr(
+            workspace_service,
+            "_promote_user_notes_ltm_candidates",
+            lambda _user_id, candidates: promoted.extend(candidates),
+        )
+        content = "\n".join([
+            "preferences:",
+            "- duplicate",
+            "- duplicate",
+            "- preference-item-001",
+        ]) + "\n"
+
+        workspace_service.save_user_notes(USER, content)
+
+        assert promoted == []
+
+    def test_ltm_promotion_uses_memory_service_when_available(self, ws_dir, monkeypatch):
+        calls = []
+
+        class FakeMemoryService:
+            available = True
+
+            def remember(self, user_id, content, source, importance, tags, entity_ids=None):
+                calls.append({
+                    "user_id": user_id,
+                    "content": content,
+                    "source": source,
+                    "importance": importance,
+                    "tags": tags,
+                    "entity_ids": entity_ids,
+                })
+                return "mem-1"
+
+        monkeypatch.setattr(
+            "prax.services.memory_service.get_memory_service",
+            lambda: FakeMemoryService(),
+        )
+
+        workspace_service._promote_user_notes_ltm_candidates(
+            USER,
+            [("From user_notes compaction (preferences): User prefers concise diffs.", 0.65, ["user_notes_compaction", "preference"])],
+        )
+
+        assert calls == [{
+            "user_id": USER,
+            "content": "From user_notes compaction (preferences): User prefers concise diffs.",
+            "source": "user_notes_compaction",
+            "importance": 0.65,
+            "tags": ["user_notes_compaction", "preference"],
+            "entity_ids": None,
+        }]
+
 
 class TestGitHistory:
     def test_full_lifecycle_commits(self, ws_dir):

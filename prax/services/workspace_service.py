@@ -38,6 +38,9 @@ _USER_NOTES_IDENTITY_QUERY_TOKENS = {"name", "call", "called", "identity"}
 _USER_NOTES_COMPACT_MIN_CHARS = 4096
 _USER_NOTES_COMPACT_MIN_LINES = 80
 _USER_NOTES_SECTION_MAX_ITEMS = 16
+_USER_NOTES_PROMOTION_MAX = 10
+
+type _UserNotePromotionCandidate = tuple[str, float, list[str]]
 
 # ---------------------------------------------------------------------------
 # Workspace .gitignore — written on init to every new workspace.
@@ -232,6 +235,7 @@ def git_commit(root: str, message: str) -> None:
 
 def save_user_notes(user_id: str, content: str) -> str:
     """Save user_notes.md to the workspace root (not active/). Git commit."""
+    promotion_candidates: list[_UserNotePromotionCandidate] = []
     with get_lock(user_id):
         root = ensure_workspace(user_id)
         filepath = os.path.join(root, "user_notes.md")
@@ -244,9 +248,12 @@ def save_user_notes(user_id: str, content: str) -> str:
                 with open(filepath, "w", encoding="utf-8") as f:
                     f.write(compacted)
                 git_commit(root, "Compact user notes")
+                promotion_candidates = _user_notes_ltm_promotion_candidates(content, compacted)
                 logger.info("Compacted user_notes.md for %s", user_id)
         logger.info("Updated user_notes.md for %s", user_id)
-        return filepath
+
+    _promote_user_notes_ltm_candidates(user_id, promotion_candidates)
+    return filepath
 
 
 def read_user_notes(user_id: str) -> str:
@@ -413,6 +420,153 @@ def _compact_user_notes_content(content: str) -> str:
             lines.append(item)
 
     return "\n".join(lines).rstrip() + "\n" if lines else ""
+
+
+def _extract_user_notes_list_items(content: str) -> list[tuple[str, str, str, int]]:
+    """Return list-style notes as (section, item_text, fingerprint, line_index)."""
+    items: list[tuple[str, str, str, int]] = []
+    section = "notes"
+    for idx, raw_line in enumerate(content.splitlines()):
+        line = raw_line.strip()
+        if not line:
+            continue
+        if _is_user_notes_section_header(line):
+            section = _display_user_notes_key(line[:-1])
+            continue
+        if _user_notes_scalar(line):
+            section = "notes"
+            continue
+
+        normalized = _normalize_user_notes_item(line)
+        if not normalized:
+            continue
+        item_text = normalized[2:] if normalized.startswith("- ") else normalized
+        fingerprint = _fingerprint_user_notes_item(normalized)
+        if fingerprint:
+            items.append((section, item_text, fingerprint, idx))
+    return items
+
+
+def _user_note_promotion_candidate(
+    section: str,
+    item_text: str,
+) -> _UserNotePromotionCandidate | None:
+    """Classify a dropped user-note item for selective LTM promotion.
+
+    This is intentionally conservative.  User-note compaction should not dump
+    old clutter into semantic memory; it should only preserve durable,
+    user-specific preferences, workflows, aliases, and project constraints.
+    """
+    text = re.sub(r"\s+", " ", item_text.strip())
+    if not text or len(text) < 24:
+        return None
+
+    lower = text.lower()
+    word_count = len(re.findall(r"[a-zA-Z]{3,}", text))
+    if word_count < 4:
+        return None
+
+    transient_patterns = (
+        r"\btoday\b", r"\btomorrow\b", r"\byesterday\b", r"\btonight\b",
+        r"\bthis week\b", r"\bnext week\b", r"\btemporary\b",
+        r"\bremind(er)?\b", r"\bschedule[sd]?\b", r"\bappointment\b",
+        r"\bmeeting\b", r"\btodo\b", r"\bto-do\b", r"\bcurrently\b",
+        r"\bright now\b", r"\bin progress\b", r"\b\d{4}-\d{2}-\d{2}\b",
+    )
+    if any(re.search(pattern, lower) for pattern in transient_patterns):
+        return None
+
+    section_key = _canonical_user_notes_key(section)
+    durable_sections = {
+        "preferences", "preference", "workflows", "workflow", "projects",
+        "project", "tools", "tool", "aliases", "alias", "interests",
+        "interest",
+    }
+    durable_phrases = (
+        "user prefers", "prefers ", "likes ", "dislikes ", "wants ",
+        "needs ", "always ", "never ", "default", "format", "style",
+        "workflow", "when user says", "interpret ", "means ", "alias",
+        "project", "uses ", "constraint", "tradeoff", "trade-off",
+    )
+    if section_key not in durable_sections and not any(phrase in lower for phrase in durable_phrases):
+        return None
+
+    tags = ["user_notes_compaction"]
+    if "prefer" in lower or section_key in {"preferences", "preference"}:
+        tags.append("preference")
+    if "workflow" in lower or section_key in {"workflows", "workflow"}:
+        tags.append("workflow")
+    if "project" in lower or section_key in {"projects", "project"}:
+        tags.append("project")
+    if "alias" in lower or "when user says" in lower or "interpret " in lower:
+        tags.append("alias")
+    if "format" in lower or "style" in lower:
+        tags.append("formatting")
+
+    if len(text) > 500:
+        text = text[:497].rstrip() + "..."
+    content = f"From user_notes compaction ({_display_user_notes_key(section)}): {text}"
+    return content, 0.65, tags
+
+
+def _user_notes_ltm_promotion_candidates(
+    original: str,
+    compacted: str,
+) -> list[_UserNotePromotionCandidate]:
+    """Return durable dropped items worth preserving in LTM."""
+    original_items = _extract_user_notes_list_items(original)
+    retained_fingerprints = {
+        fingerprint for _section, _item, fingerprint, _idx in _extract_user_notes_list_items(compacted)
+    }
+
+    candidates: list[_UserNotePromotionCandidate] = []
+    seen: set[str] = set()
+    for section, item_text, fingerprint, _idx in original_items:
+        if fingerprint in retained_fingerprints or fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        candidate = _user_note_promotion_candidate(section, item_text)
+        if not candidate:
+            continue
+        candidates.append(candidate)
+        if len(candidates) >= _USER_NOTES_PROMOTION_MAX:
+            break
+    return candidates
+
+
+def _promote_user_notes_ltm_candidates(
+    user_id: str,
+    candidates: list[_UserNotePromotionCandidate],
+) -> None:
+    """Store selected compaction drops in LTM when memory infra is available."""
+    if not candidates:
+        return
+    try:
+        from prax.services.memory_service import get_memory_service
+
+        svc = get_memory_service()
+        if not getattr(svc, "available", False):
+            logger.info(
+                "Skipped %d user_notes LTM promotion candidate(s): memory unavailable",
+                len(candidates),
+            )
+            return
+
+        promoted = 0
+        for content, importance, tags in candidates:
+            memory_id = svc.remember(
+                user_id,
+                content,
+                source="user_notes_compaction",
+                importance=importance,
+                tags=tags,
+            )
+            if memory_id:
+                promoted += 1
+        if promoted:
+            logger.info("Promoted %d user_notes compaction item(s) to LTM for %s", promoted, user_id)
+    except Exception:
+        logger.debug("User notes LTM promotion failed for %s", user_id, exc_info=True)
 
 
 def _tokenize_user_notes_text(text: str) -> set[str]:

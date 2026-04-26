@@ -51,12 +51,9 @@ if [ -f /root/.installed_packages ] || [ -f /root/.installed_pip_packages ] || [
   [ -f /root/.installed_npm_packages ] && echo "  npm: $(sort -u /root/.installed_npm_packages | tr '\n' ' ')"
 fi
 
-# ── Persistent tmux session ──
-# Terminal state survives WebSocket reconnects (page refresh, device switch).
-if command -v tmux &>/dev/null; then
-  tmux has-session -t prax 2>/dev/null || \
-    tmux new-session -d -s prax -c /source
-fi
+# Terminal state persistence is owned by TeamWork's terminal router
+# now (the bash process outlives the WebSocket).  Nothing to do here.
+# tmux is still installed if the user wants it from the prompt.
 
 # ── Scratch Python venv (for Prax to pip install into freely) ──
 if [ ! -d /opt/prax-venv ]; then

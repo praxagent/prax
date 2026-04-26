@@ -89,6 +89,47 @@ def sandbox_start(task_description: str, model: str | None = None) -> str:
     )
 
 
+@tool
+def terminal_history(lines: int = 200) -> str:
+    """Read the recent scrollback from the user's persistent terminal.
+
+    The TeamWork terminal panel runs a persistent shell that survives
+    tab navigation and WebSocket reconnects.  Output is buffered server-
+    side, so this tool returns whatever has scrolled past in the panel,
+    even when no browser is currently attached.  The user's commands and
+    your `sandbox_shell` calls share one continuous history.
+
+    Use it before answering questions like "what just happened in the
+    terminal?", "what was the last command?", or "did that build
+    succeed?" — instead of re-running things or asking the user to paste
+    output.  ANSI escape codes are stripped server-side for clean reading.
+
+    Args:
+        lines: How many lines back to capture (default 200).
+    """
+    import requests
+    try:
+        from prax.services.teamwork_service import get_teamwork_client
+        tw = get_teamwork_client()
+        if not tw.enabled or not tw.project_id:
+            return "(TeamWork not available — terminal_history needs the TeamWork web UI to be configured)"
+        # /api/terminal/{project_id}/recent is the public router (not the
+        # /api/external/* TeamWork-agent API), so call it directly.
+        resp = requests.get(
+            f"{tw.base_url}/api/terminal/{tw.project_id}/recent",
+            params={"lines": int(lines)},
+            timeout=5.0,
+        )
+    except Exception as e:
+        return f"Could not read terminal history: {e}"
+    if resp.status_code == 404:
+        return "(no active terminal session — open the Terminal tab in TeamWork to start one)"
+    if resp.status_code != 200:
+        return f"Could not read terminal history: HTTP {resp.status_code}"
+    output = (resp.json() or {}).get("output", "")
+    return output or "(terminal buffer is empty)"
+
+
 @risk_tool(risk=RiskLevel.MEDIUM)
 def sandbox_message(message: str, model: str | None = None, session_id: str | None = None) -> str:
     """Send a follow-up message or instruction to a sandbox coding session.
@@ -524,7 +565,8 @@ def sandbox_goto(path: str, line: int, window: int = 100) -> str:
 
 def build_sandbox_tools() -> list:
     return [
-        sandbox_shell, sandbox_start, sandbox_message, sandbox_review,
+        sandbox_shell, terminal_history,
+        sandbox_start, sandbox_message, sandbox_review,
         sandbox_finish, sandbox_abort, sandbox_search, sandbox_execute,
         sandbox_install, sandbox_rebuild,
         sandbox_view, sandbox_scroll, sandbox_goto,

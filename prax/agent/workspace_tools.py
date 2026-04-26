@@ -97,6 +97,7 @@ def user_notes_update(content: str) -> str:
     Include: timezone, name, preferences, interests, or anything they ask you to remember.
     Keep the file concise; only request-relevant snippets are loaded automatically.
     Oversized or duplicate-heavy notes are compacted automatically after update.
+    Durable dropped details may be selectively promoted to long-term memory.
     """
     try:
         workspace_service.save_user_notes(_get_user_id(), content)
