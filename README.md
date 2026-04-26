@@ -94,6 +94,25 @@ This adds the full observability suite alongside the core services:
 
 Grafana comes pre-provisioned with Tempo, Loki, and Prometheus datasources plus two dashboards (Agent Overview, LLM Performance). Config lives in `observability/`.
 
+#### GPU mode (NVIDIA)
+
+If you have an NVIDIA GPU and want the sandbox to use it (local LLM inference via vLLM, faster Whisper transcription, ML/AI experimentation in `sandbox_shell`, etc.), layer in the GPU override:
+
+```bash
+make sandbox-gpu                                                # one-shot, with smoke test
+# or persistently — add to .env so plain `docker compose` always uses it:
+echo 'COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml' >> .env
+docker compose up -d
+```
+
+Requires on the host:
+- NVIDIA driver (verify: `nvidia-smi`)
+- [`nvidia-container-toolkit`](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) installed and registered with Docker (verify: `docker info | grep -i nvidia` shows `nvidia` under Runtimes).
+
+The override (`docker-compose.gpu.yml`) reserves all GPUs for the sandbox container and sets the env vars the toolkit needs to inject CUDA libraries at runtime — no CUDA install in the image. To pin to a specific GPU instead of all, change `count: all` to `device_ids: ["0"]` in the override file. Inside the sandbox, `nvidia-smi` works immediately and `pip install torch --index-url https://download.pytorch.org/whl/cu124` (or any cu12x wheel) picks up the GPU automatically.
+
+Only the sandbox gets the GPU — Prax itself stays CPU-only by default. If you want CUDA in the `prax` container too (for embeddings etc.), add the same `deploy.resources` block to the `prax` service in the override.
+
 #### Memory, Ollama, and core services
 
 Qdrant and Neo4j are **bundled inside the `prax` container** and start automatically on `docker compose up` — data persists to `workspaces/<PRAX_USER_ID>/.services/{qdrant,neo4j,teamwork}` so it survives restarts and rebuilds, and is scoped per user. Prax talks to them over localhost inside the container; they're not published to the host by default. Prax is nothing without his memory.

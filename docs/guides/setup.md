@@ -12,7 +12,7 @@
 - OpenAI (or alternate LLM) credentials.
 - Java 11+ (for `opendataloader-pdf` PDF extraction).
 - Docker (for sandbox code execution).
-- **Optional:** NVIDIA GPU with 8GB+ VRAM + vLLM + Unsloth (for self-improving fine-tuning).
+- **Optional:** NVIDIA GPU with 8GB+ VRAM + vLLM + Unsloth (for self-improving fine-tuning). To attach a host GPU to the sandbox container for ad-hoc CUDA work (Whisper acceleration, local LLM inference, ML experiments via `sandbox_shell`), install [`nvidia-container-toolkit`](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) and use `make sandbox-gpu` (or layer the override in via `COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml` in `.env`). See [Sandbox → GPU access](../infrastructure/sandbox.md) for details.
 - **Optional:** Playwright (`pip install playwright && playwright install chromium`) for browser automation.
 - **Optional:** `gh` CLI (for self-modification PR creation).
 

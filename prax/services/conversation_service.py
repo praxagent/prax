@@ -131,7 +131,7 @@ class ConversationService:
         self._save(self._database, db_key, {"role": "user", "content": text})
 
         lc_history = _history_to_messages(history)
-        workspace_ctx = get_workspace_context(user_id)
+        workspace_ctx = get_workspace_context(user_id, text)
         logger.info("Agent invoked for %s (key=%s): %s", user_id, db_key, text[:80])
         response = self.agent.run(
             conversation=lc_history,

@@ -95,7 +95,8 @@ def user_notes_update(content: str) -> str:
 
     Write the FULL content of the notes file each time (not just new lines).
     Include: timezone, name, preferences, interests, or anything they ask you to remember.
-    These notes are automatically loaded into your context on every conversation.
+    Keep the file concise; only request-relevant snippets are loaded automatically.
+    Oversized or duplicate-heavy notes are compacted automatically after update.
     """
     try:
         workspace_service.save_user_notes(_get_user_id(), content)

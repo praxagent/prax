@@ -22,6 +22,15 @@ Instead of adding infinite specialized tools (one for LaTeX, one for ffmpeg, one
 
 **File sharing:** When the sandbox produces large files (videos, PDFs), Prax can publish them with `workspace_share_file()` to generate a public ngrok URL — but only on explicit user request, and typically only for SMS or Discord recipients (TeamWork users should be pointed at the file in their workspace browser instead). Each share is registered in `workspaces/{user}/.shares.json` with a randomized token and survives restarts. Use `workspace_list_shares()` to enumerate active shares and `workspace_unshare_file(token)` to revoke.
 
+**GPU access (NVIDIA, optional):** The sandbox is CPU-only by default. To attach the host's NVIDIA GPU(s), use the `docker-compose.gpu.yml` override:
+
+```bash
+make sandbox-gpu                                                # one-shot, with preflight check + nvidia-smi smoke test
+echo 'COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml' >> .env  # persist for all future compose commands
+```
+
+Requires `nvidia-container-toolkit` on the host (verify with `docker info | grep -i nvidia`). The override reserves all GPUs for the sandbox and sets `NVIDIA_VISIBLE_DEVICES=all` + `NVIDIA_DRIVER_CAPABILITIES=compute,utility` so the toolkit injects the matching CUDA libraries at runtime — no CUDA install in the image. Inside the sandbox, `nvidia-smi` works immediately and `pip install torch --index-url https://download.pytorch.org/whl/cu124` (any cu12x wheel matches a 13.x driver) auto-detects the GPU. Pin to specific cards by changing `count: all` to `device_ids: ["0", "2"]` in the override file.
+
 > **Security note:** Ngrok URLs are publicly reachable — anyone with the link can download the file. Shared file URLs are protected by two layers of randomization: a 32-character hex token in the path and a UUID-randomized filename (only the file extension is preserved). This makes URLs unguessable and reveals nothing about the original file name or contents. Still, treat shared links as semi-public: share them only with intended recipients, and revoke them with `workspace_unshare_file()` when no longer needed.
 
 ### Sandbox Docker Image

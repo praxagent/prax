@@ -1,11 +1,12 @@
 # Memory System
 
-Prax has a two-layer, research-grounded memory system inspired by human cognition: a fast **short-term memory** (STM) for immediate context, and a scalable **long-term memory** (LTM) for durable recall across conversations.
+Prax has a layered, research-grounded memory system inspired by human cognition: a compact quick-reference `user_notes.md` file for high-signal preferences, a fast **short-term memory** (STM) for immediate context, and a scalable **long-term memory** (LTM) for durable recall across conversations.
 
 ## Table of Contents
 
 - [Architecture Overview](#architecture-overview)
 - [Concepts: Dense vs Sparse Retrieval](#concepts-dense-vs-sparse-retrieval)
+- [Quick-Reference User Notes](#quick-reference-user-notes)
 - [Short-Term Memory (STM)](#short-term-memory-stm)
 - [Long-Term Memory (LTM)](#long-term-memory-ltm)
   - [Vector Store (Qdrant)](#vector-store-qdrant)
@@ -70,15 +71,16 @@ Memory Spoke Agent
     └── Hierarchical summaries (daily → global)
 ```
 
-The system has three independent data stores, each serving a different recall pattern:
+The system has four independent data stores, each serving a different recall pattern:
 
 | Store | Technology | What it's good at |
 |-------|-----------|-------------------|
+| User notes | Workspace markdown file | Small canonical facts and aliases that should affect future behavior |
 | STM scratchpad | Workspace JSON file | Fast key-value notes, always available, no infra |
 | Vector store | Qdrant | "Find memories similar to X" — semantic similarity |
 | Knowledge graph | Neo4j | "How are X and Y related?" — structured traversal |
 
-At retrieval time, all three are queried and their results are fused.
+At retrieval time, memory context is kept bounded. `user_notes.md` is filtered deterministically against the current user message; STM and LTM retrieval are budgeted separately.
 
 ---
 
@@ -156,6 +158,68 @@ Prax runs both searches in parallel and fuses the ranked results using **Recipro
 - Karpukhin et al., "Dense Passage Retrieval for Open-Domain Question Answering" (EMNLP 2020). [arXiv:2004.04906](https://arxiv.org/abs/2004.04906). Demonstrated that dense retrieval substantially outperforms BM25 for passage retrieval (9-19% absolute improvement in top-20 accuracy).
 - Robertson & Zaragoza, "The Probabilistic Relevance Framework: BM25 and Beyond" (Foundations and Trends in IR, 2009). Formal treatment of BM25 as a probabilistic ranking model.
 - Salton & Buckley, "Term-weighting approaches in automatic text retrieval" (Information Processing & Management, 1988). Original TF-IDF framework.
+
+---
+
+## Quick-Reference User Notes
+
+`user_notes.md` lives at the workspace root and stores the highest-signal,
+cross-session facts that should change Prax's future behavior: timezone,
+name, durable preferences, compact aliases, and stable interests. It is not
+the same thing as STM or LTM:
+
+| Layer | Scope | Retrieval behavior |
+|-------|-------|--------------------|
+| `user_notes.md` | Canonical quick-reference facts | Deterministic snippet retrieval against the current user message |
+| STM | Current/in-progress scratchpad | Bounded working-memory injection |
+| LTM | Semantic durable memory | Vector + graph retrieval when memory infra is available |
+
+### Context Injection
+
+`user_notes.md` is **not injected wholesale**. It can grow over time, and
+dumping the full file into every prompt pollutes context and wastes tokens.
+Instead, `get_workspace_context(user_id, user_input)` calls a cheap
+deterministic retriever:
+
+- Tokenize the current user message.
+- Match against user-note lines and section items.
+- Boost high-signal categories such as timezone for reminder/time queries.
+- Preserve exact aliases such as `NPR`.
+- Inject at most 8 matching lines and 1200 characters.
+
+If no line is relevant, no user-notes context is injected. The full file
+remains available through `user_notes_read` when the user asks broadly about
+stored preferences or personal context.
+
+### Update and Compaction
+
+`user_notes_update` writes the full file content. After each write,
+`save_user_notes()` commits the raw update first, then runs deterministic
+compaction only if the file appears too large or messy:
+
+| Trigger | Threshold |
+|---------|-----------|
+| Size | More than 4096 characters |
+| Line count | More than 80 nonblank lines |
+| Duplicate scalar key | Example: two `timezone:` lines |
+| Duplicate list item | Same bullet repeated in the same section |
+
+When triggered, the compactor:
+
+- Keeps the latest scalar value for keys such as `timezone` and `name`.
+- Deduplicates repeated bullets.
+- Canonicalizes section names.
+- Caps each list section to the most recent 16 items.
+- Writes a second `Compact user notes` git commit.
+
+The raw pre-compaction version is recoverable from workspace git history, so
+compaction keeps the live file concise without silently destroying data.
+
+### Design Constraints
+
+The compactor intentionally does **not** call an LLM. User notes are part of
+the prompt budget control path; cleanup must be fast, deterministic, and
+cheap. Semantic consolidation belongs in LTM, not in the quick-reference file.
 
 ---
 

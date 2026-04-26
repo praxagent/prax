@@ -128,6 +128,112 @@ class TestGetWorkspaceContext:
         assert "1 file(s)" in ctx
         assert "workspace_list" in ctx
 
+    def test_user_notes_not_injected_without_relevance(self, ws_dir):
+        workspace_service.save_user_notes(
+            USER,
+            "\n".join([
+                "preferences:",
+                "- Interpret NPR as NPR News Now.",
+                "- User prefers concise answers.",
+            ]),
+        )
+
+        ctx = workspace_service.get_workspace_context(USER, "what is the weather?")
+
+        assert "Interpret NPR" not in ctx
+        assert "concise answers" not in ctx
+
+    def test_user_notes_injects_relevant_alias_only(self, ws_dir):
+        workspace_service.save_user_notes(
+            USER,
+            "\n".join([
+                "preferences:",
+                "- Interpret NPR as NPR News Now.",
+                "- User prefers concise answers.",
+                "interests:",
+                "- gardening",
+            ]),
+        )
+
+        ctx = workspace_service.get_workspace_context(USER, "NPR")
+
+        assert "Relevant User Notes" in ctx
+        assert "Interpret NPR" in ctx
+        assert "gardening" not in ctx
+
+    def test_user_notes_injects_timezone_for_reminders(self, ws_dir):
+        workspace_service.save_user_notes(
+            USER,
+            "\n".join([
+                "timezone: America/Los_Angeles",
+                "preferences:",
+                "- Interpret NPR as NPR News Now.",
+            ]),
+        )
+
+        ctx = workspace_service.get_workspace_context(USER, "remind me tomorrow")
+
+        assert "America/Los_Angeles" in ctx
+        assert "Interpret NPR" not in ctx
+
+
+class TestUserNotesCompaction:
+    def test_small_clean_user_notes_remain_verbatim(self, ws_dir):
+        content = "\n".join([
+            "timezone: America/Los_Angeles",
+            "preferences:",
+            "- Interpret NPR as NPR News Now.",
+        ]) + "\n"
+
+        workspace_service.save_user_notes(USER, content)
+
+        assert workspace_service.read_user_notes(USER) == content
+
+    def test_duplicate_user_notes_trigger_compaction(self, ws_dir):
+        content = "\n".join([
+            "timezone: UTC",
+            "preferences:",
+            "- Interpret NPR as NPR News Now.",
+            "- Interpret NPR as NPR News Now.",
+            "timezone: America/Los_Angeles",
+        ]) + "\n"
+
+        workspace_service.save_user_notes(USER, content)
+        compacted = workspace_service.read_user_notes(USER)
+
+        assert "timezone: America/Los_Angeles" in compacted
+        assert "timezone: UTC" not in compacted
+        assert compacted.count("Interpret NPR as NPR News Now") == 1
+
+    def test_large_user_notes_are_capped_to_recent_section_items(self, ws_dir):
+        content = "preferences:\n" + "\n".join(
+            f"- preference-item-{i:03d}" for i in range(100)
+        ) + "\n"
+
+        workspace_service.save_user_notes(USER, content)
+        compacted = workspace_service.read_user_notes(USER)
+
+        assert "preference-item-000" not in compacted
+        assert "preference-item-083" not in compacted
+        assert "preference-item-084" in compacted
+        assert "preference-item-099" in compacted
+
+    def test_compaction_preserves_raw_update_in_git_history(self, ws_dir):
+        content = "\n".join([
+            "preferences:",
+            "- duplicate",
+            "- duplicate",
+        ]) + "\n"
+
+        workspace_service.save_user_notes(USER, content)
+        root = workspace_service._workspace_root(USER)
+        result = subprocess.run(
+            ["git", "log", "--oneline"], cwd=root, capture_output=True, text=True,
+        )
+
+        assert "Update user notes" in result.stdout
+        assert "Compact user notes" in result.stdout
+
 
 class TestGitHistory:
     def test_full_lifecycle_commits(self, ws_dir):

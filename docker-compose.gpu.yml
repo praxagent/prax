@@ -1,0 +1,38 @@
+# GPU override for the sandbox container.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d sandbox
+# Or, persistently via .env:
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml
+#
+# Requires on the host:
+#   - NVIDIA driver + GPU (verify with `nvidia-smi`)
+#   - nvidia-container-toolkit installed and registered with Docker
+#     (verify with `docker info | grep -i nvidia` — should list "nvidia"
+#     under Runtimes)
+#
+# What this does:
+#   - Reserves all GPUs on the host for the sandbox container so anything
+#     run via sandbox_shell / opencode / claude-code can use CUDA.
+#   - Sets NVIDIA_VISIBLE_DEVICES + NVIDIA_DRIVER_CAPABILITIES so the
+#     toolkit injects the right libcuda.so / libnvidia-* libraries at
+#     runtime (no CUDA install needed in the image itself).
+#   - Inside the container: `nvidia-smi` works; PyTorch etc. installed
+#     via `pip install torch --index-url https://download.pytorch.org/whl/cuXXX`
+#     pick up the GPU automatically.
+#
+# To pin to specific GPU(s) instead of all, change `count: all` to a
+# number, or use `device_ids: ["0", "2"]` (mutually exclusive with count).
+
+services:
+  sandbox:
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
