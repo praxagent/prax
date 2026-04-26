@@ -215,11 +215,33 @@ When triggered, the compactor:
 The raw pre-compaction version is recoverable from workspace git history, so
 compaction keeps the live file concise without silently destroying data.
 
+### Selective LTM Promotion
+
+Compaction can drop older list items when a section exceeds the live-file cap.
+Some dropped items are still useful long-term preferences. Prax therefore runs
+a conservative promotion filter over dropped items:
+
+- **Promote candidates:** durable natural-language preferences, workflows,
+  aliases, formatting/style preferences, and project constraints.
+- **Do not promote:** duplicate bullets, stale scalar values such as an old
+  `timezone:`, transient reminders/tasks, dated items, or short junk tokens.
+- **Destination:** `MemoryService.remember(..., source="user_notes_compaction")`
+  with tags such as `preference`, `workflow`, `alias`, `project`, or
+  `formatting`.
+- **Limit:** at most 10 promoted items per compaction.
+- **Degradation:** if LTM infrastructure is unavailable, promotion is skipped
+  and the pre-compaction detail remains recoverable from git history.
+
+This is intentionally selective. The goal is to preserve durable signal that
+no longer belongs in the quick-reference file, not to dump every removed bullet
+into semantic memory.
+
 ### Design Constraints
 
-The compactor intentionally does **not** call an LLM. User notes are part of
-the prompt budget control path; cleanup must be fast, deterministic, and
-cheap. Semantic consolidation belongs in LTM, not in the quick-reference file.
+The compactor and promotion classifier intentionally do **not** call an LLM.
+User notes are part of the prompt budget control path; cleanup must be fast,
+deterministic, and cheap. Rich semantic extraction remains the job of the
+normal LTM consolidation pipeline.
 
 ---
 

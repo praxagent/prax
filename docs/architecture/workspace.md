@@ -71,7 +71,7 @@ WORKSPACE_PATH=./workspaces    # Same directory, shared via volume mount
 
 TeamWork expects the workspace directory layout documented in its [Workspace Structure](https://github.com/praxagent/teamwork#workspace-structure) section. Prax's layout (`active/`, `archive/`, `plugins/`, `user_notes.md`, `.git/`) is fully compatible — TeamWork doesn't prescribe internal structure, it just serves what's there.
 
-`user_notes.md` is git-backed and compacted by Prax after oversized or duplicate-heavy updates. The full file is not injected into every prompt; Prax retrieves only request-relevant snippets to avoid context pollution. See [Memory System: Quick-Reference User Notes](../infrastructure/memory.md#quick-reference-user-notes).
+`user_notes.md` is git-backed and compacted by Prax after oversized or duplicate-heavy updates. The full file is not injected into every prompt; Prax retrieves only request-relevant snippets to avoid context pollution. Durable dropped details may be selectively promoted to LTM when memory infrastructure is available. See [Memory System: Quick-Reference User Notes](../infrastructure/memory.md#quick-reference-user-notes).
 
 **Backup:** TeamWork provides a one-click zip download of the workspace from Settings (200 MB cap). This includes all workspace files except `.git/`, caches, and `.env`. For full backups including git history, use `git clone` or `git bundle`.
 

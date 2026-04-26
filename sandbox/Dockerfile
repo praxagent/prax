@@ -59,6 +59,13 @@ RUN curl -fsSL https://code-server.dev/install.sh | sh
 # ── Coding agents ──
 RUN npm install -g opencode-ai @anthropic-ai/claude-code @openai/codex
 
+# Persistence + `exit` resilience now live in TeamWork's terminal
+# router (server-side session that outlives the WS) plus
+# bash-respawn.sh.  No tmux involvement in the auto-shell — tmux owns
+# the screen which broke native xterm.js scrolling and complicated
+# resize.  tmux is still apt-installed for users who want to invoke
+# it manually.
+
 # ── uv (copied direct to /usr/local/bin so the /root volume mount can't
 #       wipe it — see prior incident: installer wrote to /root/.local/bin
 #       which the workspace volume hides on container start).
@@ -78,16 +85,20 @@ WORKDIR /workspace
 COPY opencode.json /opt/opencode.json
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-COPY tmux-shell.sh /usr/local/bin/tmux-shell.sh
+COPY bash-respawn.sh /usr/local/bin/bash-respawn.sh
 COPY chromium-launch.sh /usr/local/bin/chromium-launch.sh
 COPY clipboard-bridge.py /usr/local/bin/clipboard-bridge.py
 COPY supervisord.conf /etc/supervisor/supervisord.conf
 COPY cast-ext/ /opt/prax-cast-ext/
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/tmux-shell.sh /usr/local/bin/chromium-launch.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/bash-respawn.sh /usr/local/bin/chromium-launch.sh
+# tmux is still apt-installed above for opt-in user use (`tmux` from a
+# bash prompt just works).  We just don't auto-wrap the shell in it
+# anymore — that broke native xterm.js scrolling, resize behavior, and
+# was a constant source of "why is the terminal weird" tickets.
 
 # Set tmux-shell as the default shell so terminal WebSocket connections
 # attach to the persistent tmux session instead of spawning fresh shells.
-ENV SHELL=/usr/local/bin/tmux-shell.sh
+ENV SHELL=/bin/bash
 # DISPLAY for the virtual framebuffer — baked into the image so docker exec
 # commands (sandbox_shell, terminal sessions) can interact with the desktop.
 ENV DISPLAY=:99
