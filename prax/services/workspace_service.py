@@ -19,6 +19,26 @@ from prax.settings import settings
 
 logger = logging.getLogger(__name__)
 
+_USER_NOTES_CONTEXT_MAX_CHARS = 1200
+_USER_NOTES_MAX_MATCHES = 8
+_USER_NOTES_STOPWORDS = {
+    "about", "after", "again", "also", "and", "any", "are", "but", "can",
+    "could", "does", "for", "from", "get", "give", "have", "how", "into",
+    "just", "know", "like", "make", "more", "need", "now", "our", "please",
+    "should", "that", "the", "their", "them", "then", "there", "this",
+    "what", "when", "where", "which", "who", "why", "with", "would", "you",
+    "your",
+}
+_USER_NOTES_TIME_QUERY_TOKENS = {
+    "alarm", "calendar", "date", "deadline", "later", "morning", "night",
+    "remind", "reminder", "schedule", "scheduled", "time", "timezone",
+    "today", "tomorrow", "tonight",
+}
+_USER_NOTES_IDENTITY_QUERY_TOKENS = {"name", "call", "called", "identity"}
+_USER_NOTES_COMPACT_MIN_CHARS = 4096
+_USER_NOTES_COMPACT_MIN_LINES = 80
+_USER_NOTES_SECTION_MAX_ITEMS = 16
+
 # ---------------------------------------------------------------------------
 # Workspace .gitignore — written on init to every new workspace.
 # Blocks media, LaTeX build artifacts, and Python caches.
@@ -218,6 +238,13 @@ def save_user_notes(user_id: str, content: str) -> str:
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(content)
         git_commit(root, "Update user notes")
+        if _should_compact_user_notes(content):
+            compacted = _compact_user_notes_content(content)
+            if compacted.strip() and compacted.strip() != content.strip():
+                with open(filepath, "w", encoding="utf-8") as f:
+                    f.write(compacted)
+                git_commit(root, "Compact user notes")
+                logger.info("Compacted user_notes.md for %s", user_id)
         logger.info("Updated user_notes.md for %s", user_id)
         return filepath
 
@@ -230,6 +257,259 @@ def read_user_notes(user_id: str) -> str:
         return ""
     with open(filepath, encoding="utf-8") as f:
         return f.read()
+
+
+def _canonical_user_notes_key(key: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", key.lower()).strip("_")
+
+
+def _display_user_notes_key(key: str) -> str:
+    canonical = _canonical_user_notes_key(key)
+    preferred = {
+        "timezone": "timezone",
+        "time_zone": "timezone",
+        "name": "name",
+        "preferences": "preferences",
+        "interests": "interests",
+    }
+    return preferred.get(canonical, canonical.replace("_", " "))
+
+
+def _normalize_user_notes_item(line: str) -> str:
+    line = re.sub(r"\s+", " ", line.strip())
+    if line.startswith(("-", "*")):
+        line = line[1:].strip()
+    return f"- {line}" if line else ""
+
+
+def _fingerprint_user_notes_item(line: str) -> str:
+    line = line.strip().lower()
+    if line.startswith(("-", "*")):
+        line = line[1:].strip()
+    return re.sub(r"\s+", " ", line)
+
+
+def _user_notes_scalar(line: str) -> tuple[str, str] | None:
+    if line.startswith(("-", "*")):
+        return None
+    match = re.match(r"^([A-Za-z][\w /-]{0,60}):\s+(.+)$", line)
+    if not match:
+        return None
+    key = _display_user_notes_key(match.group(1))
+    value = re.sub(r"\s+", " ", match.group(2).strip())
+    if not key or not value:
+        return None
+    return key, value
+
+
+def _should_compact_user_notes(content: str) -> bool:
+    stripped_lines = [line.strip() for line in content.splitlines() if line.strip()]
+    if len(content) > _USER_NOTES_COMPACT_MIN_CHARS:
+        return True
+    if len(stripped_lines) > _USER_NOTES_COMPACT_MIN_LINES:
+        return True
+
+    scalar_keys: set[str] = set()
+    item_keys: set[tuple[str, str]] = set()
+    section = ""
+    for line in stripped_lines:
+        if _is_user_notes_section_header(line):
+            section = _display_user_notes_key(line[:-1])
+            continue
+        scalar = _user_notes_scalar(line)
+        if scalar:
+            key, _value = scalar
+            if key in scalar_keys:
+                return True
+            scalar_keys.add(key)
+            section = ""
+            continue
+        fingerprint = _fingerprint_user_notes_item(line)
+        item_key = (section, fingerprint)
+        if fingerprint and item_key in item_keys:
+            return True
+        item_keys.add(item_key)
+    return False
+
+
+def _compact_user_notes_content(content: str) -> str:
+    """Rewrite user notes into a concise canonical form.
+
+    The compactor is intentionally deterministic: no LLM call, no semantic
+    guessing.  It removes duplicate lines, resolves duplicate scalar keys by
+    keeping the latest value, and caps oversized list sections to the most
+    recent items.  The raw pre-compaction write is committed first by
+    ``save_user_notes``, so recoverability comes from git history.
+    """
+    scalar_values: dict[str, tuple[str, str, int]] = {}
+    section_names: dict[str, tuple[str, int]] = {}
+    section_items: dict[str, dict[str, tuple[str, int]]] = {}
+    loose_items: dict[str, tuple[str, int]] = {}
+
+    section = ""
+    for idx, raw_line in enumerate(content.splitlines()):
+        line = raw_line.strip()
+        if not line:
+            continue
+        if _is_user_notes_section_header(line):
+            section = _display_user_notes_key(line[:-1])
+            section_names[section] = (section, idx)
+            section_items.setdefault(section, {})
+            continue
+
+        scalar = _user_notes_scalar(line)
+        if scalar:
+            key, value = scalar
+            scalar_values[key] = (key, value, idx)
+            section = ""
+            continue
+
+        normalized = _normalize_user_notes_item(line)
+        if not normalized:
+            continue
+        fingerprint = _fingerprint_user_notes_item(normalized)
+        if section:
+            section_names.setdefault(section, (section, idx))
+            section_items.setdefault(section, {})[fingerprint] = (normalized, idx)
+        else:
+            loose_items[fingerprint] = (normalized, idx)
+
+    lines: list[str] = []
+    scalar_order = {
+        "timezone": 0,
+        "name": 1,
+    }
+    for key, value, _idx in sorted(
+        scalar_values.values(),
+        key=lambda item: (scalar_order.get(item[0], 100), item[2]),
+    ):
+        lines.append(f"{key}: {value}")
+
+    if loose_items:
+        section_items.setdefault("notes", {}).update(loose_items)
+        section_names.setdefault("notes", ("notes", len(content.splitlines())))
+
+    preferred_sections = {
+        "preferences": 0,
+        "interests": 1,
+        "notes": 99,
+    }
+    sorted_sections = sorted(
+        section_items.items(),
+        key=lambda item: (
+            preferred_sections.get(item[0], 50),
+            section_names.get(item[0], (item[0], 0))[1],
+        ),
+    )
+    for section_key, items_by_fingerprint in sorted_sections:
+        items = sorted(items_by_fingerprint.values(), key=lambda item: item[1])
+        if not items:
+            continue
+        if lines:
+            lines.append("")
+        lines.append(f"{section_key}:")
+        capped = items[-_USER_NOTES_SECTION_MAX_ITEMS:]
+        for item, _idx in capped:
+            lines.append(item)
+
+    return "\n".join(lines).rstrip() + "\n" if lines else ""
+
+
+def _tokenize_user_notes_text(text: str) -> set[str]:
+    """Return lightweight matching tokens for user-note retrieval."""
+    tokens = set(re.findall(r"[a-z0-9][a-z0-9_/-]{1,}", text.lower()))
+    return {t for t in tokens if t not in _USER_NOTES_STOPWORDS}
+
+
+def _is_user_notes_section_header(line: str) -> bool:
+    return (
+        line.endswith(":")
+        and not line.startswith(("-", "*"))
+        and len(line) <= 80
+    )
+
+
+def _build_relevant_user_notes_context(notes: str, user_input: str) -> str:
+    """Select a bounded set of user-note snippets relevant to this turn.
+
+    ``user_notes.md`` can grow over time.  Injecting the whole file every
+    turn is both expensive and pollutes task interpretation, so this keeps
+    retrieval deterministic and cheap: exact-ish token overlap plus a few
+    high-signal heuristics for time/identity requests.
+    """
+    notes = notes.strip()
+    if not notes or not user_input.strip():
+        return ""
+
+    query_tokens = _tokenize_user_notes_text(user_input)
+    if not query_tokens:
+        return ""
+
+    time_query = bool(query_tokens & _USER_NOTES_TIME_QUERY_TOKENS)
+    identity_query = bool(query_tokens & _USER_NOTES_IDENTITY_QUERY_TOKENS)
+
+    matches: list[tuple[int, int, str]] = []
+    section = ""
+    for idx, raw_line in enumerate(notes.splitlines()):
+        line = raw_line.strip()
+        if not line:
+            continue
+        if _is_user_notes_section_header(line):
+            section = line[:-1].strip()
+            continue
+
+        line_tokens = _tokenize_user_notes_text(line)
+        overlap = query_tokens & line_tokens
+        score = len(overlap) * 4
+
+        lower = line.lower()
+        if time_query and ("timezone" in line_tokens or "timezone:" in lower):
+            score += 8
+        if identity_query and (lower.startswith("name:") or " name " in f" {lower} "):
+            score += 8
+
+        # Preserve short all-caps aliases such as NPR even when punctuation
+        # makes token boundaries awkward.
+        for token in query_tokens:
+            if len(token) >= 3 and token in lower:
+                score += 1
+
+        if score <= 0:
+            continue
+
+        display = line
+        if section and line.startswith(("-", "*")):
+            display = f"{section}: {line}"
+        matches.append((score, idx, display))
+
+    if not matches:
+        return ""
+
+    selected = [
+        line for _score, _idx, line in sorted(matches, key=lambda item: (-item[0], item[1]))[
+            :_USER_NOTES_MAX_MATCHES
+        ]
+    ]
+
+    rendered_lines: list[str] = []
+    total = 0
+    for line in selected:
+        extra = len(line) + 3
+        if total + extra > _USER_NOTES_CONTEXT_MAX_CHARS:
+            break
+        rendered_lines.append(f"- {line}")
+        total += extra
+
+    if not rendered_lines:
+        return ""
+
+    return (
+        "\n\n## Relevant User Notes\n"
+        "Only snippets matching the current request are injected. Use "
+        "user_notes_read for a full notes lookup when the user asks about "
+        "stored preferences or past personal context.\n"
+        + "\n".join(rendered_lines)
+    )
 
 
 def append_link(user_id: str, url: str, description: str = "") -> str:
@@ -614,27 +894,25 @@ def read_instructions(user_id: str) -> str:
         return f.read()
 
 
-def get_workspace_context(user_id: str) -> str:
+def get_workspace_context(user_id: str, user_input: str = "") -> str:
     """Build a context string for the system prompt listing active workspace files.
 
-    If ``user_notes.md`` exists in the workspace root, its contents are
-    included so the agent always has the user's preferences in context.
+    ``user_notes.md`` is not injected wholesale.  Only a bounded set of
+    request-relevant snippets is included, keeping the full file available
+    through ``user_notes_read`` without paying its context cost every turn.
     """
     parts: list[str] = []
 
-    # Load user notes if they exist.
+    # Load only relevant user-note snippets if they exist.
     root = workspace_root(user_id)
     notes_path = os.path.join(root, "user_notes.md")
     if os.path.isfile(notes_path):
         try:
             with open(notes_path, encoding="utf-8") as f:
-                notes = f.read().strip()
-            if notes:
-                parts.append(
-                    "\n\n## User Notes\n"
-                    "Things you've learned about this user (maintained by you in user_notes.md):\n"
-                    f"{notes}"
-                )
+                notes = f.read()
+            notes_context = _build_relevant_user_notes_context(notes, user_input)
+            if notes_context:
+                parts.append(notes_context)
         except Exception:
             pass
 

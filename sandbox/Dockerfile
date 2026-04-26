@@ -2,6 +2,21 @@ FROM debian:trixie-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# ──────────────────────────────────────────────────────────────────────
+# IMPORTANT: do NOT install user-facing tooling under /root/...
+#
+# At runtime, docker-compose.yml bind-mounts the user's empty
+# `${WORKSPACE_DIR}/${PRAX_USER_ID}/.sandbox/home` over /root, which
+# hides everything baked into /root at build time.  uv was previously
+# installed to /root/.local/bin/uv with a symlink in /usr/local/bin —
+# the symlink ended up dangling on every fresh container start.
+#
+# Install long-lived binaries to /usr/local/bin/ or /opt/ instead.
+# Caches (apt, pip, npm, uv) under /root are fine to lose — they'll
+# rebuild on demand.  The entrypoint scans for dangling PATH symlinks
+# at startup and logs a warning if anything regresses.
+# ──────────────────────────────────────────────────────────────────────
+
 # ── System packages ──
 RUN apt-get update -qq && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv \
@@ -13,6 +28,7 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
     ffmpeg poppler-utils pandoc hugo \
     git curl wget jq tmux \
     socat \
+    supervisor \
     xvfb x11vnc xfce4 xterm dbus-x11 \
     novnc websockify \
     xdotool scrot imagemagick psmisc \
@@ -40,11 +56,20 @@ RUN echo 'export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --enable-remote-extensions"' \
 # ── code-server (web-based VS Code, works on amd64 + arm64) ──
 RUN curl -fsSL https://code-server.dev/install.sh | sh
 
-# ── Coding agents + uv ──
-RUN npm install -g opencode-ai @anthropic-ai/claude-code @openai/codex \
-    && curl -LsSf https://astral.sh/uv/install.sh | sh \
-    && ln -s /root/.local/bin/uv /usr/local/bin/uv \
-    && ln -s /root/.local/bin/uvx /usr/local/bin/uvx
+# ── Coding agents ──
+RUN npm install -g opencode-ai @anthropic-ai/claude-code @openai/codex
+
+# ── uv (copied direct to /usr/local/bin so the /root volume mount can't
+#       wipe it — see prior incident: installer wrote to /root/.local/bin
+#       which the workspace volume hides on container start).
+COPY --from=ghcr.io/astral-sh/uv@sha256:e49fde5daf002023f0a2e2643861ce9ca8a8da5b73d0e6db83ef82ff99969baf /uv /uvx /usr/local/bin/
+
+# ── Persistent scratch Python venv ──
+# Keep ad-hoc Python deps out of Debian's externally-managed system Python.
+# The entrypoint puts this venv on PATH; Prax can use it for temporary audio
+# transcription without writing artifacts into the user's workspace.
+RUN uv venv /opt/prax-venv --python python3 \
+    && uv pip install --python /opt/prax-venv/bin/python faster-whisper
 
 WORKDIR /workspace
 
@@ -54,9 +79,11 @@ COPY opencode.json /opt/opencode.json
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY tmux-shell.sh /usr/local/bin/tmux-shell.sh
+COPY chromium-launch.sh /usr/local/bin/chromium-launch.sh
 COPY clipboard-bridge.py /usr/local/bin/clipboard-bridge.py
+COPY supervisord.conf /etc/supervisor/supervisord.conf
 COPY cast-ext/ /opt/prax-cast-ext/
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/tmux-shell.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/tmux-shell.sh /usr/local/bin/chromium-launch.sh
 
 # Set tmux-shell as the default shell so terminal WebSocket connections
 # attach to the persistent tmux session instead of spawning fresh shells.

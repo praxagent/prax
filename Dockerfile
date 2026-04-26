@@ -37,6 +37,7 @@ ARG TARGETARCH
 # ── 1. System packages ──────────────────────────────────────────────
 RUN apt-get update -qq && apt-get install -y --no-install-recommends \
     git ffmpeg curl hugo ca-certificates gnupg gosu \
+    supervisor \
     imagemagick \
     texlive-latex-base texlive-latex-extra texlive-latex-recommended texlive-fonts-recommended \
     texlive-science lmodern cm-super \
@@ -119,6 +120,11 @@ COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-dev
 
 COPY . .
+
+# Ensure supervisord launchers are executable (lost on COPY from some hosts).
+RUN chmod +x scripts/entrypoint-combined.sh scripts/entrypoint-lite.sh \
+             scripts/ngrok-launch.sh scripts/watchdog-launch.sh \
+             scripts/teamwork-launch.sh
 
 # ── 10. Patchright + NLTK ───────────────────────────────────────────
 RUN uv run patchright install chromium

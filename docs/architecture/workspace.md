@@ -8,7 +8,7 @@
 workspaces/{user_id}/          ← phone number or Discord user ID
 ├── .git/                  ← full version history
 ├── schedules.yaml         ← cron schedule definitions (YAML)
-├── user_notes.md          ← dynamic notes about the user (timezone, preferences, personality)
+├── user_notes.md          ← compact quick-reference facts about the user (timezone, aliases, key preferences)
 ├── links.md               ← running log of every URL the user has shared
 ├── todos.json             ← user's personal to-do list
 ├── instructions.md        ← system prompt reference (agent can re-read)
@@ -70,6 +70,8 @@ WORKSPACE_PATH=./workspaces    # Same directory, shared via volume mount
 ```
 
 TeamWork expects the workspace directory layout documented in its [Workspace Structure](https://github.com/praxagent/teamwork#workspace-structure) section. Prax's layout (`active/`, `archive/`, `plugins/`, `user_notes.md`, `.git/`) is fully compatible — TeamWork doesn't prescribe internal structure, it just serves what's there.
+
+`user_notes.md` is git-backed and compacted by Prax after oversized or duplicate-heavy updates. The full file is not injected into every prompt; Prax retrieves only request-relevant snippets to avoid context pollution. See [Memory System: Quick-Reference User Notes](../infrastructure/memory.md#quick-reference-user-notes).
 
 **Backup:** TeamWork provides a one-click zip download of the workspace from Settings (200 MB cap). This includes all workspace files except `.git/`, caches, and `.env`. For full backups including git history, use `git clone` or `git bundle`.
 

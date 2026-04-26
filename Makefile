@@ -1,4 +1,4 @@
-.PHONY: lint layers test actions ci tailscale-up tailscale-down tailscale-status
+.PHONY: lint layers test actions ci tailscale-up tailscale-down tailscale-status sandbox-gpu sandbox-gpu-check
 
 # Tests that require a fully-configured Docker sandbox with a live
 # /plugin_data mount.  These pass locally only when the sandbox
@@ -54,3 +54,38 @@ tailscale-down:
 
 tailscale-status:
 	@sudo tailscale serve status
+
+# ── GPU sandbox ─────────────────────────────────────────────────────
+# Recreate the sandbox container with the GPU compose override layered
+# in (docker-compose.gpu.yml).  Requires nvidia-container-toolkit on the
+# host — `make sandbox-gpu-check` verifies that before trying.
+#
+# Persist by adding to .env:
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml
+# Then plain `docker compose up -d` always layers the override in.
+
+sandbox-gpu-check:
+	@command -v nvidia-smi >/dev/null 2>&1 || { \
+	  echo "ERROR: nvidia-smi not found. Install the NVIDIA driver first."; exit 1; }
+	@docker info 2>/dev/null | grep -qi 'Runtimes:.*nvidia' || { \
+	  echo "ERROR: nvidia container runtime not registered with Docker."; \
+	  echo "Install nvidia-container-toolkit: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html"; \
+	  exit 1; }
+	@nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
+
+sandbox-gpu: sandbox-gpu-check
+	docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d sandbox --force-recreate
+	@echo
+	@echo "Waiting for sandbox to come up..."
+	@for i in 1 2 3 4 5 6 7 8 9 10; do \
+	  docker compose exec -T sandbox true 2>/dev/null && break; \
+	  sleep 1; \
+	done
+	@echo
+	@echo "── GPU visible inside sandbox ──"
+	@docker compose exec -T sandbox nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv
+	@echo
+	@echo "Sandbox now has GPU access. To make this persistent across all"
+	@echo "future \`docker compose\` commands, add this line to .env:"
+	@echo
+	@echo "  COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml"
