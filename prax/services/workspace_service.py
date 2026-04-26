@@ -1587,23 +1587,24 @@ def get_workspace_plugins_dir(user_id: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# File sharing (publish / unpublish)
+# File sharing (publish / unpublish) — backed by share_registry
 # ---------------------------------------------------------------------------
 
-# In-memory registry of published files.  token -> (absolute file path, public name).
-_published_files: dict[str, tuple[str, str]] = {}
-_publish_lock = threading.Lock()
 
-
-def publish_file(user_id: str, relative_path: str) -> dict:
+def publish_file(user_id: str, relative_path: str, *,
+                 channel: str | None = None) -> dict:
     """Publish a workspace file so it can be accessed via a public URL.
 
-    Only the specific file is shared — not the whole workspace. Both the
+    Only the specific file is shared — not the whole workspace.  Both the
     path token and the served filename are randomized UUIDs so the URL
-    reveals nothing about the file's real name or contents.
+    reveals nothing about the file's real name or contents.  The share
+    is persisted in the per-user registry at ``{workspace}/.shares.json``,
+    so it survives restarts and shows up in workspace_list_shares.
 
     Returns dict with 'url' and 'token', or 'error'.
     """
+    from prax.services import share_registry
+
     root = workspace_root(user_id)
     abs_path = os.path.abspath(os.path.join(root, relative_path))
     # Safety: ensure path stays within workspace.
@@ -1612,51 +1613,41 @@ def publish_file(user_id: str, relative_path: str) -> dict:
     if not os.path.isfile(abs_path):
         return {"error": f"File not found: {relative_path}"}
 
-    from prax.utils.ngrok import get_ngrok_url
-    ngrok_url = get_ngrok_url()
-    if not ngrok_url:
-        return {"error": "NGROK_URL is not configured — cannot generate a public link."}
-
-    import uuid
-    token = uuid.uuid4().hex  # 32 random hex chars
-    # Randomize the public filename — only preserve the extension so
-    # browsers / media players know the content type.
-    ext = os.path.splitext(abs_path)[1]  # e.g. ".mp4"
-    public_name = f"{uuid.uuid4().hex}{ext}"
-
-    with _publish_lock:
-        _published_files[token] = (abs_path, public_name)
-
-    url = f"{ngrok_url.rstrip('/')}/shared/{token}/{public_name}"
-    return {"url": url, "token": token, "file": relative_path}
+    entry = share_registry.register_file(user_id, abs_path, channel=channel)
+    url = share_registry.public_url_for(entry)
+    if not url:
+        # Registered, but no public URL available — caller decides how to
+        # surface this (probably "saved, but ngrok isn't up — link will
+        # work once it is").
+        return {
+            "token": entry["token"],
+            "file": relative_path,
+            "warning": "Share registered but NGROK_URL is not configured — link is not yet reachable.",
+        }
+    return {"url": url, "token": entry["token"], "file": relative_path}
 
 
-def unpublish_file(token: str) -> dict:
+def unpublish_file(user_id: str, token: str) -> dict:
     """Remove a previously published file share."""
-    with _publish_lock:
-        if token in _published_files:
-            del _published_files[token]
-            return {"status": "unpublished", "token": token}
+    from prax.services import share_registry
+    if share_registry.revoke(user_id, token):
+        return {"status": "unpublished", "token": token}
     return {"error": f"Token not found: {token}"}
 
 
 def get_published_file(token: str, filename: str | None = None) -> str | None:
-    """Look up a published file by its share token.
+    """Look up a published file by its share token (cross-user).
 
-    If *filename* is provided, it must match the randomized public name that
-    was generated when the file was published — this prevents a valid token
-    from being reused with a different filename.
+    The /shared/<token>/<filename> route has no user context, so this
+    scans every workspace's registry.  If *filename* is provided, it
+    must match the randomized public name minted when the file was
+    published — protects against the (theoretical) token collision.
 
     Returns the absolute path to the real file, or None.
     """
-    with _publish_lock:
-        entry = _published_files.get(token)
-        if entry is None:
-            return None
-        abs_path, public_name = entry
-        if filename is not None and filename != public_name:
-            return None
-        return abs_path
+    from prax.services import share_registry
+    entry = share_registry.find_file_share_globally(token, public_name=filename)
+    return entry.get("abs_path") if entry else None
 
 
 # ---------------------------------------------------------------------------

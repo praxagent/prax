@@ -37,16 +37,15 @@ def update_draft(slug: str, content: str, title: str | None = None) -> dict:
     Returns dict with ``slug``, ``url``, and ``title`` on success.
     """
     from prax.services.note_service import publish_notes, update_note
-    from prax.utils.ngrok import get_ngrok_url
+    from prax.settings import settings
 
     user_id = _get_user_id()
+    teamwork_url = settings.teamwork_base_url.rstrip("/")
     try:
         result = update_note(user_id, slug, content=content, title=title)
-        base_url = get_ngrok_url()
-        if base_url:
-            pub = publish_notes(user_id, base_url, slug=slug)
-            if "url" in pub:
-                result["url"] = pub["url"]
+        pub = publish_notes(user_id, teamwork_url, slug=slug)
+        if "url" in pub:
+            result["url"] = pub["url"]
         logger.info("Updated draft '%s' → %s", slug, result.get("url"))
         return result
     except Exception as exc:

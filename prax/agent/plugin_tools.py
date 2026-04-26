@@ -672,12 +672,21 @@ def workspace_push() -> str:
 
 @tool
 def workspace_share_file(file_path: str) -> str:
-    """Publish a workspace file and get a public URL to share with the user.
+    """Publish a workspace file at a public ngrok URL — DO NOT call without
+    explicit user consent.
 
-    Use this when you need to share a large file (video, PDF, etc.) that
-    can't be sent inline via SMS or Discord. The URL is accessible via ngrok.
-    Only the specific file you publish is shared — nothing else in the
-    workspace is exposed.
+    This puts the file on the public internet (token-gated, but anyone with
+    the token can fetch it).  Only call this when:
+      • the user has explicitly said "share this", "publish this", or
+        equivalent, AND
+      • the active channel can't carry the file inline — typically SMS or
+        Discord.  For TeamWork users, point them at the file in their
+        workspace browser instead.
+
+    Only the specific file you pass is shared; nothing else is exposed.
+    The share is persisted in the user's share registry and survives
+    restarts — list active shares with workspace_list_shares, revoke with
+    workspace_unshare_file.
 
     Args:
         file_path: Path relative to the workspace root (e.g. "active/presentation.mp4").
@@ -689,6 +698,11 @@ def workspace_share_file(file_path: str) -> str:
     result = publish_file(uid, file_path)
     if "error" in result:
         return f"Error: {result['error']}"
+    if "warning" in result:
+        return (
+            f"File registered as shared (token `{result['token']}`), but "
+            f"NGROK_URL isn't configured so the link isn't reachable yet."
+        )
     return f"File shared: {result['url']}"
 
 
@@ -699,11 +713,42 @@ def workspace_unshare_file(token: str) -> str:
     Args:
         token: The share token returned by workspace_share_file.
     """
+    uid = current_user_id.get()
+    if not uid:
+        return "Error: no active user context."
     from prax.services.workspace_service import unpublish_file
-    result = unpublish_file(token)
+    result = unpublish_file(uid, token)
     if "error" in result:
         return f"Error: {result['error']}"
     return "File link removed."
+
+
+@tool
+def workspace_list_shares() -> str:
+    """List every active public share for the current user (files, courses, notes).
+
+    Each entry shows the kind, the shareable URL (or a "no public URL" note
+    if ngrok isn't up), the token, and when/where the share was created.
+    Useful before adding a new share, or to check what's currently exposed.
+    """
+    uid = current_user_id.get()
+    if not uid:
+        return "Error: no active user context."
+    from prax.services import share_registry
+    entries = share_registry.list_all(uid)
+    if not entries:
+        return "No active shares."
+    lines = []
+    for e in entries:
+        kind = e.get("kind", "?")
+        url = e.get("url") or "(no public URL — NGROK_URL not configured)"
+        ident = e.get("slug") or e.get("public_name") or "?"
+        when = e.get("created_at", "?")
+        via = e.get("created_via", "?")
+        lines.append(
+            f"- {kind}: {ident}\n  url: {url}\n  token: {e['token']} (created {when} via {via})"
+        )
+    return "\n".join(lines)
 
 
 @tool
@@ -1012,4 +1057,5 @@ def build_plugin_tools() -> list:
         workspace_push,
         workspace_share_file,
         workspace_unshare_file,
+        workspace_list_shares,
     ]

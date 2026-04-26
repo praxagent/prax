@@ -188,42 +188,60 @@ def course_save_material(course_id: str, filename: str, content: str) -> str:
 
 
 @tool
-def course_publish(course_id: str) -> str:
-    """Publish a course as a Hugo static blog, accessible via ngrok.
+def course_publish(course_id: str, public: bool = False) -> str:
+    """Build a course as a Hugo static site, served by TeamWork.
 
     Generates Hugo markdown from ALL courses and builds a single static site.
-    Each course is a section with its own index and module pages.  The site is
-    served at /courses/<course_id>/ via the main Flask app.
-
-    Requires Hugo to be installed (available in the sandbox Docker image)
-    and NGROK_URL to be configured.
+    Each course is a section with its own index and module pages.
 
     Args:
         course_id: The course to publish (triggers a full site rebuild).
+        public: When True, also register the course in the user's share
+            registry so it's reachable over the public ngrok URL.  Default
+            False — only the local TeamWork URL is returned, which the user
+            reaches via localhost / Tailscale / SSH tunnel.  Only set True
+            when the user has explicitly asked to share the course
+            publicly.
     """
-    from prax.utils.ngrok import get_ngrok_url
+    from prax.services import share_registry
+    from prax.settings import settings
 
     uid = _get_user_id()
-    base_url = get_ngrok_url()
-    if not base_url:
-        return (
-            "Cannot publish — NGROK_URL is not configured.\n"
-            "Set NGROK_URL in your .env file to enable public course links."
-        )
+    teamwork_url = settings.teamwork_base_url.rstrip("/")
 
     try:
-        result = course_service.build_course_site(uid, course_id, base_url)
+        result = course_service.build_course_site(uid, course_id, teamwork_url)
         if "error" in result:
             return f"Hugo build failed: {result['error']}"
-        return (
-            f"Course published!\n"
-            f"URL: {result['url']}\n"
-            f"All courses are included in the site. Republish anytime to update."
-        )
     except FileNotFoundError:
         return f"Course `{course_id}` not found."
     except Exception as e:
         return f"Error publishing course: {e}"
+
+    private_url = f"{teamwork_url}/courses/{course_id}/"
+    if not public:
+        return (
+            f"Course built locally.\n"
+            f"Local URL: {private_url}\n"
+            f"This is reachable on your network (or via Tailscale / SSH tunnel) "
+            f"but not publicly. To share it on the open internet, ask me to "
+            f"publish it publicly."
+        )
+
+    entry = share_registry.register_course(uid, course_id)
+    public_url = share_registry.public_url_for(entry)
+    if not public_url:
+        return (
+            f"Course built and registered as public (token `{entry['token']}`),\n"
+            f"but NGROK_URL is not configured so the public link isn't reachable.\n"
+            f"Local URL: {private_url}"
+        )
+    return (
+        f"Course published publicly.\n"
+        f"Public URL: {public_url}\n"
+        f"Local URL:  {private_url}\n"
+        f"Revoke with workspace_unshare_file using token `{entry['token']}`."
+    )
 
 
 def build_course_tools() -> list:

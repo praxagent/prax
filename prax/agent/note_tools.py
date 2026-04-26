@@ -150,15 +150,10 @@ def note_update(note_id: str, content: str, title: str = "", tags: str = "") -> 
             tags=tag_list,
         )
 
-        # Publish if NGROK is available; degrade gracefully if not.
-        from prax.utils.ngrok import get_ngrok_url
-        base_url = get_ngrok_url()
-        if not base_url:
-            return (
-                f"Note updated: **{meta['title']}**\n"
-                f"(saved locally — NGROK_URL not configured for web publishing)"
-            )
-        result = note_service.publish_notes(uid, base_url, slug=meta["slug"])
+        # Always rebuild — TeamWork serves the local URL, no ngrok needed.
+        from prax.settings import settings
+        teamwork_url = settings.teamwork_base_url.rstrip("/")
+        result = note_service.publish_notes(uid, teamwork_url, slug=meta["slug"])
         if "error" in result:
             # Note is saved — Hugo publish is best-effort for the web page.
             import logging

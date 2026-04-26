@@ -28,11 +28,12 @@ actions:
 ci: actions lint layers test
 	@echo "\nAll CI checks passed."
 
-# ── Tailscale Serve mappings for remote (laptop) access ──
-# noVNC / CDP / WebRTC all require a secure context (HTTPS), so the
-# laptop needs HTTPS URLs for the prax stack.  Each `tailscale serve`
-# command listens on a tailnet port and proxies to the matching
-# localhost port on this host:
+# ── Tailscale Serve mappings — HOST-INSTALLED FALLBACK ────────────────
+# Preferred path is the dockerized sidecar (set TS_AUTHKEY +
+# COMPOSE_PROFILES=tailscale in .env, then `docker compose up`).  These
+# targets remain for users who already have `tailscaled` installed on
+# the host and don't want a sidecar — they configure the same two
+# tailnet→localhost mappings the sidecar provides:
 #   :443  → :3000  (TeamWork UI; Desktop + Browser WS flow through same-origin)
 #   :3001 → :3002  (Grafana — offset host port avoids 0.0.0.0 vs tailnet-IP conflict)
 # HTTPS must be enabled on your tailnet: admin console → DNS → HTTPS Certificates.

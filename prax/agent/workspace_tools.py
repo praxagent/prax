@@ -353,8 +353,8 @@ def workspace_send_file(filename: str, message: str = "") -> str:
     # Fall back to ngrok share link.
     try:
         result = workspace_service.publish_file(uid, f"active/{filename}")
-        if "error" not in result:
-            url = result["url"]
+        url = result.get("url")
+        if "error" not in result and url:
             # Try to send the link via the user's channel.
             _deliver_share_link(uid, url, filename, message)
             return (

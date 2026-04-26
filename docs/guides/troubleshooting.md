@@ -4,7 +4,9 @@
 
 - **Docker build "not enough free space":** Run `docker system prune -a` to remove unused images, containers, and build cache. Add `--volumes` if you also want to reclaim volume space (this deletes data in unnamed volumes). On macOS, Docker Desktop's disk image can also be resized in Settings → Resources.
 - **403 from `/transcribe`:** Ensure the calling number exists in `PHONE_TO_NAME_MAP`.
-- **ngrok 502 / Twilio timeout:** Confirm the Flask process is running and ngrok points to the correct port.
+- **ngrok 502 / Twilio timeout:** Confirm the Flask process is running and ngrok points to the correct port (5001 for Twilio webhooks).
+- **Course/note URL 404 over ngrok:** Course/note pages no longer auto-publish to ngrok — they're served by TeamWork at `TEAMWORK_BASE_URL` by default. To make a specific page publicly reachable, the user must explicitly opt in (e.g. `course_publish(course_id, public=True)`), which adds an entry to `workspaces/{user}/.shares.json`. Use `workspace_list_shares` to inspect the registry.
+- **Tailscale sidecar doesn't start:** Confirm both `TS_AUTHKEY` and `COMPOSE_PROFILES=tailscale` are set in `.env` — without `COMPOSE_PROFILES`, Compose silently skips the service. If it starts but doesn't appear in the tailnet, check `docker compose logs tailscale` for an auth error (most common cause: ephemeral or one-off key — must be reusable + non-ephemeral + pre-approved).
 - **PDF extraction fails:** Ensure Java 11+ is installed (`java -version`).
 - **LangChain provider errors:** `prax/agent/llm_factory.py` validates missing API keys; double-check `.env`.
 - **Sandbox won't start:** In Docker Compose mode, check `docker compose logs sandbox` — the app waits for the sandbox health check. In local mode, verify Docker Desktop is running (`docker info`). Build the sandbox image: `docker build -t prax-sandbox:latest sandbox/`.

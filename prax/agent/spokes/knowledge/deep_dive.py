@@ -347,18 +347,17 @@ def _note_publisher(
 ) -> dict:
     """Publish a note via the note_service."""
     from prax.services.note_service import publish_notes, save_and_publish, update_note
-    from prax.utils.ngrok import get_ngrok_url
+    from prax.settings import settings
 
     uid = current_user_id.get() or "unknown"
+    teamwork_url = settings.teamwork_base_url.rstrip("/")
     try:
         if slug:
             # Update existing note.
             result = update_note(uid, slug, content=content, title=title)
-            base_url = get_ngrok_url()
-            if base_url:
-                pub = publish_notes(uid, base_url, slug=slug)
-                if "url" in pub:
-                    result["url"] = pub["url"]
+            pub = publish_notes(uid, teamwork_url, slug=slug)
+            if "url" in pub:
+                result["url"] = pub["url"]
             return result
         # New note.
         return save_and_publish(uid, title, content, tags=tags or [])

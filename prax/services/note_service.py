@@ -317,6 +317,7 @@ def save_and_publish(
     content: str,
     tags: list[str] | None = None,
     source_url: str | None = None,
+    public: bool = False,
 ) -> dict:
     """Create a note and publish it in one step.
 
@@ -324,39 +325,44 @@ def save_and_publish(
     (URL, PDF, arXiv, manual) should use this instead of calling
     create_note + publish_notes separately.
 
-    Returns ``{"slug", "title", "url"}`` on success or ``{"error": ...}``.
+    The Hugo build happens unconditionally so the note is always reachable
+    via TeamWork (local / Tailscale / SSH).  When ``public=True`` the note
+    is also registered in the share registry so the public ngrok URL works.
+
+    Returns ``{"slug", "title", "url", "public_url"}`` on success or
+    ``{"error": ...}``.
     """
+    from prax.services import share_registry
+    from prax.settings import settings
+
     if source_url:
         content = f"**Source:** [{source_url}]({source_url})\n\n---\n\n{content}"
 
     meta = create_note(user_id, title, content, tags or [])
+    teamwork_url = settings.teamwork_base_url.rstrip("/")
 
-    # Publish if NGROK is available; degrade gracefully if not.
-    from prax.utils.ngrok import get_ngrok_url
-
-    base_url = get_ngrok_url()
-    if not base_url:
-        logger.info("NGROK_URL not configured — note saved locally, skipping publish")
-        return {
-            "slug": meta["slug"],
-            "title": meta["title"],
-            "url": "(saved locally — NGROK_URL not configured for web publishing)",
-        }
-
-    result = publish_notes(user_id, base_url, slug=meta["slug"])
+    result = publish_notes(user_id, teamwork_url, slug=meta["slug"])
     if "error" in result:
-        # Note is saved — Hugo publish is best-effort for the web page URL.
+        # Note is saved — Hugo publish is best-effort for the rendered page.
         logger.warning("Hugo publish failed for %s: %s", meta["slug"], result["error"])
         return {
             "slug": meta["slug"],
             "title": meta["title"],
             "url": f"(saved — web page not rebuilt: {result['error']})",
         }
-    return {
+
+    private_url = f"{teamwork_url}/notes/{meta['slug']}/"
+    response = {
         "slug": meta["slug"],
         "title": meta["title"],
-        "url": result["url"],
+        "url": private_url,
     }
+    if public:
+        entry = share_registry.register_note(user_id, meta["slug"])
+        public_url = share_registry.public_url_for(entry)
+        response["public_url"] = public_url or "(NGROK_URL not configured)"
+        response["share_token"] = entry["token"]
+    return response
 
 
 # ---------------------------------------------------------------------------

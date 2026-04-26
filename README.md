@@ -156,27 +156,36 @@ docker compose up --build            # both
 
 Accessing Prax from another machine works fine, but the **Desktop** and **Browser** tabs in TeamWork need a WebSocket to noVNC / CDP, and browsers only allow those from a **secure context** — HTTPS or `localhost`. Opening `http://<remote-host>:3000` directly will fail with `noVNC requires a secure context (TLS)` in the console and `Connection closed (code: 1006)` from `rfb.js`.
 
-Two easy fixes:
+Three easy fixes, in order of recommendation:
 
-**Tailscale Serve** — front Prax with HTTPS via a MagicDNS cert (recommended):
-
-```bash
-# One-time: enable HTTPS on your tailnet (admin console → DNS → HTTPS Certificates)
-sudo tailscale serve --bg --https=443 http://localhost:3000
-# Visit: https://<machine>.<tailnet>.ts.net/
-```
-
-Point the proxy at `3000` (TeamWork UI), not `5001` — the Desktop/Browser WS endpoints are served by TeamWork via same-origin `/api/desktop/...` and `/api/browser/...` paths, so a single HTTPS mapping covers everything. To tear it down: `sudo tailscale serve --https=443 off`.
-
-If you've also started the **observability** profile, add a second mapping so dashboard links from the Observability tab resolve from the laptop. Note that Grafana binds the **host** port `3002` — it's the **tailnet** port that's `3001`, proxied to `localhost:3002`:
+**Tailscale sidecar (Docker)** — recommended. Runs `tailscaled` inside the compose stack, so your server's host network never has to expose Prax. State is persisted in a Docker volume so the node keeps its identity across restarts:
 
 ```bash
-sudo tailscale serve --bg --https=3001 http://localhost:3002
+# 1. Get a reusable, NON-ephemeral, pre-approved key from
+#    https://login.tailscale.com/admin/settings/keys
+#    (Ephemeral keys count against the free tier's 1,000-min/month
+#    minute budget — non-ephemeral keys do not.)
+# 2. Add to .env:
+#       TS_AUTHKEY=tskey-auth-...
+#       TS_HOSTNAME=prax            # whatever name you want on the tailnet
+#       COMPOSE_PROFILES=tailscale  # without this the sidecar is skipped
+# 3. Up:
+docker compose up -d
+# Visit: https://prax.<tailnet>.ts.net/         (TeamWork)
+#        https://prax.<tailnet>.ts.net:3001/   (Grafana, if observability is up)
 ```
 
-The Observability panel derives Grafana's host from `window.location`, so `https://<machine>.<tailnet>.ts.net:3001/` is what it'll link to automatically — no env var needed. Binding Grafana to a *different* host port than the one Tailscale serves on avoids a `0.0.0.0:3001` vs tailnet-IP `:3001` conflict that would otherwise block `docker compose up grafana`.
+The sidecar uses Tailscale userspace mode (no `/dev/net/tun` on the host), reads its serve config from [`tailscale/serve-config.json`](tailscale/serve-config.json), and proxies `:443 → prax:8000` and `:3001 → grafana:3000` over the tailnet. HTTPS must be enabled on your tailnet (admin console → DNS → HTTPS Certificates). Compose treats the service as opt-in: with `COMPOSE_PROFILES` unset, the sidecar is silently skipped, so leaving the variables out is identical to not having Tailscale at all.
 
-**SSH tunnel** — works without touching Tailscale config, since browsers treat `localhost` as a secure context even over plain HTTP:
+**Tailscale on the host** — fallback if you already run `tailscaled` on the server and don't want a sidecar. The Makefile keeps the original mappings:
+
+```bash
+make tailscale-up      # serves :443→:3000 and :3001→:3002 from the host
+make tailscale-down    # tears them down
+make tailscale-status  # show current serve config
+```
+
+**SSH tunnel** — works without touching Tailscale at all, since browsers treat `localhost` as a secure context even over plain HTTP:
 
 ```bash
 ssh -L 3000:localhost:3000 <remote-host>

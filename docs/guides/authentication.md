@@ -39,9 +39,42 @@ Tailscale assigns each device a stable IP on your tailnet (100.x.y.z). Traffic i
 
 Go to [https://login.tailscale.com](https://login.tailscale.com) and sign up. Free for personal use (up to 100 devices).
 
-### Step 2: Install on your workstation (where Prax runs)
+### Step 2: Bring Prax onto the tailnet
 
-**Linux (headless server):**
+You have two options here.  **Option 2a (recommended)** runs `tailscaled`
+as a Docker sidecar in the Prax compose stack — your server's host
+network never has to expose Prax, no `tailscaled` install on the host,
+and the Tailscale node identity is pinned to a Docker volume so
+container restarts don't burn through device slots.  **Option 2b** runs
+`tailscaled` on the host directly, which is fine if you already manage
+Tailscale system-wide.
+
+**Option 2a: Dockerized Tailscale sidecar (recommended)**
+
+1. In the Tailscale admin console (Settings → Keys), generate a key
+   with **Reusable ✓**, **Ephemeral ✗**, **Pre-approved ✓**.  Ephemeral
+   nodes count against the free tier's 1,000-min/month minute budget;
+   non-ephemeral nodes don't, so this matters for a long-running
+   server.
+2. Add the key to your Prax `.env`:
+   ```
+   TS_AUTHKEY=tskey-auth-...
+   TS_HOSTNAME=prax
+   COMPOSE_PROFILES=tailscale
+   TEAMWORK_BASE_URL=https://prax.<your-tailnet>.ts.net
+   ```
+   Without `COMPOSE_PROFILES=tailscale` the sidecar is silently skipped
+   — there's no opt-out flag to set if you don't want it.
+3. `docker compose up -d`.  The sidecar joins the tailnet automatically
+   and serves `https://prax.<tailnet>.ts.net/` (TeamWork) and
+   `https://prax.<tailnet>.ts.net:3001/` (Grafana, when the
+   observability profile is also active).
+
+Skip ahead to **Step 3** below — you don't need `sudo tailscale up`
+on the host.
+
+**Option 2b: Install on the host**
+
 ```bash
 # Install
 curl -fsSL https://tailscale.com/install.sh | sh

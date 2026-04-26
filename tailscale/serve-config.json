@@ -1,0 +1,18 @@
+{
+  "TCP": {
+    "443": { "HTTPS": true },
+    "3001": { "HTTPS": true }
+  },
+  "Web": {
+    "${TS_CERT_DOMAIN}:443": {
+      "Handlers": {
+        "/": { "Proxy": "http://prax:8000" }
+      }
+    },
+    "${TS_CERT_DOMAIN}:3001": {
+      "Handlers": {
+        "/": { "Proxy": "http://grafana:3000" }
+      }
+    }
+  }
+}

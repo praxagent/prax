@@ -126,7 +126,7 @@ The agent also has tools for modifying its own system prompt (`prompt_write`, `p
 | `plugin_catalog` | Auto-generated listing of all available plugins |
 | `plugin_import` / `plugin_import_activate` / `plugin_import_remove` / `plugin_import_list` | Import shared plugins from public repos (git submodules), security review |
 | `workspace_set_remote` / `workspace_push` | Configure and push workspace to a private remote |
-| `workspace_share_file` / `workspace_unshare_file` | Publish/unpublish workspace files via ngrok (opt-in, token-based) |
+| `workspace_share_file` / `workspace_unshare_file` / `workspace_list_shares` | Publish a workspace file at a public ngrok URL (explicit user consent only — typically for SMS/Discord recipients), revoke by token, or enumerate active shares. Backed by the persistent share registry at `workspaces/{user}/.shares.json` |
 | `sandbox_install` | Install system packages in the persistent sandbox |
 | `sandbox_rebuild` | Edit sandbox Dockerfile and rebuild the container image |
 | `prompt_read` / `prompt_write` / `prompt_rollback` | System prompt management |

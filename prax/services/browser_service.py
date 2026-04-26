@@ -90,7 +90,6 @@ def _resolve_cdp_ws_url(cdp_url: str) -> str | None:
     if cdp_url.startswith(("ws://", "wss://")):
         return cdp_url
 
-    import re
     from urllib.parse import urlparse, urlunparse
 
     import httpx

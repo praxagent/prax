@@ -1,13 +1,12 @@
-// Offscreen document — owns the signaling WebSocket, the captured
-// MediaStream, and the MediaRecorder.  Keeps the signaling WS connected
-// at all times and reacts to `{type:"start"}` / `{type:"stop"}` from
-// the client peer.  When capturing, muxes the tab's audio+video into
-// WebM chunks and ships them as binary WS frames.
+// Offscreen document — owns the signaling WebSocket, MediaStream, and
+// MediaRecorder.  Capture is now driven from the service worker (which
+// gets a real user invocation via Ctrl+Shift+K or the action icon in
+// the Desktop tab).  This file just reacts to push messages from the
+// SW and pumps WebM chunks to TeamWork.
 //
 // Signaling URL is rewritten at container-entry time (see
-// sandbox/entrypoint.sh) so the hostname matches whatever Docker Compose
-// service name is running TeamWork.  The default is the development
-// compose project name.
+// sandbox/entrypoint.sh) so the hostname matches whatever Docker
+// Compose service name is running TeamWork.
 const WS_URL = 'ws://__PRAX_CAST_SIGNALING_HOST__/api/browser/cast/sandbox';
 
 const CHUNK_INTERVAL_MS = 200;
@@ -17,21 +16,57 @@ let reconnectTimer = null;
 let recorder = null;
 let stream = null;
 
+let bgPort = null;
+
 function log(...args) { console.log('[prax-cast]', ...args); }
 
 function sendJson(obj) {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(obj));
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+}
+
+// ── Service-worker port ─────────────────────────────────────────────
+// Held open so the SW stays alive and so we have a channel for it to
+// push capture commands to us.
+function ensureBgPort() {
+  if (bgPort) return bgPort;
+  bgPort = chrome.runtime.connect({ name: 'cast' });
+
+  bgPort.onMessage.addListener(async (msg) => {
+    if (!msg) return;
+    if (msg.type === 'start-capture') {
+      await beginCapture(msg.streamId, msg.tabUrl, msg.tabTitle);
+    } else if (msg.type === 'stop-capture') {
+      stopCapture('sw-requested');
+    } else if (msg.type === 'cast-error') {
+      sendJson({ type: 'error', error: msg.error });
+    }
+  });
+
+  bgPort.onDisconnect.addListener(() => {
+    const err = chrome.runtime.lastError?.message || 'disconnected';
+    log('bg port closed:', err);
+    bgPort = null;
+    // Try again next tick so we recover from SW restarts.
+    setTimeout(ensureBgPort, 1000);
+  });
+
+  return bgPort;
+}
+
+function notifyBg(type) {
+  if (bgPort) {
+    try { bgPort.postMessage({ type }); } catch { /* port may be closing */ }
   }
 }
 
-function connect() {
+// ── Signaling WebSocket ─────────────────────────────────────────────
+function connectWs() {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   try {
     ws = new WebSocket(WS_URL);
   } catch (e) {
     log('WebSocket construct failed:', e);
-    reconnectTimer = setTimeout(connect, 3000);
+    reconnectTimer = setTimeout(connectWs, 3000);
     return;
   }
   ws.binaryType = 'arraybuffer';
@@ -39,84 +74,35 @@ function connect() {
   ws.onclose = () => {
     log('signaling closed — will reconnect');
     ws = null;
-    // If we were mid-stream, stop the recorder; the client is gone.
-    if (recorder) stopCapture();
-    reconnectTimer = setTimeout(connect, 3000);
+    if (recorder) stopCapture('signaling-closed');
+    reconnectTimer = setTimeout(connectWs, 3000);
   };
   ws.onerror = () => { try { ws.close(); } catch {} };
   ws.onmessage = async (ev) => {
-    if (typeof ev.data !== 'string') return;  // no binary from client side
+    if (typeof ev.data !== 'string') return;
     let msg;
     try { msg = JSON.parse(ev.data); } catch { return; }
-    if (msg.type === 'start') {
-      await startCapture();
-    } else if (msg.type === 'stop') {
-      stopCapture();
+    // The client (BrowserPanel) can request a stop at any time.  Start
+    // requests are intentionally ignored here — capture is initiated only
+    // from a real X11 user gesture (shortcut or action click).
+    if (msg.type === 'stop') {
+      stopCapture('client-requested');
+    } else if (msg.type === 'start') {
+      // Friendly hint so the panel can render an explanation.
+      sendJson({
+        type: 'awaiting-invocation',
+        hint: 'Click the prax-cast icon in Chrome\'s toolbar (in the Desktop tab) to start capture.',
+      });
     }
   };
 }
 
-// Persistent port to the service worker.  Held open for the life of
-// the offscreen document so the SW stays alive (a connected port
-// disables its 30s idle timeout) and so we don't race the SW's lazy
-// startup on the first capture attempt.
-let bgPort = null;
-let pendingStreamResolve = null;
-
-function ensureBgPort() {
-  if (bgPort) return bgPort;
-  bgPort = chrome.runtime.connect({ name: 'cast' });
-  bgPort.onMessage.addListener((msg) => {
-    if (msg?.type === 'stream-response' && pendingStreamResolve) {
-      const resolve = pendingStreamResolve;
-      pendingStreamResolve = null;
-      resolve(msg);
-    }
-  });
-  bgPort.onDisconnect.addListener(() => {
-    const err = chrome.runtime.lastError?.message || 'disconnected';
-    log('bg port closed:', err);
-    bgPort = null;
-    if (pendingStreamResolve) {
-      const resolve = pendingStreamResolve;
-      pendingStreamResolve = null;
-      resolve({ error: `bg port: ${err}` });
-    }
-  });
-  return bgPort;
-}
-
-async function requestStreamFromBg(timeoutMs = 5000) {
-  const port = ensureBgPort();
-  return new Promise((resolve) => {
-    pendingStreamResolve = resolve;
-    try {
-      port.postMessage({ type: 'request-stream' });
-    } catch (e) {
-      pendingStreamResolve = null;
-      resolve({ error: `postMessage failed: ${e.message}` });
-      return;
-    }
-    setTimeout(() => {
-      if (pendingStreamResolve === resolve) {
-        pendingStreamResolve = null;
-        resolve({ error: 'timeout waiting for service worker' });
-      }
-    }, timeoutMs);
-  });
-}
-
-async function startCapture() {
-  if (recorder) return;  // already running; ignore duplicate start
-
-  // `chrome.tabs` and `chrome.tabCapture` aren't exposed to offscreen
-  // documents — ask the service worker to look them up via the port.
-  const resp = await requestStreamFromBg();
-  if (!resp || resp.error) {
-    sendJson({ type: 'error', error: `stream request failed: ${resp?.error || 'no response'}` });
+// ── Capture lifecycle ──────────────────────────────────────────────
+async function beginCapture(streamId, tabUrl, tabTitle) {
+  if (recorder) {
+    log('capture already running — ignoring duplicate start');
     return;
   }
-  const { streamId, tabUrl, tabTitle } = resp;
 
   try {
     stream = await navigator.mediaDevices.getUserMedia({
@@ -155,6 +141,7 @@ async function startCapture() {
     stream = null;
     recorder = null;
     sendJson({ type: 'stopped' });
+    notifyBg('capture-stopped');
   };
   recorder.onerror = (e) => {
     log('recorder error:', e);
@@ -162,22 +149,23 @@ async function startCapture() {
   };
 
   recorder.start(CHUNK_INTERVAL_MS);
-  sendJson({ type: 'started' });
+  sendJson({ type: 'started', tabUrl, tabTitle });
+  notifyBg('capture-started');
   log(`capture started — mime=${mimeType}, tab=${tabUrl}`);
 }
 
-function stopCapture() {
+function stopCapture(reason = 'unknown') {
+  log(`stopping capture (${reason})`);
   if (recorder && recorder.state !== 'inactive') {
-    recorder.stop();  // onstop will clean up
+    recorder.stop();  // onstop notifies SW + WS
   } else {
     if (stream) stream.getTracks().forEach((t) => t.stop());
     stream = null;
     recorder = null;
+    notifyBg('capture-stopped');
   }
 }
 
-connect();
-// Eagerly open the port to the service worker so it's awake and ready
-// before the first Cast click — avoids a cold-start race where the SW
-// is dormant when the user triggers capture.
+// Boot
+connectWs();
 ensureBgPort();
