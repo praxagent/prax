@@ -27,6 +27,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from prax.agent import ConversationAgent
 from prax.agent.user_context import current_user, current_user_id
 from prax.conversation_memory import add_dict_to_list, retrieve_dict
+from prax.services.state_paths import ensure_conversation_db
 from prax.services.workspace_service import get_workspace_context
 from prax.settings import settings
 
@@ -68,14 +69,15 @@ class ConversationService:
         self._retrieve = retriever
         self._save = saver
         self._database = database_name or settings.database_name
+        self._uses_real_sqlite = retriever is retrieve_dict and saver is add_dict_to_list
 
-    def _build_history(self, phone_int: int) -> list[dict]:
+    def _build_history(self, database_name: str, phone_int: int) -> list[dict]:
         """Return stored conversation history, preserving the ``date`` field.
 
         The date is used by ``_history_to_messages`` to add relative-time
         tags so the LLM can distinguish fresh context from stale context.
         """
-        return self._retrieve(self._database, phone_int) or []
+        return self._retrieve(database_name, phone_int) or []
 
     def reply(
         self,
@@ -120,15 +122,21 @@ class ConversationService:
             raw = user_id.lstrip("+").lstrip("D")
             db_key = int(raw)
 
-        history = self._build_history(db_key)
+        database_name = (
+            ensure_conversation_db(user_id, self._database)
+            if self._uses_real_sqlite
+            else self._database
+        )
+
+        history = self._build_history(database_name, db_key)
         if not history:
-            self._save(self._database, db_key, {
+            self._save(database_name, db_key, {
                 "role": "system",
                 "content": "You are a helpful assistant."
             })
-            history = self._build_history(db_key)
+            history = self._build_history(database_name, db_key)
 
-        self._save(self._database, db_key, {"role": "user", "content": text})
+        self._save(database_name, db_key, {"role": "user", "content": text})
 
         lc_history = _history_to_messages(history)
         workspace_ctx = get_workspace_context(user_id, text)
@@ -141,7 +149,7 @@ class ConversationService:
         )
         logger.info("Agent response for %s: %s", user_id, response[:80])
 
-        self._save(self._database, db_key, {"role": "assistant", "content": response})
+        self._save(database_name, db_key, {"role": "assistant", "content": response})
         return response
 
 

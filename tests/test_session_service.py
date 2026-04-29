@@ -31,6 +31,21 @@ class TestClassifySession:
         sid = classify_session("user1", "[SCHEDULED_TASK — ...] check email")
         assert sid.startswith("scheduled-")
 
+    def test_scheduled_task_session_is_stable_for_same_prompt(self):
+        _reset()
+        prompt = "[SCHEDULED_TASK — ...] Send the morning briefing"
+        sid1 = classify_session("user1", prompt)
+        sid2 = classify_session("user1", prompt)
+        assert sid1 == sid2
+
+    def test_scheduled_task_does_not_mutate_active_chat_session(self):
+        _reset()
+        sid1 = classify_session("user1", "Discuss the geometry of surprise article")
+        update_session_summary("user1", "[SCHEDULED_TASK — ...] Send the morning briefing", "Done")
+        state = _get_user_state("user1")
+        assert state["session_id"] == sid1
+        assert "morning" not in state["topic_summary"].lower()
+
     def test_reminder_gets_standalone_session(self):
         _reset()
         sid = classify_session("user1", "[Reminder] go to dentist")
@@ -69,6 +84,19 @@ class TestClassifySession:
             sid2 = classify_session("user1", "What's the weather?")
 
         assert sid1 != sid2
+
+    def test_url_slug_overlap_continues_session_even_if_host_changes(self):
+        _reset()
+        sid1 = classify_session("user1", "https://sethmorton.xyz/blog/the_geometry_of_surprise")
+
+        corrected_url = (
+            "https://www.sethmorton.com/blog/the_geometry_of_surprise\n\n"
+            "[SYSTEM: captured to library/raw/ as `20260426-143300-www-sethmorton-com-blog-the-geometry-of-surprise`]"
+        )
+        with patch("prax.services.session_service._is_continuation_llm", return_value=False):
+            sid2 = classify_session("user1", corrected_url)
+
+        assert sid1 == sid2
 
     def test_different_users_get_different_sessions(self):
         _reset()

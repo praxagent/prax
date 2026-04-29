@@ -1027,6 +1027,8 @@ def plugin_check_all_updates() -> str:
 
 def build_plugin_tools() -> list:
     """Return all agent-facing plugin management tools."""
+    from prax.agent.self_tool_registry_tools import build_self_tool_registry_tools
+
     return [
         plugin_list,
         plugin_read,
@@ -1044,6 +1046,7 @@ def build_plugin_tools() -> list:
         plugin_check_all_updates,
         plugin_import_remove,
         plugin_import_list,
+        *build_self_tool_registry_tools(),
         prompt_read,
         prompt_write,
         prompt_rollback,

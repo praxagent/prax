@@ -11,10 +11,10 @@ from prax.blueprints.reader_routes import reader_routes
 from prax.blueprints.teamwork_routes import teamwork_routes
 from prax.blueprints.textchat_routes import textchat_routes
 from prax.blueprints.user_routes import user_routes
-from prax.conversation_memory import init_database
 from prax.services.discord_service import start_bot as start_discord_bot
 from prax.services.identity_service import init_identity_db, migrate_legacy_users, reconcile_workspace_dir
 from prax.services.scheduler_service import init_scheduler
+from prax.services.state_paths import ensure_conversation_db
 from prax.settings import settings
 from prax.token_management import get_encoding_for_model
 
@@ -31,7 +31,7 @@ def create_app():
         except Exception:
             pass
 
-    init_database(app.config['DATABASE_NAME'])
+    ensure_conversation_db(database_name=app.config['DATABASE_NAME'])
 
     app.register_blueprint(main_routes)
     app.register_blueprint(conference_routes)
@@ -90,7 +90,7 @@ def create_app():
     from prax.agent.model_tiers import tier_summary
     logger.info("Model tiers:\n%s", tier_summary())
 
-    init_database(settings.database_name)
+    ensure_conversation_db(database_name=settings.database_name)
     init_identity_db()
     migrate_legacy_users()
 

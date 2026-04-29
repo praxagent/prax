@@ -17,7 +17,7 @@ from prax.helpers_dictionaries import (
 from prax.helpers_functions import delete_temp_files
 from prax.readers.news.deutschlandfunk_radio import dlf_process
 from prax.readers.news.npr_top_hour import npr_process
-from prax.settings import settings
+from prax.services.state_paths import ensure_conversation_db
 
 logger = logging.getLogger(__name__)
 
@@ -82,13 +82,13 @@ def preprocess_input(user_input_raw, resp, gather, call_sid):
                 logger.info(language_code)
 
                 thread1 = threading.Thread(target=add_dict_to_list, kwargs={
-                        'database_name': settings.database_name,
+                        'database_name': ensure_conversation_db(),
                         'id': int(convo_states[call_sid]['from_num'][1:]),
                         'new_dict': {'role': 'user', 'content': language_prompts[language_code]},
                         })
                 thread1.start()
                 thread2 = threading.Thread(target=add_dict_to_list, kwargs={
-                        'database_name': settings.database_name,
+                        'database_name': ensure_conversation_db(),
                         'id': int(convo_states[call_sid]['from_num'][1:]),
                         'new_dict': {'role': 'user', 'content': initial_user_prompts[language_code]},
                         })

@@ -77,7 +77,9 @@ def _write_registry(data: dict) -> None:
 
 def _get_all_users() -> list[int]:
     """Return all user phone ints from the conversations DB."""
-    db_path = settings.database_name
+    from prax.services.state_paths import ensure_conversation_db
+
+    db_path = ensure_conversation_db(database_name=settings.database_name)
     if not os.path.exists(db_path):
         return []
     conn = sqlite3.connect(db_path)
@@ -89,7 +91,9 @@ def _get_all_users() -> list[int]:
 
 
 def _get_conversations(phone_int: int) -> list[dict]:
-    db_path = settings.database_name
+    from prax.services.state_paths import ensure_conversation_db
+
+    db_path = ensure_conversation_db(database_name=settings.database_name)
     conn = sqlite3.connect(db_path)
     try:
         row = conn.execute(

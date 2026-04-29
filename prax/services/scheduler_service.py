@@ -247,7 +247,13 @@ def _on_fire(user_id: str, schedule_id: str, prompt: str, channel: str | None = 
             f"3) Do NOT ask for confirmation or clarification. "
             f"4) Just execute the task using your best judgment and respond with the result. "
             f"5) If the task is ambiguous, take the most reasonable interpretation and do it. "
-            f"6) Keep your response concise — it will be delivered as a notification.] "
+            f"6) Keep your response concise — it will be delivered as a notification. "
+            f"7) For news/headlines/briefings, use delegate_research to run the news tool; "
+            f"background_search_tool snippets are not sufficient. "
+            f"8) For weather/local conditions, use delegate_environment. It must resolve "
+            f"a concrete city/region first; timezone alone is not enough. If no location "
+            f"or live source can be confirmed, ask for location or say weather is "
+            f"unavailable rather than inventing a forecast.] "
             f"{prompt}",
         )
         _deliver_message(user_id, response, channel=channel)

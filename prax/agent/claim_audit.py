@@ -150,6 +150,87 @@ _GROUNDING_TOOL_NAMES: set[str] = {
     "get_weather",
 }
 
+# Scheduled tasks run while the user is absent.  Generic search snippets are
+# too weak for this path: they can be irrelevant, stale, or explicitly tagged
+# as informational.  A morning briefing must use the news pipeline or an
+# equivalent stronger fetch path, not just background_search_tool.
+_SCHEDULED_NEWS_INTENT_PATTERNS: list[re.Pattern] = [
+    re.compile(r"\b(?:morning|daily|today'?s)?\s*briefing\b", re.IGNORECASE),
+    re.compile(r"\btop\s+\d*\s*news\b", re.IGNORECASE),
+    re.compile(r"\bheadline(?:s)?\b", re.IGNORECASE),
+    re.compile(r"\bnews item(?:s)?\b", re.IGNORECASE),
+]
+
+_SCHEDULED_WEATHER_INTENT_PATTERNS: list[re.Pattern] = [
+    re.compile(r"\bweather\b", re.IGNORECASE),
+    re.compile(r"\bforecast\b", re.IGNORECASE),
+]
+
+_SCHEDULED_NEWS_GROUNDING_TOOLS: set[str] = {
+    "news",
+    "delegate_research",
+    "delegate_browser",
+    "web_summary_tool",
+    "fetch_url_content",
+}
+
+_WEATHER_GROUNDING_TOOLS: set[str] = {
+    "weather",
+    "get_weather",
+    "weather_lookup",
+}
+
+_WEATHER_FETCH_EVIDENCE_TOOLS: set[str] = {
+    "delegate_environment",
+    "delegate_research",
+    "delegate_browser",
+    "fetch_url_content",
+    "web_summary_tool",
+    "sandbox_shell",
+}
+
+_WEATHER_SOURCE_MARKERS = (
+    "weather.gov",
+    "api.weather.gov",
+    "forecast.weather.gov",
+    "open-meteo",
+    "api.open-meteo.com",
+    "national weather service",
+)
+
+_WEATHER_EVIDENCE_MARKERS = (
+    "forecast",
+    "temperature",
+    "degrees",
+    "precipitation",
+    "rain",
+    "snow",
+    "wind",
+    "humidity",
+)
+
+_FAILED_TOOL_MARKERS = (
+    "error",
+    "could not",
+    "couldn't",
+    "unable to",
+    "timed out",
+    "timeout",
+    "no news sources configured",
+    "no sources configured",
+    "reader returned http",
+    "err_name_not_resolved",
+)
+
+_WEATHER_UNAVAILABLE_MARKERS = (
+    "weather unavailable",
+    "couldn't fetch weather",
+    "could not fetch weather",
+    "no weather tool",
+    "weather tool is not configured",
+    "weather not available",
+)
+
 
 def _extract_tool_names(messages: list) -> set[str]:
     """Return the set of tool names actually invoked this turn.
@@ -170,6 +251,110 @@ def _extract_tool_names(messages: list) -> set[str]:
             if name:
                 called.add(str(name))
     return called
+
+
+def _successful_tool_names(messages: list) -> set[str]:
+    """Return ToolMessage names whose result does not look like a failure."""
+    called: set[str] = set()
+    try:
+        from langchain_core.messages import ToolMessage
+    except Exception:
+        return called
+    for msg in messages:
+        if not isinstance(msg, ToolMessage):
+            continue
+        name = getattr(msg, "name", None)
+        if not name:
+            continue
+        content = (msg.content or "").lower()
+        if any(marker in content for marker in _FAILED_TOOL_MARKERS):
+            continue
+        called.add(str(name))
+    return called
+
+
+def _successful_weather_tool_names(messages: list) -> set[str]:
+    """Return tools that produced weather-specific live evidence.
+
+    A capable harness can get weather without a dedicated plugin by using
+    research/browser/sandbox against an authoritative source.  Generic search
+    snippets still do not count.
+    """
+    called: set[str] = set()
+    try:
+        from langchain_core.messages import ToolMessage
+    except Exception:
+        return called
+    for msg in messages:
+        if not isinstance(msg, ToolMessage):
+            continue
+        name = str(getattr(msg, "name", "") or "")
+        if not name:
+            continue
+        content = (msg.content or "").lower()
+        if any(marker in content for marker in _FAILED_TOOL_MARKERS):
+            continue
+        if name in _WEATHER_GROUNDING_TOOLS:
+            called.add(name)
+            continue
+        has_source = any(marker in content for marker in _WEATHER_SOURCE_MARKERS)
+        has_weather_data = any(marker in content for marker in _WEATHER_EVIDENCE_MARKERS)
+        if name in _WEATHER_FETCH_EVIDENCE_TOOLS and has_source and has_weather_data:
+            called.add(name)
+    return called
+
+
+def _matches_any(text: str, patterns: list[re.Pattern]) -> bool:
+    return any(pattern.search(text or "") for pattern in patterns)
+
+
+def audit_scheduled_task_grounding(
+    task_prompt: str,
+    response: str,
+    messages: list,
+) -> dict | None:
+    """Enforce minimum evidence for unattended scheduled tasks.
+
+    The ordinary narrative audit checks whether *some* grounding tool ran.
+    For scheduled briefings that is not enough: a search snippet about the
+    wrong topic should never clear a "3 top news items" notification.  This
+    audit applies an intent-specific floor against the scheduled task prompt.
+    """
+    combined = f"{task_prompt}\n{response}"
+    findings: list[str] = []
+    successful_tools = _successful_tool_names(messages)
+
+    if _matches_any(combined, _SCHEDULED_NEWS_INTENT_PATTERNS):
+        strong_news_tools = successful_tools & _SCHEDULED_NEWS_GROUNDING_TOOLS
+        if not strong_news_tools:
+            findings.append(
+                "news/briefing requested but no successful news, research, "
+                "browser, summary, or URL-fetch tool result was available; "
+                "background_search_tool alone is not sufficient"
+            )
+
+    if _matches_any(task_prompt, _SCHEDULED_WEATHER_INTENT_PATTERNS):
+        weather_tools = _successful_weather_tool_names(messages)
+        disclosed_unavailable = any(
+            marker in (response or "").lower()
+            for marker in _WEATHER_UNAVAILABLE_MARKERS
+        )
+        if not weather_tools and not disclosed_unavailable:
+            findings.append(
+                "weather requested but no successful weather tool, "
+                "authoritative weather fetch, or explicit weather-unavailable "
+                "disclosure was present"
+            )
+
+    if not findings:
+        return None
+
+    return {
+        "missing_grounding": True,
+        "called_tools": sorted(_extract_tool_names(messages)),
+        "successful_tools": sorted(successful_tools),
+        "requirements": findings,
+    }
 
 
 def audit_narrative_grounding(

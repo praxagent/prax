@@ -36,7 +36,6 @@ services:
     group_add: ["0"]
     volumes:
       - ${WORKSPACE_DIR:-../workspaces}:/app/workspaces
-      - ./conversations.db:/app/conversations.db
       - ./static:/app/static
       - ./logs:/app/logs
       # Persistent data for embedded services — scoped per-user.

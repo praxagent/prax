@@ -25,6 +25,7 @@ import contextvars
 import json
 import logging
 import threading
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -110,10 +111,12 @@ class ExecutionGraph:
         """Return a JSON-serializable representation of the graph."""
         with self._lock:
             nodes = []
-            overall_status = "completed"
+            statuses: list[str] = []
+            root_statuses: list[str] = []
             for n in self._nodes.values():
-                if n.status == "running":
-                    overall_status = "running"
+                statuses.append(n.status)
+                if n.parent_id is None or n.parent_id not in self._nodes:
+                    root_statuses.append(n.status)
                 nodes.append({
                     "span_id": n.span_id,
                     "name": n.name,
@@ -132,6 +135,18 @@ class ExecutionGraph:
                 })
             # Sort nodes by started_at so roots come first
             nodes.sort(key=lambda n: n["started_at"])
+            if "running" in root_statuses:
+                overall_status = "running"
+            elif "timed_out" in root_statuses or "timed_out" in statuses:
+                overall_status = "timed_out"
+            elif "failed" in root_statuses or "failed" in statuses:
+                overall_status = "failed"
+            elif "aborted" in root_statuses or "aborted" in statuses:
+                overall_status = "aborted"
+            elif "running" in statuses:
+                overall_status = "running"
+            else:
+                overall_status = "completed"
             result: dict = {
                 "trace_id": self.trace_id,
                 "status": overall_status,
@@ -211,6 +226,27 @@ class TraceContext:
 _current_trace: contextvars.ContextVar[TraceContext | None] = (
     contextvars.ContextVar("_current_trace", default=None)
 )
+
+
+@dataclass
+class _PendingDelegationContext:
+    """Trace parent registered by callback dispatch for a delegate_* tool.
+
+    LangGraph may execute a tool body in a different context than the callback
+    that observed ``on_tool_start``.  The callback still knows the exact
+    ``delegate_*`` span it created, so it records that span here.  The spoke
+    runner can claim it before starting the child spoke span.
+    """
+
+    tool_name: str
+    ctx: TraceContext
+    input_preview: str = ""
+    created_at: float = field(default_factory=time.monotonic)
+
+
+_pending_delegations: list[_PendingDelegationContext] = []
+_pending_delegations_lock = threading.Lock()
+_PENDING_DELEGATION_TTL_SECONDS = 120
 
 # Stores the trace_id of the most recent root span in the current context.
 # Read by callers (e.g. teamwork_routes) after an agent run to attach
@@ -491,7 +527,12 @@ class DelegationDepthExceeded(RuntimeError):
     """Raised when delegation nesting exceeds the configured limit."""
 
 
-def start_span(name: str, spoke_or_category: str) -> SpanHandle:
+def start_span(
+    name: str,
+    spoke_or_category: str,
+    *,
+    parent_context: TraceContext | None = None,
+) -> SpanHandle:
     """Create a span -- child of current trace, or new trace if none exists.
 
     Returns a :class:`SpanHandle`.  Call ``handle.end(...)`` to close,
@@ -503,7 +544,7 @@ def start_span(name: str, spoke_or_category: str) -> SpanHandle:
     Raises :class:`DelegationDepthExceeded` if the delegation chain exceeds
     the configured ``AGENT_MAX_DELEGATION_DEPTH``.
     """
-    parent = _current_trace.get()
+    parent = parent_context or _current_trace.get()
 
     if parent:
         trace_id = parent.trace_id
@@ -576,6 +617,101 @@ def start_span(name: str, spoke_or_category: str) -> SpanHandle:
 def get_current_trace() -> TraceContext | None:
     """Return the active trace context, or ``None``."""
     return _current_trace.get()
+
+
+def _prune_pending_delegations(now: float | None = None) -> None:
+    now = now or time.monotonic()
+    _pending_delegations[:] = [
+        pending for pending in _pending_delegations
+        if now - pending.created_at <= _PENDING_DELEGATION_TTL_SECONDS
+    ]
+
+
+def _matches_pending_input(pending: _PendingDelegationContext, task: str) -> bool:
+    if not task:
+        return False
+    task_norm = " ".join(task.lower().split())
+    input_norm = " ".join((pending.input_preview or "").lower().split())
+    if not task_norm or not input_norm:
+        return False
+    return task_norm[:160] in input_norm or input_norm[:160] in task_norm
+
+
+def register_pending_delegation_context(
+    tool_name: str,
+    ctx: TraceContext,
+    input_preview: str = "",
+) -> None:
+    """Record the trace context for a delegate_* tool span.
+
+    This is intentionally process-local and short-lived.  It bridges the gap
+    between LangChain callback dispatch and actual tool execution when they do
+    not share a contextvar context.
+    """
+    if not tool_name.startswith("delegate_"):
+        return
+    with _pending_delegations_lock:
+        _prune_pending_delegations()
+        _pending_delegations.append(
+            _PendingDelegationContext(
+                tool_name=tool_name,
+                ctx=ctx,
+                input_preview=str(input_preview)[:1000],
+            )
+        )
+
+
+def claim_pending_delegation_context(
+    tool_name: str | None = None,
+    task: str = "",
+) -> TraceContext | None:
+    """Claim a pending delegate_* context for a spoke starting out-of-band."""
+    with _pending_delegations_lock:
+        _prune_pending_delegations()
+        if not _pending_delegations:
+            return None
+
+        candidates = list(enumerate(_pending_delegations))
+        if tool_name:
+            exact = [
+                (idx, pending) for idx, pending in candidates
+                if pending.tool_name == tool_name
+            ]
+            if exact:
+                task_matches = [
+                    (idx, pending) for idx, pending in exact
+                    if _matches_pending_input(pending, task)
+                ]
+                if task_matches or len(exact) == 1:
+                    idx, pending = (task_matches or exact)[0]
+                    _pending_delegations.pop(idx)
+                    return pending.ctx
+
+        if task:
+            task_matches = [
+                (idx, pending) for idx, pending in candidates
+                if _matches_pending_input(pending, task)
+            ]
+            if task_matches:
+                idx, pending = task_matches[0]
+                _pending_delegations.pop(idx)
+                return pending.ctx
+
+        if len(_pending_delegations) == 1:
+            return _pending_delegations.pop(0).ctx
+
+    return None
+
+
+def discard_pending_delegation_context(span_id: str) -> None:
+    """Drop an unclaimed pending delegation when the delegate tool ends."""
+    if not span_id:
+        return
+    with _pending_delegations_lock:
+        _pending_delegations[:] = [
+            pending for pending in _pending_delegations
+            if pending.ctx.span_id != span_id
+        ]
 
 
 def get_graph_summary() -> str:
@@ -770,6 +906,18 @@ class GraphCallbackHandler(BaseCallbackHandler):
         self._live_agent = live_agent_name  # push live output to TeamWork
         self._tool_count = 0
 
+    def _span_depth(self, span_id: str) -> int:
+        """Return the graph depth of a span, best-effort."""
+        depth = 0
+        with self._graph._lock:
+            node = self._graph._nodes.get(span_id)
+            seen: set[str] = set()
+            while node and node.parent_id and node.parent_id not in seen:
+                seen.add(node.span_id)
+                depth += 1
+                node = self._graph._nodes.get(node.parent_id)
+        return depth
+
     def on_tool_start(
         self, serialized: dict, input_str: str, *, run_id, **kwargs
     ) -> None:
@@ -819,16 +967,21 @@ class GraphCallbackHandler(BaseCallbackHandler):
         # of the parent agent span.
         if tool_name.startswith("delegate_"):
             parent_ctx = _current_trace.get()
-            if parent_ctx:
-                tool_ctx = TraceContext(
-                    trace_id=self._trace_id,
-                    span_id=span_id,
-                    parent_id=self._parent_span_id,
-                    origin=tool_name,
-                    depth=parent_ctx.depth + 1,
-                    graph=self._graph,
-                )
-                self._ctx_tokens[rid] = _current_trace.set(tool_ctx)
+            parent_depth = (
+                parent_ctx.depth
+                if parent_ctx
+                else self._span_depth(self._parent_span_id)
+            )
+            tool_ctx = TraceContext(
+                trace_id=self._trace_id,
+                span_id=span_id,
+                parent_id=self._parent_span_id,
+                origin=tool_name,
+                depth=parent_depth + 1,
+                graph=self._graph,
+            )
+            self._ctx_tokens[rid] = _current_trace.set(tool_ctx)
+            register_pending_delegation_context(tool_name, tool_ctx, input_str)
 
     def on_tool_end(self, output, *, run_id, **kwargs) -> None:
         rid = str(run_id)
@@ -838,6 +991,7 @@ class GraphCallbackHandler(BaseCallbackHandler):
             _current_trace.reset(token)
         span_id = self._active.pop(rid, None)
         if span_id:
+            discard_pending_delegation_context(span_id)
             # Remove from active names dedup tracker.
             tool_name = ""
             for k, v in list(self._active_names.items()):
@@ -873,6 +1027,7 @@ class GraphCallbackHandler(BaseCallbackHandler):
             _current_trace.reset(token)
         span_id = self._active.pop(rid, None)
         if span_id:
+            discard_pending_delegation_context(span_id)
             self._active_names = {
                 k: v for k, v in self._active_names.items() if v != span_id
             }

@@ -30,6 +30,7 @@ class TraceEvent(StrEnum):
     TOOL_RESULT = "tool_result"
     AUDIT = "audit"
     ERROR = "error"
+    DECISION = "decision"
     PLUGIN_IMPORT = "plugin_import"
     PLUGIN_ACTIVATE = "plugin_activate"
     PLUGIN_BLOCK = "plugin_block"

@@ -237,10 +237,17 @@ sidecar, the original `make tailscale-up` / `make tailscale-down` /
 
 ## Database
 
-By default the SQLite database lives at `conversations.db`. To start fresh:
+By default the SQLite conversation-history database lives under the user's
+workspace service-state directory:
+
+```text
+workspaces/<PRAX_USER_ID>/.services/prax/conversations.db
+```
+
+To start fresh:
 ```bash
-rm -f conversations.db
-uv run python -c "from prax.conversation_memory import init_database; init_database('conversations.db')"
+rm -f "$WORKSPACE_DIR/$PRAX_USER_ID/.services/prax/conversations.db"
+uv run python -c "from prax.services.state_paths import ensure_conversation_db; ensure_conversation_db()"
 ```
 
 ## Running the App
@@ -253,6 +260,6 @@ The server listens on `0.0.0.0:5001` (configurable via `.env`). The scheduler st
 ### Production / Deployment
 
 - **Gunicorn**: `uv run gunicorn 'app:app' --bind 0.0.0.0:5001 --workers 2 --threads 4`
-- **Environment**: copy `.env` to the server, point `LOG_PATH`/`DATABASE_NAME` to persistent volumes.
+- **Environment**: copy `.env` to the server, point `LOG_PATH` and `WORKSPACE_DIR` to persistent volumes. `DATABASE_NAME` is optional; leaving it as `conversations.db` stores history under the workspace service-state directory.
 - **Docker**: see `Dockerfile` and `docker-compose.yml` in the repo root. The app container needs `/var/run/docker.sock` mounted for sandbox functionality.
 - **TLS / DNS**: for inbound from your own laptops, prefer the Tailscale sidecar (HTTPS via MagicDNS, see Remote access above).  For inbound from external services that aren't on your tailnet (e.g. Twilio webhooks), terminate TLS via ngrok (dev) or a reverse proxy (Nginx/Cloudflare/etc.).

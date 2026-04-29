@@ -881,10 +881,11 @@ def library_space_chat_history(space: str):
     """Return the conversation history for a space's scoped chat."""
     try:
         from prax.conversation_memory import retrieve_dict
-        from prax.settings import settings
+        from prax.services.state_paths import ensure_conversation_db
 
+        user_id = _get_teamwork_user_id()
         space_key = _space_conversation_key(space)
-        history = retrieve_dict(settings.database_name, space_key)
+        history = retrieve_dict(ensure_conversation_db(user_id), space_key)
         if not history:
             return jsonify({"messages": []})
         # Filter to user + assistant messages (skip system messages

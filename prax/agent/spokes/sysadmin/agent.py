@@ -39,6 +39,13 @@ plugin management, configuration, source inspection, and self-maintenance tasks.
 - **plugin_activate** / **plugin_rollback** / **plugin_status** — lifecycle management
 - **plugin_remove** / **plugin_catalog** / **plugin_list** — discovery and cleanup
 
+### Self-authored tool registry
+- **self_tool_register** / **self_tool_list** — keep durable metadata for tools
+  Prax authors for itself
+- **self_tool_update_status** / **self_tool_record_result** — track lifecycle,
+  tests, runtime failures, and activation state
+- **self_tool_audit** — inspect one tool's metadata and history
+
 ### Prompt management
 - **prompt_read** / **prompt_write** / **prompt_rollback** / **prompt_list** — manage
   system prompts and their versions

@@ -13,9 +13,12 @@ each step he actually completed.
 """
 from __future__ import annotations
 
+import time
+
 import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 
+import prax.agent.orchestrator as orchestrator_module
 from prax.agent.orchestrator import ConversationAgent
 from prax.services import workspace_service
 
@@ -60,6 +63,64 @@ class TestCaveatGuard:
     def test_response_has_caveat_empty(self):
         assert ConversationAgent._response_has_caveat("") is None
         assert ConversationAgent._response_has_caveat(None) is None  # type: ignore[arg-type]
+
+
+class TestUrlRecoveryGuard:
+    def test_continues_when_url_failure_asks_user_for_next_step(self):
+        messages = [
+            ToolMessage(
+                content="Reader returned HTTP 400 for https://example.com/post",
+                name="fetch_url_content",
+                tool_call_id="c_reader",
+            ),
+            AIMessage(content="I couldn't read it. If you want, I can try the browser."),
+        ]
+        assert ConversationAgent._should_continue_after_url_failure(
+            "Create a note from https://example.com/post",
+            messages,
+        )
+
+    def test_stops_after_reader_browser_and_search_all_tried(self):
+        messages = [
+            ToolMessage(
+                content="Reader returned HTTP 400 for https://example.com/post",
+                name="fetch_url_content",
+                tool_call_id="c_reader",
+            ),
+            ToolMessage(
+                content="ERR_NAME_NOT_RESOLVED",
+                name="delegate_browser",
+                tool_call_id="c_browser",
+            ),
+            ToolMessage(
+                content="No matching mirror found",
+                name="background_search_tool",
+                tool_call_id="c_search",
+            ),
+            AIMessage(content="I couldn't read it. If you want, paste the content."),
+        ]
+        assert not ConversationAgent._should_continue_after_url_failure(
+            "Create a note from https://example.com/post",
+            messages,
+        )
+
+
+class TestGraphInvokeTimeout:
+    def test_invoke_graph_once_returns_after_timeout(self, monkeypatch):
+        class SlowGraph:
+            def invoke(self, payload, config=None):
+                time.sleep(2)
+                return {"messages": []}
+
+        agent = object.__new__(ConversationAgent)
+        agent.graph = SlowGraph()
+        monkeypatch.setattr(orchestrator_module.settings, "agent_run_timeout", 0.05)
+
+        started = time.monotonic()
+        with pytest.raises(TimeoutError):
+            agent._invoke_graph_once([], {}, USER)
+
+        assert time.monotonic() - started < 0.5
 
 
 class TestAutoCompleteGuard:

@@ -124,6 +124,8 @@ def wrap_with_governance(tool: BaseTool) -> BaseTool:
     """
     tool_name = tool.name
     static_risk = getattr(tool, "_risk_level", None) or get_risk_level(tool_name)
+    from prax.agent.user_context import capture_user_context, use_user_context
+    bound_context = capture_user_context()
 
     # Resolve capability metadata for epistemic tagging.
     capability = get_tool_capability(tool_name)
@@ -135,6 +137,10 @@ def wrap_with_governance(tool: BaseTool) -> BaseTool:
     epistemic_note = capability.get("epistemic_note", "") if capability else ""
 
     def _governed_run(**kwargs: Any) -> Any:
+        with use_user_context(bound_context):
+            return _governed_run_bound(**kwargs)
+
+    def _governed_run_bound(**kwargs: Any) -> Any:
         global _high_risk_confirmed, _tool_call_count
 
         # --- Active Inference: extract expected observation (Phase 1) ---

@@ -28,7 +28,6 @@ services:
       - ${WORKSPACE_DIR:-../workspaces}/${PRAX_USER_ID}/.services/qdrant:/data/qdrant
       - ${WORKSPACE_DIR:-../workspaces}/${PRAX_USER_ID}/.services/neo4j:/data/neo4j
       - ${WORKSPACE_DIR:-../workspaces}/${PRAX_USER_ID}/.services/teamwork:/data/teamwork
-      - ./conversations.db:/app/conversations.db
       - ./logs:/app/logs
       # Dev mounts
       - ./prax:/app/prax
