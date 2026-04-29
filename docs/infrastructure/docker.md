@@ -59,12 +59,8 @@ This adds five services (Tempo :4318, Loki :3100, Promtail, Prometheus :9090, Gr
 ```bash
 docker build -t prax .
 
-# Ensure the database file exists (Docker will create a directory otherwise)
-touch "$HOME/conversations.db"
-
 docker run -d -p 5001:5001 --restart always \
   -v "$HOME/workspaces:/app/workspaces" \
-  -v "$HOME/conversations.db:/app/conversations.db" \
   -v /var/run/docker.sock:/var/run/docker.sock \
   prax
 ```

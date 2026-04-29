@@ -272,6 +272,104 @@ def memory_stats() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Structured durable memory ledger
+# ---------------------------------------------------------------------------
+
+
+def _csv(value: str) -> list[str]:
+    return [item.strip() for item in (value or "").split(",") if item.strip()]
+
+
+@tool
+def memory_structured_record(
+    bucket: str,
+    key: str,
+    content: str,
+    scope: str = "user",
+    source: str = "",
+    confidence: float = 0.7,
+    importance: float = 0.5,
+    tags: str = "",
+    ttl_days: int | None = None,
+    supersedes: str = "",
+) -> str:
+    """Record typed durable memory with scope and lifecycle metadata.
+
+    Buckets: preference, project_fact, session_scratchpad, decision, tool_note.
+    Scopes: user, project, session.
+
+    Use this when the memory should be inspectable and explicitly typed rather
+    than only embedded in vector/graph memory.
+    """
+    from prax.services import structured_memory_service as structured
+
+    try:
+        record = structured.record_memory(
+            _uid(),
+            bucket=bucket,
+            key=key,
+            content=content,
+            scope=scope,
+            source=source,
+            confidence=confidence,
+            importance=importance,
+            tags=_csv(tags),
+            ttl_days=ttl_days,
+            supersedes=supersedes,
+        )
+    except ValueError as exc:
+        return f"Failed to record structured memory: {exc}"
+    return (
+        f"Structured memory saved: id={record['id']} "
+        f"bucket={record['bucket']} scope={record['scope']} key={record['key']}"
+    )
+
+
+@tool
+def memory_structured_find(
+    query: str = "",
+    bucket: str = "",
+    scope: str = "",
+    status: str = "active",
+    limit: int = 20,
+) -> str:
+    """Find typed durable memory records by query, bucket, scope, and status."""
+    from prax.services import structured_memory_service as structured
+
+    records = structured.list_memories(
+        _uid(),
+        query=query,
+        bucket=bucket,
+        scope=scope,
+        status=status,
+        limit=limit,
+    )
+    if not records:
+        return "No structured memory records found."
+
+    lines = []
+    for record in records:
+        tags = f" tags={','.join(record.get('tags', []))}" if record.get("tags") else ""
+        lines.append(
+            f"- {record['id']} [{record['bucket']}/{record['scope']}/{record['status']}] "
+            f"imp={record.get('importance', 0):.1f} conf={record.get('confidence', 0):.1f}{tags}\n"
+            f"  {record['key']}: {record['content']}"
+        )
+    return "\n".join(lines)
+
+
+@tool
+def memory_structured_archive(memory_id: str, reason: str = "") -> str:
+    """Archive a typed durable memory record by id."""
+    from prax.services import structured_memory_service as structured
+
+    record = structured.archive_memory(_uid(), memory_id, reason=reason)
+    if not record:
+        return f"No structured memory found with id={memory_id}."
+    return f"Archived structured memory {memory_id}: {record['key']}"
+
+
+# ---------------------------------------------------------------------------
 # Tool builders
 # ---------------------------------------------------------------------------
 
@@ -289,4 +387,7 @@ def build_memory_tools() -> list:
         memory_graph_query,
         memory_consolidate,
         memory_stats,
+        memory_structured_record,
+        memory_structured_find,
+        memory_structured_archive,
     ]

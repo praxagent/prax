@@ -946,6 +946,79 @@ def think(reasoning: str) -> str:
     return "OK"
 
 
+@tool
+def decision_record(
+    problem: str,
+    chosen_action: str,
+    rationale: str,
+    options_considered: str = "",
+    rejected_alternatives: str = "",
+    confidence: float = 0.7,
+    assumptions: str = "",
+    scope: str = "session",
+    tags: str = "",
+) -> str:
+    """Record an explicit decision into trace history and structured memory.
+
+    Use this for non-trivial tool-selection, fallback, architectural, or
+    user-facing workflow decisions where future Prax should know what was
+    chosen and why.
+    """
+    uid = _get_user_id()
+    if uid == "unknown":
+        return "Error: no active user context."
+
+    from prax.services import structured_memory_service as structured
+
+    tag_list = [item.strip() for item in tags.split(",") if item.strip()]
+    metadata = {
+        "chosen_action": chosen_action.strip(),
+        "rationale": rationale.strip(),
+        "options_considered": options_considered.strip(),
+        "rejected_alternatives": rejected_alternatives.strip(),
+        "assumptions": assumptions.strip(),
+    }
+    content = (
+        f"Decision: {chosen_action.strip()}. "
+        f"Rationale: {rationale.strip()}"
+    )
+    try:
+        record = structured.record_memory(
+            uid,
+            bucket="decision",
+            key=problem,
+            content=content,
+            scope=scope,
+            source="decision_record",
+            confidence=confidence,
+            importance=0.75,
+            tags=tag_list,
+            metadata=metadata,
+        )
+    except ValueError as exc:
+        return f"Failed to record decision: {exc}"
+
+    trace_content = "\n".join([
+        f"problem: {problem.strip()}",
+        f"chosen_action: {chosen_action.strip()}",
+        f"rationale: {rationale.strip()}",
+        f"options_considered: {options_considered.strip()}",
+        f"rejected_alternatives: {rejected_alternatives.strip()}",
+        f"assumptions: {assumptions.strip()}",
+        f"confidence: {max(0.0, min(1.0, float(confidence))):.2f}",
+        f"structured_memory_id: {record['id']}",
+    ])
+    try:
+        workspace_service.append_trace(uid, [{
+            "type": TraceEvent.DECISION,
+            "content": trace_content,
+        }])
+    except Exception:
+        _ws_logger.debug("Failed to append decision trace event", exc_info=True)
+
+    return f"Decision recorded: id={record['id']} key={record['key']}"
+
+
 @risk_tool(risk=RiskLevel.HIGH)
 def request_extended_budget(reason: str, additional_calls: int = 20) -> str:
     """Request additional tool calls beyond the current budget.
@@ -1149,7 +1222,7 @@ def build_workspace_tools():
         # Conversation awareness
         conversation_history, conversation_search,
         # Meta / reasoning
-        think, request_extended_budget,
+        think, decision_record, request_extended_budget,
         read_logs, system_status,
         # Resourcefulness — self-upgrade and ad-hoc code execution
         self_upgrade_tier, run_python,

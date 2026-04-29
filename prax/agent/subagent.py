@@ -116,7 +116,12 @@ def _run_subagent(task: str, category: str) -> str:
         set_role_status("Executor", "working")
         push_live_output("Executor", f"[{category}] Starting: {task[:120]}\n", status="running", append=False)
 
-    tools = _get_tools_for_category(category)
+    # Set component context for earned trust and autonomy-aware limits.
+    from prax.agent.autonomy import get_recursion_limit
+    from prax.agent.user_context import bind_tools_user_context, current_component
+    current_component.set(f"subagent_{category}")
+
+    tools = bind_tools_user_context(_get_tools_for_category(category))
     if not tools:
         span.end(status="failed", summary="No tools available")
         return f"No tools available for category '{category}'."
@@ -152,11 +157,6 @@ def _run_subagent(task: str, category: str) -> str:
         f"## Execution Context\n{identity}"
         f"{metacognitive_hint}"
     )
-
-    # Set component context for earned trust and autonomy-aware limits.
-    from prax.agent.autonomy import get_recursion_limit
-    from prax.agent.user_context import current_component
-    current_component.set(f"subagent_{category}")
 
     _graph_cb = GraphCallbackHandler(
         parent_span_id=span.span_id,

@@ -20,6 +20,7 @@ graph TB
     Prax -->|delegate_content_editor| Content["Content Editor\nsub-hub"]
     Prax -->|delegate_course| Course["Course Spoke"]
     Prax -->|delegate_desktop| Desktop["Desktop Spoke"]
+    Prax -->|delegate_environment| Environment["Environment Spoke\nweather + local conditions"]
     Prax -->|delegate_sysadmin| Sysadmin["Sysadmin\nsub-hub"]
     Prax -->|delegate_sandbox| Sandbox["Sandbox Spoke\n+ sandbox_view/scroll/goto"]
     Prax -->|delegate_finetune| Finetune["Finetune Spoke"]
@@ -39,6 +40,7 @@ graph TB
     style Sandbox fill:#F5A623,color:#fff
     style Course fill:#F5A623,color:#fff
     style Desktop fill:#F5A623,color:#fff
+    style Environment fill:#F5A623,color:#fff
     style Finetune fill:#F5A623,color:#fff
     style Knowledge fill:#F5A623,color:#fff
     style Scheduler fill:#F5A623,color:#fff

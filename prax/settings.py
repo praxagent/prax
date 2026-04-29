@@ -121,6 +121,16 @@ class AppSettings(BaseSettings):
             "the run is aborted.  Prevents unbounded API spend."
         ),
     )
+    llm_request_timeout: int = Field(
+        default=300, alias="LLM_REQUEST_TIMEOUT",
+        description=(
+            "Per-call HTTP timeout (seconds) for LLM provider requests.  "
+            "Prevents a stalled connection from hanging the orchestrator "
+            "indefinitely — without this, a hung OpenAI/Anthropic call "
+            "blocks the entire agent turn (and the agent_run_timeout "
+            "check above doesn't fire because the invoke never returns)."
+        ),
+    )
 
     @property
     def sandbox_persistent(self) -> bool:

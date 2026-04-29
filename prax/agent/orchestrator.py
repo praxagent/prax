@@ -19,6 +19,11 @@ from prax.trace_events import TraceEvent
 # Maximum number of continuation rounds when a plan has incomplete steps.
 _MAX_PLAN_CONTINUATIONS = 3
 
+# Maximum number of continuation rounds when the agent tries to stop after a
+# recoverable URL/content-fetch failure.  Keep this low so bad sites don't trap
+# the turn forever.
+_MAX_RECOVERY_CONTINUATIONS = 2
+
 # Keywords/patterns that suggest a request is complex enough to benefit from
 # a plan.  Checked case-insensitively against the user input.
 _COMPLEXITY_SIGNALS = [
@@ -272,6 +277,44 @@ class ConversationAgent:
         "did not actually",
     })
 
+    _URL_FAILURE_MARKERS = frozenset({
+        "reader returned http",
+        "err_name_not_resolved",
+        "navigation failed",
+        "could not read the url",
+        "couldn't access the page",
+        "could not access the page",
+        "could not fetch",
+        "error fetching",
+        "domain did not resolve",
+        "server ip address could not be found",
+    })
+
+    _ASK_USER_TO_CONTINUE_MARKERS = frozenset({
+        "if you want, i can",
+        "if you'd like, i can",
+        "if you want me to",
+        "send me",
+        "paste the article",
+        "paste the content",
+        "provide a working link",
+        "permission to try",
+        "try again later",
+        "i can still do one of",
+        "do you want me to",
+    })
+
+    _URL_RECOVERY_TOOL_FAMILIES = {
+        "fetch_url_content": "reader",
+        "note_from_url": "reader",
+        "delegate_knowledge": "reader",
+        "delegate_browser": "browser",
+        "browser_navigate": "browser",
+        "background_search_tool": "search",
+        "delegate_research": "search",
+        "web_summary_tool": "summary",
+    }
+
     @classmethod
     def _response_has_caveat(cls, content: str) -> str | None:
         """Return the first caveat marker found in ``content``, else None.
@@ -286,6 +329,77 @@ class ConversationAgent:
             if marker in lowered:
                 return marker
         return None
+
+    @staticmethod
+    def _last_ai_content(messages: list) -> str:
+        for msg in reversed(messages or []):
+            if isinstance(msg, AIMessage) and msg.content:
+                return str(msg.content)
+        return ""
+
+    @classmethod
+    def _should_continue_after_url_failure(cls, user_input: str, messages: list) -> bool:
+        """Detect recoverable URL failures where the agent stopped too early.
+
+        This catches the "reader failed, ask the user whether to try browser /
+        archive / search" pattern.  Those fallback attempts are part of the
+        job; the user should not have to push Prax through the next obvious
+        recovery path.
+        """
+        response = cls._last_ai_content(messages).lower()
+        if not response:
+            return False
+        if not any(marker in response for marker in cls._ASK_USER_TO_CONTINUE_MARKERS):
+            return False
+
+        saw_url_failure = False
+        recovery_families: set[str] = set()
+        for msg in messages or []:
+            if not isinstance(msg, ToolMessage):
+                continue
+            name = str(getattr(msg, "name", "") or "")
+            content = (msg.content or "").lower()
+            family = cls._URL_RECOVERY_TOOL_FAMILIES.get(name)
+            if family:
+                recovery_families.add(family)
+            if any(marker in content for marker in cls._URL_FAILURE_MARKERS):
+                saw_url_failure = True
+
+        if not saw_url_failure:
+            return False
+
+        # If the agent already tried reader, browser, and search/summary, it
+        # can stop and report the exact failed attempts.
+        tried_enough = (
+            "reader" in recovery_families
+            and "browser" in recovery_families
+            and bool(recovery_families & {"search", "summary"})
+        )
+        if tried_enough:
+            return False
+
+        # Be conservative outside URL/content tasks.
+        looks_like_url_task = (
+            "http://" in user_input
+            or "https://" in user_input
+            or any(word in user_input.lower() for word in (
+                "url", "article", "page", "link", "note", "summarize",
+                "what went wrong",
+            ))
+        )
+        return looks_like_url_task or bool(recovery_families)
+
+    @staticmethod
+    def _url_recovery_nudge() -> str:
+        return (
+            "[SYSTEM] You hit a URL/content fetch failure and your draft "
+            "response asks the user whether to try another path. Do not ask "
+            "yet. Try a new recovery route now: search the web for the title, "
+            "domain, or URL slug; try a canonical URL variant if the hostname "
+            "looks wrong; use delegate_browser if you have not already; or "
+            "fetch a discovered working URL. If all distinct recovery paths "
+            "fail, then report the exact attempts and stop."
+        )
 
     @staticmethod
     def _auto_complete_plan_steps(uid: str, messages: list) -> None:
@@ -419,6 +533,14 @@ class ConversationAgent:
 
         # Rebuild graph if plugins changed since last invocation.
         self._rebuild_if_needed()
+        # Tool bodies may execute in a fresh contextvars context inside
+        # LangGraph. Rebuild the graph once the request user/message context is
+        # set so governance wrappers bind the correct user into every tool.
+        self.tools = get_registered_tools()
+        self.graph = create_react_agent(
+            self.llm, self.tools, checkpointer=self.checkpoint_mgr.saver,
+        )
+        self._plugin_version = self._current_plugin_version()
 
         history: list[BaseMessage] = list(conversation)
         logger.debug("Agent invoked with %d history messages", len(history))
@@ -594,6 +716,8 @@ class ConversationAgent:
         push_live_output(settings.agent_name, "Processing request...\n", status="running", append=False)
         log_activity(settings.agent_name, "task_started", f"Processing: {user_input[:150]}")
 
+        run_status = "completed"
+        run_error_summary = ""
         try:
             result = self._invoke_with_retry(messages, config, turn.user_id)
 
@@ -623,11 +747,31 @@ class ConversationAgent:
                 continuation_messages = result.get("messages", []) + [
                     HumanMessage(content=f"[SYSTEM] {nudge}"),
                 ]
-                result = self.graph.invoke(
-                    {"messages": continuation_messages}, config=config,
+                result = self._invoke_graph_once(
+                    continuation_messages, config, turn.user_id,
+                )
+
+            recovery_continuations = 0
+            while (
+                self._should_continue_after_url_failure(user_input, result.get("messages", []))
+                and recovery_continuations < _MAX_RECOVERY_CONTINUATIONS
+                and _time.monotonic() < _run_deadline
+            ):
+                recovery_continuations += 1
+                logger.info(
+                    "URL recovery enforcement: continuation %d/%d (user=%s)",
+                    recovery_continuations, _MAX_RECOVERY_CONTINUATIONS, uid,
+                )
+                recovery_messages = result.get("messages", []) + [
+                    HumanMessage(content=self._url_recovery_nudge()),
+                ]
+                result = self._invoke_graph_once(
+                    recovery_messages, config, turn.user_id,
                 )
 
             if _time.monotonic() >= _run_deadline:
+                run_status = "timed_out"
+                run_error_summary = f"Agent run exceeded {settings.agent_run_timeout}s wall-clock timeout."
                 logger.warning(
                     "Agent run hit wall-clock timeout (%ds) for user %s",
                     settings.agent_run_timeout, uid,
@@ -643,6 +787,32 @@ class ConversationAgent:
                     pass
 
             self._rebuild_if_needed()
+        except TimeoutError as exc:
+            run_status = "timed_out"
+            run_error_summary = str(exc)
+            logger.error("Agent run timed out for user %s: %s", uid, exc)
+            result = {
+                "messages": messages + [
+                    AIMessage(content=(
+                        f"I hit the {settings.agent_run_timeout}s turn timeout while "
+                        "working on that request. I stopped waiting so the session "
+                        "doesn't stay stuck. Please retry or ask me to continue from "
+                        "the saved work."
+                    )),
+                ],
+            }
+        except Exception as exc:
+            run_status = "failed"
+            run_error_summary = f"{type(exc).__name__}: {str(exc)[:180]}"
+            logger.exception("Agent run failed for user %s", uid)
+            result = {
+                "messages": messages + [
+                    AIMessage(content=(
+                        "I hit an internal error while working on that request. "
+                        f"Error: {type(exc).__name__}: {str(exc)[:160]}"
+                    )),
+                ],
+            }
         finally:
             self.checkpoint_mgr.end_turn(turn.user_id)
             # Shut down idle plugin subprocesses after each turn.
@@ -658,12 +828,13 @@ class ConversationAgent:
         # Mark Prax's live output as completed so the UI shows the session log.
         push_live_output(
             settings.agent_name,
-            f"\nCompleted ({_graph_cb._tool_count} tool calls)\n",
-            status="completed",
+            f"\n{run_status.replace('_', ' ').title()} ({_graph_cb._tool_count} tool calls)\n",
+            status="completed" if run_status == "completed" else run_status,
         )
         log_activity(
-            settings.agent_name, "task_completed",
-            f"Completed with {_graph_cb._tool_count} tool calls",
+            settings.agent_name,
+            "task_completed" if run_status == "completed" else f"task_{run_status}",
+            f"{run_status.replace('_', ' ').title()} with {_graph_cb._tool_count} tool calls",
         )
 
         # Write full agent trace to the user's workspace log.
@@ -687,6 +858,7 @@ class ConversationAgent:
                 result.get("messages", []),
                 uid,
                 scheduled=is_scheduled,
+                task_input=user_input,
             )
 
         # Update session summary for next turn's classification.
@@ -758,6 +930,8 @@ class ConversationAgent:
             outcome_status = "completed"
             if _time.monotonic() >= _run_deadline:
                 outcome_status = "timeout"
+            elif run_status != "completed":
+                outcome_status = run_status
             elif not response:
                 outcome_status = "failed"
 
@@ -796,7 +970,11 @@ class ConversationAgent:
         except Exception:
             pass
 
-        root_span.end(status="completed", summary=response[:200] if response else "")
+        root_span.end(
+            status=run_status,
+            summary=(run_error_summary or response)[:200] if (run_error_summary or response) else "",
+            tool_calls=_graph_cb._tool_count,
+        )
         return response
 
     @staticmethod
@@ -838,8 +1016,11 @@ class ConversationAgent:
 
         while True:
             try:
-                return self.graph.invoke({"messages": messages}, config=config)
+                return self._invoke_graph_once(messages, config, user_id)
             except Exception as exc:
+                if isinstance(exc, TimeoutError):
+                    raise
+
                 # --- Context overflow recovery ---
                 # If the LLM rejects the payload for being too large,
                 # compact 20% more aggressively and retry (up to 3 times).
@@ -984,6 +1165,70 @@ class ConversationAgent:
                 # from the saved state, so we pass None for messages.
                 config = {**rollback_cfg, "callbacks": _callbacks}
 
+    def _invoke_graph_once(
+        self,
+        messages: list[BaseMessage],
+        config: dict,
+        user_id: str,
+    ) -> dict:
+        """Invoke LangGraph once with a hard await timeout.
+
+        The earlier implementation used ``ThreadPoolExecutor`` as a context
+        manager.  On timeout that still blocks in ``shutdown(wait=True)``, so a
+        stuck provider/tool can leave the root orchestrator span ``running``
+        forever.  This uses a daemon thread instead: the worker may finish
+        later, but the request thread stops waiting and can close the trace.
+        """
+        import queue
+        import threading
+
+        result_q: queue.Queue[tuple[str, object]] = queue.Queue(maxsize=1)
+
+        def _worker() -> None:
+            try:
+                result_q.put(("ok", self.graph.invoke({"messages": messages}, config=config)))
+            except Exception as exc:
+                result_q.put(("error", exc))
+
+        worker = threading.Thread(
+            target=_worker,
+            name=f"prax-graph-invoke-{str(user_id)[:12]}",
+            daemon=True,
+        )
+        worker.start()
+        worker.join(settings.agent_run_timeout)
+        if worker.is_alive():
+            logger.error(
+                "graph.invoke exceeded %ss wall-clock limit (user=%s); "
+                "abandoning the call so the root span can close.",
+                settings.agent_run_timeout, user_id,
+            )
+            try:
+                from prax.services.health_telemetry import (
+                    EventCategory,
+                    Severity,
+                    record_event,
+                )
+                record_event(
+                    EventCategory.TURN_TIMEOUT, Severity.ERROR,
+                    component="orchestrator",
+                    details=f"graph.invoke timeout after {settings.agent_run_timeout}s for user {user_id}",
+                )
+            except Exception:
+                pass
+            raise TimeoutError(
+                f"agent run exceeded {settings.agent_run_timeout}s — "
+                "abandoning to free the orchestrator."
+            )
+
+        try:
+            status, payload = result_q.get_nowait()
+        except queue.Empty as exc:
+            raise RuntimeError("graph.invoke worker exited without returning a result") from exc
+        if status == "error":
+            raise payload  # type: ignore[misc]
+        return payload  # type: ignore[return-value]
+
     @staticmethod
     def _audit_claims(
         response: str,
@@ -991,6 +1236,7 @@ class ConversationAgent:
         user_id: str | None,
         *,
         scheduled: bool = False,
+        task_input: str = "",
     ) -> str:
         """Run deterministic claim audit and log findings.
 
@@ -1018,6 +1264,7 @@ class ConversationAgent:
                 audit_claims,
                 audit_narrative_grounding,
                 audit_plan_completion,
+                audit_scheduled_task_grounding,
                 format_audit_warning,
             )
             from prax.services.teamwork_hooks import (
@@ -1039,6 +1286,10 @@ class ConversationAgent:
             findings = audit_claims(response, tool_results)
             narrative = audit_narrative_grounding(response, messages)
             plan_mismatch = audit_plan_completion(response, messages)
+            scheduled_grounding = (
+                audit_scheduled_task_grounding(task_input, response, messages)
+                if scheduled else None
+            )
 
             flagged_parts: list[str] = []
             if findings:
@@ -1057,6 +1308,13 @@ class ConversationAgent:
                     f"{plan_mismatch['caveat_tool']} reply contained caveat "
                     f"{plan_mismatch['caveat_marker']!r} — the sub-agent "
                     f"said the work is partial and the response ignored it"
+                )
+            if scheduled_grounding:
+                called = ", ".join(scheduled_grounding["called_tools"]) or "(none)"
+                requirements = "; ".join(scheduled_grounding["requirements"])
+                flagged_parts.append(
+                    f"SCHEDULED EVIDENCE FLOOR: {requirements} "
+                    f"(called: {called})"
                 )
 
             if flagged_parts:
@@ -1081,7 +1339,7 @@ class ConversationAgent:
                 # BLOCKING substitution for scheduled tasks with narrative
                 # hallucinations. The user is not present to correct — better
                 # to deliver nothing substantive than fabricated news.
-                if scheduled and narrative:
+                if scheduled and (narrative or scheduled_grounding):
                     logger.error(
                         "BLOCKING scheduled-task response due to ungrounded "
                         "narrative claims (user=%s): %s",

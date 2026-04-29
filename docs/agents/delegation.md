@@ -23,6 +23,7 @@ graph TB
     Prax -->|delegate_content_editor| Content[Content Editor<br/>sub-hub: research → write → review]
     Prax -->|delegate_course| Course[Course Agent]
     Prax -->|delegate_desktop| Desktop[Desktop Agent]
+    Prax -->|delegate_environment| Environment[Environment Agent<br/>weather + local conditions]
     Prax -->|delegate_sysadmin| Sysadmin[Sysadmin Agent<br/>30+ tools: plugins, config, source]
     Prax -->|delegate_sandbox| Sandbox[Sandbox Agent<br/>Docker + OpenCode + Desktop + sandbox_view/scroll/goto]
     Prax -->|delegate_finetune| Finetune[Finetune Agent<br/>8 tools: LoRA pipeline]
@@ -58,6 +59,7 @@ graph TB
 | **Content Editor** | `delegate_content_editor` | Sub-hub: blog pipeline (research → write → review) or course author mode | Blog posts, publication-quality content, and course module content |
 | **Course** | `delegate_course` | Course authoring + publish | Course creation and tutoring |
 | **Desktop** | `delegate_desktop` | Desktop automation (xdotool / Chrome DevTools Protocol) | GUI tasks in the sandbox desktop |
+| **Environment** | `delegate_environment` | Location resolver + live weather fetch + datetime | Weather, local conditions, and time/location context; asks for location when only timezone is known |
 | **Sysadmin** | `delegate_sysadmin` | 30+: plugin mgmt, prompts, LLM config, source, workspace sync | Plugin install/update, config changes, self-improvement |
 | **Sandbox** | `delegate_sandbox` | Session lifecycle, archive, package management, 6 desktop tools, `sandbox_view` / `sandbox_scroll` / `sandbox_goto` (SWE-agent-style line-numbered file viewer) | Code execution in isolated Docker containers + GUI desktop interaction |
 | **Finetune** | `delegate_finetune` | 8: harvest, train, verify, promote, rollback | LoRA fine-tuning pipeline (requires FINETUNE_ENABLED) |

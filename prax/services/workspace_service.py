@@ -209,9 +209,27 @@ def ensure_workspace(user_id: str) -> str:
     return root
 
 
-def git_commit(root: str, message: str) -> None:
-    """Stage all changes and commit if there's anything to commit."""
-    r = subprocess.run(["git", "add", "-A"], cwd=root, capture_output=True, text=True)
+def git_commit(root: str, message: str) -> dict:
+    """Stage all changes and commit if there's anything to commit.
+
+    DEFENSIVE: never raises.  All callers (agent_plan_clear, save_user_notes,
+    create_note, etc.) treat git as a best-effort audit log — a busted
+    workspace state (unfinished merge, detached HEAD, missing user.email,
+    "dubious ownership", filesystem permission glitch) must NOT propagate
+    out as a tool failure that hangs the agent's recovery turn.
+
+    Returns a dict with at least `status` (`committed` | `noop` | `failed`)
+    and, on failure, `error` (the captured stderr).  Callers that don't
+    care about the result can safely ignore it.
+    """
+    try:
+        r = subprocess.run(
+            ["git", "add", "-A"], cwd=root, capture_output=True, text=True,
+        )
+    except Exception as exc:
+        logger.warning("git add -A raised: %s", exc)
+        return {"status": "failed", "error": str(exc)}
+
     if r.returncode != 0:
         # Self-heal "dubious ownership" errors from Docker UID mismatch.
         if "dubious ownership" in r.stderr:
@@ -219,18 +237,40 @@ def git_commit(root: str, message: str) -> None:
                 ["git", "config", "--global", "--add", "safe.directory", root],
                 capture_output=True,
             )
-            r = subprocess.run(["git", "add", "-A"], cwd=root, capture_output=True, text=True)
+            r = subprocess.run(
+                ["git", "add", "-A"], cwd=root, capture_output=True, text=True,
+            )
         if r.returncode != 0:
             logger.warning("git add -A failed (rc=%d): %s", r.returncode, r.stderr[:300])
             # Fallback: try adding without -A (just tracked files + new).
             subprocess.run(["git", "add", "."], cwd=root, capture_output=True)
-    result = subprocess.run(
-        ["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True,
-    )
-    if result.stdout.strip():
-        subprocess.run(
-            ["git", "commit", "-m", message], cwd=root, check=True, capture_output=True,
+
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True,
         )
+    except Exception as exc:
+        logger.warning("git status raised: %s", exc)
+        return {"status": "failed", "error": str(exc)}
+
+    if not result.stdout.strip():
+        return {"status": "noop"}
+
+    commit = subprocess.run(
+        ["git", "commit", "-m", message], cwd=root, capture_output=True, text=True,
+    )
+    if commit.returncode != 0:
+        # Most common: "fatal: empty ident name", unfinished merge, detached
+        # HEAD, or pre-commit hooks gone wrong.  Log loudly so it's visible
+        # in `docker compose logs prax`, but DON'T raise — the agent's
+        # in-flight tool call must still return a clean result so the next
+        # LLM turn can decide what to do.
+        logger.warning(
+            "git commit failed (rc=%d) at %s: %s",
+            commit.returncode, root, (commit.stderr or commit.stdout)[:500],
+        )
+        return {"status": "failed", "error": commit.stderr.strip() or commit.stdout.strip()}
+    return {"status": "committed"}
 
 
 def save_user_notes(user_id: str, content: str) -> str:

@@ -171,10 +171,12 @@ def _run_research(question: str, depth: int = 0) -> str:
         depth: Recursion depth for this invocation.  0 is top-level.
     """
     token = _research_depth.set(depth)
+    from prax.agent.user_context import bind_tools_user_context, current_component
+    component_token = current_component.set("research")
     try:
         logger.info("Research agent (depth=%d): %s", depth, question[:80])
 
-        tools = _build_research_tools(depth=depth)
+        tools = bind_tools_user_context(_build_research_tools(depth=depth))
         if not tools:
             return "No research tools available."
 
@@ -224,6 +226,7 @@ def _run_research(question: str, depth: int = 0) -> str:
 
         return "Research agent completed but produced no output."
     finally:
+        current_component.reset(component_token)
         _research_depth.reset(token)
 
 

@@ -185,13 +185,24 @@ def build_llm(
             api_key=settings.openai_key,
             temperature=temp,
             callbacks=callbacks,
+            # Per-request HTTP timeout — prevents a stalled OpenAI
+            # connection from hanging the orchestrator forever.  Without
+            # this, langchain_openai's default is no timeout, and a
+            # hung POST /v1/chat/completions blocks the agent turn even
+            # though agent_run_timeout exists (that timeout is only
+            # checked AFTER graph.invoke returns).
+            timeout=settings.llm_request_timeout,
             model_kwargs={"logprobs": True, "top_logprobs": 5},
         )
 
     if provider_name == "anthropic":
         if not settings.anthropic_key:
             raise ValueError("ANTHROPIC_KEY is required for Anthropic provider")
-        return ChatAnthropic(model=model_name, api_key=settings.anthropic_key, temperature=temp, callbacks=callbacks)
+        return ChatAnthropic(
+            model=model_name, api_key=settings.anthropic_key,
+            temperature=temp, callbacks=callbacks,
+            timeout=settings.llm_request_timeout,
+        )
 
     if provider_name in {"google", "google-vertex"}:
         if not settings.google_vertex_project or not settings.google_vertex_location:
@@ -202,6 +213,7 @@ def build_llm(
             project=settings.google_vertex_project,
             location=settings.google_vertex_location,
             callbacks=callbacks,
+            request_timeout=settings.llm_request_timeout,
         )
 
     if provider_name in {"ollama", "local"}:
@@ -214,6 +226,7 @@ def build_llm(
             base_url=settings.vllm_base_url,
             temperature=temp,
             callbacks=callbacks,
+            timeout=settings.llm_request_timeout,
         )
 
     raise ValueError(f"Unsupported LLM provider: {provider}")

@@ -7,6 +7,7 @@ from prax.agent.claim_audit import (
     audit_claims,
     audit_narrative_grounding,
     audit_plan_completion,
+    audit_scheduled_task_grounding,
     format_audit_warning,
 )
 
@@ -238,6 +239,98 @@ class TestNarrativeGrounding:
         assert finding is not None
         assert finding["missing_grounding"] is True
         assert "delegate_research" not in finding["called_tools"]
+
+
+class TestScheduledTaskGrounding:
+    def _msgs(self, tool_names: list[str]) -> list:
+        return [
+            AIMessage(content=""),
+            *[ToolMessage(content="result", name=n, tool_call_id=f"c{i}")
+              for i, n in enumerate(tool_names)],
+        ]
+
+    def test_background_search_alone_does_not_ground_scheduled_briefing(self):
+        task = (
+            "[SCHEDULED_TASK] Send a concise morning briefing: "
+            "3 top news items and weather/time-saving tips."
+        )
+        response = "Good morning — today's quick briefing: I don't have reliable top news."
+        messages = self._msgs(["background_search_tool", "get_current_datetime"])
+        finding = audit_scheduled_task_grounding(task, response, messages)
+        assert finding is not None
+        assert finding["missing_grounding"] is True
+        assert any("background_search_tool alone is not sufficient" in r for r in finding["requirements"])
+
+    def test_news_tool_satisfies_scheduled_briefing(self):
+        task = "[SCHEDULED_TASK] Send a concise morning briefing with 3 top news items."
+        response = "Today's top news items are grounded in the digest."
+        messages = self._msgs(["news", "get_current_datetime"])
+        assert audit_scheduled_task_grounding(task, response, messages) is None
+
+    def test_weather_request_requires_tool_or_unavailable_disclosure(self):
+        task = "[SCHEDULED_TASK] Send weather and time-saving tips."
+        response = "Weather should be sunny today."
+        messages = self._msgs(["get_current_datetime"])
+        finding = audit_scheduled_task_grounding(task, response, messages)
+        assert finding is not None
+        assert any("weather requested" in r for r in finding["requirements"])
+
+    def test_authoritative_weather_fetch_satisfies_weather_request(self):
+        task = "[SCHEDULED_TASK] Send weather and time-saving tips."
+        response = "Weather: the NWS forecast says a high near 72."
+        messages = [
+            AIMessage(content=""),
+            ToolMessage(
+                content=(
+                    "Fetched forecast.weather.gov for Los Angeles. "
+                    "National Weather Service forecast: high near 72 degrees, "
+                    "west wind 5 mph."
+                ),
+                name="delegate_research",
+                tool_call_id="c_weather",
+            ),
+        ]
+        assert audit_scheduled_task_grounding(task, response, messages) is None
+
+    def test_environment_spoke_weather_satisfies_weather_request(self):
+        task = "[SCHEDULED_TASK] Send weather and time-saving tips."
+        response = "Weather: verified local conditions are available."
+        messages = [
+            AIMessage(content=""),
+            ToolMessage(
+                content=(
+                    "VERIFIED_WEATHER\n"
+                    "location: Los Angeles, California, United States\n"
+                    "conditions: mainly clear\n"
+                    "temperature: 72.1 °F\n"
+                    "sources: https://api.open-meteo.com/v1/forecast"
+                ),
+                name="delegate_environment",
+                tool_call_id="c_environment",
+            ),
+        ]
+        assert audit_scheduled_task_grounding(task, response, messages) is None
+
+    def test_background_search_does_not_satisfy_weather_request(self):
+        task = "[SCHEDULED_TASK] Send weather and time-saving tips."
+        response = "Weather: sunny and 72."
+        messages = [
+            AIMessage(content=""),
+            ToolMessage(
+                content="Search snippets mention weather in Los Angeles.",
+                name="background_search_tool",
+                tool_call_id="c_search",
+            ),
+        ]
+        finding = audit_scheduled_task_grounding(task, response, messages)
+        assert finding is not None
+        assert any("authoritative weather fetch" in r for r in finding["requirements"])
+
+    def test_weather_unavailable_disclosure_passes_without_weather_tool(self):
+        task = "[SCHEDULED_TASK] Send weather and time-saving tips."
+        response = "Weather unavailable: no weather tool is configured."
+        messages = self._msgs(["get_current_datetime"])
+        assert audit_scheduled_task_grounding(task, response, messages) is None
 
 
 # ---------------------------------------------------------------------------

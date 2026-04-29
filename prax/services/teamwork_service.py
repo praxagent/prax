@@ -423,7 +423,9 @@ class TeamWorkClient:
         if not self._project_id:
             return {}
 
-        db_path = settings.database_name
+        from prax.services.state_paths import ensure_conversation_db
+
+        db_path = ensure_conversation_db(database_name=settings.database_name)
         try:
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()

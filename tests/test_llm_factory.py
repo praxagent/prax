@@ -11,6 +11,7 @@ def test_build_llm_for_each_provider(monkeypatch):
         default_llm_provider='openai',
         base_model='gpt-test',
         agent_temperature=0.2,
+        llm_request_timeout=300,
         openai_key='sk-test',
         anthropic_key='ant-test',
         google_vertex_project='proj',
@@ -51,6 +52,7 @@ def test_build_llm_with_tier(monkeypatch):
         default_llm_provider='openai',
         base_model='gpt-test',
         agent_temperature=0.2,
+        llm_request_timeout=300,
         openai_key='sk-test',
     )
     monkeypatch.setattr(llm_module, 'settings', dummy_settings, raising=False)
@@ -74,6 +76,7 @@ def test_build_llm_model_overrides_tier(monkeypatch):
         default_llm_provider='openai',
         base_model='gpt-test',
         agent_temperature=0.2,
+        llm_request_timeout=300,
         openai_key='sk-test',
     )
     monkeypatch.setattr(llm_module, 'settings', dummy_settings, raising=False)
@@ -92,6 +95,7 @@ def test_build_llm_records_tier_choice(monkeypatch):
         default_llm_provider='openai',
         base_model='gpt-test',
         agent_temperature=0.2,
+        llm_request_timeout=300,
         openai_key='sk-test',
     )
     monkeypatch.setattr(llm_module, 'settings', dummy_settings, raising=False)
@@ -126,6 +130,7 @@ def test_peek_tier_choices_does_not_clear(monkeypatch):
         default_llm_provider='openai',
         base_model='gpt-test',
         agent_temperature=0.2,
+        llm_request_timeout=300,
         openai_key='sk-test',
     )
     monkeypatch.setattr(llm_module, 'settings', dummy_settings, raising=False)
@@ -153,6 +158,7 @@ def test_tier_choice_records_default_when_no_tier(monkeypatch):
         default_llm_provider='openai',
         base_model='gpt-fallback',
         agent_temperature=0.2,
+        llm_request_timeout=300,
         openai_key='sk-test',
     )
     monkeypatch.setattr(llm_module, 'settings', dummy_settings, raising=False)
@@ -174,6 +180,7 @@ def test_build_llm_requires_keys(monkeypatch):
         default_llm_provider='openai',
         base_model='gpt-test',
         agent_temperature=0.2,
+        llm_request_timeout=300,
         openai_key=None,
         anthropic_key=None,
         google_vertex_project=None,

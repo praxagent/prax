@@ -55,6 +55,14 @@ Durable memories with semantic search and knowledge graph.
 - **memory_consolidate** — Extract entities/relations from recent traces into LTM.
 - **memory_stats** — Show memory system statistics.
 
+## Structured Memory Ledger (always available)
+Typed, inspectable JSON records in the user's git-backed workspace.
+
+- **memory_structured_record** — Store a typed record with bucket, scope,
+  confidence, importance, source, tags, and optional TTL/supersession.
+- **memory_structured_find** — Search/filter structured records.
+- **memory_structured_archive** — Retire stale or wrong structured records.
+
 ## Workflow
 1. **Understand** what the user wants — store, recall, or explore memories.
 2. **Execute** using the appropriate tool(s).
@@ -79,6 +87,8 @@ Namespaces keep knowledge organized. Don't dump everything into "general".
   memory_entity_lookup (graph) to get a complete picture.  Also try
   knowledge_search in case relevant concepts exist in the knowledge graph.
 - When storing memories, make content self-contained and specific.
+- Use memory_structured_record for stable preferences, project facts,
+  explicit decisions, and tool notes that should remain auditable.
 - Set importance appropriately: 0.8+ for critical preferences/decisions,
   0.5 for useful context, 0.2 for minor notes.
 - If LTM is unavailable, fall back to STM operations and inform the user.

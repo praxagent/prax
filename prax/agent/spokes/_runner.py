@@ -72,10 +72,22 @@ def run_spoke(
     """
     import time as _time
 
-    from prax.agent.trace import GraphCallbackHandler, build_identity_context, start_span
+    from prax.agent.trace import (
+        GraphCallbackHandler,
+        build_identity_context,
+        claim_pending_delegation_context,
+        get_current_trace,
+        start_span,
+    )
 
     label = config_key.replace("subagent_", "")
-    span = start_span(label, label)
+    parent_context = None
+    if get_current_trace() is None:
+        parent_context = claim_pending_delegation_context(
+            f"delegate_{label}",
+            task=task,
+        )
+    span = start_span(label, label, parent_context=parent_context)
     _spoke_start = _time.monotonic()
 
     logger.info("Spoke [%s] delegated: %s", label, task[:120])
@@ -110,8 +122,6 @@ def run_spoke(
         tier=cfg.get("tier") or default_tier,
     )
 
-    graph = create_react_agent(llm, tools)
-
     # --- Inject identity + state context into system prompt ---
     identity = build_identity_context(label)
     enhanced_prompt = f"{system_prompt}\n\n## Execution Context\n{identity}"
@@ -122,8 +132,10 @@ def run_spoke(
 
     # Set component context for earned trust and apply autonomy-aware limits.
     from prax.agent.autonomy import get_recursion_limit
-    from prax.agent.user_context import current_component
+    from prax.agent.user_context import bind_tools_user_context, current_component
     current_component.set(label)
+    tools = bind_tools_user_context(tools)
+    graph = create_react_agent(llm, tools)
     effective_limit = get_recursion_limit(recursion_limit)
 
     _graph_cb = GraphCallbackHandler(

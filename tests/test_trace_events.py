@@ -7,6 +7,7 @@ class TestTraceEventVocabulary:
         from prax.trace_events import TraceEvent
         expected = {
             "user", "assistant", "system", "tool_call", "tool_result", "audit", "error",
+            "decision",
             "plugin_import", "plugin_activate", "plugin_block",
             "plugin_rollback", "plugin_remove", "plugin_security_warn",
             "tier_choice",
@@ -70,6 +71,27 @@ class TestTierChoiceInTraceGraph:
         )
         assert len(graph._nodes["s1"].tier_choices) == 1
         assert graph._nodes["s1"].tier_choices[0]["tier_requested"] == "high"
+
+    def test_timed_out_root_keeps_graph_terminal_even_if_child_leaks_running(self):
+        from prax.agent.trace import ExecutionGraph, SpanNode
+        graph = ExecutionGraph("t1")
+        root = SpanNode(
+            span_id="root", name="orchestrator", parent_id=None,
+            trace_id="t1", spoke_or_category="orchestrator",
+        )
+        child = SpanNode(
+            span_id="child", name="late_tool", parent_id="root",
+            trace_id="t1", spoke_or_category="tool",
+        )
+        graph.add_node(root)
+        graph.add_node(child)
+        graph.complete_node("root", status="timed_out", summary="timeout")
+
+        data = graph.to_dict()
+
+        assert data["status"] == "timed_out"
+        assert next(n for n in data["nodes"] if n["span_id"] == "root")["status"] == "timed_out"
+        assert next(n for n in data["nodes"] if n["span_id"] == "child")["status"] == "running"
 
     def test_graph_summary_includes_tier_info(self):
         from prax.agent.trace import ExecutionGraph, SpanNode
@@ -207,6 +229,52 @@ class TestGraphCallbackHandlerLangChainDispatch:
         node = list(graph._nodes.values())[0]
         assert node.name == "web_search"
         assert node.status == "running"
+
+    def test_delegate_spoke_can_claim_callback_context_from_separate_context(self):
+        """Spoke spans should nest under delegate_* even when contextvars split."""
+        import contextvars
+        from uuid import uuid4
+
+        import prax.agent.trace as trace_module
+        from prax.agent.trace import ExecutionGraph, GraphCallbackHandler, SpanNode
+
+        graph = ExecutionGraph("test-trace")
+        graph.session_id = "session-1"
+        graph.add_node(SpanNode(
+            span_id="root-span",
+            name="orchestrator",
+            parent_id=None,
+            trace_id="test-trace",
+            spoke_or_category="orchestrator",
+        ))
+        handler = GraphCallbackHandler(
+            parent_span_id="root-span", graph=graph, trace_id="test-trace",
+        )
+
+        run_id = uuid4()
+        callback_context = contextvars.copy_context()
+        callback_context.run(
+            handler.on_tool_start,
+            {"name": "delegate_browser"},
+            '{"task": "look up the weather"}',
+            run_id=run_id,
+        )
+        assert trace_module.get_current_trace() is None
+
+        parent = trace_module.claim_pending_delegation_context(
+            "delegate_browser",
+            task="look up the weather",
+        )
+        assert parent is not None
+        span = trace_module.start_span("browser", "browser", parent_context=parent)
+        span.end(status="completed", summary="done")
+        callback_context.run(handler.on_tool_end, "done", run_id=run_id)
+
+        delegate = next(n for n in graph._nodes.values() if n.name == "delegate_browser")
+        browser = next(n for n in graph._nodes.values() if n.name == "browser")
+        assert delegate.parent_id == "root-span"
+        assert browser.parent_id == delegate.span_id
+        assert graph.to_dict()["session_id"] == "session-1"
 
     def test_handle_event_tool_end_completes_node(self):
         from uuid import uuid4
