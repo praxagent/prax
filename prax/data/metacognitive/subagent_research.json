@@ -5,10 +5,19 @@
       "pattern_id": "DDGSException_research",
       "description": "DDGSException: TimeoutError: TimeoutError('error sending request for url (https://leta.mullvad.net/search/__data.js",
       "category": "research",
-      "confidence": 0.5,
+      "confidence": 0.10123493776890526,
       "occurrences": 1,
       "last_seen": 1774818033.9132879,
       "compensating_instruction": "Check the argument types and format for subagent_research."
+    },
+    "ConnectionError_research": {
+      "pattern_id": "ConnectionError_research",
+      "description": "ConnectionError: HTTPConnectionPool(host='export.arxiv.org', port=80): Max retries exceeded with url: /api/query?sear",
+      "category": "research",
+      "confidence": 0.5,
+      "occurrences": 1,
+      "last_seen": 1777508351.9286041,
+      "compensating_instruction": "The tool needs substantive input \u2014 collect the required data first."
     }
   }
 }

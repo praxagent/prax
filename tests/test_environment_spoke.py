@@ -281,3 +281,5 @@ def test_delegate_environment_calls_run_spoke():
         assert kwargs["config_key"] == "subagent_environment"
         assert kwargs["role_name"] == "Environment"
         assert "weather" in kwargs["task"].lower()
+        assert "VERIFIED_WEATHER" in kwargs["preserve_tool_result_prefixes"]
+        assert "VERIFIED_FORECAST" in kwargs["preserve_tool_result_prefixes"]

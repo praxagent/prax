@@ -135,6 +135,7 @@ class SmsService:
     def _reply_via_agent(self, from_number: str, text: str) -> None:
         """Call conversation_service and SMS the result. Meant to run in a thread."""
         try:
+            from prax.agent.user_context import current_channel_name
             from prax.services.identity_service import resolve_user
             user = resolve_user("sms", from_number)
 
@@ -155,6 +156,7 @@ class SmsService:
                     f"offer to promote it to a notebook if relevant.]"
                 )
 
+            current_channel_name.set("sms")
             response = conversation_service.reply(user.id, prompt)
             send_sms(response, from_number)
 

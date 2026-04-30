@@ -230,6 +230,32 @@ class TestGraphCallbackHandlerLangChainDispatch:
         assert node.name == "web_search"
         assert node.status == "running"
 
+    def test_tool_events_touch_heartbeat(self):
+        from uuid import uuid4
+
+        from prax.agent.trace import ExecutionGraph, GraphCallbackHandler, TraceHeartbeat
+
+        graph = ExecutionGraph("test-trace")
+        heartbeat = TraceHeartbeat("test-trace")
+        handler = GraphCallbackHandler(
+            parent_span_id="root-span",
+            graph=graph,
+            trace_id="test-trace",
+            heartbeat=heartbeat,
+        )
+        before = heartbeat.snapshot()["last_activity_at"]
+        rid = uuid4()
+
+        handler.on_tool_start({"name": "delegate_content_editor"}, "{}", run_id=rid)
+        started = heartbeat.snapshot()
+        handler.on_tool_end("done", run_id=rid)
+        ended = heartbeat.snapshot()
+
+        assert started["last_activity_at"] >= before
+        assert started["last_source"] == "delegate_content_editor"
+        assert ended["last_activity_at"] >= started["last_activity_at"]
+        assert "completed tool delegate_content_editor" in ended["last_message"]
+
     def test_delegate_spoke_can_claim_callback_context_from_separate_context(self):
         """Spoke spans should nest under delegate_* even when contextvars split."""
         import contextvars

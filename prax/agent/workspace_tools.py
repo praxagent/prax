@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging as _logging
 import os
+import re
 
 from langchain_core.tools import tool
 
@@ -57,6 +58,11 @@ def _validate_syntax(filename: str, content: str) -> str | None:
                 tomllib.loads(content)
             except tomllib.TOMLDecodeError as e:
                 return f"TOML decode error: {e}"
+        elif ext in (".md", ".markdown"):
+            from prax.services.mermaid_validator import validate_fast
+            errors = validate_fast(content)
+            if errors:
+                return "Broken mermaid diagram(s): " + "; ".join(errors)
     except Exception as e:
         _ws_logger.debug("Syntax validator error for %s: %s", filename, e)
         return None
@@ -122,9 +128,10 @@ def user_notes_read() -> str:
 def workspace_save(filename: str, content: str) -> str:
     """Save a file to the active workspace. Use for markdown notes, extracted content, etc.
 
-    Files with recognised syntax (.py, .json, .yaml/.yml, .toml) are
-    syntax-checked before writing. A syntactically broken file is
-    rejected and the file on disk is not modified.
+    Files with recognised syntax (.py, .json, .yaml/.yml, .toml, .md) are
+    syntax-checked before writing. For markdown, this includes a fast
+    heuristic check on every ```mermaid``` block. A syntactically broken
+    file is rejected and the file on disk is not modified.
     """
     try:
         syntax_err = _validate_syntax(filename, content)
@@ -486,6 +493,325 @@ def workspace_search(query: str) -> str:
     for r in results:
         lines.append(f"**{r['filename']}**:\n{r['snippet']}")
     return "\n\n".join(lines)
+
+
+_ARTIFACT_URL_RE = re.compile(r"https?://[^\s<>'\"`)\]]+")
+_ARTIFACT_FILE_RE = re.compile(
+    r"(?<![\w./-])"
+    r"([A-Za-z0-9][\w .()@+-]{0,150}\."
+    r"(?:md|pdf|tex|png|jpg|jpeg|gif|webp|mp3|mp4|wav|json|csv|txt|html|zip))"
+    r"(?![\w./-])",
+    re.IGNORECASE,
+)
+_ARTIFACT_QUERY_STOPWORDS = {
+    "again", "artifact", "file", "find", "here", "it", "link", "made",
+    "please", "put", "save", "saved", "show", "that", "the", "there",
+    "this", "where", "you",
+}
+_ARTIFACT_STRONG_WORDS = {
+    "approved", "created", "done", "downloaded", "final", "note",
+    "package", "presentation", "published", "saved", "shareable", "url",
+}
+
+
+def _artifact_query_tokens(query: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-z0-9][a-z0-9_-]{2,}", query.lower())
+        if token not in _ARTIFACT_QUERY_STOPWORDS
+    }
+
+
+def _clean_artifact_location(value: str) -> str:
+    return value.strip().rstrip(".,;:!?")
+
+
+def _clip_artifact_evidence(text: str, max_chars: int = 260) -> str:
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 3].rstrip() + "..."
+
+
+def _artifact_kind(location: str) -> str:
+    lower = location.lower()
+    if "/notes/" in lower:
+        return "note URL"
+    if "/teamwork/library/notes/" in lower or lower.startswith("library/"):
+        return "Library note"
+    if lower.startswith("active/"):
+        return "workspace file"
+    if lower.startswith("archive/"):
+        return "archived file"
+    if lower.startswith("output/") or "library/outputs/" in lower:
+        return "Library output"
+    return "artifact"
+
+
+def _score_artifact_candidate(
+    *,
+    location: str,
+    evidence: str,
+    tokens: set[str],
+    recency_score: int,
+    source_bonus: int,
+) -> int:
+    lower = f"{location} {evidence}".lower()
+    score = source_bonus + recency_score
+    if "/notes/" in lower:
+        score += 60
+    if "library/" in lower or "/teamwork/library/" in lower:
+        score += 30
+    if "active/" in lower:
+        score += 18
+    if any(word in lower for word in _ARTIFACT_STRONG_WORDS):
+        score += 18
+    for token in tokens:
+        if token in lower:
+            score += 12
+    if tokens and not any(token in lower for token in tokens):
+        score -= 20
+    return score
+
+
+def _add_artifact_candidate(
+    candidates: dict[str, dict],
+    *,
+    location: str,
+    evidence: str,
+    tokens: set[str],
+    recency_score: int = 0,
+    source_bonus: int = 0,
+) -> None:
+    location = _clean_artifact_location(location)
+    if not location:
+        return
+    key = location.lower()
+    score = _score_artifact_candidate(
+        location=location,
+        evidence=evidence,
+        tokens=tokens,
+        recency_score=recency_score,
+        source_bonus=source_bonus,
+    )
+    existing = candidates.get(key)
+    if existing and existing["score"] >= score:
+        return
+    candidates[key] = {
+        "location": location,
+        "kind": _artifact_kind(location),
+        "evidence": _clip_artifact_evidence(evidence),
+        "score": score,
+    }
+
+
+def _collect_trace_artifacts(
+    candidates: dict[str, dict],
+    *,
+    uid: str,
+    query_tokens: set[str],
+    recent_lines: int,
+) -> str:
+    trace_tail = workspace_service.read_trace_tail(uid, lines=max(80, min(recent_lines, 3000)))
+    if not trace_tail:
+        return ""
+
+    lines = trace_tail.splitlines()
+    total = max(1, len(lines))
+    for idx, line in enumerate(lines):
+        if not line.strip():
+            continue
+        recency_score = int(((idx + 1) / total) * 40)
+        for url in _ARTIFACT_URL_RE.findall(line):
+            _add_artifact_candidate(
+                candidates,
+                location=url,
+                evidence=f"trace: {line}",
+                tokens=query_tokens,
+                recency_score=recency_score,
+                source_bonus=70,
+            )
+        for filename in _ARTIFACT_FILE_RE.findall(line):
+            lower_line = line.lower()
+            if "content=" in lower_line and "active workspace files" in lower_line:
+                continue
+            _add_artifact_candidate(
+                candidates,
+                location=filename,
+                evidence=f"trace: {line}",
+                tokens=query_tokens,
+                recency_score=recency_score,
+                source_bonus=35,
+            )
+    return trace_tail
+
+
+def _collect_note_artifacts(candidates: dict[str, dict], *, uid: str, query_tokens: set[str]) -> None:
+    from prax.settings import settings
+
+    base_url = settings.teamwork_base_url.rstrip("/")
+
+    try:
+        from prax.services import note_service
+
+        for idx, note in enumerate(note_service.list_notes(uid)[:20]):
+            title = note.get("title") or note.get("slug") or ""
+            slug = note.get("slug") or ""
+            if not slug:
+                continue
+            evidence = f"note index: {title} ({slug})"
+            if query_tokens and not any(t in f"{title} {slug}".lower() for t in query_tokens):
+                continue
+            _add_artifact_candidate(
+                candidates,
+                location=f"{base_url}/notes/{slug}/",
+                evidence=evidence,
+                tokens=query_tokens,
+                recency_score=max(0, 20 - idx),
+                source_bonus=45,
+            )
+    except Exception:
+        _ws_logger.debug("artifact_locator: note_service lookup failed", exc_info=True)
+
+    try:
+        from prax.services import library_service
+
+        notes = library_service.list_notes(uid)
+        notes.sort(
+            key=lambda n: (n.get("updated_at") or n.get("created_at") or ""),
+            reverse=True,
+        )
+        for idx, note in enumerate(notes[:40]):
+            title = note.get("title") or note.get("slug") or ""
+            project = note.get("project") or ""
+            notebook = note.get("notebook") or ""
+            slug = note.get("slug") or ""
+            haystack = f"{title} {project} {notebook} {slug}".lower()
+            if not slug or (query_tokens and not any(t in haystack for t in query_tokens)):
+                continue
+            _add_artifact_candidate(
+                candidates,
+                location=f"library/{project}/{notebook}/{slug}",
+                evidence=f"Library note: {title} (`{project}/{notebook}/{slug}`)",
+                tokens=query_tokens,
+                recency_score=max(0, 18 - idx),
+                source_bonus=28,
+            )
+
+        for idx, output in enumerate(library_service.list_outputs(uid)[:20]):
+            title = output.get("title") or output.get("slug") or ""
+            slug = output.get("slug") or ""
+            haystack = f"{title} {slug}".lower()
+            if not slug or (query_tokens and not any(t in haystack for t in query_tokens)):
+                continue
+            _add_artifact_candidate(
+                candidates,
+                location=f"library/outputs/{slug}.md",
+                evidence=f"Library output: {title}",
+                tokens=query_tokens,
+                recency_score=max(0, 16 - idx),
+                source_bonus=24,
+            )
+    except Exception:
+        _ws_logger.debug("artifact_locator: library lookup failed", exc_info=True)
+
+
+def _collect_workspace_file_artifacts(
+    candidates: dict[str, dict],
+    *,
+    uid: str,
+    query: str,
+    query_tokens: set[str],
+) -> None:
+    if not query_tokens:
+        return
+
+    try:
+        for filename in workspace_service.list_active(uid):
+            haystack = filename.lower()
+            if not any(token in haystack for token in query_tokens):
+                continue
+            _add_artifact_candidate(
+                candidates,
+                location=f"active/{filename}",
+                evidence="active workspace filename matched the query",
+                tokens=query_tokens,
+                source_bonus=18,
+            )
+    except Exception:
+        _ws_logger.debug("artifact_locator: active workspace lookup failed", exc_info=True)
+
+    try:
+        for result in workspace_service.search_archive(uid, query)[:8]:
+            filename = result.get("filename", "")
+            if not filename:
+                continue
+            _add_artifact_candidate(
+                candidates,
+                location=f"archive/{filename}",
+                evidence=f"archive match: {result.get('snippet', '')}",
+                tokens=query_tokens,
+                source_bonus=12,
+            )
+    except Exception:
+        _ws_logger.debug("artifact_locator: archive lookup failed", exc_info=True)
+
+
+@tool
+def artifact_locator(query: str = "", recent_lines: int = 1200) -> str:
+    """Find the concrete artifact/link from recent work.
+
+    Use this before answering follow-ups like "where is it?", "link again",
+    "where did you put/save it?", or "show me the thing you just made".
+    It searches recent trace/tool output first, then note indexes, Library
+    outputs, and query-matching workspace files. Do not answer these
+    follow-ups from ``agent_plan_status`` alone; a completed plan is not an
+    artifact location.
+    """
+    uid = _get_user_id()
+    if uid == "unknown":
+        return "Cannot locate artifacts: no active user context."
+
+    query = (query or "").strip()
+    query_tokens = _artifact_query_tokens(query)
+    candidates: dict[str, dict] = {}
+    trace_tail = _collect_trace_artifacts(
+        candidates,
+        uid=uid,
+        query_tokens=query_tokens,
+        recent_lines=recent_lines,
+    )
+    _collect_note_artifacts(candidates, uid=uid, query_tokens=query_tokens)
+    _collect_workspace_file_artifacts(
+        candidates,
+        uid=uid,
+        query=query,
+        query_tokens=query_tokens,
+    )
+
+    ranked = sorted(
+        candidates.values(),
+        key=lambda item: (item["score"], item["location"]),
+        reverse=True,
+    )
+    if not ranked:
+        searched = ["recent trace/tool output", "published notes", "Library notes/outputs"]
+        if query_tokens:
+            searched.append("query-matching active/archive workspace files")
+        reason = f" for `{query}`" if query else ""
+        return (
+            f"No concrete artifact location found{reason}. "
+            f"Searched: {', '.join(searched)}."
+        )
+
+    lines = ["Most likely recent artifact locations:"]
+    for idx, item in enumerate(ranked[:8], start=1):
+        lines.append(f"{idx}. {item['kind']}: {item['location']}")
+        lines.append(f"   evidence: {item['evidence']}")
+
+    trace_hint = "trace/tool output was available" if trace_tail else "no trace log was available"
+    lines.append(f"\nSearch basis: {trace_hint}; note indexes and workspace matches were checked.")
+    return "\n".join(lines)
 
 
 @tool
@@ -1220,7 +1546,7 @@ def build_workspace_tools():
         # orchestrator no longer carries them inline; this keeps its
         # tool count under Anthropic's ~50-tool accuracy threshold.)
         # Conversation awareness
-        conversation_history, conversation_search,
+        conversation_history, conversation_search, artifact_locator,
         # Meta / reasoning
         think, decision_record, request_extended_budget,
         read_logs, system_status,

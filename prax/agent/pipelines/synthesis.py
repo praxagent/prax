@@ -137,6 +137,11 @@ class SynthesisPipeline:
 
     def _status(self, message: str) -> None:
         """Emit a status update via the callback if one is configured."""
+        try:
+            from prax.agent.trace import touch_current_trace
+            touch_current_trace(f"{self.item_kind} pipeline", message)
+        except Exception:
+            logger.debug("Pipeline heartbeat update failed", exc_info=True)
         if self.status_callback:
             try:
                 self.status_callback(message)

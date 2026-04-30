@@ -93,7 +93,7 @@ Every event is a `HealthEvent` with: `category`, `severity`, `component`, `detai
 | `SPOKE_SUCCESS` | `spoke_success` | A spoke sub-agent completes successfully | INFO | Spoke label |
 | `LLM_ERROR` | `llm_error` | LLM provider returns an error (rate limit, timeout, etc.) | ERROR | Provider name |
 | `TURN_COMPLETED` | `turn_completed` | Orchestrator finishes processing a user message | INFO | `orchestrator` |
-| `TURN_TIMEOUT` | `turn_timeout` | Orchestrator's graph execution exceeds `agent_run_timeout` | WARNING | `orchestrator` |
+| `TURN_TIMEOUT` | `turn_timeout` | Orchestrator graph execution exceeds the idle timeout (`agent_run_timeout`) or maximum runtime (`agent_run_max_timeout`) | WARNING/ERROR | `orchestrator` |
 | `RETRY` | `retry` | Orchestrator retries after a graph failure | WARNING | `orchestrator` |
 | `BUDGET_EXHAUSTED` | `budget_exhausted` | Tool call counter exceeds `agent_max_tool_calls` budget | WARNING | `governed_tool` |
 
@@ -148,7 +148,7 @@ Computes average and P95 latency from `TURN_COMPLETED` events (which carry `late
 ### Reliability
 
 Combines two signals:
-- **Timeouts** -- the orchestrator's graph execution exceeded the configured `agent_run_timeout`. Two or more timeouts triggers `error` status.
+- **Timeouts** -- the orchestrator's graph execution exceeded the configured idle timeout (`agent_run_timeout`) without heartbeat activity, or the maximum runtime (`agent_run_max_timeout`) even with activity. Two or more timeouts triggers `error` status.
 - **Retries** -- the orchestrator retried after a graph failure. More than 5 retries indicates persistent instability.
 
 ### Tool Budget

@@ -107,3 +107,48 @@ def test_spoke_runner_handles_no_tools():
             role_name="Test",
         )
     assert "No tools available" in result
+
+
+def test_spoke_runner_preserves_structured_tool_evidence():
+    """Evidence-bearing nested tool output can be carried to the parent."""
+    from langchain_core.messages import AIMessage, ToolMessage
+
+    from prax.agent.spokes._runner import _append_preserved_tool_results
+
+    result = _append_preserved_tool_results(
+        "Clear and mild in Los Angeles this morning.",
+        [
+            ToolMessage(
+                content=(
+                    "VERIFIED_WEATHER\n"
+                    "location: Los Angeles, California, United States\n"
+                    "temperature: 63.8 °F\n"
+                    "sources: https://api.open-meteo.com/v1/forecast"
+                ),
+                name="environment_current_weather",
+                tool_call_id="weather",
+            ),
+            AIMessage(content="Clear and mild in Los Angeles this morning."),
+        ],
+        ("VERIFIED_WEATHER",),
+    )
+
+    assert "Clear and mild" in result
+    assert "[Tool evidence preserved for audit]" in result
+    assert "VERIFIED_WEATHER" in result
+    assert "api.open-meteo.com" in result
+
+
+def test_spoke_runner_does_not_duplicate_preserved_evidence():
+    from langchain_core.messages import ToolMessage
+
+    from prax.agent.spokes._runner import _append_preserved_tool_results
+
+    evidence = "VERIFIED_WEATHER\nsources: https://api.open-meteo.com/v1/forecast"
+    result = _append_preserved_tool_results(
+        f"Summary\n\n{evidence}",
+        [ToolMessage(content=evidence, name="environment_current_weather", tool_call_id="weather")],
+        ("VERIFIED_WEATHER",),
+    )
+
+    assert result.count("VERIFIED_WEATHER") == 1

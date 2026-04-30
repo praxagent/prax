@@ -1726,6 +1726,21 @@ def library_get_output(slug: str):
         return jsonify({"error": "Failed to fetch output"}), 500
 
 
+@teamwork_routes.route("/teamwork/library/outputs/<slug>", methods=["DELETE"])
+def library_delete_output(slug: str):
+    """Delete a generated output."""
+    try:
+        from prax.services import library_service
+        user_id = _get_teamwork_user_id()
+        result = library_service.delete_output(user_id, slug)
+        if "error" in result:
+            return jsonify(result), 404
+        return jsonify(result)
+    except Exception:
+        logger.exception("Failed to delete output")
+        return jsonify({"error": "Failed to delete output"}), 500
+
+
 # --- Archive (long-term keepers: PDFs, docs, reference material) ---
 
 @teamwork_routes.route("/teamwork/library/archive", methods=["GET"])

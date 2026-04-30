@@ -4,6 +4,7 @@ from __future__ import annotations
 from langchain_core.messages import AIMessage, ToolMessage
 
 from prax.agent.claim_audit import (
+    audit_artifact_location,
     audit_claims,
     audit_narrative_grounding,
     audit_plan_completion,
@@ -311,6 +312,28 @@ class TestScheduledTaskGrounding:
         ]
         assert audit_scheduled_task_grounding(task, response, messages) is None
 
+    def test_preserved_environment_evidence_satisfies_weather_request(self):
+        task = "[SCHEDULED_TASK] Send weather and time-saving tips."
+        response = "Clear and mild in Los Angeles this morning."
+        messages = [
+            AIMessage(content=""),
+            ToolMessage(
+                content=(
+                    "Clear and mild in Los Angeles this morning.\n\n"
+                    "[Tool evidence preserved for audit]\n"
+                    "VERIFIED_WEATHER\n"
+                    "location: Los Angeles, California, United States\n"
+                    "conditions: clear sky\n"
+                    "temperature: 63.8 °F\n"
+                    "humidity: 60 %\n"
+                    "sources: https://api.open-meteo.com/v1/forecast"
+                ),
+                name="delegate_environment",
+                tool_call_id="c_environment",
+            ),
+        ]
+        assert audit_scheduled_task_grounding(task, response, messages) is None
+
     def test_background_search_does_not_satisfy_weather_request(self):
         task = "[SCHEDULED_TASK] Send weather and time-saving tips."
         response = "Weather: sunny and 72."
@@ -331,6 +354,60 @@ class TestScheduledTaskGrounding:
         response = "Weather unavailable: no weather tool is configured."
         messages = self._msgs(["get_current_datetime"])
         assert audit_scheduled_task_grounding(task, response, messages) is None
+
+
+# ---------------------------------------------------------------------------
+# Artifact-location audit
+# ---------------------------------------------------------------------------
+
+class TestArtifactLocationAudit:
+    def _msg(self, name: str, content: str) -> ToolMessage:
+        return ToolMessage(content=content, name=name, tool_call_id=f"c_{name}")
+
+    def test_flags_where_is_it_without_artifact_locator(self):
+        task = "Where is it?"
+        response = (
+            "I found likely files in the workspace: "
+            "`2510.02453.md`, `three_marks_presentation.tex`."
+        )
+        messages = [
+            self._msg(
+                "delegate_workspace",
+                "I searched workspace_list and found several likely files.",
+            ),
+        ]
+
+        finding = audit_artifact_location(task, response, messages)
+
+        assert finding is not None
+        assert finding["missing_grounding"] is True
+        assert finding["called_tools"] == ["delegate_workspace"]
+
+    def test_passes_when_artifact_locator_was_called_directly(self):
+        task = "Where is it?"
+        response = "It is here: http://localhost:8000/notes/x/"
+        messages = [
+            self._msg(
+                "artifact_locator",
+                "Most likely recent artifact locations:\n"
+                "1. note URL: http://localhost:8000/notes/x/",
+            ),
+        ]
+
+        assert audit_artifact_location(task, response, messages) is None
+
+    def test_passes_when_workspace_delegate_returns_locator_output(self):
+        task = "Link again please"
+        response = "It is here: http://localhost:8000/notes/x/"
+        messages = [
+            self._msg(
+                "delegate_workspace",
+                "Most likely recent artifact locations:\n"
+                "1. note URL: http://localhost:8000/notes/x/",
+            ),
+        ]
+
+        assert audit_artifact_location(task, response, messages) is None
 
 
 # ---------------------------------------------------------------------------

@@ -564,6 +564,17 @@ class TestOutputs:
         assert fetched is not None
         assert "report body" in fetched["content"]
 
+    def test_delete_output(self, user):
+        r = library_service.write_output(user, "Throwaway", "body")
+        slug = r["output"]["slug"]
+        result = library_service.delete_output(user, slug)
+        assert result["status"] == "deleted"
+        assert library_service.get_output(user, slug) is None
+
+    def test_delete_output_missing(self, user):
+        result = library_service.delete_output(user, "no-such-slug")
+        assert "error" in result
+
 
 # ---------------------------------------------------------------------------
 # Refine (LLM-mocked)

@@ -116,9 +116,18 @@ class AppSettings(BaseSettings):
     agent_run_timeout: int = Field(
         default=300, alias="AGENT_RUN_TIMEOUT",
         description=(
-            "Hard wall-clock timeout (seconds) for a single agent.run() "
-            "invocation.  If the agent hasn't finished within this time, "
-            "the run is aborted.  Prevents unbounded API spend."
+            "Idle timeout (seconds) for a single agent.run() invocation. "
+            "If no tool/span/status heartbeat is observed within this time, "
+            "the run is abandoned. Healthy long-running work can continue "
+            "until agent_run_max_timeout."
+        ),
+    )
+    agent_run_max_timeout: int = Field(
+        default=1800, alias="AGENT_RUN_MAX_TIMEOUT",
+        description=(
+            "Maximum wall-clock runtime (seconds) for one agent.run() "
+            "invocation even if heartbeat activity continues. Prevents "
+            "unbounded API spend while allowing long healthy tasks."
         ),
     )
     llm_request_timeout: int = Field(
