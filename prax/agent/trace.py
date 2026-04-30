@@ -208,6 +208,69 @@ class ExecutionGraph:
 
 
 @dataclass
+class TraceHeartbeat:
+    """Thread-safe liveness marker for a running execution trace."""
+
+    trace_id: str
+    started_at: float = field(default_factory=time.monotonic)
+    last_activity_at: float = field(default_factory=time.monotonic)
+    last_source: str = "trace"
+    last_message: str = "trace started"
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def touch(self, source: str, message: str = "") -> None:
+        with self._lock:
+            self.last_activity_at = time.monotonic()
+            self.last_source = source[:80] if source else "trace"
+            if message:
+                self.last_message = message[:240]
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            now = time.monotonic()
+            return {
+                "trace_id": self.trace_id,
+                "started_at": self.started_at,
+                "elapsed_s": now - self.started_at,
+                "last_activity_at": self.last_activity_at,
+                "idle_s": now - self.last_activity_at,
+                "last_source": self.last_source,
+                "last_message": self.last_message,
+            }
+
+
+_trace_heartbeats: dict[str, TraceHeartbeat] = {}
+_trace_heartbeats_lock = threading.Lock()
+
+
+def get_trace_heartbeat(trace_id: str) -> TraceHeartbeat:
+    """Return the heartbeat object for a trace, creating it if needed."""
+    with _trace_heartbeats_lock:
+        heartbeat = _trace_heartbeats.get(trace_id)
+        if heartbeat is None:
+            heartbeat = TraceHeartbeat(trace_id=trace_id)
+            _trace_heartbeats[trace_id] = heartbeat
+        return heartbeat
+
+
+def remove_trace_heartbeat(trace_id: str) -> None:
+    """Drop liveness state for a completed trace."""
+    with _trace_heartbeats_lock:
+        _trace_heartbeats.pop(trace_id, None)
+
+
+def touch_current_trace(source: str, message: str = "") -> None:
+    """Update liveness for the currently active trace, if any."""
+    ctx = _current_trace.get()
+    if not ctx:
+        return
+    try:
+        get_trace_heartbeat(ctx.trace_id).touch(source, message)
+    except Exception:
+        logger.debug("Failed to touch trace heartbeat", exc_info=True)
+
+
+@dataclass
 class TraceContext:
     """Immutable context that flows via contextvars."""
 
@@ -470,6 +533,7 @@ class SpanHandle:
         if self.ctx.parent_id is None:
             global _last_completed_graph
             _last_completed_graph = self.ctx.graph
+            remove_trace_heartbeat(self.trace_id)
             # Persist to disk so graphs survive restarts.
             _persist_graph(self.ctx.graph)
             # Prune old completed graphs from the in-memory registry.
@@ -589,6 +653,13 @@ def start_span(
         spoke_or_category=spoke_or_category,
     )
     graph.add_node(node)
+    try:
+        get_trace_heartbeat(trace_id).touch(
+            f"{spoke_or_category}:{name}",
+            f"started span {name}",
+        )
+    except Exception:
+        logger.debug("Failed to update heartbeat for span start", exc_info=True)
 
     ctx = TraceContext(
         trace_id=trace_id,
@@ -893,11 +964,13 @@ class GraphCallbackHandler(BaseCallbackHandler):
     def __init__(
         self, *, parent_span_id: str, graph: ExecutionGraph, trace_id: str,
         live_agent_name: str | None = None,
+        heartbeat: TraceHeartbeat | None = None,
     ):
         super().__init__()
         self._parent_span_id = parent_span_id
         self._graph = graph
         self._trace_id = trace_id
+        self._heartbeat = heartbeat or get_trace_heartbeat(trace_id)
         self._active: dict[str, str] = {}  # run_id → span_id
         self._ctx_tokens: dict[str, object] = {}  # run_id → ContextVar token
         # Track active tool names for deduplication (LangGraph fires
@@ -926,6 +999,7 @@ class GraphCallbackHandler(BaseCallbackHandler):
         if rid in self._active:
             return
         tool_name = serialized.get("name") or "unknown_tool"
+        self._heartbeat.touch(tool_name, f"started tool {tool_name}")
 
         # Dedup: LangGraph fires on_tool_start at multiple levels for the
         # same tool call (ToolNode processor + individual invocation).
@@ -1002,6 +1076,7 @@ class GraphCallbackHandler(BaseCallbackHandler):
             }
             preview = str(output)[:2000] if output else ""
             self._graph.complete_node(span_id, status="completed", summary=preview)
+            self._heartbeat.touch(tool_name or "tool", f"completed tool {tool_name or span_id}")
 
             # Push completion to live output + activity log
             if self._live_agent and tool_name:
@@ -1034,3 +1109,4 @@ class GraphCallbackHandler(BaseCallbackHandler):
             self._graph.complete_node(
                 span_id, status="failed", summary=str(error)[:2000]
             )
+            self._heartbeat.touch("tool_error", f"tool failed: {str(error)[:160]}")

@@ -57,7 +57,8 @@ RUN echo 'export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --enable-remote-extensions"' \
 RUN curl -fsSL https://code-server.dev/install.sh | sh
 
 # ── Coding agents ──
-RUN npm install -g opencode-ai @anthropic-ai/claude-code @openai/codex
+RUN npm install -g opencode-ai @anthropic-ai/claude-code @openai/codex \
+    @mermaid-js/mermaid-cli
 
 # Persistence + `exit` resilience now live in TeamWork's terminal
 # router (server-side session that outlives the WS) plus

@@ -182,6 +182,11 @@ class TestNoteServiceSaveAndPublishContract:
         Tailscale / SSH).  Public ngrok exposure is opt-in via ``public=True``.
         """
         from prax.services import note_service
+        from prax.settings import settings
+
+        # Pin the configured TeamWork URL so the test doesn't depend on
+        # whatever the dev's local .env happens to set.
+        monkeypatch.setattr(settings, "teamwork_base_url", "http://localhost:8000")
 
         workspace = tmp_path / "workspace"
         workspace.mkdir()

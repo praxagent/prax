@@ -186,6 +186,21 @@ class TestStatusCallback:
         result = pipeline.run("Topic")
         assert result.status == "approved"
 
+    def test_status_updates_touch_trace_heartbeat(self, monkeypatch):
+        touches = []
+
+        def fake_touch(source, message):
+            touches.append((source, message))
+
+        monkeypatch.setattr("prax.agent.trace.touch_current_trace", fake_touch)
+        pipeline = _make_pipeline()
+
+        pipeline.run("Topic")
+
+        assert touches
+        assert any("Starting note pipeline" in message for _source, message in touches)
+        assert any("Writing first draft" in message for _source, message in touches)
+
 
 class TestPipelineResultSummary:
     def test_approved_summary(self):

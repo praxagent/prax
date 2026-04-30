@@ -16,6 +16,7 @@ archiving, sharing, compiling LaTeX, and creating office documents.
 - workspace_download — download files from URLs (PDFs, images, etc.)
 - workspace_send_file — share a file via a public link
 - workspace_archive / workspace_search / workspace_restore
+- artifact_locator — find recent files, note URLs, and generated outputs
 - latex_compile — compile .tex to PDF
 - log_link / links_history — URL bookmarking
 - create_pdf / create_presentation / create_spreadsheet — office-document authoring
@@ -29,6 +30,7 @@ def build_tools() -> list:
     """Return all tools available to the workspace spoke."""
     from prax.agent.office_tools import build_office_tools
     from prax.agent.workspace_tools import (
+        artifact_locator,
         latex_compile,
         links_history,
         log_link,
@@ -48,7 +50,7 @@ def build_tools() -> list:
         workspace_save, workspace_download, workspace_patch,
         workspace_read, workspace_list, workspace_send_file,
         workspace_archive, workspace_search, workspace_restore,
-        latex_compile, log_link, links_history, reread_instructions,
+        artifact_locator, latex_compile, log_link, links_history, reread_instructions,
         # Office-document authoring — formerly orchestrator-level, moved
         # here so delegate_workspace is the one-stop shop for files.
         *build_office_tools(),

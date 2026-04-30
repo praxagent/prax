@@ -398,6 +398,63 @@ def audit_narrative_grounding(
 
 
 # ---------------------------------------------------------------------------
+# Artifact-location audit — detects "where is it?" answers that search the
+# wrong surfaces or answer from plan state instead of artifact evidence.
+# ---------------------------------------------------------------------------
+
+_ARTIFACT_LOCATION_INTENT_PATTERNS: list[re.Pattern] = [
+    re.compile(
+        r"\bwhere\s+(?:is|are|was|were)\b.{0,80}\b"
+        r"(?:it|file|link|url|note|artifact|thing|package|result|output)\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    re.compile(r"\bwhere\s+did\s+you\s+(?:put|save|store|create|publish)\b", re.IGNORECASE),
+    re.compile(r"\b(?:link|url)\s+(?:again|please|for|to)\b", re.IGNORECASE),
+    re.compile(r"\bshow\s+me\s+(?:the\s+)?(?:file|link|url|artifact|thing|note|package)\b", re.IGNORECASE),
+]
+
+
+def audit_artifact_location(
+    task_prompt: str,
+    response: str,
+    messages: list,
+) -> dict | None:
+    """Require artifact-location follow-ups to use artifact evidence.
+
+    The concrete regression: the user asked "Where is it?", the agent
+    searched only generic workspace filenames, missed recent note URLs in
+    trace/tool output, and the claim auditor passed.  This check keeps that
+    from being silent.  A passing turn either calls ``artifact_locator``
+    directly or delegates to the workspace spoke and gets the locator's
+    recognizable "Most likely recent artifact locations" result back.
+    """
+    if not _matches_any(task_prompt or "", _ARTIFACT_LOCATION_INTENT_PATTERNS):
+        return None
+
+    try:
+        from langchain_core.messages import ToolMessage
+    except Exception:
+        return None
+
+    called_tools = _extract_tool_names(messages)
+    for msg in messages:
+        if not isinstance(msg, ToolMessage):
+            continue
+        name = str(getattr(msg, "name", "") or "")
+        content = str(getattr(msg, "content", "") or "")
+        if name == "artifact_locator":
+            return None
+        if name == "delegate_workspace" and "Most likely recent artifact locations" in content:
+            return None
+
+    return {
+        "missing_grounding": True,
+        "called_tools": sorted(called_tools),
+        "intent": "artifact-location",
+    }
+
+
+# ---------------------------------------------------------------------------
 # Plan-completion alignment audit — detects "Done" lies when the plan had
 # caveated sub-agent responses that never resulted in explicit step_done calls.
 # ---------------------------------------------------------------------------

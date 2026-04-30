@@ -102,6 +102,72 @@ def test_workspace_search_no_match(monkeypatch):
     assert "No archived" in result
 
 
+def test_artifact_locator_finds_recent_note_urls_before_filename_noise(monkeypatch):
+    module = importlib.reload(importlib.import_module('prax.agent.workspace_tools'))
+    ws = importlib.import_module('prax.services.workspace_service')
+    note_service = importlib.import_module('prax.services.note_service')
+    library_service = importlib.import_module('prax.services.library_service')
+
+    trace_tail = """
+=== 2026-04-29T02:41:39Z ===
+[TOOL_RESULT] [delegate_knowledge] Done: http://localhost:8000/notes/create-a-polished-video-presentation-package-for-the-paper-t/
+=== 2026-04-29T02:47:53Z ===
+[TOOL_RESULT] [delegate_knowledge] Done — note created here: http://localhost:8000/notes/video-presentation-note-for-the-paper-predictive-pursuit-eme/
+"""
+    monkeypatch.setattr(ws, 'read_trace_tail', lambda uid, lines=1200: trace_tail)
+    monkeypatch.setattr(ws, 'list_active', lambda uid: [
+        "three_marks_presentation.tex",
+        "Attention_Is_All_You_Need_slides.tex",
+    ])
+    monkeypatch.setattr(ws, 'search_archive', lambda uid, q: [])
+    monkeypatch.setattr(note_service, 'list_notes', lambda uid: [])
+    monkeypatch.setattr(library_service, 'list_notes', lambda uid: [])
+    monkeypatch.setattr(library_service, 'list_outputs', lambda uid: [])
+    current_user_id.set('+10000000000')
+
+    result = module.artifact_locator.invoke({"query": "where is it?"})
+
+    assert "video-presentation-note-for-the-paper-predictive-pursuit-eme" in result
+    assert "create-a-polished-video-presentation-package" in result
+    assert result.find("video-presentation-note-for-the-paper-predictive-pursuit-eme") < result.find(
+        "create-a-polished-video-presentation-package",
+    )
+    assert "three_marks_presentation.tex" not in result
+
+
+def test_artifact_locator_uses_note_index_when_trace_has_no_urls(monkeypatch):
+    module = importlib.reload(importlib.import_module('prax.agent.workspace_tools'))
+    ws = importlib.import_module('prax.services.workspace_service')
+    note_service = importlib.import_module('prax.services.note_service')
+    library_service = importlib.import_module('prax.services.library_service')
+
+    monkeypatch.setattr(ws, 'read_trace_tail', lambda uid, lines=1200: "")
+    monkeypatch.setattr(ws, 'list_active', lambda uid: [])
+    monkeypatch.setattr(ws, 'search_archive', lambda uid, q: [])
+    monkeypatch.setattr(note_service, 'list_notes', lambda uid: [
+        {
+            "slug": "video-presentation-note-for-the-paper",
+            "title": "Video presentation note for the paper",
+        },
+    ])
+    monkeypatch.setattr(library_service, 'list_notes', lambda uid: [])
+    monkeypatch.setattr(library_service, 'list_outputs', lambda uid: [])
+    current_user_id.set('+10000000000')
+
+    result = module.artifact_locator.invoke({"query": "video presentation"})
+
+    assert "/notes/video-presentation-note-for-the-paper/" in result
+    assert "note index" in result
+
+
+def test_build_workspace_tools_includes_artifact_locator():
+    module = importlib.reload(importlib.import_module('prax.agent.workspace_tools'))
+
+    names = {tool.name for tool in module.build_workspace_tools()}
+
+    assert "artifact_locator" in names
+
+
 def test_workspace_restore(monkeypatch):
     module = importlib.reload(importlib.import_module('prax.agent.workspace_tools'))
     ws = importlib.import_module('prax.services.workspace_service')
@@ -201,12 +267,46 @@ class TestEditWithLinter:
         calls = []
         monkeypatch.setattr(ws, 'save_file', lambda uid, fn, content: calls.append(fn))
         current_user_id.set('+10000000000')
-        # Even "syntactically-broken-looking" markdown saves fine.
+        # Even "syntactically-broken-looking" non-mermaid markdown saves fine.
         result = module.workspace_save.invoke({
             "filename": "notes.md", "content": "# Title\n\n```python\ndef f(:",
         })
         assert "Saved" in result
         assert calls == ["notes.md"]
+
+    def test_markdown_with_valid_mermaid_saves(self, monkeypatch):
+        module = self._module()
+        ws = importlib.import_module('prax.services.workspace_service')
+        calls = []
+        monkeypatch.setattr(ws, 'save_file', lambda uid, fn, content: calls.append(fn))
+        current_user_id.set('+10000000000')
+        result = module.workspace_save.invoke({
+            "filename": "diagram.md",
+            "content": "# Title\n\n```mermaid\nflowchart TD\n  A --> B\n```\n",
+        })
+        assert "Saved" in result
+        assert calls == ["diagram.md"]
+
+    def test_markdown_with_broken_mermaid_rejected(self, monkeypatch):
+        module = self._module()
+        ws = importlib.import_module('prax.services.workspace_service')
+        calls = []
+        monkeypatch.setattr(ws, 'save_file', lambda uid, fn, content: calls.append(fn))
+        current_user_id.set('+10000000000')
+        # Prose first line — exact failure mode from the conditional-misalignment note.
+        result = module.workspace_save.invoke({
+            "filename": "broken.md",
+            "content": (
+                "# Title\n\n"
+                "```mermaid\n"
+                "An analytical diagram: training context and triggers\n"
+                "  A --> B\n"
+                "```\n"
+            ),
+        })
+        assert "Rejected" in result
+        assert "mermaid" in result.lower()
+        assert calls == []
 
     def test_patch_rejected_when_result_broken(self, monkeypatch):
         module = self._module()

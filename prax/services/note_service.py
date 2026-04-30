@@ -113,7 +113,19 @@ def create_note(user_id: str, title: str, content: str,
 def update_note(user_id: str, slug: str, content: str | None = None,
                 title: str | None = None, tags: list[str] | None = None,
                 related: list[str] | None = None) -> dict:
-    """Update an existing note. Only provided fields are changed."""
+    """Update an existing note. Only provided fields are changed.
+
+    Raises :class:`ValueError` when *content* contains a broken mermaid
+    diagram — the on-disk note is not modified in that case.
+    """
+    if content is not None:
+        from prax.services.mermaid_validator import validate_fast, validate_render
+        fast_errors = validate_fast(content)
+        if fast_errors:
+            raise ValueError("Broken mermaid diagram(s) — " + "; ".join(fast_errors))
+        render_errors = validate_render(content)
+        if render_errors:
+            raise ValueError("Broken mermaid diagram(s) — " + "; ".join(render_errors))
     with get_lock(user_id):
         root = ensure_workspace(user_id)
         path = _note_path(root, slug)
@@ -333,10 +345,21 @@ def save_and_publish(
     ``{"error": ...}``.
     """
     from prax.services import share_registry
+    from prax.services.mermaid_validator import validate_fast, validate_render
     from prax.settings import settings
 
     if source_url:
         content = f"**Source:** [{source_url}]({source_url})\n\n---\n\n{content}"
+
+    # Two-tier mermaid gate: cheap heuristic fails fast; mmdc render
+    # catches anything the heuristic missed. Both run before the note is
+    # written to disk so the agent can retry without churning git history.
+    fast_errors = validate_fast(content)
+    if fast_errors:
+        return {"error": "Note has broken mermaid diagram(s) — " + "; ".join(fast_errors)}
+    render_errors = validate_render(content)
+    if render_errors:
+        return {"error": "Note has broken mermaid diagram(s) — " + "; ".join(render_errors)}
 
     meta = create_note(user_id, title, content, tags or [])
     teamwork_url = settings.teamwork_base_url.rstrip("/")

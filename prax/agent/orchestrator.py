@@ -474,14 +474,17 @@ class ConversationAgent:
         """Execute the agent graph and return the final string response."""
         import time as _time
 
-        from prax.agent.trace import GraphCallbackHandler, start_span
+        from prax.agent.trace import GraphCallbackHandler, get_trace_heartbeat, start_span
 
         _run_start = _time.monotonic()
-        _run_deadline = _run_start + settings.agent_run_timeout
+        _run_max_timeout = max(settings.agent_run_timeout, settings.agent_run_max_timeout)
+        _run_max_deadline = _run_start + _run_max_timeout
 
         # Start a root span that wraps the entire orchestrator invocation.
         # This sets last_root_trace_id so callers can attach it to responses.
         root_span = start_span("orchestrator", "orchestrator")
+        heartbeat = get_trace_heartbeat(root_span.trace_id)
+        heartbeat.touch("orchestrator", "agent run started")
 
         # Store the user's raw input as the trace trigger so the execution
         # graph shows what started it — without system prefixes or tool guidance.
@@ -502,6 +505,7 @@ class ConversationAgent:
             graph=root_span.ctx.graph,
             trace_id=root_span.trace_id,
             live_agent_name=settings.agent_name,
+            heartbeat=heartbeat,
         )
 
         # Reset per-plugin call counters for the new message.
@@ -634,10 +638,16 @@ class ConversationAgent:
 
             now_str = format_current_time(tz_name)
             channel_label = current_channel_name.get("")
-            channel_line = (
-                f"Channel: #{channel_label}" if channel_label and channel_label != "DM"
-                else ("Channel: Direct Message" if channel_label == "DM" else "")
-            )
+            if channel_label == "discord":
+                channel_line = "Channel: Discord — user is OFF-NETWORK, cannot reach localhost/Tailscale URLs. Default to public sharing for any artifact."
+            elif channel_label == "sms":
+                channel_line = "Channel: SMS — user is OFF-NETWORK, cannot reach localhost/Tailscale URLs. Default to public sharing for any artifact."
+            elif channel_label == "DM":
+                channel_line = "Channel: Direct Message (TeamWork) — user is on-network."
+            elif channel_label:
+                channel_line = f"Channel: #{channel_label} (TeamWork) — user is on-network."
+            else:
+                channel_line = ""
             temporal_context = (
                 f"\n\n## Current Context\n"
                 f"- **Now:** {now_str}\n"
@@ -719,7 +729,7 @@ class ConversationAgent:
         run_status = "completed"
         run_error_summary = ""
         try:
-            result = self._invoke_with_retry(messages, config, turn.user_id)
+            result = self._invoke_with_retry(messages, config, turn.user_id, heartbeat)
 
             # Plan enforcement: if the agent responded but has an incomplete
             # plan, push it back into the loop to finish the work.
@@ -728,7 +738,7 @@ class ConversationAgent:
                 uid
                 and self._has_incomplete_plan(uid)
                 and continuations < _MAX_PLAN_CONTINUATIONS
-                and _time.monotonic() < _run_deadline
+                and _time.monotonic() < _run_max_deadline
             ):
                 # Auto-mark plan steps done if substantial work was completed
                 # (delegation tools returned results) but steps weren't marked.
@@ -748,14 +758,14 @@ class ConversationAgent:
                     HumanMessage(content=f"[SYSTEM] {nudge}"),
                 ]
                 result = self._invoke_graph_once(
-                    continuation_messages, config, turn.user_id,
+                    continuation_messages, config, turn.user_id, heartbeat,
                 )
 
             recovery_continuations = 0
             while (
                 self._should_continue_after_url_failure(user_input, result.get("messages", []))
                 and recovery_continuations < _MAX_RECOVERY_CONTINUATIONS
-                and _time.monotonic() < _run_deadline
+                and _time.monotonic() < _run_max_deadline
             ):
                 recovery_continuations += 1
                 logger.info(
@@ -766,22 +776,22 @@ class ConversationAgent:
                     HumanMessage(content=self._url_recovery_nudge()),
                 ]
                 result = self._invoke_graph_once(
-                    recovery_messages, config, turn.user_id,
+                    recovery_messages, config, turn.user_id, heartbeat,
                 )
 
-            if _time.monotonic() >= _run_deadline:
+            if _time.monotonic() >= _run_max_deadline:
                 run_status = "timed_out"
-                run_error_summary = f"Agent run exceeded {settings.agent_run_timeout}s wall-clock timeout."
+                run_error_summary = f"Agent run exceeded {_run_max_timeout}s maximum wall-clock timeout."
                 logger.warning(
-                    "Agent run hit wall-clock timeout (%ds) for user %s",
-                    settings.agent_run_timeout, uid,
+                    "Agent run hit maximum wall-clock timeout (%ds) for user %s",
+                    _run_max_timeout, uid,
                 )
                 try:
                     from prax.services.health_telemetry import EventCategory, Severity, record_event
                     record_event(
                         EventCategory.TURN_TIMEOUT, Severity.WARNING,
                         component="orchestrator",
-                        details=f"Timeout after {settings.agent_run_timeout}s for user {uid}",
+                        details=f"Maximum timeout after {_run_max_timeout}s for user {uid}",
                     )
                 except Exception:
                     pass
@@ -794,8 +804,8 @@ class ConversationAgent:
             result = {
                 "messages": messages + [
                     AIMessage(content=(
-                        f"I hit the {settings.agent_run_timeout}s turn timeout while "
-                        "working on that request. I stopped waiting so the session "
+                        f"I hit a turn timeout while working on that request: {exc}. "
+                        "I stopped waiting so the session "
                         "doesn't stay stuck. Please retry or ask me to continue from "
                         "the saved work."
                     )),
@@ -928,7 +938,7 @@ class ConversationAgent:
             # via root_span.end below — at this point we know it's at least
             # "completed" by virtue of reaching this code path.
             outcome_status = "completed"
-            if _time.monotonic() >= _run_deadline:
+            if _time.monotonic() >= _run_max_deadline:
                 outcome_status = "timeout"
             elif run_status != "completed":
                 outcome_status = run_status
@@ -994,6 +1004,7 @@ class ConversationAgent:
         messages: list[BaseMessage],
         config: dict,
         user_id: str,
+        heartbeat=None,
     ) -> dict:
         """Invoke the agent graph, retrying from the last checkpoint on failure.
 
@@ -1016,7 +1027,7 @@ class ConversationAgent:
 
         while True:
             try:
-                return self._invoke_graph_once(messages, config, user_id)
+                return self._invoke_graph_once(messages, config, user_id, heartbeat)
             except Exception as exc:
                 if isinstance(exc, TimeoutError):
                     raise
@@ -1170,19 +1181,26 @@ class ConversationAgent:
         messages: list[BaseMessage],
         config: dict,
         user_id: str,
+        heartbeat=None,
     ) -> dict:
-        """Invoke LangGraph once with a hard await timeout.
+        """Invoke LangGraph once with heartbeat-aware await timeouts.
 
         The earlier implementation used ``ThreadPoolExecutor`` as a context
         manager.  On timeout that still blocks in ``shutdown(wait=True)``, so a
         stuck provider/tool can leave the root orchestrator span ``running``
-        forever.  This uses a daemon thread instead: the worker may finish
-        later, but the request thread stops waiting and can close the trace.
+        forever.  This uses a daemon thread instead, but waits on an idle
+        heartbeat rather than a pure wall-clock cutoff: healthy work can keep
+        going until the maximum runtime cap.
         """
         import queue
         import threading
+        import time as _time
+
+        from prax.agent.trace import TraceHeartbeat
 
         result_q: queue.Queue[tuple[str, object]] = queue.Queue(maxsize=1)
+        heartbeat = heartbeat or TraceHeartbeat(trace_id=f"invoke-{str(user_id)[:12]}")
+        heartbeat.touch("orchestrator", "graph invoke started")
 
         def _worker() -> None:
             try:
@@ -1196,30 +1214,43 @@ class ConversationAgent:
             daemon=True,
         )
         worker.start()
-        worker.join(settings.agent_run_timeout)
-        if worker.is_alive():
-            logger.error(
-                "graph.invoke exceeded %ss wall-clock limit (user=%s); "
-                "abandoning the call so the root span can close.",
-                settings.agent_run_timeout, user_id,
-            )
-            try:
-                from prax.services.health_telemetry import (
-                    EventCategory,
-                    Severity,
-                    record_event,
+        idle_timeout = max(0.01, float(settings.agent_run_timeout))
+        max_timeout = max(idle_timeout, float(settings.agent_run_max_timeout))
+        poll_interval = min(1.0, max(0.01, idle_timeout / 5.0))
+        notice_interval = max(60.0, idle_timeout / 2.0)
+        last_notice_at = 0.0
+
+        while worker.is_alive():
+            worker.join(poll_interval)
+            if not worker.is_alive():
+                break
+
+            snapshot = heartbeat.snapshot()
+            elapsed = float(snapshot["elapsed_s"])
+            idle_for = float(snapshot["idle_s"])
+
+            if elapsed >= max_timeout:
+                reason = (
+                    f"agent run exceeded {int(max_timeout)}s maximum runtime "
+                    f"(last activity {idle_for:.1f}s ago from "
+                    f"{snapshot['last_source']}: {snapshot['last_message']})"
                 )
-                record_event(
-                    EventCategory.TURN_TIMEOUT, Severity.ERROR,
-                    component="orchestrator",
-                    details=f"graph.invoke timeout after {settings.agent_run_timeout}s for user {user_id}",
+                self._record_graph_timeout(user_id, reason, severity="ERROR")
+                raise TimeoutError(reason)
+
+            if idle_for >= idle_timeout:
+                reason = (
+                    f"agent run idle for {idle_for:.1f}s, exceeding "
+                    f"{int(idle_timeout)}s idle timeout (last activity from "
+                    f"{snapshot['last_source']}: {snapshot['last_message']})"
                 )
-            except Exception:
-                pass
-            raise TimeoutError(
-                f"agent run exceeded {settings.agent_run_timeout}s — "
-                "abandoning to free the orchestrator."
-            )
+                self._record_graph_timeout(user_id, reason, severity="ERROR")
+                raise TimeoutError(reason)
+
+            now = _time.monotonic()
+            if elapsed >= idle_timeout and now - last_notice_at >= notice_interval:
+                last_notice_at = now
+                self._emit_still_working_notice(user_id, snapshot, idle_timeout, max_timeout)
 
         try:
             status, payload = result_q.get_nowait()
@@ -1228,6 +1259,50 @@ class ConversationAgent:
         if status == "error":
             raise payload  # type: ignore[misc]
         return payload  # type: ignore[return-value]
+
+    @staticmethod
+    def _record_graph_timeout(user_id: str, reason: str, *, severity: str = "ERROR") -> None:
+        logger.error("graph.invoke timeout for user %s: %s", user_id, reason)
+        try:
+            from prax.services.health_telemetry import (
+                EventCategory,
+                Severity,
+                record_event,
+            )
+            level = Severity.ERROR if severity.upper() == "ERROR" else Severity.WARNING
+            record_event(
+                EventCategory.TURN_TIMEOUT,
+                level,
+                component="orchestrator",
+                details=f"{reason} for user {user_id}",
+            )
+        except Exception:
+            pass
+
+    @staticmethod
+    def _emit_still_working_notice(
+        user_id: str,
+        snapshot: dict,
+        idle_timeout: float,
+        max_timeout: float,
+    ) -> None:
+        """Post a sparse liveness note while a long turn keeps making progress."""
+        try:
+            from prax.services.teamwork_hooks import log_activity, push_live_output
+
+            elapsed = float(snapshot["elapsed_s"])
+            idle_for = float(snapshot["idle_s"])
+            msg = (
+                "Still working; recent activity is healthy. "
+                f"Elapsed {elapsed:.0f}s, idle {idle_for:.0f}s/"
+                f"{idle_timeout:.0f}s, max {max_timeout:.0f}s. "
+                f"Last activity: {snapshot['last_source']} - "
+                f"{snapshot['last_message']}"
+            )
+            push_live_output(settings.agent_name, msg + "\n", status="running")
+            log_activity(settings.agent_name, "heartbeat", f"user={user_id}: {msg}")
+        except Exception:
+            pass
 
     @staticmethod
     def _audit_claims(
@@ -1261,6 +1336,7 @@ class ConversationAgent:
 
         try:
             from prax.agent.claim_audit import (
+                audit_artifact_location,
                 audit_claims,
                 audit_narrative_grounding,
                 audit_plan_completion,
@@ -1285,6 +1361,7 @@ class ConversationAgent:
 
             findings = audit_claims(response, tool_results)
             narrative = audit_narrative_grounding(response, messages)
+            artifact_location = audit_artifact_location(task_input, response, messages)
             plan_mismatch = audit_plan_completion(response, messages)
             scheduled_grounding = (
                 audit_scheduled_task_grounding(task_input, response, messages)
@@ -1300,6 +1377,13 @@ class ConversationAgent:
                 flagged_parts.append(
                     f"UNGROUNDED NARRATIVE: claims phrases {phrases} but no "
                     f"research/web/news/browser tool was called (called: {called})"
+                )
+            if artifact_location:
+                called = ", ".join(artifact_location["called_tools"]) or "(none)"
+                flagged_parts.append(
+                    "ARTIFACT-LOCATION WEAKNESS: user asked where a generated "
+                    "artifact/link is, but artifact_locator was not called "
+                    f"and no locator output was returned (called: {called})"
                 )
             if plan_mismatch:
                 flagged_parts.append(

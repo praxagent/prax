@@ -1166,6 +1166,14 @@ def create_note(
     """
     if author not in ("human", "prax"):
         return {"error": f"Invalid author '{author}' — must be 'human' or 'prax'"}
+    if author == "prax":
+        from prax.services.mermaid_validator import validate_fast, validate_render
+        fast_errors = validate_fast(content)
+        if fast_errors:
+            return {"error": "Broken mermaid diagram(s) — " + "; ".join(fast_errors)}
+        render_errors = validate_render(content)
+        if render_errors:
+            return {"error": "Broken mermaid diagram(s) — " + "; ".join(render_errors)}
     nb_dir = _notebook_path(user_id, project, notebook)
     if not nb_dir.exists():
         return {"error": f"Notebook '{project}/{notebook}' not found"}
@@ -1394,6 +1402,15 @@ def update_note(
                     "Ask the user to enable editing before modifying it."
                 )
             }
+
+    if content is not None and editor == "prax":
+        from prax.services.mermaid_validator import validate_fast, validate_render
+        fast_errors = validate_fast(content)
+        if fast_errors:
+            return {"error": "Broken mermaid diagram(s) — " + "; ".join(fast_errors)}
+        render_errors = validate_render(content)
+        if render_errors:
+            return {"error": "Broken mermaid diagram(s) — " + "; ".join(render_errors)}
 
     if content is not None:
         body = content
@@ -2089,6 +2106,16 @@ def get_output(user_id: str, slug: str) -> dict | None:
     meta, body = _parse_frontmatter(path.read_text(encoding="utf-8"))
     meta.setdefault("slug", slug)
     return {"meta": meta, "content": body}
+
+
+def delete_output(user_id: str, slug: str) -> dict[str, Any]:
+    """Delete a generated output."""
+    path = _library_root(user_id) / OUTPUTS_DIR / f"{slug}.md"
+    if not path.exists():
+        return {"error": f"Output '{slug}' not found"}
+    path.unlink()
+    logger.info("library: deleted output %s", slug)
+    return {"status": "deleted", "slug": slug}
 
 
 # ---------------------------------------------------------------------------

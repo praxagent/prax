@@ -41,6 +41,7 @@ def run_spoke(
     recursion_limit: int = 80,
     pre_check: Callable[[], str | None] | None = None,
     state_context: str | None = None,
+    preserve_tool_result_prefixes: tuple[str, ...] = (),
 ) -> str:
     """Execute a spoke agent and return its textual result.
 
@@ -69,6 +70,11 @@ def run_spoke(
         Optional description of the observed state before execution.
         Injected into the system prompt so the agent knows the starting
         conditions (read-before-act pattern).
+    preserve_tool_result_prefixes:
+        Optional exact prefixes for structured tool results that must be
+        carried into the delegate result.  Use this when a parent/auditor
+        needs source evidence that the spoke LLM might otherwise summarize
+        away.
     """
     import time as _time
 
@@ -240,9 +246,14 @@ def run_spoke(
     # Extract the final AI response
     for msg in reversed(result.get("messages", [])):
         if isinstance(msg, AIMessage) and msg.content:
-            logger.info("Spoke [%s] completed (%d tool calls): %s", label, tool_count, msg.content[:120])
-            span.end(status="completed", summary=msg.content[:200], tool_calls=tool_count)
-            _finish(role_name, channel, msg.content, label=label, status="success", start_time=_spoke_start)
+            final_content = _append_preserved_tool_results(
+                str(msg.content),
+                result.get("messages", []),
+                preserve_tool_result_prefixes,
+            )
+            logger.info("Spoke [%s] completed (%d tool calls): %s", label, tool_count, final_content[:120])
+            span.end(status="completed", summary=final_content[:200], tool_calls=tool_count)
+            _finish(role_name, channel, final_content, label=label, status="success", start_time=_spoke_start)
             try:
                 from prax.services.health_telemetry import EventCategory, record_event
                 record_event(
@@ -253,11 +264,49 @@ def run_spoke(
                 )
             except Exception:
                 pass
-            return msg.content
+            return final_content
 
     span.end(status="completed", summary="No output produced", tool_calls=tool_count)
     _finish(role_name, label=label, status="success", start_time=_spoke_start)
     return f"Spoke [{label}] completed but produced no output."
+
+
+def _append_preserved_tool_results(
+    response: str,
+    messages: list,
+    prefixes: tuple[str, ...] = (),
+) -> str:
+    """Append selected structured tool outputs to a spoke's final response.
+
+    Parent agents only receive the spoke's final ToolMessage, not every
+    nested tool result.  For evidence-bearing tools, a terse LLM summary can
+    accidentally hide the verification block from parent-level auditors.
+    """
+    normalized_prefixes = tuple(prefix.strip().upper() for prefix in prefixes if prefix.strip())
+    if not normalized_prefixes:
+        return response
+
+    preserved: list[str] = []
+    seen: set[str] = set()
+    for msg in messages:
+        if not isinstance(msg, ToolMessage):
+            continue
+        content = str(msg.content or "").strip()
+        if not content:
+            continue
+        upper_content = content.lstrip().upper()
+        if not any(upper_content.startswith(prefix) for prefix in normalized_prefixes):
+            continue
+        if content in response or content in seen:
+            continue
+        seen.add(content)
+        preserved.append(content)
+
+    if not preserved:
+        return response
+
+    evidence = "\n\n".join(preserved)
+    return f"{response.rstrip()}\n\n[Tool evidence preserved for audit]\n{evidence}"
 
 
 def _log_tool_calls(result: dict, label: str, role_name: str | None = None) -> int:

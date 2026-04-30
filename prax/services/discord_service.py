@@ -285,11 +285,15 @@ def _build_bot():
             )
 
         # Run the synchronous agent call in a thread pool.
+        from prax.agent.user_context import current_channel_name
         from prax.services.conversation_service import conversation_service
+
+        def _reply_with_channel() -> str:
+            current_channel_name.set("discord")
+            return conversation_service.reply(user_id, prompt_input)
+
         try:
-            response = await asyncio.to_thread(
-                conversation_service.reply, user_id, prompt_input
-            )
+            response = await asyncio.to_thread(_reply_with_channel)
         except Exception:
             logger.exception("Agent reply failed for Discord user %s", author_id)
             response = "Sorry, something went wrong processing your message. Please try again."

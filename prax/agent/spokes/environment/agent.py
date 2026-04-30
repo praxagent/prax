@@ -654,6 +654,13 @@ def delegate_environment(task: str) -> str:
         role_name="Environment",
         channel=None,
         recursion_limit=10,
+        preserve_tool_result_prefixes=(
+            "VERIFIED_WEATHER",
+            "VERIFIED_FORECAST",
+            "WEATHER_UNAVAILABLE",
+            "LOCATION_UNCERTAIN",
+            "LOCATION_REQUIRED",
+        ),
     )
 
 

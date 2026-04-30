@@ -115,10 +115,55 @@ class TestGraphInvokeTimeout:
         agent = object.__new__(ConversationAgent)
         agent.graph = SlowGraph()
         monkeypatch.setattr(orchestrator_module.settings, "agent_run_timeout", 0.05)
+        monkeypatch.setattr(orchestrator_module.settings, "agent_run_max_timeout", 1)
 
         started = time.monotonic()
         with pytest.raises(TimeoutError):
             agent._invoke_graph_once([], {}, USER)
+
+        assert time.monotonic() - started < 0.5
+
+    def test_invoke_graph_once_allows_healthy_heartbeat_past_idle_timeout(self, monkeypatch):
+        from prax.agent.trace import TraceHeartbeat
+
+        heartbeat = TraceHeartbeat("test-heartbeat")
+
+        class HealthySlowGraph:
+            def invoke(self, payload, config=None):
+                end = time.monotonic() + 0.18
+                while time.monotonic() < end:
+                    heartbeat.touch("test", "still making progress")
+                    time.sleep(0.02)
+                return {"messages": ["ok"]}
+
+        agent = object.__new__(ConversationAgent)
+        agent.graph = HealthySlowGraph()
+        monkeypatch.setattr(orchestrator_module.settings, "agent_run_timeout", 0.05)
+        monkeypatch.setattr(orchestrator_module.settings, "agent_run_max_timeout", 1)
+
+        result = agent._invoke_graph_once([], {}, USER, heartbeat)
+
+        assert result == {"messages": ["ok"]}
+
+    def test_invoke_graph_once_enforces_max_timeout_even_with_heartbeats(self, monkeypatch):
+        from prax.agent.trace import TraceHeartbeat
+
+        heartbeat = TraceHeartbeat("test-max")
+
+        class EndlessHealthyGraph:
+            def invoke(self, payload, config=None):
+                while True:
+                    heartbeat.touch("test", "still making progress")
+                    time.sleep(0.02)
+
+        agent = object.__new__(ConversationAgent)
+        agent.graph = EndlessHealthyGraph()
+        monkeypatch.setattr(orchestrator_module.settings, "agent_run_timeout", 0.05)
+        monkeypatch.setattr(orchestrator_module.settings, "agent_run_max_timeout", 0.15)
+
+        started = time.monotonic()
+        with pytest.raises(TimeoutError, match="maximum runtime"):
+            agent._invoke_graph_once([], {}, USER, heartbeat)
 
         assert time.monotonic() - started < 0.5
 
