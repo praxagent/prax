@@ -1,4 +1,5 @@
 import importlib
+from types import SimpleNamespace
 
 from langchain_core.tools import tool
 
@@ -24,6 +25,54 @@ def test_tool_registry_round_trip():
     registry.clear_tools()
     after_names = [t.name for t in registry.get_registered_tools()]
     assert "custom_tool" not in after_names
+
+
+def test_orchestrator_promotes_presentation_plugin_tools(monkeypatch):
+    registry = importlib.reload(importlib.import_module('prax.agent.tool_registry'))
+
+    @tool
+    def text_to_presentation(source: str) -> str:
+        """Create a narrated presentation from source material."""
+        return source
+
+    @tool
+    def pdf_to_slides(source: str) -> str:
+        """Create slides from a PDF source."""
+        return source
+
+    @tool
+    def news(query: str) -> str:
+        """Return news results."""
+        return query
+
+    manifests = {
+        "text_to_presentation": SimpleNamespace(
+            route="artifact",
+            orchestrator_exposure="requested",
+        ),
+        "pdf_to_slides": SimpleNamespace(
+            route="artifact",
+            orchestrator_exposure="requested",
+        ),
+        "news": SimpleNamespace(
+            route="research",
+            orchestrator_exposure="requested",
+        ),
+    }
+    mock_loader = SimpleNamespace(
+        get_tools=lambda: [text_to_presentation, pdf_to_slides, news],
+        get_tool_manifest=lambda name: manifests.get(name),
+    )
+    monkeypatch.setattr(
+        "prax.plugins.loader.get_plugin_loader",
+        lambda: mock_loader,
+    )
+
+    names = [t.name for t in registry.get_registered_tools()]
+
+    assert "text_to_presentation" in names
+    assert "pdf_to_slides" not in names
+    assert "news" not in names
 
 
 def test_tool_count_stays_under_openai_limit():

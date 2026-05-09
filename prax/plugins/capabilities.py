@@ -73,8 +73,8 @@ class PluginCapabilities:
     def _check_permission(self, capability: str) -> None:
         """Raise if *capability* is not declared in permissions.md.
 
-        For BUILTIN plugins, permissions.md is optional (all allowed).
-        For IMPORTED plugins, permissions.md is the authoritative ceiling.
+        The loader requires permissions.md for IMPORTED plugins. BUILTIN and
+        WORKSPACE plugins may still omit it during the compatibility window.
         """
         if self._permissions is None:
             return  # No permissions.md — use tier policy only (backward compat)

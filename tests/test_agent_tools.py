@@ -141,3 +141,36 @@ def test_youtube_transcribe_tool_error(monkeypatch):
     )
     result = module.youtube_transcribe.invoke({"url": "https://youtu.be/abc12345678"})
     assert "Failed to transcribe YouTube video" in result
+
+
+def test_orchestrator_default_tools_include_analyze_image(monkeypatch):
+    """Inbound images from Discord/SMS/TeamWork must reach a kernel-level tool.
+
+    Without ``analyze_image`` in the orchestrator's tool list, the agent has
+    no way to extract content from an image URL — it ends up trying
+    ``run_python`` or ``delegate_desktop`` (neither of which can read remote
+    images) and tells the user to re-upload.  Regression for that failure.
+    """
+    from prax.settings import settings
+    monkeypatch.setattr(settings, 'vision_provider', 'openai', raising=False)
+    monkeypatch.setattr(settings, 'vision_model', 'gpt-image-1.5', raising=False)
+    monkeypatch.setattr(settings, 'openai_key', 'sk-test', raising=False)
+
+    module = importlib.reload(importlib.import_module('prax.agent.tools'))
+    tool_names = {t.name for t in module.build_default_tools()}
+    assert 'analyze_image' in tool_names
+
+
+def test_orchestrator_default_tools_omit_analyze_image_without_vision(monkeypatch):
+    """Graceful degradation: no vision provider key → no analyze_image tool.
+
+    Loading the tool without a configured key would crash on first call.
+    """
+    from prax.settings import settings
+    monkeypatch.setattr(settings, 'vision_provider', 'openai', raising=False)
+    monkeypatch.setattr(settings, 'vision_model', 'gpt-image-1.5', raising=False)
+    monkeypatch.setattr(settings, 'openai_key', '', raising=False)
+
+    module = importlib.reload(importlib.import_module('prax.agent.tools'))
+    tool_names = {t.name for t in module.build_default_tools()}
+    assert 'analyze_image' not in tool_names

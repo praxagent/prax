@@ -152,3 +152,42 @@ def test_spoke_runner_does_not_duplicate_preserved_evidence():
     )
 
     assert result.count("VERIFIED_WEATHER") == 1
+
+
+def test_spoke_runner_preserves_evidence_when_content_is_block_list():
+    """LangChain wraps tool results as a list of content blocks for some
+    providers.  The legacy ``str(content).startswith(prefix)`` check then
+    silently lost the VERIFIED_WEATHER block — every successful weather
+    fetch reached the orchestrator stripped of its proof, and the audit
+    suppressed the briefing as if weather had never been fetched.
+    """
+    from langchain_core.messages import ToolMessage
+
+    from prax.agent.spokes._runner import _append_preserved_tool_results
+
+    block_content = [
+        {
+            "type": "text",
+            "text": (
+                "VERIFIED_WEATHER\n"
+                "location: Los Angeles, California, United States\n"
+                "temperature: 63.8 °F\n"
+                "sources: https://api.open-meteo.com/v1/forecast"
+            ),
+        }
+    ]
+    result = _append_preserved_tool_results(
+        "Clear and mild in Los Angeles this morning.",
+        [
+            ToolMessage(
+                content=block_content,
+                name="environment_current_weather",
+                tool_call_id="weather",
+            ),
+        ],
+        ("VERIFIED_WEATHER",),
+    )
+
+    assert "[Tool evidence preserved for audit]" in result
+    assert "VERIFIED_WEATHER" in result
+    assert "api.open-meteo.com" in result

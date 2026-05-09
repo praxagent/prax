@@ -19,6 +19,7 @@ from prax.agent.obs_tools import build_obs_tools
 from prax.agent.research_agent import build_research_tools
 from prax.agent.spokes import build_all_spoke_tools
 from prax.agent.subagent import build_subagent_tools
+from prax.agent.vision_tools import build_vision_tools
 from prax.agent.workspace_tools import build_workspace_tools
 from prax.helpers_functions import background_search
 
@@ -112,6 +113,10 @@ def build_default_tools():
         [background_search_tool, get_current_datetime, fetch_url_content, sandbox_shell]
         # Orchestrator-level workspace tools (planning, todos, notes, meta)
         + build_workspace_tools()
+        # Image understanding — handles inbound image attachments from
+        # Discord/SMS/TeamWork via the configured vision provider.  Empty
+        # list when no provider is configured (graceful degradation).
+        + build_vision_tools()
         # Self-improvement entry points (pending/rollback only)
         + build_codegen_tools_for_main_agent()
         # Sub-agent delegation (delegate_task, delegate_parallel)

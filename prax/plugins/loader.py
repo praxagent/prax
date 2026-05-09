@@ -21,6 +21,7 @@ from pathlib import Path
 from langchain_core.tools import BaseTool, StructuredTool
 
 from prax.plugins.capabilities import PluginCapabilities
+from prax.plugins.manifest import PluginManifest, PluginManifestError, PluginToolManifest, load_plugin_manifest
 from prax.plugins.monitored_tool import wrap_with_monitoring
 from prax.plugins.registry import PluginRegistry, PluginTrust
 from prax.plugins.restricted_env import restricted_import_env
@@ -56,6 +57,9 @@ class PluginLoader:
     def __init__(self, registry: PluginRegistry | None = None) -> None:
         self._tools: list[BaseTool] = []
         self._tool_to_plugin: dict[str, str] = {}  # tool_name -> rel_path
+        self._tool_to_manifest: dict[str, PluginToolManifest] = {}
+        self._plugin_manifests: dict[str, PluginManifest] = {}
+        self._load_errors: dict[str, str] = {}
         self._version: int = 0
         self._lock = threading.Lock()
         self.registry = registry or PluginRegistry()
@@ -107,6 +111,8 @@ class PluginLoader:
         for entry in sorted(current.iterdir()):
             if entry.name.startswith(("_", ".")):
                 continue
+            if entry.is_dir() and entry.name in {"test", "tests"}:
+                continue
 
             if entry.is_dir():
                 # Check for a sibling plugin filter (multi-plugin repo).
@@ -136,7 +142,11 @@ class PluginLoader:
                     # No plugin.py — recurse into subdirectory.
                     self._scan_dir(entry, root, found)
 
-            elif entry.is_file() and entry.suffix == ".py":
+            elif (
+                entry.is_file()
+                and entry.suffix == ".py"
+                and not entry.name.startswith("test_")
+            ):
                 # Flat plugin file.
                 rel = str(entry.relative_to(root))
                 found.append((entry, rel))
@@ -176,8 +186,13 @@ class PluginLoader:
             ws_dirs = list(self._workspace_dirs)
         for ws_dir in ws_dirs:
             if ws_dir.is_dir():
-                for item in self._discover_plugins(ws_dir):
-                    ordered_plugins.append((*item, PluginTrust.WORKSPACE))
+                for plugin_file, rel_key in self._discover_plugins(ws_dir):
+                    trust_tier = (
+                        PluginTrust.IMPORTED
+                        if rel_key.startswith("shared/")
+                        else PluginTrust.WORKSPACE
+                    )
+                    ordered_plugins.append((plugin_file, rel_key, trust_tier))
 
         # Priority 2: legacy plugin repo (deprecated — kept for backward compat)
         try:
@@ -195,20 +210,45 @@ class PluginLoader:
 
         tools: list[BaseTool] = []
         tool_map: dict[str, str] = {}
+        tool_manifests: dict[str, PluginToolManifest] = {}
+        plugin_manifests: dict[str, PluginManifest] = {}
+        load_errors: dict[str, str] = {}
         seen_tool_names: set[str] = set()
         builtin_names = _get_builtin_tool_names()
 
         for plugin_file, rel_key, trust_tier in ordered_plugins:
             try:
+                manifest = self._load_manifest(
+                    plugin_file, rel_key, trust_tier, load_errors,
+                )
+                if trust_tier == PluginTrust.IMPORTED and manifest is None:
+                    continue
+                if manifest is not None:
+                    plugin_manifests[rel_key] = manifest
+
                 if trust_tier == PluginTrust.IMPORTED:
                     # Phase 2: IMPORTED plugins are loaded in an isolated subprocess.
                     loaded = self._load_imported_via_bridge(
                         plugin_file, rel_key, trust_tier,
-                        builtin_names, seen_tool_names,
+                        builtin_names, seen_tool_names, manifest, load_errors,
                     )
+                    manifest_tools = manifest.tool_map if manifest else {}
                     for t, name in loaded:
+                        tool_manifest = manifest_tools.get(name)
+                        if manifest and tool_manifest is None:
+                            load_errors[rel_key] = (
+                                f"Tool {name!r} is returned by register() but is "
+                                "not declared in plugin.json"
+                            )
+                            logger.warning(
+                                "Rejecting undeclared imported tool %s from %s",
+                                name, rel_key,
+                            )
+                            continue
                         tools.append(t)
                         tool_map[name] = rel_key
+                        if tool_manifest:
+                            tool_manifests[name] = tool_manifest
                         seen_tool_names.add(name)
                     continue
 
@@ -246,8 +286,16 @@ class PluginLoader:
                         plugin_tools = reg_fn()
 
                     if isinstance(plugin_tools, list):
+                        manifest_tools = manifest.tool_map if manifest else {}
                         new_tools = []
                         for t in plugin_tools:
+                            tool_manifest = manifest_tools.get(t.name)
+                            if manifest and tool_manifest is None:
+                                logger.warning(
+                                    "Rejecting plugin tool %s from %s — not declared in plugin.json",
+                                    t.name, rel_key,
+                                )
+                                continue
                             if t.name in builtin_names:
                                 logger.warning(
                                     "Rejecting plugin tool %s from %s — cannot override built-in tool",
@@ -263,10 +311,12 @@ class PluginLoader:
                             monitored = wrap_with_monitoring(t, rel_key, trust_tier=trust_tier)
                             tools.append(monitored)
                             tool_map[t.name] = rel_key
+                            if tool_manifest:
+                                tool_manifests[t.name] = tool_manifest
                             seen_tool_names.add(t.name)
                             new_tools.append(t)
                         if new_tools:
-                            version = getattr(mod, "PLUGIN_VERSION", "1")
+                            version = manifest.version if manifest else getattr(mod, "PLUGIN_VERSION", "1")
                             self.registry.activate_plugin(rel_key, version, trust_tier=trust_tier)
                             logger.info(
                                 "Loaded plugin %s: %s",
@@ -282,6 +332,9 @@ class PluginLoader:
             new_names = {t.name for t in tools}
             self._tools = tools
             self._tool_to_plugin = tool_map
+            self._tool_to_manifest = tool_manifests
+            self._plugin_manifests = plugin_manifests
+            self._load_errors = load_errors
             if new_names != old_names:
                 self._version += 1
                 logger.info("Plugin tool set changed (%d tools), version now %d", len(tools), self._version)
@@ -291,6 +344,25 @@ class PluginLoader:
 
         return tools
 
+    def _load_manifest(
+        self,
+        plugin_file: Path,
+        rel_key: str,
+        trust_tier: str,
+        load_errors: dict[str, str],
+    ) -> PluginManifest | None:
+        """Load manifest metadata for a plugin, enforcing imported manifests."""
+        required = trust_tier == PluginTrust.IMPORTED
+        try:
+            return load_plugin_manifest(plugin_file.parent, required=required)
+        except PluginManifestError as exc:
+            load_errors[rel_key] = str(exc)
+            logger.warning(
+                "Blocking plugin %s: invalid or missing plugin.json: %s",
+                rel_key, exc,
+            )
+            return None
+
     def _load_imported_via_bridge(
         self,
         plugin_file: Path,
@@ -298,6 +370,8 @@ class PluginLoader:
         trust_tier: str,
         builtin_names: set[str],
         seen_tool_names: set[str],
+        manifest: PluginManifest | None,
+        load_errors: dict[str, str] | None = None,
     ) -> list[tuple[BaseTool, str]]:
         """Load an IMPORTED plugin in an isolated subprocess via the bridge.
 
@@ -308,15 +382,6 @@ class PluginLoader:
         # Shut down any existing bridge for this plugin (e.g., on reload).
         shutdown_bridge(rel_key)
 
-        # Read declared permissions from the plugin module (pre-import scan).
-        try:
-            mod = self._import_plugin(plugin_file, trust_tier=trust_tier)
-            declared_perms = getattr(mod, "PLUGIN_PERMISSIONS", None)
-            if declared_perms:
-                self.registry.set_declared_permissions(rel_key, declared_perms)
-        except Exception:
-            logger.debug("Could not pre-scan permissions for %s", rel_key, exc_info=True)
-
         approved = set(self.registry.get_approved_permissions(rel_key))
 
         from prax.agent.user_context import current_user_id
@@ -326,13 +391,10 @@ class PluginLoader:
         plugin_dir = plugin_file.parent
         perms = load_permissions(plugin_dir)
         if perms is None:
-            logger.warning(
-                "IMPORTED plugin %s has no permissions.md — loading with no capabilities. "
-                "Add a permissions.md to declare what this plugin needs.",
-                rel_key,
-            )
-            from prax.plugins.permissions import NONE as NO_PERMS
-            perms = NO_PERMS
+            logger.warning("Blocking IMPORTED plugin %s: missing permissions.md", rel_key)
+            if load_errors is not None:
+                load_errors[rel_key] = "Missing required permissions.md"
+            return []
 
         # Use secrets declared in permissions.md (replaces PLUGIN_PERMISSIONS).
         if perms.secrets:
@@ -359,11 +421,25 @@ class PluginLoader:
         except Exception:
             logger.exception("Failed to register IMPORTED plugin %s via subprocess", rel_key)
             shutdown_bridge(rel_key)
+            if load_errors is not None:
+                load_errors[rel_key] = "Failed to register via subprocess bridge"
             return []
 
         loaded: list[tuple[BaseTool, str]] = []
+        manifest_tools = manifest.tool_map if manifest else {}
         for meta in tool_metadata:
             name = meta["name"]
+            if manifest and name not in manifest_tools:
+                logger.warning(
+                    "Rejecting imported tool %s from %s — not declared in plugin.json",
+                    name, rel_key,
+                )
+                if load_errors is not None:
+                    load_errors[rel_key] = (
+                        f"Tool {name!r} is returned by register() but is not "
+                        "declared in plugin.json"
+                    )
+                continue
             if name in builtin_names:
                 logger.warning(
                     "Rejecting plugin tool %s from %s — cannot override built-in tool",
@@ -383,7 +459,8 @@ class PluginLoader:
             loaded.append((monitored, name))
 
         if loaded:
-            self.registry.activate_plugin(rel_key, "1", trust_tier=trust_tier)
+            version = manifest.version if manifest else "1"
+            self.registry.activate_plugin(rel_key, version, trust_tier=trust_tier)
             logger.info(
                 "Loaded IMPORTED plugin %s via subprocess: %s",
                 rel_key, [name for _, name in loaded],
@@ -441,10 +518,43 @@ class PluginLoader:
         with self._lock:
             return list(self._tools)
 
+    def get_tools_for_route(self, route: str) -> list[BaseTool]:
+        """Return plugin tools whose manifest declares a specific route."""
+        with self._lock:
+            return [
+                tool for tool in self._tools
+                if self._tool_to_manifest.get(tool.name)
+                and self._tool_to_manifest[tool.name].route == route
+            ]
+
+    def get_tools_for_routes(self, routes: set[str] | frozenset[str]) -> list[BaseTool]:
+        """Return plugin tools whose manifest route is in *routes*."""
+        with self._lock:
+            return [
+                tool for tool in self._tools
+                if self._tool_to_manifest.get(tool.name)
+                and self._tool_to_manifest[tool.name].route in routes
+            ]
+
     def get_tool_plugin_map(self) -> dict[str, str]:
         """Return mapping of tool_name -> plugin relative key."""
         with self._lock:
             return dict(self._tool_to_plugin)
+
+    def get_tool_manifest(self, tool_name: str) -> PluginToolManifest | None:
+        """Return manifest metadata for a loaded plugin tool, if declared."""
+        with self._lock:
+            return self._tool_to_manifest.get(tool_name)
+
+    def get_plugin_manifests(self) -> dict[str, PluginManifest]:
+        """Return loaded plugin manifests keyed by plugin relative path."""
+        with self._lock:
+            return dict(self._plugin_manifests)
+
+    def get_load_errors(self) -> dict[str, str]:
+        """Return plugin load errors from the most recent scan."""
+        with self._lock:
+            return dict(self._load_errors)
 
     # ------------------------------------------------------------------
     # Hot-swap

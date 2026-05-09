@@ -12,9 +12,13 @@ The agent can create and manage its own tool plugins at runtime. Plugins use a *
 prax/plugins/tools/
   npr_podcast/          ← Built-in plugin (ships with repo)
     plugin.py
+    plugin.json
+    permissions.md
     README.md
   pdf_reader/
     plugin.py
+    plugin.json
+    permissions.md
     README.md
   custom/               ← Agent-created plugins
     weather/
@@ -23,7 +27,9 @@ prax/plugins/tools/
   CATALOG.md            ← Auto-generated plugin listing
 ```
 
-**Plugin format** — a Python module with a `register()` function:
+**Plugin format** — a folder with required metadata and a Python module with
+a `register()` function. Imported shared plugins must include both
+`plugin.json` and `permissions.md`; missing or invalid metadata blocks loading.
 
 ```python
 # prax/plugins/tools/custom/weather/plugin.py
@@ -40,6 +46,45 @@ def register(caps):
         return resp.text
 
     return [weather_lookup]
+```
+
+`plugin.json` declares identity, tool routes, and risk. It may request direct
+orchestrator exposure, but Prax core decides whether to grant that request:
+
+```json
+{
+  "name": "weather",
+  "version": "1",
+  "description": "Weather lookup for any city",
+  "tools": [
+    {
+      "name": "weather_lookup",
+      "description": "Get the current weather for a city.",
+      "route": "utility",
+      "risk": "low",
+      "orchestrator_exposure": "none"
+    }
+  ]
+}
+```
+
+Known routes: `artifact`, `media`, `research`, `sysadmin`, `utility`,
+`vision`, `workspace`. End-user routes are available through the Plugin Agent;
+research-route tools are exposed to the Research Agent.
+
+`permissions.md` is the authoritative capability ceiling:
+
+```markdown
+# Permissions
+
+## capabilities
+- http
+
+## secrets
+(none)
+
+## allowed_commands
+(none)
 ```
 
 > **Note:** `register(caps)` receives a [`PluginCapabilities`](#plugin-security) instance.
@@ -134,7 +179,7 @@ The agent also has tools for modifying its own system prompt (`prompt_write`, `p
 | `llm_config_read` / `llm_config_update` | Per-component LLM provider/model/temperature routing |
 | `source_read` / `source_list` | Read any source file or list directories in the codebase |
 
-**Plugin priority:** Workspace custom plugins override built-in ones when they define tools with the same name. Priority: workspace plugins > built-in. This lets Prax fix or improve any built-in tool by writing a better version.
+**Plugin priority:** Workspace custom plugins override built-in ones when they define tools with the same name. Imported shared plugins under `plugins/shared/` are treated as `imported` trust even though they live inside the workspace, so they run through the subprocess bridge and must include `plugin.json` + `permissions.md`. Priority: workspace custom plugins > imported shared plugins > built-in.
 
 **Example plugins — [prax-plugins](https://github.com/praxagent/prax-plugins):** A collection of open-source plugins. Install one by telling Prax: *"Import the txt2presentation plugin from https://github.com/praxagent/prax-plugins"* — or install them all: *"Import all plugins from https://github.com/praxagent/prax-plugins"*. See its README for how to create your own plugins.
 
@@ -211,6 +256,10 @@ Prefer spokes over adding tools directly to the orchestrator — the
 orchestrator's tool count is kept under Anthropic's ~50-tool
 accuracy threshold (~42 today). Every new top-level tool erodes
 that margin.
+
+Installed end-user plugin capabilities should normally route through the
+Plugin Agent (`delegate_plugins`) using their manifest `route`. Only a tiny
+core-reviewed allowlist may be promoted directly to the orchestrator.
 
 **Minimum spoke skeleton** (see `prax/agent/spokes/tasks/` for a
 fresh reference implementation):

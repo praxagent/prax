@@ -135,9 +135,16 @@ def _build_research_tools(depth: int = 0) -> list:
     )
     from prax.plugins.loader import get_plugin_loader
 
+    loader = get_plugin_loader()
+    plugin_tools = [
+        t for t in loader.get_tools()
+        if (loader.get_tool_manifest(t.name) is None
+            or loader.get_tool_manifest(t.name).route == "research")
+    ]
+
     tools = (
         [background_search_tool, fetch_url_content, get_current_datetime]
-        + get_plugin_loader().get_tools()
+        + plugin_tools
     )
 
     # Add multi-model consensus (professor) if at least 2 LLM providers
