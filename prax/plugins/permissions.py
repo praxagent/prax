@@ -118,7 +118,7 @@ UNRESTRICTED = PluginPermissions(
     allowed_commands=None,
 )
 
-# No permissions at all — used when permissions.md is missing for IMPORTED.
+# No permissions at all — used for explicit deny-all policies.
 NONE = PluginPermissions()
 
 

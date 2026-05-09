@@ -13,17 +13,44 @@ Key infrastructure that makes this work:
 - **Identity injection** -- each agent receives execution context in its system prompt: trace ID, depth in the delegation tree, who delegated it, and what parallel peers are doing.
 - **Self-diagnostics** -- `prax_doctor` checks LLM configuration, sandbox health, plugin status, spoke availability, workspace integrity, TeamWork connectivity, and scheduler state in one call.
 
+## Orchestration Discipline
+
+The [Cursor orchestration skill](https://github.com/cursor/plugins/blob/d1cdb88a9eb33cf392395c87e3fd76419fc1010e/orchestrate/skills/orchestrate/SKILL.md) is a useful reference for multi-agent shape, but Prax should adapt the pattern through spokes instead of copying Cursor's cloud-agent CLI. The transferable ideas are:
+
+- **Do not orchestrate simple work.** If one tool or one spoke can complete the task, call it directly.
+- **Planner owns scope, workers own implementation.** The orchestrator can use `agent_plan` to decompose and track status, but concrete work belongs to a spoke, sub-agent, or plugin tool.
+- **Workers receive one bounded task.** Give each worker the minimum source material, owned files or artifact scope, expected output, and acceptance checks. Avoid broad "help with this" prompts.
+- **Handoffs move through the parent.** Sibling workers do not coordinate directly. Each worker returns a concise handoff to the spawning agent; the parent decides whether to publish more work, verify, or synthesize.
+- **Propagate state, do not synchronize state.** Pass summaries, artifact paths, diffs, and explicit blockers upward or downward. Do not share full scratchpads or let unrelated workers mutate the same files.
+- **Verifier nodes are first-class work.** For non-trivial artifacts, dispatch verification as its own step: tests for code, media inspection for videos, browser verification for UI, claim audit for factual output, or reviewer sub-agents for prose.
+
+A good Prax handoff has this shape:
+
+```json
+{
+  "goal": "What this worker is responsible for",
+  "scope": "Owned files, routes, artifacts, or topic slice",
+  "inputs": ["Paths, URLs, trace IDs, prior handoffs"],
+  "expected_output": "Concrete artifact, patch, answer, or verdict",
+  "acceptance_checks": ["Tests, stream checks, citations, visual checks"],
+  "blockers": ["Missing dependency or permission, if any"]
+}
+```
+
+This is the same control-flow discipline already used by the content and knowledge pipelines: fixed orchestration shape, fresh worker context, explicit handoffs, and a verifier before completion.
+
 ## Hub-and-Spoke Architecture
 
 ```mermaid
 graph TB
-    User([User]) --> Prax[Prax Orchestrator<br/>~42 tools total]
+    User([User]) --> Prax[Prax Orchestrator<br/>near 50-tool ceiling]
 
     Prax -->|delegate_browser| Browser[Browser Agent<br/>CDP + Playwright + analyze_image + browser_verify]
     Prax -->|delegate_content_editor| Content[Content Editor<br/>sub-hub: research → write → review]
     Prax -->|delegate_course| Course[Course Agent]
     Prax -->|delegate_desktop| Desktop[Desktop Agent]
     Prax -->|delegate_environment| Environment[Environment Agent<br/>weather + local conditions]
+    Prax -->|delegate_plugins| Plugins[Plugin Agent<br/>manifest-routed end-user tools]
     Prax -->|delegate_sysadmin| Sysadmin[Sysadmin Agent<br/>30+ tools: plugins, config, source]
     Prax -->|delegate_sandbox| Sandbox[Sandbox Agent<br/>Docker + OpenCode + Desktop + sandbox_view/scroll/goto]
     Prax -->|delegate_finetune| Finetune[Finetune Agent<br/>8 tools: LoRA pipeline]
@@ -60,6 +87,7 @@ graph TB
 | **Course** | `delegate_course` | Course authoring + publish | Course creation and tutoring |
 | **Desktop** | `delegate_desktop` | Desktop automation (xdotool / Chrome DevTools Protocol) | GUI tasks in the sandbox desktop |
 | **Environment** | `delegate_environment` | Location resolver + live weather fetch + datetime | Weather, local conditions, and time/location context; asks for location when only timezone is known |
+| **Plugins** | `delegate_plugins` | Manifest-routed `artifact`/`media`/`utility`/`vision`/`workspace` plugin tools | Installed end-user plugin capabilities such as presentations, media generation, OCR, and artifact conversion |
 | **Sysadmin** | `delegate_sysadmin` | 30+: plugin mgmt, prompts, LLM config, source, workspace sync | Plugin install/update, config changes, self-improvement |
 | **Sandbox** | `delegate_sandbox` | Session lifecycle, archive, package management, 6 desktop tools, `sandbox_view` / `sandbox_scroll` / `sandbox_goto` (SWE-agent-style line-numbered file viewer) | Code execution in isolated Docker containers + GUI desktop interaction |
 | **Finetune** | `delegate_finetune` | 8: harvest, train, verify, promote, rollback | LoRA fine-tuning pipeline (requires FINETUNE_ENABLED) |
@@ -286,7 +314,7 @@ The orchestrator keeps tools that are **conversational** (require back-and-forth
 - **URL handling** — lightweight `fetch_url_content` (no browser needed)
 - **Resourcefulness** — `self_upgrade_tier` (auto-escalate to a more capable model when stuck), `run_python` (execute arbitrary Python in the sandbox when no existing tool fits), and `review_my_traces` (self-reflection — pull recent execution traces and send them to a HIGH-tier LLM for honest feedback on failures, efficiency, and improvements)
 - **Routing decisions** — choosing which spoke to delegate to
-- **Spoke delegation** — 6 spoke tools + 2 generic sub-agent tools + 1 research delegate + 1 vision tool
+- **Spoke delegation** — one `delegate_*` tool per registered spoke, plus generic sub-agent fallbacks, kept near the 50-tool ceiling
 
 ## Adding a New Spoke
 
@@ -307,9 +335,14 @@ prax/agent/spokes/
 │   ├── publisher.py      # Hugo publishing utilities
 │   └── prompts.py        # System prompts for sub-agents
 ├── finetune/            # Simple spoke: LoRA training pipeline
+├── environment/         # Simple spoke: weather, local conditions, datetime
 ├── knowledge/           # Simple spoke: notes + research projects
+├── plugins/             # Simple spoke: manifest-routed end-user plugin tools
 ├── sandbox/             # Simple spoke: Docker code execution
-└── sysadmin/            # Sub-hub spoke: delegates to self-improve + plugin-fix
+├── scheduler/           # Simple spoke: cron + reminders
+├── sysadmin/            # Sub-hub spoke: delegates to self-improve + plugin-fix
+├── tasks/               # Simple spoke: todos + background task runner
+└── workspace/           # Simple spoke: files + office document authoring
 ```
 
 **Two spoke patterns:**

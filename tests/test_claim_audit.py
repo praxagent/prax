@@ -355,6 +355,104 @@ class TestScheduledTaskGrounding:
         messages = self._msgs(["get_current_datetime"])
         assert audit_scheduled_task_grounding(task, response, messages) is None
 
+    def test_weather_is_unavailable_phrasing_passes(self):
+        # "Weather is unavailable" / "Weather data unavailable" / "Weather
+        # not available" must count as disclosure — the literal-substring
+        # check missed all of these for a week of suppressed briefings.
+        task = "[SCHEDULED_TASK] Send weather and time-saving tips."
+        for phrasing in [
+            "Weather is unavailable today — no saved location.",
+            "Weather data unavailable; ask for location.",
+            "Weather: not available right now.",
+            "Weather can't be fetched without a city.",
+            "Couldn't fetch weather data this morning.",
+        ]:
+            messages = self._msgs(["get_current_datetime"])
+            finding = audit_scheduled_task_grounding(task, phrasing, messages)
+            assert finding is None, f"phrasing should be a disclosure: {phrasing!r}"
+
+    def test_location_uncertain_in_environment_reply_passes(self):
+        # The actual production trace: delegate_environment returns
+        # LOCATION_UNCERTAIN when it can't resolve a city.  The orchestrator's
+        # response talked around weather without using the exact "weather
+        # unavailable" substring, but the spoke's structured signal IS the
+        # legitimate disclosure and must satisfy the audit.
+        task = (
+            "[SCHEDULED_TASK — CRITICAL RULES: 8) For weather/local "
+            "conditions, use delegate_environment.] Send a concise morning "
+            "briefing: 3 top news items and weather/time-saving tips."
+        )
+        response = (
+            "Good morning — here are today's headlines.\n"
+            "1. Story A.\n2. Story B.\n3. Story C.\n"
+            "Local conditions: I don't have a saved location, so I'm "
+            "skipping weather today."
+        )
+        messages = [
+            AIMessage(content=""),
+            ToolMessage(
+                content=(
+                    "**Morning Briefing — Story A / B / C** (3 items)\n"
+                    "If you want, I can also turn this into a tech brief."
+                ),
+                name="delegate_research",
+                tool_call_id="c_research",
+            ),
+            ToolMessage(
+                content=(
+                    "Weather is unavailable right now because I don't have "
+                    "a concrete city/region to use.\n\n"
+                    "[Tool evidence preserved for audit]\n"
+                    "LOCATION_UNCERTAIN\n"
+                    "reason: No saved location or explicit location was found.\n"
+                    "ask_user: What city/region should I use for local conditions?"
+                ),
+                name="delegate_environment",
+                tool_call_id="c_env",
+            ),
+        ]
+        assert audit_scheduled_task_grounding(task, response, messages) is None
+
+    def test_long_scheduled_preamble_does_not_self_match(self):
+        # Regression: the production [SCHEDULED_TASK — CRITICAL RULES: ...]
+        # preamble itself mentions "news/headlines/briefings" and "weather"
+        # inside its rules section.  A trivial task ("say hi") wrapped in
+        # that preamble must NOT be flagged as a news or weather request.
+        task = (
+            "[SCHEDULED_TASK — CRITICAL RULES: "
+            "1) Do NOT ask follow-up questions — the user is not present. "
+            "2) Do NOT use schedule_create, schedule_reminder, or any scheduling tools. "
+            "3) Do NOT ask for confirmation or clarification. "
+            "4) Just execute the task using your best judgment and respond with the result. "
+            "5) If the task is ambiguous, take the most reasonable interpretation and do it. "
+            "6) Keep your response concise — it will be delivered as a notification. "
+            "7) For news/headlines/briefings, use delegate_research to run the news tool; "
+            "background_search_tool snippets are not sufficient. "
+            "8) For weather/local conditions, use delegate_environment. It must resolve "
+            "a concrete city/region first; timezone alone is not enough. If no location "
+            "or live source can be confirmed, ask for location or say weather is "
+            "unavailable rather than inventing a forecast.] say hi"
+        )
+        response = "Hi!"
+        messages = self._msgs(["agent_plan"])
+        assert audit_scheduled_task_grounding(task, response, messages) is None
+
+    def test_long_scheduled_preamble_still_flags_real_news_request(self):
+        # Make sure stripping the preamble doesn't disable detection: when
+        # the actual user task IS a news request, the audit must still fire.
+        task = (
+            "[SCHEDULED_TASK — CRITICAL RULES: "
+            "7) For news/headlines/briefings, use delegate_research. "
+            "8) For weather/local conditions, use delegate_environment.] "
+            "Send today's top 3 headlines."
+        )
+        response = "Here are today's top headlines: ..."
+        messages = self._msgs(["background_search_tool"])
+        finding = audit_scheduled_task_grounding(task, response, messages)
+        assert finding is not None
+        assert any("background_search_tool alone is not sufficient" in r
+                   for r in finding["requirements"])
+
 
 # ---------------------------------------------------------------------------
 # Artifact-location audit
@@ -487,3 +585,46 @@ class TestPlanCompletionAlignment:
 
     def test_passes_empty_response(self):
         assert audit_plan_completion("", []) is None
+
+    def test_extension_offer_alone_is_not_a_caveat(self):
+        # The 7-day briefing regression: delegate_research returned a clean
+        # successful briefing that ended with "If you want, I can also turn
+        # this into a tech-focused brief".  That's an extension offer on top
+        # of completed work, not a partial-work caveat — flagging "Done" was
+        # a false positive that contributed to suppressed briefings.
+        clean_with_offer = (
+            "**Morning Briefing — May 1, 2026**\n"
+            "1. Story one — source A.\n"
+            "2. Story two — source B.\n"
+            "3. Story three — source C.\n"
+            "If you want, I can also turn this into an even tighter "
+            "bullet-style executive brief or a tech-focused brief."
+        )
+        messages = [
+            ToolMessage(
+                content=clean_with_offer,
+                name="delegate_research",
+                tool_call_id="c_r",
+            ),
+        ]
+        response = "Done — here's your briefing."
+        assert audit_plan_completion(response, messages) is None
+
+    def test_offer_plus_strong_caveat_still_flags(self):
+        # Belt-and-suspenders: when an offer is paired with a strong
+        # partial-work signal, the audit must still fire.
+        caveat_reply = (
+            "I tried, but I was unable to fetch the article.\n"
+            "If you want, I can retry with a different reader."
+        )
+        messages = [
+            ToolMessage(
+                content=caveat_reply,
+                name="delegate_research",
+                tool_call_id="c_r",
+            ),
+        ]
+        response = "Done — here's the summary."
+        finding = audit_plan_completion(response, messages)
+        assert finding is not None
+        assert finding["caveat_marker"] == "unable to"

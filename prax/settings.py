@@ -57,9 +57,16 @@ class AppSettings(BaseSettings):
     pro_model: str = Field(default="gpt-5.4-pro", alias="PRO_MODEL")
     pro_enabled: bool = Field(default=False, alias="PRO_ENABLED")
 
-    # Vision / image understanding
+    # Vision / image understanding.  ``vision_provider`` selects the routing:
+    # ``openai`` works against the real OpenAI API *and* any OpenAI-compatible
+    # endpoint (llama.cpp ``llama-server``, vLLM, Ollama's /v1, LM Studio, …) —
+    # set ``VISION_BASE_URL`` to point at the local server.  When a base URL
+    # is set, ``VISION_API_KEY`` is optional (most local servers ignore it,
+    # but we still pass a placeholder because the OpenAI SDK requires one).
     vision_model: str = Field(default="gpt-image-1.5", alias="VISION_MODEL")
     vision_provider: str = Field(default="openai", alias="VISION_PROVIDER")
+    vision_base_url: str | None = Field(default=None, alias="VISION_BASE_URL")
+    vision_api_key: str | None = Field(default=None, alias="VISION_API_KEY")
 
     # Workspace
     workspace_dir: str = Field(default="../workspaces", alias="WORKSPACE_DIR")

@@ -473,6 +473,26 @@ class TestLoaderBridgeIntegration:
 
         plugin_dir = tmp_path / "tools" / "imported_test"
         plugin_dir.mkdir(parents=True)
+        (plugin_dir / "permissions.md").write_text("""\
+# Permissions
+
+## capabilities
+""")
+        (plugin_dir / "plugin.json").write_text("""\
+{
+  "name": "imported_test",
+  "version": "1",
+  "description": "Imported bridge test plugin.",
+  "tools": [
+    {
+      "name": "imported_tool",
+      "description": "An imported tool.",
+      "route": "utility",
+      "risk": "low"
+    }
+  ]
+}
+""")
         (plugin_dir / "plugin.py").write_text(textwrap.dedent("""\
             from langchain_core.tools import tool
 
@@ -496,6 +516,8 @@ class TestLoaderBridgeIntegration:
             "imported",
             set(),
             set(),
+            None,
+            {},
         )
 
         from prax.plugins.bridge import shutdown_bridge

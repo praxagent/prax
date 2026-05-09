@@ -42,6 +42,7 @@ def build_all_spoke_tools() -> list:
     from prax.agent.spokes.environment import build_spoke_tools as environment_spoke
     from prax.agent.spokes.finetune import build_spoke_tools as finetune_spoke
     from prax.agent.spokes.knowledge import build_spoke_tools as knowledge_spoke
+    from prax.agent.spokes.plugins import build_spoke_tools as plugins_spoke
     from prax.agent.spokes.sandbox import build_spoke_tools as sandbox_spoke
     from prax.agent.spokes.scheduler import build_spoke_tools as scheduler_spoke
     from prax.agent.spokes.sysadmin import build_spoke_tools as sysadmin_spoke
@@ -56,6 +57,7 @@ def build_all_spoke_tools() -> list:
         *environment_spoke(),
         *finetune_spoke(),
         *knowledge_spoke(),
+        *plugins_spoke(),
         *sandbox_spoke(),
         *scheduler_spoke(),
         *sysadmin_spoke(),

@@ -21,8 +21,20 @@ _MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
 
 def _fetch_image_base64(url: str) -> tuple[str, str]:
-    """Download an image and return (base64_data, media_type)."""
-    resp = requests.get(url, timeout=30, stream=True)
+    """Download an image and return (base64_data, media_type).
+
+    Sends an explicit ``User-Agent`` because several common image hosts
+    (Wikimedia, some news CDNs) reject ``python-requests``'s default UA
+    with HTTP 403.  Discord/Twilio CDN URLs work either way.
+    """
+    headers = {
+        "User-Agent": (
+            "PraxAssistant/1.0 (+https://github.com/PraxAssistant/prax) "
+            "image-fetch/vision-tools"
+        ),
+        "Accept": "image/*,*/*;q=0.8",
+    }
+    resp = requests.get(url, timeout=30, stream=True, headers=headers)
     resp.raise_for_status()
     content_type = resp.headers.get("content-type", "image/jpeg")
     # Normalize content type.
@@ -38,11 +50,38 @@ def _fetch_image_base64(url: str) -> tuple[str, str]:
     return base64.standard_b64encode(data).decode("ascii"), media_type
 
 
+def _openai_image_payload(image_url: str) -> dict:
+    """Return the ``image_url`` content block for an OpenAI-compatible call.
+
+    When pointing at a local server (``VISION_BASE_URL`` set) we always inline
+    the image as a base64 ``data:`` URI: most local model servers run without
+    outbound network access and can't reach the Discord/Twilio CDN that hosts
+    the original attachment.  For real OpenAI we pass the URL through —
+    OpenAI's image fetchers handle public CDNs reliably and avoid spending
+    bytes on encoding round-trips.
+    """
+    if settings.vision_base_url and image_url.startswith(("http://", "https://")):
+        b64_data, media_type = _fetch_image_base64(image_url)
+        data_uri = f"data:{media_type};base64,{b64_data}"
+        return {"type": "image_url", "image_url": {"url": data_uri}}
+    return {"type": "image_url", "image_url": {"url": image_url}}
+
+
 def _analyze_openai(image_url: str, prompt: str) -> str:
-    """Analyze an image using the OpenAI API."""
+    """Analyze an image via the OpenAI API or any OpenAI-compatible server.
+
+    Honors ``VISION_BASE_URL`` (e.g. ``http://localhost:8083/v1`` for a local
+    llama.cpp ``llama-server`` or vLLM/Ollama endpoint) and ``VISION_API_KEY``
+    (falls back to ``OPENAI_KEY``; local servers usually accept any string).
+    """
     from openai import OpenAI
 
-    client = OpenAI(api_key=settings.openai_key)
+    api_key = settings.vision_api_key or settings.openai_key or "local-no-key"
+    client_kwargs: dict = {"api_key": api_key}
+    if settings.vision_base_url:
+        client_kwargs["base_url"] = settings.vision_base_url
+
+    client = OpenAI(**client_kwargs)
     response = client.chat.completions.create(
         model=settings.vision_model,
         messages=[
@@ -50,7 +89,7 @@ def _analyze_openai(image_url: str, prompt: str) -> str:
                 "role": "user",
                 "content": [
                     {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": image_url}},
+                    _openai_image_payload(image_url),
                 ],
             }
         ],
@@ -108,6 +147,31 @@ def analyze_image_impl(image_url: str, prompt: str) -> str:
         provider, settings.vision_model, image_url[:80], prompt[:80],
     )
 
+    # Record this choice in the trace so the user can see whether vision went
+    # to OpenAI, a local llama-server, etc. — same mechanism the chat path
+    # uses, so model attribution is uniform across the trace.
+    try:
+        from prax.agent.llm_factory import _record_tier_choice
+        from prax.agent.trace import get_current_trace
+        ctx = get_current_trace()
+        # Mark local endpoints distinctly so reading a trace makes it obvious
+        # which calls were on-prem vs hosted.
+        provider_tag = (
+            f"{provider}@{settings.vision_base_url}"
+            if settings.vision_base_url
+            else provider
+        )
+        _record_tier_choice(
+            tier_requested="vision",
+            tier_resolved="vision",
+            model=settings.vision_model,
+            provider=provider_tag,
+            span_id=ctx.span_id if ctx else None,
+            span_name=ctx.origin if ctx else None,
+        )
+    except Exception:
+        pass  # tracing failure must never block image analysis
+
     if provider == "openai":
         return _analyze_openai(image_url, prompt)
     if provider == "anthropic":
@@ -139,15 +203,20 @@ def analyze_image(image_url: str, prompt: str = "Describe this image in detail."
 
 
 def build_vision_tools() -> list:
-    """Return vision tools if a vision provider is configured."""
+    """Return vision tools if a vision provider is configured.
+
+    For the ``openai`` provider, a configured ``VISION_BASE_URL`` (a local
+    OpenAI-compatible server) is treated as sufficient — the API key check is
+    skipped, since local servers typically don't enforce keys.
+    """
     if not settings.vision_model:
         return []
-    # Check that the required API key exists for the configured provider.
     provider = settings.vision_provider.lower()
-    if provider == "openai" and not settings.openai_key:
+    if provider == "openai":
+        if not (settings.vision_base_url or settings.vision_api_key or settings.openai_key):
+            return []
+    elif provider == "anthropic" and not settings.anthropic_key:
         return []
-    if provider == "anthropic" and not settings.anthropic_key:
-        return []
-    if provider in {"google", "google-vertex"} and not settings.google_api_key:
+    elif provider in {"google", "google-vertex"} and not settings.google_api_key:
         return []
     return [analyze_image]

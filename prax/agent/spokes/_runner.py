@@ -271,6 +271,35 @@ def run_spoke(
     return f"Spoke [{label}] completed but produced no output."
 
 
+def _tool_message_text(msg: ToolMessage) -> str:
+    """Extract plain text from a ToolMessage regardless of content shape.
+
+    LangChain's BaseMessage.content can be either a plain string or a list of
+    content blocks (``[{"type": "text", "text": "..."}, ...]``) depending on
+    the LLM provider's message format.  Calling ``str(content)`` on the list
+    form produces ``"[{'type': 'text', ...}]"`` — which silently broke the
+    prefix-startswith check used to preserve VERIFIED_WEATHER evidence.
+    """
+    raw = msg.content
+    if raw is None:
+        return ""
+    if isinstance(raw, str):
+        return raw
+    if isinstance(raw, list):
+        parts: list[str] = []
+        for block in raw:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict):
+                # Common shapes: {"type": "text", "text": "..."} (Anthropic),
+                # {"text": "..."} (some providers), or just {"content": "..."}.
+                text = block.get("text") or block.get("content") or ""
+                if isinstance(text, str):
+                    parts.append(text)
+        return "\n".join(p for p in parts if p)
+    return str(raw)
+
+
 def _append_preserved_tool_results(
     response: str,
     messages: list,
@@ -291,7 +320,7 @@ def _append_preserved_tool_results(
     for msg in messages:
         if not isinstance(msg, ToolMessage):
             continue
-        content = str(msg.content or "").strip()
+        content = _tool_message_text(msg).strip()
         if not content:
             continue
         upper_content = content.lstrip().upper()

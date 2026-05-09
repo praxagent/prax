@@ -39,6 +39,20 @@ _CLAIM_PATTERNS: list[re.Pattern] = [
 # Tool result tags that indicate the source is informational (not to be quoted).
 _INFORMATIONAL_MARKER = "[INFORMATIONAL SOURCE"
 
+# Strip the [SCHEDULED_TASK — ...] / [Reminder ...] system preamble from the
+# task prompt before intent matching.  The preamble itself contains the words
+# "news/headlines/briefings" and "weather" inside its *rules section* — without
+# stripping, every scheduled task ("say hi") would be misclassified as a
+# news/weather request.  Mirrors session_service._SYSTEM_PREFIX_RE.
+_SCHEDULED_PREFIX_RE = re.compile(
+    r"^\[(?:SCHEDULED_TASK|Reminder)[^\]]*\]\s*",
+    re.IGNORECASE,
+)
+
+
+def _strip_scheduled_preamble(task_prompt: str) -> str:
+    return _SCHEDULED_PREFIX_RE.sub("", task_prompt or "")
+
 
 def audit_claims(
     response: str,
@@ -231,6 +245,27 @@ _WEATHER_UNAVAILABLE_MARKERS = (
     "weather not available",
 )
 
+# Regex covering the natural-language ways a response can disclose that
+# weather couldn't be fetched.  The literal-substring list above misses
+# common phrasings ("Weather is unavailable", "Weather data unavailable",
+# "couldn't fetch fresh ... weather data"); this regex keeps the audit
+# from blocking briefings that DID legitimately disclose unavailability.
+_WEATHER_UNAVAILABLE_RE = re.compile(
+    r"\bweather\b[\w\s,:'\-]{0,40}\b("
+    r"unavailable|not available|no data|cannot|can't|couldn't|could not|"
+    r"not configured|no location|holding"
+    r")\b"
+    r"|\b(?:no|cannot|can't|couldn't|could not|unable to)\b[\w\s,:'\-]{0,60}\bweather\b",
+    re.IGNORECASE,
+)
+
+# Structured signal from delegate_environment: when the spoke can't resolve
+# a concrete city/region it returns LOCATION_UNCERTAIN.  That IS the correct
+# weather-unavailability disclosure for the audit — the spoke did its job
+# and reported "no live source confirmable", which the system prompt
+# explicitly tells the orchestrator to treat as "weather unavailable".
+_LOCATION_UNCERTAIN_MARKER = "LOCATION_UNCERTAIN"
+
 
 def _extract_tool_names(messages: list) -> set[str]:
     """Return the set of tool names actually invoked this turn.
@@ -308,6 +343,37 @@ def _matches_any(text: str, patterns: list[re.Pattern]) -> bool:
     return any(pattern.search(text or "") for pattern in patterns)
 
 
+def _weather_unavailable_disclosed(response: str, messages: list) -> bool:
+    """Return True if weather unavailability was disclosed.
+
+    Checks three signals, any of which is sufficient:
+
+    1. Literal-substring markers in the response (legacy path).
+    2. Natural-language regex match in the response — catches common
+       phrasings like "Weather is unavailable today", "Weather data
+       unavailable", "couldn't fetch fresh news or weather data".
+    3. ``LOCATION_UNCERTAIN`` evidence from a sub-agent tool message
+       (typically ``delegate_environment``) — the structured signal the
+       environment spoke emits when it can't resolve a concrete location,
+       which the system prompt explicitly treats as "weather unavailable".
+    """
+    lowered = (response or "").lower()
+    if any(marker in lowered for marker in _WEATHER_UNAVAILABLE_MARKERS):
+        return True
+    if _WEATHER_UNAVAILABLE_RE.search(response or ""):
+        return True
+    try:
+        from langchain_core.messages import ToolMessage
+    except Exception:
+        return False
+    for msg in messages:
+        if not isinstance(msg, ToolMessage):
+            continue
+        if _LOCATION_UNCERTAIN_MARKER in str(msg.content or ""):
+            return True
+    return False
+
+
 def audit_scheduled_task_grounding(
     task_prompt: str,
     response: str,
@@ -320,7 +386,8 @@ def audit_scheduled_task_grounding(
     wrong topic should never clear a "3 top news items" notification.  This
     audit applies an intent-specific floor against the scheduled task prompt.
     """
-    combined = f"{task_prompt}\n{response}"
+    user_task = _strip_scheduled_preamble(task_prompt)
+    combined = f"{user_task}\n{response}"
     findings: list[str] = []
     successful_tools = _successful_tool_names(messages)
 
@@ -333,12 +400,9 @@ def audit_scheduled_task_grounding(
                 "background_search_tool alone is not sufficient"
             )
 
-    if _matches_any(task_prompt, _SCHEDULED_WEATHER_INTENT_PATTERNS):
+    if _matches_any(user_task, _SCHEDULED_WEATHER_INTENT_PATTERNS):
         weather_tools = _successful_weather_tool_names(messages)
-        disclosed_unavailable = any(
-            marker in (response or "").lower()
-            for marker in _WEATHER_UNAVAILABLE_MARKERS
-        )
+        disclosed_unavailable = _weather_unavailable_disclosed(response, messages)
         if not weather_tools and not disclosed_unavailable:
             findings.append(
                 "weather requested but no successful weather tool, "
@@ -469,19 +533,17 @@ _COMPLETION_CLAIM_PATTERNS: list[re.Pattern] = [
 ]
 
 # Phrases in delegation tool results that signal partial / caveated work.
-# Mirror of ConversationAgent._CAVEAT_MARKERS — kept separate so the
-# auditor can run against old traces without importing orchestrator.
+# Two tiers: strong markers fire the audit on their own; offer markers only
+# count when accompanied by a strong marker.  A reply that says "Done — if
+# you want, I can also turn this into a tech-focused brief" is an extension
+# offer on top of completed work, not a partial-work caveat.  Treating bare
+# offer language as a caveat caused every successful research/news delegation
+# to false-flag the orchestrator's "Done" response.
 _TOOL_CAVEAT_MARKERS: list[str] = [
     "one caveat",
     "however,",
     "but it does not guarantee",
     "does not guarantee",
-    "if you want, i can",
-    "if you'd like, i can",
-    "if you want me to",
-    "do you want me to",
-    "want me to",
-    "should i",
     "partial",
     "could not",
     "couldn't",
@@ -494,6 +556,18 @@ _TOOL_CAVEAT_MARKERS: list[str] = [
     "skipped",
     "didn't actually",
     "did not actually",
+]
+
+# Soft offer markers — "want me to do more?" style.  These are caveats only
+# when paired with a strong marker above.  Standalone they're extension
+# offers from a successfully completed delegation.
+_TOOL_OFFER_MARKERS: list[str] = [
+    "if you want, i can",
+    "if you'd like, i can",
+    "if you want me to",
+    "do you want me to",
+    "want me to",
+    "should i",
 ]
 
 

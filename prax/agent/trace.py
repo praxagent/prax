@@ -117,6 +117,22 @@ class ExecutionGraph:
                 statuses.append(n.status)
                 if n.parent_id is None or n.parent_id not in self._nodes:
                     root_statuses.append(n.status)
+                models_used: list[dict] = []
+                seen_keys: set[tuple[str, str, str | None]] = set()
+                for tc in n.tier_choices:
+                    key = (
+                        str(tc.get("provider", "")),
+                        str(tc.get("model", "")),
+                        tc.get("tier_resolved") or tc.get("tier_requested"),
+                    )
+                    if key in seen_keys:
+                        continue
+                    seen_keys.add(key)
+                    models_used.append({
+                        "provider": tc.get("provider"),
+                        "model": tc.get("model"),
+                        "tier": tc.get("tier_resolved") or tc.get("tier_requested"),
+                    })
                 nodes.append({
                     "span_id": n.span_id,
                     "name": n.name,
@@ -127,6 +143,7 @@ class ExecutionGraph:
                     "finished_at": n.finished_at.isoformat() if n.finished_at else None,
                     "tool_calls": n.tool_calls,
                     "summary": n.summary,
+                    "models_used": models_used,
                     "duration_s": round(
                         (n.finished_at - n.started_at).total_seconds(), 1
                     ) if n.finished_at else round(

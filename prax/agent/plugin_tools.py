@@ -16,6 +16,7 @@ The workspace can be pushed to a private remote using PRAX_SSH_KEY_B64.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from langchain_core.tools import tool
@@ -106,6 +107,12 @@ def plugin_list() -> str:
             f"\n**Plugin-provided tools:** {', '.join(t.name for t in plugin_tools)}"
         )
 
+    load_errors = loader.get_load_errors()
+    if load_errors:
+        lines.append("\n**Blocked plugins:**")
+        for rel_key, error in sorted(load_errors.items()):
+            lines.append(f"- `{rel_key}` — {error}")
+
     return "\n".join(lines)
 
 
@@ -126,7 +133,16 @@ def plugin_read(name: str) -> str:
 
 
 @risk_tool(risk=RiskLevel.HIGH)
-def plugin_write(name: str, code: str, description: str = "") -> str:
+def plugin_write(
+    name: str,
+    code: str,
+    description: str = "",
+    route: str = "utility",
+    risk: str = "medium",
+    capabilities: str = "",
+    allowed_commands: str = "",
+    secrets: str = "",
+) -> str:
     """Write or update a plugin and run sandbox tests.
 
     Creates a folder-based plugin at ``<name>/plugin.py`` with an auto-generated
@@ -151,7 +167,16 @@ def plugin_write(name: str, code: str, description: str = "") -> str:
     Args:
         name: Plugin name (creates ``<name>/plugin.py``).
         code: The full Python source code for the plugin.
-        description: One-line description for the README (optional).
+        description: One-line description for the README and manifest.
+        route: Manifest route for the plugin tools, e.g. "utility", "artifact",
+               "media", "vision", "workspace", or "research".
+        risk: Manifest risk level: "low", "medium", or "high".
+        capabilities: Comma-separated permissions.md capabilities such as
+                      "http,llm,commands,filesystem".
+        allowed_commands: Comma-separated command names allowed when
+                          capabilities includes "commands".
+        secrets: Comma-separated ENV keys the plugin may request via
+                 permissions.md approval.
     """
     try:
         abs_path = _safe_plugin_path(name)
@@ -189,6 +214,22 @@ def plugin_write(name: str, code: str, description: str = "") -> str:
             abs_path.unlink(missing_ok=True)
             return f"Sandbox test FAILED — file removed.\nErrors: {result['errors']}"
 
+    _write_manifest(
+        abs_path.parent,
+        name=name,
+        version="1",
+        description=description or "Custom plugin.",
+        tool_names=result["tools"],
+        route=route,
+        risk=risk,
+    )
+    _write_permissions(
+        abs_path.parent,
+        capabilities=capabilities,
+        allowed_commands=allowed_commands,
+        secrets=secrets,
+    )
+
     _audit_plugin_event(
         TraceEvent.PLUGIN_ACTIVATE, name,
         f"action=write tools={result['tools']}",
@@ -196,9 +237,78 @@ def plugin_write(name: str, code: str, description: str = "") -> str:
     return (
         f"Plugin written and sandbox test PASSED.\n"
         f"Tools defined: {result['tools']}\n"
+        f"Manifest route: {route}; risk: {risk}\n"
         f"Use plugin_activate('{name}') to make it live.\n"
         f"Use workspace_push() to sync to the remote."
     )
+
+
+def _write_manifest(
+    plugin_dir: Path,
+    *,
+    name: str,
+    version: str,
+    description: str,
+    tool_names: list[str],
+    route: str,
+    risk: str,
+) -> None:
+    """Write required plugin metadata for agent-created plugins."""
+    manifest = {
+        "name": name,
+        "version": version,
+        "description": description,
+        "tools": [
+            {
+                "name": tool_name,
+                "description": description,
+                "route": route,
+                "risk": risk,
+            }
+            for tool_name in tool_names
+        ],
+    }
+    (plugin_dir / "plugin.json").write_text(
+        json.dumps(manifest, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _write_permissions(
+    plugin_dir: Path,
+    *,
+    capabilities: str,
+    allowed_commands: str,
+    secrets: str,
+) -> None:
+    """Write a conservative permissions.md for agent-created plugins."""
+    caps = _csv_items(capabilities)
+    commands = _csv_items(allowed_commands)
+    secret_keys = _csv_items(secrets)
+    lines = [
+        "# Permissions",
+        "",
+        "## capabilities",
+    ]
+    lines.extend(f"- {cap}" for cap in caps)
+    if not caps:
+        lines.append("(none)")
+    lines.extend(["", "## secrets"])
+    if secret_keys:
+        lines.extend(f"- {key}: Required by this plugin" for key in secret_keys)
+    else:
+        lines.append("(none)")
+    lines.extend(["", "## allowed_commands"])
+    if commands:
+        lines.extend(f"- {cmd}" for cmd in commands)
+    else:
+        lines.append("(none)")
+    (plugin_dir / "permissions.md").write_text("\n".join(lines) + "\n")
+
+
+def _csv_items(value: str) -> list[str]:
+    """Parse comma-separated metadata fields."""
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 @tool
@@ -821,6 +931,7 @@ def plugin_import(repo_url: str, name: str | None = None, plugin_subfolder: str 
     except Exception:
         pass
     loader.load_all()
+    load_errors = loader.get_load_errors()
 
     subfolder_note = ""
     if result.get("subfolder"):
@@ -834,7 +945,7 @@ def plugin_import(repo_url: str, name: str | None = None, plugin_subfolder: str 
         f"Imported plugin repo '{result['name']}' from {result['url']}.\n"
         f"Path: {result['path']}\n"
         f"{subfolder_note}"
-        f"Plugins loaded and available."
+        f"{_format_load_status(load_errors)}"
     )
 
 
@@ -860,7 +971,7 @@ def plugin_import_activate(name: str) -> str:
     except Exception:
         pass
     loader.load_all()
-    return f"Plugin '{name}' activated. Tools reloaded."
+    return f"Plugin '{name}' activated. {_format_load_status(loader.get_load_errors())}"
 
 
 @tool
@@ -959,11 +1070,22 @@ def plugin_import_update(name: str) -> str:
     except Exception:
         pass
     loader.load_all()
+    load_errors = loader.get_load_errors()
 
     return (
         f"Updated '{result['name']}' ({result['old_commit']} → {result['new_commit']}). "
-        f"Tools reloaded."
+        f"{_format_load_status(load_errors)}"
     )
+
+
+def _format_load_status(load_errors: dict[str, str]) -> str:
+    """Return a user-facing plugin load status summary."""
+    if not load_errors:
+        return "Plugins loaded and available."
+    lines = ["Some plugins were blocked by loader policy:"]
+    for rel_key, error in sorted(load_errors.items()):
+        lines.append(f"- `{rel_key}` — {error}")
+    return "\n".join(lines)
 
 
 @tool

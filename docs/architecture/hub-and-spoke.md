@@ -2,7 +2,7 @@
 
 [← Architecture](README.md)
 
-Prax uses a hub-and-spoke model: the orchestrator holds ~44 tools (kernel + planning/meta + trace introspection + `delegate_*` per spoke) and delegates domain-specific work to focused spoke agents.  This keeps the orchestrator's context lean — [research shows](../research/production-patterns.md#9-tool-overload-and-selection-degradation) that tool selection accuracy degrades significantly past 20–50 tools, with Anthropic documenting a hard cliff around 50.
+Prax uses a hub-and-spoke model: the orchestrator stays near the 50-tool ceiling (kernel + planning/meta + trace introspection + `delegate_*` per spoke + a tiny core-reviewed plugin promotion allowlist) and delegates domain-specific work to focused spoke agents.  This keeps the orchestrator's context lean — [research shows](../research/production-patterns.md#9-tool-overload-and-selection-degradation) that tool selection accuracy degrades significantly past 20–50 tools, with Anthropic documenting a hard cliff around 50.
 
 > **Fallback:** If a delegated agent fails or can't handle the task, Prax can read the full tool catalog from a generated markdown file and call any tool directly. The spoke system is the fast path; direct tool access is the safety net.
 
@@ -10,7 +10,7 @@ Prax uses a hub-and-spoke model: the orchestrator holds ~44 tools (kernel + plan
 
 ```mermaid
 graph TB
-    Prax["Prax Orchestrator\n~42 tools"]
+    Prax["Prax Orchestrator\nnear 50-tool ceiling"]
 
     Prax --> Core["Kernel\nsearch, datetime, URL fetch, sandbox_shell"]
     Prax --> Planning["Planning/Meta\nagent_plan, progress_*, user_notes, think, run_python, review_my_traces, trace_search, trace_detail"]
@@ -21,6 +21,7 @@ graph TB
     Prax -->|delegate_course| Course["Course Spoke"]
     Prax -->|delegate_desktop| Desktop["Desktop Spoke"]
     Prax -->|delegate_environment| Environment["Environment Spoke\nweather + local conditions"]
+    Prax -->|delegate_plugins| Plugins["Plugin Spoke\nmanifest-routed end-user tools"]
     Prax -->|delegate_sysadmin| Sysadmin["Sysadmin\nsub-hub"]
     Prax -->|delegate_sandbox| Sandbox["Sandbox Spoke\n+ sandbox_view/scroll/goto"]
     Prax -->|delegate_finetune| Finetune["Finetune Spoke"]
@@ -41,6 +42,7 @@ graph TB
     style Course fill:#F5A623,color:#fff
     style Desktop fill:#F5A623,color:#fff
     style Environment fill:#F5A623,color:#fff
+    style Plugins fill:#F5A623,color:#fff
     style Finetune fill:#F5A623,color:#fff
     style Knowledge fill:#F5A623,color:#fff
     style Scheduler fill:#F5A623,color:#fff
@@ -157,6 +159,23 @@ graph LR
     style Workspace fill:#7ED321,color:#fff
 ```
 
+#### Plugin Spoke
+
+Routes installed end-user plugin capabilities by `plugin.json` manifest route.
+The spoke sees tools declared as `artifact`, `media`, `utility`, `vision`, or
+`workspace`. Research-route plugins stay inside the Research spoke, and plugin
+management stays inside the Sysadmin spoke.
+
+```mermaid
+graph LR
+    Plugins["🔌 Plugin Spoke"] --> artifact["artifact tools\npresentation/video/export"]
+    Plugins --> media["media tools"]
+    Plugins --> utility["utility tools"]
+    Plugins --> vision["vision/OCR tools"]
+    Plugins --> workspace["workspace tools"]
+    style Plugins fill:#F5A623,color:#fff
+```
+
 #### Scheduler Agent
 
 Manages recurring cron jobs and one-time reminders.
@@ -175,9 +194,11 @@ graph LR
     style Scheduler fill:#BD10E0,color:#fff
 ```
 
-#### Plugin Engineering Agent
+#### Plugin Management Agent
 
-Creates, tests, and manages hot-swappable plugins.
+Creates, tests, imports, and manages hot-swappable plugins through the Sysadmin
+sub-hub. This is separate from the Plugin Spoke, which executes end-user plugin
+capabilities.
 
 ```mermaid
 graph LR
@@ -218,6 +239,7 @@ graph LR
 | `prax/agent/subagent.py` | General sub-agent delegation: spawns focused LangGraph sub-graphs with per-category LLM config |
 | `prax/agent/self_improve_agent.py` | Self-improvement sub-agent: diagnose bugs, patch via sandbox, deploy via codegen |
 | `prax/agent/plugin_fix_agent.py` | Plugin engineering sub-agent: create/fix/test/activate plugins autonomously |
+| `prax/agent/spokes/plugins/agent.py` | Plugin spoke: manifest-routed end-user plugin execution via `delegate_plugins` |
 | `prax/agent/course_author_agent.py` | Content author sub-agent: produces rich course materials (mermaid, code, LaTeX) via iterative sandbox drafting |
 | `prax/agent/tools.py` | Kernel tool wrappers (search, datetime, fetch_url) — reader tools migrated to plugins |
 | `prax/agent/plugin_tools.py` | 17 plugin management tools: plugin CRUD, catalog, prompt CRUD, LLM config, source_read/list |
@@ -229,9 +251,10 @@ graph LR
 | `prax/agent/note_tools.py` | 7 note tools (create, update, list, search, note_from_url, pdf_to_note, note_link) |
 | `prax/agent/project_tools.py` | 6 research project tools (create, status, add note/link/source, brief) |
 | `prax/agent/browser_tools.py` | 14 browser tools (navigate, click, fill, screenshot, login, VNC) |
-| `prax/agent/tool_registry.py` | Tool aggregation: built-in + plugin-provided + manually registered |
+| `prax/agent/tool_registry.py` | Tool aggregation: built-in + spoke delegates + tiny manifest-backed plugin promotions + manually registered |
 | `prax/agent/llm_factory.py` | Multi-provider LLM factory (OpenAI, Anthropic, Google, Ollama, vLLM) |
 | `prax/plugins/loader.py` | Recursive plugin discovery (folder-per-plugin + flat), hot-swap, version tracking, auto-rollback, catalog generation |
+| `prax/plugins/manifest.py` | Plugin metadata validation: identity, tool routes, risk, and requested orchestrator exposure |
 | `prax/plugins/sandbox.py` | Subprocess-isolated plugin validation before activation |
 | `prax/plugins/registry.py` | JSON-based version registry with rollback and failure monitoring |
 | `prax/plugins/repo.py` | Plugin repository service: SSH deploy key auth, clone, commit, push to private repo branch |

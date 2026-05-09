@@ -242,7 +242,8 @@ class ConversationAgent:
         "delegate_task", "delegate_parallel", "delegate_research",
         "delegate_browser", "delegate_sandbox", "delegate_sysadmin",
         "delegate_finetune", "delegate_content_editor", "delegate_knowledge",
-        "workspace_save", "workspace_patch", "note_create", "note_update",
+        "delegate_plugins", "workspace_save", "workspace_patch", "note_create",
+        "note_update",
     })
 
     # Substrings that indicate a delegation response contains a caveat /
