@@ -421,6 +421,39 @@ def audit_scheduled_task_grounding(
     }
 
 
+def decide_scheduled_briefing_action(
+    narrative: dict | None,
+    scheduled_grounding: dict | None,
+) -> str:
+    """Classify how to handle audit flags on a scheduled briefing.
+
+    Returns one of:
+      - ``"pass"``: deliver the response as-is.
+      - ``"weather_disclaimer"``: deliver, but append a weather-unavailable
+        disclosure (news content is verified; only weather is missing).
+      - ``"suppress"``: replace with the safe fallback (substantive content
+        is unverified — fabricated news risk).
+
+    Why: an earlier policy suppressed the entire briefing on *any* scheduled
+    grounding flag, which threw away verified news whenever weather couldn't
+    be resolved. Verified news + a "weather unavailable" line is strictly
+    more useful than a blanket "I'm holding this one".
+    """
+    if narrative:
+        return "suppress"
+    if not scheduled_grounding:
+        return "pass"
+    reqs = [r.lower() for r in scheduled_grounding.get("requirements") or []]
+    if not reqs:
+        return "pass"
+    news_missing = any("news" in r or "briefing" in r for r in reqs)
+    if news_missing:
+        return "suppress"
+    if all("weather" in r for r in reqs):
+        return "weather_disclaimer"
+    return "suppress"
+
+
 def audit_narrative_grounding(
     response: str,
     messages: list,

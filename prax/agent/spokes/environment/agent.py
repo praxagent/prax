@@ -28,8 +28,12 @@ _US_ZIP_URL = "https://api.zippopotam.us/us"
 
 _LOCATION_KEY_RE = re.compile(
     r"^\s*(?:[-*]\s*)?"
-    r"(?:weather[_ -]?location|current[_ -]?location|home[_ -]?location|"
-    r"location|city|home|based in|lives in|live in)\s*[:=-]\s*(.+?)\s*$",
+    # Optional descriptor words/slashes/dashes before the trigger.  Catches
+    # "weather preference/location", "current weather/location", "preferred
+    # city", etc., on top of bare "location:" / "city:".
+    r"(?:[\w/ -]*?\b)?"
+    r"(?:location|city|home|based in|lives in|live in)"
+    r"\s*[:=-]\s*(.+?)\s*$",
     re.IGNORECASE,
 )
 _LOCATION_PHRASE_RE = re.compile(

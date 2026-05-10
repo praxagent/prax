@@ -45,6 +45,37 @@ def test_resolve_location_from_user_notes(monkeypatch):
     assert "user_notes.md" in result
 
 
+def test_location_key_regex_accepts_descriptor_prefixes():
+    """Real-world user_notes lines use varied phrasings.
+
+    The regression here was: a user with `weather preference/location: Tustin, CA`
+    in user_notes.md silently failed to resolve, so weather kept being skipped on
+    scheduled briefings.  The regex must accept descriptor words/slashes before
+    the trigger word (location, city, etc.).
+    """
+    from prax.agent.spokes.environment.agent import _LOCATION_KEY_RE
+
+    cases = {
+        "weather preference/location: Tustin, CA": "Tustin, CA",
+        "current weather/location: Tustin, CA": "Tustin, CA",
+        "preferred city: Boston": "Boston",
+        "my home city: Boston": "Boston",
+        # Existing accepted formats must keep working.
+        "location: Tustin, CA": "Tustin, CA",
+        "weather location: Tustin, CA": "Tustin, CA",
+        "home location: Tustin, CA": "Tustin, CA",
+        "- location: Tustin, CA": "Tustin, CA",
+        "city: Boston": "Boston",
+    }
+    for line, expected in cases.items():
+        m = _LOCATION_KEY_RE.match(line)
+        assert m is not None, f"expected match for {line!r}"
+        assert m.group(1) == expected, f"{line!r} -> {m.group(1)!r}"
+
+    # Negative: lines without `key: value` structure must not match.
+    assert _LOCATION_KEY_RE.match("Some random sentence about location.") is None
+
+
 def test_timezone_only_is_uncertain(monkeypatch):
     from prax.agent.spokes.environment import agent
     from prax.agent.user_context import current_user_id
