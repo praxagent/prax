@@ -9,6 +9,7 @@ from prax.agent.claim_audit import (
     audit_narrative_grounding,
     audit_plan_completion,
     audit_scheduled_task_grounding,
+    decide_scheduled_briefing_action,
     format_audit_warning,
 )
 
@@ -628,3 +629,67 @@ class TestPlanCompletionAlignment:
         finding = audit_plan_completion(response, messages)
         assert finding is not None
         assert finding["caveat_marker"] == "unable to"
+
+
+# ---------------------------------------------------------------------------
+# Scheduled-briefing action policy
+# ---------------------------------------------------------------------------
+
+class TestScheduledBriefingAction:
+    def test_pass_when_nothing_flagged(self):
+        assert decide_scheduled_briefing_action(None, None) == "pass"
+
+    def test_suppress_on_narrative_flag(self):
+        narrative = {"phrases": ["this morning's headlines"], "called_tools": []}
+        assert decide_scheduled_briefing_action(narrative, None) == "suppress"
+
+    def test_suppress_when_news_missing(self):
+        # News-floor failures mean the briefing's spine is unverified.
+        sg = {
+            "missing_grounding": True,
+            "called_tools": ["background_search_tool"],
+            "successful_tools": ["background_search_tool"],
+            "requirements": [
+                "news/briefing requested but no successful news, research, "
+                "browser, summary, or URL-fetch tool result was available; "
+                "background_search_tool alone is not sufficient",
+            ],
+        }
+        assert decide_scheduled_briefing_action(None, sg) == "suppress"
+
+    def test_weather_disclaimer_when_only_weather_missing(self):
+        # The exact failure mode from the 2026-05-10 trace: news fetched,
+        # weather skipped — verified content shouldn't be discarded.
+        sg = {
+            "missing_grounding": True,
+            "called_tools": ["delegate_research"],
+            "successful_tools": ["delegate_research"],
+            "requirements": [
+                "weather requested but no successful weather tool, "
+                "authoritative weather fetch, or explicit weather-unavailable "
+                "disclosure was present",
+            ],
+        }
+        assert (
+            decide_scheduled_briefing_action(None, sg) == "weather_disclaimer"
+        )
+
+    def test_suppress_when_both_news_and_weather_missing(self):
+        sg = {
+            "requirements": [
+                "news/briefing requested but no successful news ...",
+                "weather requested but no successful weather tool ...",
+            ],
+        }
+        assert decide_scheduled_briefing_action(None, sg) == "suppress"
+
+    def test_narrative_wins_over_weather_only(self):
+        # Even if the grounding flag is weather-only, ungrounded narrative
+        # claims still warrant suppression.
+        narrative = {"phrases": ["this morning's headlines"], "called_tools": []}
+        sg = {"requirements": ["weather requested but no successful weather tool"]}
+        assert decide_scheduled_briefing_action(narrative, sg) == "suppress"
+
+    def test_empty_requirements_treated_as_pass(self):
+        # Defensive: a flagged dict with no requirements shouldn't suppress.
+        assert decide_scheduled_briefing_action(None, {"requirements": []}) == "pass"

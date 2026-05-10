@@ -1342,6 +1342,7 @@ class ConversationAgent:
                 audit_narrative_grounding,
                 audit_plan_completion,
                 audit_scheduled_task_grounding,
+                decide_scheduled_briefing_action,
                 format_audit_warning,
             )
             from prax.services.teamwork_hooks import (
@@ -1421,23 +1422,38 @@ class ConversationAgent:
                     except Exception:
                         pass
 
-                # BLOCKING substitution for scheduled tasks with narrative
-                # hallucinations. The user is not present to correct — better
-                # to deliver nothing substantive than fabricated news.
-                if scheduled and (narrative or scheduled_grounding):
-                    logger.error(
-                        "BLOCKING scheduled-task response due to ungrounded "
-                        "narrative claims (user=%s): %s",
-                        user_id, warning,
+                # Scheduled-task policy: classify the failure rather than
+                # blanket-suppressing.  Verified news + a "weather
+                # unavailable" line is strictly more useful than throwing
+                # away a real briefing because we couldn't resolve a city.
+                if scheduled:
+                    action = decide_scheduled_briefing_action(
+                        narrative, scheduled_grounding,
                     )
-                    return (
-                        "[Auto-suppressed scheduled briefing]\n\n"
-                        "I couldn't fetch fresh news or weather data for "
-                        "today's briefing — rather than send you made-up "
-                        "content, I'm holding this one. Ask me for a "
-                        "briefing when you have a moment and I'll try again "
-                        "with live research."
-                    )
+                    if action == "suppress":
+                        logger.error(
+                            "BLOCKING scheduled-task response due to "
+                            "unverified substantive content "
+                            "(user=%s): %s", user_id, warning,
+                        )
+                        return (
+                            "[Auto-suppressed scheduled briefing]\n\n"
+                            "I couldn't verify the source data for today's "
+                            "briefing — rather than send you made-up "
+                            "content, I'm holding this one. Ask me for a "
+                            "briefing when you have a moment and I'll try "
+                            "again with live research."
+                        )
+                    if action == "weather_disclaimer":
+                        logger.warning(
+                            "Scheduled briefing missing weather only; "
+                            "appending disclaimer (user=%s)", user_id,
+                        )
+                        return response.rstrip() + (
+                            "\n\n_Weather is unavailable today — I "
+                            "couldn't resolve a location for a live "
+                            "forecast._"
+                        )
             else:
                 push_live_output("Auditor", "No claims flagged.\n", status="completed")
                 log_activity("Auditor", "audit", "Claim audit passed — no issues found")
