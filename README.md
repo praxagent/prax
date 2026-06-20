@@ -6,7 +6,9 @@
 
 97+ built-in tools, extensible via self-modifying plugins. Git-backed memory. Runs on your own server.
 
-Includes [**TeamWork**](https://github.com/praxagent/teamwork) — a Slack-like web UI with real-time chat, Kanban board, file browser, terminal, and browser screencast.
+Designed to work with the optional [**TeamWork**](https://github.com/praxagent/teamwork) — a Slack-like web UI with real-time chat, Kanban board, file browser, terminal, and browser screencast.
+
+Designed to work with the optional [**prax-sandbox**](https://github.com/praxagent/prax-sandbox) — a plug-and-play code-execution sandbox: a long-running Docker container running the coding agents (OpenCode / Claude Code / Codex), a headless + desktop Chromium (CDP + noVNC), and a full toolchain (TeX, ffmpeg, pandoc, hugo, …).
 
 <img src="assets/prax-header-image.png" alt="Prax">
 
