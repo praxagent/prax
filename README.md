@@ -8,9 +8,7 @@
 
 Includes [**TeamWork**](https://github.com/praxagent/teamwork) — a Slack-like web UI with real-time chat, Kanban board, file browser, terminal, and browser screencast.
 
-<img src="assets/prax_discord_example.jpg" alt="Prax on Discord" width="360">
-
-*Prax remembering your timezone, fetching NPR news, and managing your workspace — all from Discord.*
+<img src="assets/prax-header-image.png" alt="Prax">
 
 </div>
 
