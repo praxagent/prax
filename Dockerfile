@@ -116,6 +116,10 @@ RUN pip install --no-cache-dir /build/teamwork && rm -rf /build/teamwork
 # ── 9. Install Prax Python app ──────────────────────────────────────
 RUN mkdir /app/logs
 
+# The sandbox tooling is a sibling repo, brought in via additional_contexts.
+# Copy it to /prax-sandbox so the "../prax-sandbox" path dependency (relative to
+# /app/pyproject.toml) resolves during uv sync.
+COPY --from=prax-sandbox . /prax-sandbox
 COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-dev
 

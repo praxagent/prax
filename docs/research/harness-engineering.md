@@ -2,6 +2,11 @@
 
 [← Research](README.md)
 
+> **See also:** [Reliable Agentic AI Systems — the Bayer/PRINCE case study, mapped to
+> Prax](reliable-agentic-systems-bayer.md) reaches this same "harness + context
+> engineering" thesis from a regulated-RAG angle, and includes an evidence-checked
+> alignment matrix of that article's principles against Prax's shipped code.
+
 Three recent publications (SWE-agent 2024, Anthropic Nov 2025, OpenAI Feb 2026) converge on the same thesis: **the durable moat in applied AI is the harness, not the model**. The coding agent itself — Claude Code, Codex, Gemini CLI — is becoming a commodity; what differentiates teams is the environment they've built around it. This note summarises the three canonical write-ups and the community taxonomy that catalogues the ecosystem, and maps each finding to Prax's current state.
 
 ### 28. Agent-Computer Interface (ACI) — interface design as cognitive architecture

@@ -15,7 +15,6 @@ services:
       - ./config.py:/app/config.py
       - ./scripts:/app/scripts
       - ./tests:/app/tests
-      - ./sandbox:/app/sandbox
       # Git repo needed for self-improve deploys (must be read-write for commits).
       - ./.git:/app/.git
     environment:

@@ -9,9 +9,9 @@ Consolidated into 2 tools to stay within API tool count limits.
 from __future__ import annotations
 
 from langchain_core.tools import tool
+from prax_sandbox import cdp_service
 
 from prax.agent.action_policy import RiskLevel, risk_tool
-from prax.services import cdp_service
 
 
 @tool

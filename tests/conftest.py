@@ -83,4 +83,15 @@ def configure_test_env(monkeypatch, tmp_path):
                 monkeypatch.setattr(mod, "settings", new_settings)
             except Exception:
                 pass
+
+    # Circuit breakers live in a process-global registry
+    # (prax.agent.circuit_breaker._breakers).  Reset them before each test so
+    # accumulated LLM-call failures from one test don't leave a breaker OPEN and
+    # mask another test's assertions — e.g. build_llm()'s provider-validation
+    # raising ConnectionError ("breaker OPEN") instead of ValueError.
+    try:
+        from prax.agent.circuit_breaker import reset_all as _reset_breakers
+        _reset_breakers()
+    except Exception:
+        pass
     yield

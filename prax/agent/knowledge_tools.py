@@ -176,6 +176,68 @@ def knowledge_connect(concept: str, memory_entity: str) -> str:
     )
 
 
+@tool
+def knowledge_export_okf(namespace: str, dest: str = "") -> str:
+    """Export a knowledge namespace as a portable Open Knowledge Format (OKF) bundle.
+
+    Writes the namespace's concepts and their relations as plain markdown files with
+    YAML frontmatter (one file per concept, cross-linked, plus index.md + log.md) under
+    the workspace — git-versioned and shareable. Interoperable with any OKF tool.
+
+    Args:
+        namespace: The knowledge namespace to export.
+        dest: Workspace-relative output directory (default: ``okf/{namespace}``).
+    """
+    from prax.services.memory.knowledge_graph import export_namespace_okf
+    from prax.services.workspace_service import ensure_workspace, git_commit, safe_join
+
+    rel = dest or f"okf/{namespace}"
+    try:
+        root = ensure_workspace(_uid())
+        dest_abs = safe_join(root, rel)
+        result = export_namespace_okf(_uid(), namespace, dest_abs)
+        git_commit(root, f"Export OKF bundle for namespace '{namespace}'")
+    except Exception as e:
+        return f"OKF export failed: {e}"
+    if result["concepts"] == 0:
+        return f"Namespace '{namespace}' has no concepts to export."
+    return (
+        f"Exported namespace '{namespace}' as OKF → {rel}: "
+        f"{result['concepts']} concepts, {result['relations']} relations."
+    )
+
+
+@tool
+def knowledge_import_okf(path: str, namespace: str = "imported") -> str:
+    """Import an Open Knowledge Format (OKF) bundle into the knowledge graph.
+
+    Reads a directory of OKF markdown files (frontmatter + cross-links) from the
+    workspace and loads each concept (vector-indexed) plus its link relations.
+
+    Args:
+        path: Workspace-relative directory containing the OKF bundle.
+        namespace: Knowledge namespace to import into (default: "imported").
+    """
+    from prax.services.memory.knowledge_graph import import_okf
+    from prax.services.workspace_service import safe_join, workspace_root
+
+    try:
+        root = workspace_root(_uid())
+        src_abs = safe_join(root, path)
+        result = import_okf(_uid(), src_abs, namespace)
+    except Exception as e:
+        return f"OKF import failed: {e}"
+    if result["concepts"] == 0:
+        return f"No OKF concepts found at '{path}'."
+    return (
+        f"Imported OKF bundle from '{path}': {result['concepts']} concepts, "
+        f"{result['relations']} relations into namespace '{namespace}'."
+    )
+
+
 def build_knowledge_tools() -> list:
     """Return knowledge graph tools."""
-    return [knowledge_ingest, knowledge_search, knowledge_namespaces, knowledge_connect]
+    return [
+        knowledge_ingest, knowledge_search, knowledge_namespaces, knowledge_connect,
+        knowledge_export_okf, knowledge_import_okf,
+    ]

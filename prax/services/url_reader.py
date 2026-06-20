@@ -62,6 +62,14 @@ def fetch_markdown(
     a typical long-form article while still fitting comfortably in a
     deep-dive writer's context.
     """
+    # SSRF guard: reject internal/metadata targets before handing the URL to
+    # the reader (defense-in-depth — don't make the fetcher a confused deputy).
+    try:
+        from prax.utils.ssrf import SSRFError, validate_url
+        validate_url(url)
+    except SSRFError as exc:
+        raise ReaderError(f"Refusing to fetch blocked URL: {exc}") from exc
+
     try:
         resp = requests.get(
             f"{_READER_BASE}{url}",

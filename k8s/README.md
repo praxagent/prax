@@ -427,7 +427,8 @@ k9s gives you real-time pod status, logs, shell access, and resource usage — a
 ```bash
 # From the prax repo root
 docker build -t prax-app:latest .
-docker build -t prax-sandbox:latest ./sandbox/
+# The sandbox now lives in the sibling prax-sandbox repo:
+( cd ../prax-sandbox && make build )            # -> prax-sandbox:latest
 docker build -t teamwork:latest ../teamwork/
 
 # Load into k3s (k3s uses containerd, not Docker)

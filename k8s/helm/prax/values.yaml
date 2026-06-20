@@ -55,6 +55,13 @@ app:
       cpu: "1000m"
 
 sandbox:
+  # In-cluster sandbox StatefulSet (the default). Set false to use a remote
+  # control daemon instead (set sandbox.daemon.url) — no in-cluster sandbox is
+  # created and the app talks to the daemon over TLS + bearer.
+  inCluster: true
+  daemon:
+    url: ""              # e.g. https://sandbox-daemon:8843  (empty => in-cluster)
+    tlsVerify: "true"    # true | false | path to a mounted CA bundle
   replicas: 1
   resources:
     requests:
@@ -155,6 +162,7 @@ secrets:
   twilioAuthToken: ""
   discordBotToken: ""
   neo4jPassword: "prax-memory"
+  sandboxDaemonToken: ""   # bearer for a remote sandbox daemon (sandbox.daemon.url)
   teamworkApiKey: ""
   praxSshKeyB64: ""
   nytUsername: ""

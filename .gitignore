@@ -70,6 +70,7 @@ db.sqlite3-journal
 *.pdf
 
 # ---- Prax runtime / state ----
+.local-run/
 conversations.db
 app.log
 .ngrok_url

@@ -75,17 +75,18 @@ def build_tools() -> list:
 
 @tool
 def delegate_course(task: str) -> str:
-    """Delegate a course/education task to the Course Agent.
+    """Delegate LEGACY course management / publishing to the Course Agent.
 
-    The Course Agent creates and manages structured educational courses.
-    Use this for:
-    - "Create a course on linear algebra"
-    - "Check progress on the Python course"
-    - "Publish the completed course"
-    - "Update module 3 with practice problems"
+    For teaching the user something new — "teach me X", "make me a course on
+    X", running lessons, adaptive difficulty, or pop quizzes — use
+    **`delegate_professor`** instead (the adaptive, persona-led Faculty). This
+    Course Agent is for the older course system and publishing:
+    - "Publish my course as a website/blog"
+    - Managing or editing a pre-existing legacy `courses/` course
+    - One-shot creation of a plain Library learning space (no adaptive professor)
 
     Args:
-        task: Description of the course task.
+        task: Description of the legacy course/publishing task.
     """
     prompt = SYSTEM_PROMPT.format(agent_name=settings.agent_name)
     return run_spoke(

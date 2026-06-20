@@ -58,9 +58,13 @@ Prax will **refuse to start** without `PRAX_USER_ID` when running in Docker. On 
 
 ```bash
 docker compose -f docker-compose.lite.yml up --build
+
+# …or with remote access over Tailscale (opt-in profile; set TS_AUTHKEY +
+# TS_HOSTNAME in .env first — see "Remote access" below):
+COMPOSE_PROFILES=tailscale docker compose -f docker-compose.lite.yml up --build
 ```
 
-**2 containers.** Bundles Prax + TeamWork + Qdrant + Neo4j + ngrok into a single image alongside the sandbox. Uses ~2-3GB RAM total. Best for local development and resource-constrained machines.
+**2 containers.** Bundles Prax + TeamWork + Qdrant + Neo4j + ngrok into a single image alongside the sandbox. Uses ~2-3GB RAM total. Best for local development and resource-constrained machines. The Tailscale sidecar is opt-in: it only starts with `COMPOSE_PROFILES=tailscale` **and** `TS_AUTHKEY` set, never by default.
 
 #### Full mode (recommended for servers)
 
@@ -211,21 +215,159 @@ ssh -L 3000:localhost:3000 <remote-host>
 # Visit: http://localhost:3000/
 ```
 
-### Local development
+### Run without Docker
+
+The Docker image bundles Prax + TeamWork + Qdrant + Neo4j into one container. To run without Docker you start each of those pieces yourself. This is the path for local development and for machines where you'd rather not run Docker.
+
+**Shortcut — `make` targets.** Once the prerequisites below are in place, you don't have to start each piece by hand:
+
+```bash
+make run-local-min    # Prax core only, foreground — memory/sandbox/TeamWork all OFF (Ctrl-C to stop)
+make run-local-all    # full no-Docker stack in the background: Qdrant + Neo4j + TeamWork + Prax
+make local-status     # probe each service's port, report up/down
+make local-logs       # tail -F every .local-run/*.log
+make shutdown         # stop everything run-local-all started
+```
+
+`run-local-all` is opinionated — memory **on**, TeamWork **on**, sandbox **off** (the sandbox is Docker-only). PIDs and logs land in `.local-run/`. Each backing service is skipped with a warning (never a hard failure) if its binary isn't found: `qdrant` (or `./qdrant`), `neo4j`, and a sibling TeamWork checkout — override its location with `make run-local-all TEAMWORK_PATH=/path/to/teamwork`. The manual steps below are exactly what those targets automate, in case you want to run a piece yourself.
+
+**Prerequisites**
+
+- **Python 3.13** and [**uv**](https://docs.astral.sh/uv/) (the package manager — not pip)
+- For memory (on by default): **Qdrant** and **Neo4j** running locally. You can skip these entirely with `MEMORY_ENABLED=false` (STM still works; LTM degrades silently).
+- *Optional:* Ollama (only if you set `EMBEDDING_PROVIDER=ollama`); Docker (only for the code-execution sandbox — see the caveat below).
+
+**Installing the dev toolchain (Ubuntu)**
+
+`uv` runs the app and tests; `actionlint` is needed by `make ci`. Both install into `~/.local/bin` — make sure it's on your `PATH`.
+
+```bash
+# uv — the package manager (run/sync/test)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# actionlint — GitHub-workflow linter, required by `make ci`
+# Option A — build from source (needs Go ≥ 1.25):
+GOBIN="$HOME/.local/bin" go install github.com/rhysd/actionlint/cmd/actionlint@latest
+# Option B — no Go? grab a prebuilt binary (see https://github.com/rhysd/actionlint/blob/main/docs/install.md):
+#   bash <(curl -s https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) latest "$HOME/.local/bin"
+```
+
+With both on your `PATH`, **`make ci`** (actionlint + `ruff` + the layer linter + pytest) is the pre-commit gate — green locally means green in CI. To run the sandbox with or without it, see [`SANDBOX_ENABLED`](#sandbox-caveat).
+
+#### 1. Install Prax
 
 ```bash
 git clone https://github.com/praxagent/prax.git && cd prax
-uv sync --python 3.13                    # install deps (requires uv)
-cp .env-example .env                      # configure (at minimum: OPENAI_KEY)
+uv sync --python 3.13                     # install deps into a local venv
 mkdir -p static/temp
-docker build -t prax-sandbox:latest sandbox/   # optional: code execution
-uv run python app.py                      # start Prax
+cp .env-example .env                       # then edit — see step 3
 ```
 
-Set up a channel in `.env`:
-- **TeamWork web UI (included):** runs automatically via Docker Compose — open http://localhost:3000
+#### 2. Start the backing services (memory)
+
+Prax defaults already point at localhost (`QDRANT_URL=http://localhost:6333`, `NEO4J_URI=bolt://localhost:7687`), so you just need the two datastores listening on those ports.
+
+**Qdrant** — single static binary, no dependencies ([releases](https://github.com/qdrant/qdrant/releases)):
+
+```bash
+./qdrant                                   # serves HTTP on :6333, gRPC on :6334
+```
+
+**Neo4j** — Community Edition 5.x, requires a JDK 21 on the host ([download](https://neo4j.com/deployment-center/)). Set the password Prax expects and enable the APOC plugin:
+
+```bash
+neo4j-admin dbms set-initial-password prax-memory   # matches NEO4J_PASSWORD default
+# enable APOC: copy the bundled apoc jar from labs/ into plugins/, then:
+neo4j console                              # Bolt on :7687, browser UI on :7474
+```
+
+> Prefer not to install these directly? You can run just the two datastores as standalone containers and still run Prax itself without Docker:
+> ```bash
+> docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant
+> docker run -p 7474:7474 -p 7687:7687 -e NEO4J_AUTH=neo4j/prax-memory -e NEO4J_PLUGINS='["apoc"]' neo4j:5
+> ```
+> Or skip memory altogether: set `MEMORY_ENABLED=false` in `.env` and skip this step.
+
+#### 3. Configure `.env`
+
+At minimum:
+
+| Variable | Required? | Notes |
+|----------|-----------|-------|
+| `FLASK_SECRET_KEY` | **Yes** | Hard requirement — Prax won't import settings without it. Use any strong random string. |
+| `OPENAI_KEY` | Yes (or `ANTHROPIC_KEY`) | LLM provider. `OPENAI_KEY` also covers the default embeddings. |
+| `PRAX_USER_ID` | No (without Docker) | Only required in Docker. Without it, Prax defaults to a local workspace. |
+| `RUNNING_IN_DOCKER` | **Leave unset** | Setting this flips on Docker-only code paths (the `PRAX_USER_ID` guard, the persistent-sandbox sidecar). Keep it out of your `.env`. |
+| `NEO4J_PASSWORD` | No | Defaults to `prax-memory` — match whatever you set in step 2. |
+
+#### 4. Run Prax
+
+```bash
+uv run python app.py                       # serves the Flask API on http://localhost:5001
+```
+
+That's a fully working Prax over **Discord / SMS / voice**. The TeamWork web UI is a separate process — see below.
+
+#### 5. (Optional) Run TeamWork without Docker
+
+TeamWork is **off by default** in this setup (`TEAMWORK_ENABLED=false`). To use the web UI without Docker, run its repo separately:
+
+```bash
+git clone https://github.com/praxagent/teamwork.git ../teamwork && cd ../teamwork
+# build the frontend (Node 22+):
+cd frontend && npm ci && npm run build && cd ..
+# start the backend (FastAPI/uvicorn on :8000):
+DATABASE_URL="sqlite+aiosqlite:///./vteam.db" \
+WORKSPACE_PATH="$(pwd)/../prax/workspaces" \
+PRAX_URL="http://localhost:5001" \
+CORS_ORIGINS='["http://localhost:3000","http://localhost:5173"]' \
+python -m teamwork.cli
+```
+
+Then point Prax at it — add to **Prax's** `.env` and restart `app.py`:
+
+```env
+TEAMWORK_ENABLED=true
+TEAMWORK_URL=http://localhost:8000
+```
+
+For frontend hot-reload during development, run `npm run dev` in `teamwork/frontend` (Vite on **:5173**, proxies `/api` and `/ws` to the backend on :8000) instead of building static assets.
+
+> **Note:** TeamWork's in-browser terminal `docker exec`s into the sandbox container, so it expects Docker. Running TeamWork without Docker gives you chat, Kanban, file browser, and execution graphs; the terminal/desktop/browser tabs need the sandbox (next caveat).
+
+#### Sandbox caveat
+
+The code-execution sandbox is itself a Docker container — and it now lives in its own repo, [**prax-sandbox**](https://github.com/praxagent/prax-sandbox) (a sibling directory; Prax depends on it as `prax_sandbox_client`). So "fully Docker-free" means **no sandbox**: set `SANDBOX_ENABLED=false` (or simply don't run the sandbox container) and Prax runs as a pure harness — sandbox features (package auto-install, the coding agents OpenCode / Claude Code / Codex, the in-browser terminal, the noVNC desktop, the Chrome screencast, `run_python`, and the `delegate_sandbox` / `delegate_desktop` spokes) are unavailable, and no sandbox tools are registered. Core Prax (chat, memory, notes, scheduling, channels) runs fine without it. To run a sandbox locally, build its image from the sibling repo (`docker compose up` does this automatically; or `cd ../prax-sandbox && make build`). To run it on a **remote box**, see [providing Prax a sandbox](docs/infrastructure/sandbox.md) and the prax-sandbox repo's `docs/remote.md`.
+
+#### Ports
+
+| Port | Service | Started by |
+|------|---------|-----------|
+| **5001** | Prax Flask API | `uv run python app.py` |
+| **6333 / 6334** | Qdrant HTTP / gRPC | you (step 2) |
+| **7687 / 7474** | Neo4j Bolt / browser UI | you (step 2) |
+| **8000** | TeamWork API (+ Swagger at `/docs`) | TeamWork backend (step 5) |
+| **3000** | TeamWork web UI | TeamWork (served from :8000 build, or Vite proxy) |
+| **5173** | TeamWork Vite dev server | `npm run dev` (frontend dev only) |
+| **11434** | Ollama | you (only if `EMBEDDING_PROVIDER=ollama`) |
+
+#### Channels
+
+Set up a channel in Prax's `.env`:
+- **TeamWork web UI:** run it separately (step 5), then open http://localhost:3000
 - **Discord (free):** `DISCORD_BOT_TOKEN` + `DISCORD_ALLOWED_USERS`
 - **Twilio (paid):** `TWILIO_ACCOUNT_SID` + `TWILIO_AUTH_TOKEN` + `NGROK_URL`
+
+#### Remote access
+
+The [Tailscale / HTTPS](#remote-access-tailscale--https) options below also apply without Docker, with one adjustment: the Docker-oriented commands assume the container's host ports (`:3000`, `:3002`), but here Prax serves on `:5001` and TeamWork on `:8000`. Substitute accordingly.
+
+- **SSH tunnel** — works unchanged; just forward those ports:
+  ```bash
+  ssh -L 8000:localhost:8000 -L 5001:localhost:5001 <remote-host>
+  # then open http://localhost:8000 (TeamWork) — localhost is a secure context, so the Desktop/Browser tabs work
+  ```
+- **Tailscale** — the `make tailscale-*` targets and the sidecar's [`serve-config.json`](tailscale/serve-config.json) map to the Docker ports; point them at `:8000`/`:5001` instead before using them without Docker.
 
 ---
 
@@ -287,7 +429,7 @@ Agent delegation (spoke agents, sub-hubs), self-improving fine-tuning (vLLM + Un
 
 ### [Infrastructure](docs/infrastructure/README.md)
 
-Docker sandbox with OpenCode, VNC desktop environment with computer-use tools (xdotool + scrot), Playwright browser automation (CDP + Playwright, VNC login, persistent profiles), Grafana observability stack (Tempo traces, Prometheus metrics, Loki logs — `--profile observability`), two-layer memory system (STM + LTM with Qdrant, Neo4j, hybrid retrieval), and Docker Compose configuration.
+How to provide Prax a sandbox (local or remote — the sandbox itself lives in the separate [prax-sandbox](https://github.com/praxagent/prax-sandbox) repo), Playwright browser automation, Grafana observability stack (Tempo traces, Prometheus metrics, Loki logs — `--profile observability`), two-layer memory system (STM + LTM with Qdrant, Neo4j, hybrid retrieval), and Docker Compose configuration.
 
 ### [Security](docs/security/README.md)
 
@@ -340,7 +482,7 @@ Resolved failures stay as permanent regression guards — every fix adds a test 
 
 ## Coding Agents
 
-The sandbox container has three coding agents installed: **Claude Code** (Anthropic), **Codex** (OpenAI), and **OpenCode** (multi-provider). **VS Code** is also installed on the sandbox desktop for interactive editing via the VNC display. Prax uses these for self-improvement tasks — bug fixes, refactors, new features.
+The sandbox image (in the separate [prax-sandbox](https://github.com/praxagent/prax-sandbox) repo) ships three coding agents — **Claude Code** (Anthropic), **Codex** (OpenAI), and **OpenCode** (multi-provider) — plus **VS Code** on the desktop. Prax uses these for self-improvement tasks (bug fixes, refactors, new features); the settings below are the Prax-side wiring.
 
 ### Setup
 

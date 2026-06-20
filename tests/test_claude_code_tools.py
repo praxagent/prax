@@ -42,7 +42,7 @@ class TestRunCodingAgent:
             "cost_usd": 0.005,
         }
         with patch(
-            "prax.agent.claude_code_tools.sandbox_service.run_shell",
+            "prax_sandbox.control_plane.run_shell",
             return_value={"stdout": json.dumps(data), "stderr": "", "exit_code": 0},
         ):
             result = _run_coding_agent("fix the bug")
@@ -53,7 +53,7 @@ class TestRunCodingAgent:
     def test_handles_plain_string_result(self):
         data = {"result": "Done.", "session_id": "conv-456"}
         with patch(
-            "prax.agent.claude_code_tools.sandbox_service.run_shell",
+            "prax_sandbox.control_plane.run_shell",
             return_value={"stdout": json.dumps(data), "stderr": "", "exit_code": 0},
         ):
             result = _run_coding_agent("do something")
@@ -61,7 +61,7 @@ class TestRunCodingAgent:
 
     def test_handles_non_json_output(self):
         with patch(
-            "prax.agent.claude_code_tools.sandbox_service.run_shell",
+            "prax_sandbox.control_plane.run_shell",
             return_value={"stdout": "raw text output", "stderr": "", "exit_code": 0},
         ):
             result = _run_coding_agent("do something")
@@ -69,7 +69,7 @@ class TestRunCodingAgent:
 
     def test_handles_sandbox_error(self):
         with patch(
-            "prax.agent.claude_code_tools.sandbox_service.run_shell",
+            "prax_sandbox.control_plane.run_shell",
             return_value={"error": "container not running"},
         ):
             result = _run_coding_agent("do something")
@@ -77,7 +77,7 @@ class TestRunCodingAgent:
 
     def test_handles_nonzero_exit(self):
         with patch(
-            "prax.agent.claude_code_tools.sandbox_service.run_shell",
+            "prax_sandbox.control_plane.run_shell",
             return_value={"stdout": "", "stderr": "command not found", "exit_code": 127},
         ):
             result = _run_coding_agent("do something")
@@ -87,7 +87,7 @@ class TestRunCodingAgent:
     def test_resume_adds_flag(self):
         data = {"result": "Resumed.", "session_id": "conv-789"}
         with patch(
-            "prax.agent.claude_code_tools.sandbox_service.run_shell",
+            "prax_sandbox.control_plane.run_shell",
             return_value={"stdout": json.dumps(data), "stderr": "", "exit_code": 0},
         ) as mock_run:
             _run_coding_agent("continue", resume_id="conv-789")
@@ -134,7 +134,7 @@ class TestStartSession:
             "session_id": "conv-abc",
         }
         with patch(
-            "prax.agent.claude_code_tools.sandbox_service.run_shell",
+            "prax_sandbox.control_plane.run_shell",
             return_value={"stdout": json.dumps(data), "stderr": "", "exit_code": 0},
         ):
             result = claude_code_start_session.invoke({"context": "fix a bug"})
@@ -150,7 +150,7 @@ class TestMessage:
     def test_success(self):
         data = {"result": "Done!", "session_id": "conv-abc", "cost_usd": 0.003}
         with patch(
-            "prax.agent.claude_code_tools.sandbox_service.run_shell",
+            "prax_sandbox.control_plane.run_shell",
             return_value={"stdout": json.dumps(data), "stderr": "", "exit_code": 0},
         ):
             result = claude_code_message.invoke({
@@ -164,7 +164,7 @@ class TestAsk:
     def test_success(self):
         data = {"result": "v1.2.3"}
         with patch(
-            "prax.agent.claude_code_tools.sandbox_service.run_shell",
+            "prax_sandbox.control_plane.run_shell",
             return_value={"stdout": json.dumps(data), "stderr": "", "exit_code": 0},
         ):
             result = claude_code_ask.invoke({"prompt": "what version?"})

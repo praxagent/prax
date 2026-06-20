@@ -6,7 +6,7 @@ from prax.agent.user_context import current_user_id
 
 def test_sandbox_start(monkeypatch):
     module = importlib.reload(importlib.import_module("prax.agent.sandbox_tools"))
-    svc = importlib.import_module("prax.services.sandbox_service")
+    svc = importlib.import_module("prax_sandbox.control_plane")
 
     monkeypatch.setattr(
         svc, "start_session",
@@ -21,7 +21,7 @@ def test_sandbox_start(monkeypatch):
 
 def test_sandbox_start_error(monkeypatch):
     module = importlib.reload(importlib.import_module("prax.agent.sandbox_tools"))
-    svc = importlib.import_module("prax.services.sandbox_service")
+    svc = importlib.import_module("prax_sandbox.control_plane")
 
     monkeypatch.setattr(svc, "start_session", lambda uid, task, model=None: {"error": "Docker not available"})
     current_user_id.set("+10000000000")
@@ -32,7 +32,7 @@ def test_sandbox_start_error(monkeypatch):
 
 def test_sandbox_message(monkeypatch):
     module = importlib.reload(importlib.import_module("prax.agent.sandbox_tools"))
-    svc = importlib.import_module("prax.services.sandbox_service")
+    svc = importlib.import_module("prax_sandbox.control_plane")
 
     monkeypatch.setattr(
         svc, "send_message",
@@ -46,7 +46,7 @@ def test_sandbox_message(monkeypatch):
 
 def test_sandbox_message_with_model_switch(monkeypatch):
     module = importlib.reload(importlib.import_module("prax.agent.sandbox_tools"))
-    svc = importlib.import_module("prax.services.sandbox_service")
+    svc = importlib.import_module("prax_sandbox.control_plane")
 
     monkeypatch.setattr(
         svc, "send_message",
@@ -60,7 +60,7 @@ def test_sandbox_message_with_model_switch(monkeypatch):
 
 def test_sandbox_review(monkeypatch):
     module = importlib.reload(importlib.import_module("prax.agent.sandbox_tools"))
-    svc = importlib.import_module("prax.services.sandbox_service")
+    svc = importlib.import_module("prax_sandbox.control_plane")
 
     monkeypatch.setattr(
         svc, "review_session",
@@ -83,7 +83,7 @@ def test_sandbox_review(monkeypatch):
 
 def test_sandbox_finish(monkeypatch):
     module = importlib.reload(importlib.import_module("prax.agent.sandbox_tools"))
-    svc = importlib.import_module("prax.services.sandbox_service")
+    svc = importlib.import_module("prax_sandbox.control_plane")
 
     monkeypatch.setattr(
         svc, "finish_session",
@@ -97,7 +97,7 @@ def test_sandbox_finish(monkeypatch):
 
 def test_sandbox_abort(monkeypatch):
     module = importlib.reload(importlib.import_module("prax.agent.sandbox_tools"))
-    svc = importlib.import_module("prax.services.sandbox_service")
+    svc = importlib.import_module("prax_sandbox.control_plane")
 
     monkeypatch.setattr(svc, "abort_session", lambda uid, session_id=None: {"session_id": "abc", "status": "aborted"})
     current_user_id.set("+10000000000")
@@ -108,7 +108,7 @@ def test_sandbox_abort(monkeypatch):
 
 def test_sandbox_search(monkeypatch):
     module = importlib.reload(importlib.import_module("prax.agent.sandbox_tools"))
-    svc = importlib.import_module("prax.services.sandbox_service")
+    svc = importlib.import_module("prax_sandbox.control_plane")
 
     monkeypatch.setattr(
         svc, "search_solutions",
@@ -122,7 +122,7 @@ def test_sandbox_search(monkeypatch):
 
 def test_sandbox_search_no_results(monkeypatch):
     module = importlib.reload(importlib.import_module("prax.agent.sandbox_tools"))
-    svc = importlib.import_module("prax.services.sandbox_service")
+    svc = importlib.import_module("prax_sandbox.control_plane")
 
     monkeypatch.setattr(svc, "search_solutions", lambda uid, q: [])
     current_user_id.set("+10000000000")
@@ -133,7 +133,7 @@ def test_sandbox_search_no_results(monkeypatch):
 
 def test_sandbox_execute(monkeypatch):
     module = importlib.reload(importlib.import_module("prax.agent.sandbox_tools"))
-    svc = importlib.import_module("prax.services.sandbox_service")
+    svc = importlib.import_module("prax_sandbox.control_plane")
 
     monkeypatch.setattr(
         svc, "execute_solution",
@@ -167,7 +167,7 @@ class TestSandboxView:
 
     def _module(self, monkeypatch, total_lines: int = 250):
         module = importlib.reload(importlib.import_module("prax.agent.sandbox_tools"))
-        svc = importlib.import_module("prax.services.sandbox_service")
+        svc = importlib.import_module("prax_sandbox.control_plane")
         monkeypatch.setattr(svc, "run_shell", self._make_fake_shell(total_lines))
         current_user_id.set("+10000000000")
         return module
@@ -226,7 +226,7 @@ class TestSandboxView:
 
     def test_shell_error_propagated(self, monkeypatch):
         module = importlib.reload(importlib.import_module("prax.agent.sandbox_tools"))
-        svc = importlib.import_module("prax.services.sandbox_service")
+        svc = importlib.import_module("prax_sandbox.control_plane")
         monkeypatch.setattr(
             svc, "run_shell",
             lambda cmd, timeout=60: {"error": "container not running"},

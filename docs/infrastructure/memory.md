@@ -436,6 +436,19 @@ where `k = 60` (standard constant from Cormack et al., 2009) and `weight_i` come
 - Returned memories get their `access_count` and `interaction_epoch` updated
 - This implements the "strengthen on recall" pattern (MemoryBank, Zhong et al., 2023)
 
+#### Optional precision passes (opt-in)
+
+Two flags add recall/precision to the dense arm and the final ranking. Both default off, so
+retrieval is byte-for-byte unchanged unless enabled:
+
+| Flag | What it does |
+|---|---|
+| `RETRIEVAL_QUERY_EXPANSION` (+`RETRIEVAL_QUERY_EXPANSION_N`) | Generates a few paraphrase/HyDE variants of the query with a cheap LOW-tier model, embeds each, and **unions** their dense hits before RRF — a recall win when the query's wording differs from how the memory was stored (`retrieval._dense_arm` / `_expand_queries`). |
+| `RETRIEVAL_RERANK` (+`RETRIEVAL_RERANK_CANDIDATES`) | After fusion, an LLM-judge re-scores the top fused candidates against the query and reorders them, so a low-relevance-but-recent/important memory can't outrank an on-topic one (`retrieval._rerank`). |
+
+Both degrade gracefully — if the assist model is unavailable they fall back to the original
+order, never breaking retrieval.
+
 ---
 
 ## Knowledge Graph Namespaces
@@ -494,6 +507,33 @@ Each `KnowledgeConcept` has a `namespace` field that organizes knowledge by sour
 "What do I know about Alice?"               → memory graph (Entity nodes)
 "Connect my notes with what the research says" → cross-namespace join via REFERENCES_ENTITY
 ```
+
+### Concept search — hybrid (vector + keyword)
+
+`knowledge_search` does **hybrid** retrieval, not bare substring matching. Two arms run and
+fuse via RRF:
+
+1. **Keyword arm** — multi-variant `CONTAINS` match over name/display_name/description,
+   ordered by how many terms matched then importance (`knowledge_graph._keyword_search`).
+2. **Semantic arm** — dense+sparse vector search over concept embeddings in a dedicated
+   Qdrant collection `prax_knowledge_concepts` (`knowledge_vectors.search`).
+
+Concepts are vector-indexed automatically on `add_concept` (and dropped on
+`delete_namespace`). The arms are fused, vector-only hits are hydrated from Neo4j, and the
+top-k returned. **Graceful degradation:** when Qdrant/the embedder is unavailable, the
+semantic arm returns nothing and `knowledge_search` is exactly the keyword arm — so it always
+works, just with less recall. Controlled by `KNOWLEDGE_HYBRID_ENABLED` (default **on**).
+
+**Backfilling existing concepts:** new concepts index on write, but concepts created before
+hybrid search was enabled have no vectors yet. Run `knowledge_graph.reindex_user_concepts(user_id)`
+once to index the backlog (no-op when the vector backend is unavailable).
+
+> **Portability / interchange (OKF):** the concept graph can be exported to / imported from
+> portable [Open Knowledge Format](../research/open-knowledge-format.md) bundles (markdown +
+> YAML frontmatter, cross-linked, with `index.md`/`log.md`) via
+> `knowledge_graph.export_namespace_okf()` / `import_okf()` and the agent tools
+> `knowledge_export_okf` / `knowledge_import_okf` (`okf_bridge.py`). OKF is used as an
+> *interchange* format only — the Neo4j+Qdrant vector-hybrid model stays canonical.
 
 ### Data flow
 

@@ -106,11 +106,16 @@ def fetch_url_content(url: str) -> str:
 
 
 def build_default_tools():
-    from prax.agent.sandbox_tools import sandbox_shell
+    from prax.settings import settings
+
+    kernel = [background_search_tool, get_current_datetime, fetch_url_content]
+    if settings.sandbox_available:
+        from prax.agent.sandbox_tools import sandbox_shell
+        kernel.append(sandbox_shell)
 
     return (
         # Kernel tools — essential for basic reasoning
-        [background_search_tool, get_current_datetime, fetch_url_content, sandbox_shell]
+        kernel
         # Orchestrator-level workspace tools (planning, todos, notes, meta)
         + build_workspace_tools()
         # Image understanding — handles inbound image attachments from

@@ -23,7 +23,7 @@ import logging
 from langchain_core.tools import tool
 
 from prax.agent.action_policy import RiskLevel, risk_tool
-from prax.services import sandbox_service
+from prax.services.sandbox_bridge import configured_client as get_client
 
 logger = logging.getLogger(__name__)
 
@@ -110,9 +110,16 @@ def _run_coding_agent(prompt: str, resume_id: str | None = None, timeout: int = 
 
     Returns dict with 'response', 'conversation_id', 'cost', 'exit_code'.
     """
+    from prax.settings import settings
+    if not settings.sandbox_available:
+        return {
+            "response": "[ERROR] Coding agents require the sandbox (SANDBOX_ENABLED=false).",
+            "exit_code": -1,
+        }
+
     cmd = _build_command(prompt, resume_id)
 
-    result = sandbox_service.run_shell(
+    result = get_client().run_shell(
         f"cd /source && {cmd}",
         timeout=timeout,
     )

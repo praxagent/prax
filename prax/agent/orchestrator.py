@@ -75,7 +75,7 @@ def _load_system_prompt() -> str:
 
     mgr = get_prompt_manager()
     runtime_env = "Docker (persistent sandbox)" if settings.running_in_docker else "local"
-    if settings.sandbox_persistent:
+    if settings.sandbox_available:
         sandbox_guidance = (
             "- The sandbox is always running — no need to start it. You can install "
             "system packages with sandbox_install (e.g. sandbox_install('poppler-utils')). "
@@ -83,15 +83,15 @@ def _load_system_prompt() -> str:
             "additions, update the sandbox Dockerfile and rebuild.\n"
             "- Plugin tools that need system packages (pdflatex, ffmpeg, pdftoppm, etc.) "
             "automatically route commands to the sandbox container. Just call the plugin "
-            "tool normally — it works in both local and Docker mode."
+            "tool normally."
         )
     else:
         sandbox_guidance = (
-            "- You are running locally. The sandbox creates ephemeral Docker containers "
-            "(Docker Desktop required). Plugin tools run commands on the host directly, "
-            "so the user needs system packages installed locally (e.g. 'brew install "
-            "poppler ffmpeg'). If a plugin tool reports missing deps, guide the user "
-            "to install them."
+            "- The sandbox is disabled in this deployment. Sandbox coding sessions, "
+            "the in-browser terminal, the desktop, and run_python are unavailable, and "
+            "there is no delegate_sandbox/delegate_desktop. Plugin tools that need system "
+            "packages (pdflatex, ffmpeg, etc.) require those packages on the host; if a "
+            "plugin reports missing deps, guide the user to install them."
         )
     prompt = mgr.load("system_prompt.md", {
         "AGENT_NAME": settings.agent_name,
@@ -126,12 +126,22 @@ class ConversationAgent:
         # Default to medium.  Text-only pipelines (memory compaction,
         # session classification, entity extraction, note quality) stay
         # on low — they don't call tools.
+        self._orchestrator_tier = tier or cfg.get("tier") or "medium"
         self.llm = build_llm(
             provider=provider or cfg.get("provider"),
             model=effective_model,
             temperature=temperature if temperature is not None else cfg.get("temperature"),
-            tier=tier or cfg.get("tier") or "medium",
+            tier=self._orchestrator_tier,
         )
+        # Cross-provider failover state (engaged only when
+        # settings.llm_fallback_enabled).  Tracks the provider currently
+        # bound to self.llm and which providers have already been tried this
+        # turn so we step through the chain without looping.
+        self._primary_provider: str = (
+            provider or cfg.get("provider") or settings.default_llm_provider
+        ).lower()
+        self._active_provider: str = self._primary_provider
+        self._tried_providers: set[str] = {self._primary_provider}
         self.checkpoint_mgr = CheckpointManager()
         self.tools = get_registered_tools()
         self.graph = create_react_agent(
@@ -183,6 +193,106 @@ class ConversationAgent:
                 self.llm, self.tools, checkpointer=self.checkpoint_mgr.saver,
             )
             self._plugin_version = v
+
+    # ------------------------------------------------------------------
+    # Cross-provider failover (engaged only when settings.llm_fallback_enabled)
+    # ------------------------------------------------------------------
+
+    def _bind_provider(self, provider: str, model: str | None) -> None:
+        """Rebuild self.llm + self.graph against *provider* for the rest of the turn."""
+        self.llm = build_llm(
+            provider=provider,
+            model=model,
+            tier=self._orchestrator_tier if not model else None,
+        )
+        self.graph = create_react_agent(
+            self.llm, self.tools, checkpointer=self.checkpoint_mgr.saver,
+        )
+        self._active_provider = provider.lower()
+
+    def _reset_to_primary_provider(self) -> None:
+        """At turn start, fail back to the primary provider if we drifted off it."""
+        primary = self._primary_provider
+        self._tried_providers = {primary}
+        if self._active_provider != primary:
+            try:
+                self._bind_provider(primary, None)
+                logger.info("Reset orchestrator LLM back to primary provider '%s'", primary)
+            except Exception:
+                logger.warning("Could not reset to primary provider '%s'", primary, exc_info=True)
+
+    def _maybe_failover(self, exc: BaseException, user_id: str) -> bool:
+        """Fail over to the next configured provider if *exc* is provider-side.
+
+        Returns True when a fallback provider was activated (the caller should
+        retry), False otherwise.  No-op unless ``settings.llm_fallback_enabled``.
+        """
+        if not settings.llm_fallback_enabled:
+            return False
+        try:
+            from prax.agent.llm_fallback import get_fallback_providers, is_provider_error
+            if not is_provider_error(exc):
+                return False
+            for fb in get_fallback_providers(self._primary_provider):
+                if fb["provider"] in self._tried_providers:
+                    continue
+                self._tried_providers.add(fb["provider"])
+                logger.warning(
+                    "Provider '%s' failed (%s) — failing over to '%s'",
+                    self._active_provider, type(exc).__name__, fb["provider"],
+                )
+                self._bind_provider(fb["provider"], fb.get("model"))
+                try:
+                    from prax.services.health_telemetry import EventCategory, Severity, record_event
+                    record_event(
+                        EventCategory.RETRY, Severity.WARNING, component="orchestrator",
+                        details=f"LLM failover {self._primary_provider} -> {fb['provider']} ({type(exc).__name__})",
+                    )
+                except Exception:
+                    pass
+                return True
+        except Exception:
+            logger.debug("Failover evaluation failed", exc_info=True)
+        return False
+
+    @staticmethod
+    def _maybe_clarify(user_input: str) -> str | None:
+        """Return one clarifying question if the request is ambiguous AND risky.
+
+        Opt-in via ``settings.intent_clarification_enabled``.  Uses a cheap
+        LOW-tier model and is biased strongly toward proceeding; returns None
+        (proceed) on any uncertainty, system/scheduled inputs, or error.
+        """
+        if not settings.intent_clarification_enabled:
+            return None
+        stripped = user_input.lstrip()
+        if stripped.startswith("[SCHEDULED_TASK") or stripped.startswith("[SYSTEM"):
+            return None
+        try:
+            from langchain_core.messages import HumanMessage
+
+            from prax.agent.llm_factory import build_llm
+            llm = build_llm(default_tier="low", config_key="intent_clarifier")
+            prompt = (
+                "You are a pre-flight intent checker for an autonomous assistant. "
+                "Decide whether the user's request is BOTH genuinely ambiguous AND "
+                "potentially irreversible or costly to get wrong — such that asking "
+                "exactly ONE clarifying question first is clearly better than guessing. "
+                "Bias STRONGLY toward proceeding: only ask when a wrong guess would "
+                "waste real effort or do something hard to undo. "
+                "If the assistant should proceed, reply with exactly 'PROCEED'. "
+                "Otherwise reply with the single clarifying question and nothing else.\n\n"
+                f"Request: {user_input}"
+            )
+            resp = llm.invoke([HumanMessage(content=prompt)])
+            text = (getattr(resp, "content", "") or "").strip()
+            if not text or text.upper().startswith("PROCEED"):
+                return None
+            # Keep it to a single question.
+            return text.split("\n")[0].strip()
+        except Exception:
+            logger.debug("Intent clarification check failed; proceeding", exc_info=True)
+            return None
 
     @staticmethod
     def _classify_complexity(user_input: str) -> bool:
@@ -518,6 +628,14 @@ class ConversationAgent:
         current_user_message.set(user_input)
         current_component.set("orchestrator")
 
+        # Intent clarification pre-flight (opt-in): on an ambiguous AND
+        # potentially irreversible request, ask ONE question instead of
+        # burning the full agent loop on a guess.
+        clarification = self._maybe_clarify(user_input)
+        if clarification:
+            root_span.end(status="completed", summary="Asked a clarifying question")
+            return clarification
+
         # Initialize tool-call budget for this turn.
         from prax.agent.autonomy import get_recursion_limit
         from prax.agent.governed_tool import init_turn_budget
@@ -659,8 +777,16 @@ class ConversationAgent:
         except Exception:
             pass
 
+        base_system_prompt = _load_system_prompt()
+        if settings.prompt_selectivity_enabled:
+            try:
+                from prax.agent.prompt_selection import select_sections
+                base_system_prompt = select_sections(base_system_prompt, user_input)
+            except Exception:
+                logger.debug("Prompt selectivity failed; using full prompt", exc_info=True)
+
         full_prompt = (
-            _load_system_prompt()
+            base_system_prompt
             + temporal_context
             + workspace_context
             + memory_context
@@ -704,6 +830,10 @@ class ConversationAgent:
 
         # Start a checkpointed turn for this user.
         turn = self.checkpoint_mgr.start_turn(uid or "anonymous")
+        # If a prior turn failed over to a fallback provider, give the primary
+        # another chance this turn (its breaker fails fast if still unhealthy,
+        # and we'll fail over again if needed).
+        self._reset_to_primary_provider()
         # OTel/Prometheus callbacks: attach at the invocation level (not just
         # on the LLM instance) so both LLM and tool events dispatch through
         # LangChain's CallbackManager for the full chain.  Attaching them
@@ -825,7 +955,13 @@ class ConversationAgent:
                 ],
             }
         finally:
-            self.checkpoint_mgr.end_turn(turn.user_id)
+            # Keep a failed/timed-out turn resumable (opt-in) so the user can
+            # continue from the failure point instead of restarting from scratch.
+            keep = (
+                settings.checkpoint_resume_enabled
+                and run_status in ("failed", "timed_out")
+            )
+            self.checkpoint_mgr.end_turn(turn.user_id, keep_for_resume=keep)
             # Shut down idle plugin subprocesses after each turn.
             try:
                 from prax.plugins.bridge import shutdown_all_bridges
@@ -1000,6 +1136,49 @@ class ConversationAgent:
         msg = str(exc).lower()
         return "tool_call_id" in msg or "tool_calls" in msg and "400" in msg
 
+    def has_resumable_turn(self, user_id: str) -> bool:
+        """True if *user_id* has a failed/timed-out turn that can be resumed."""
+        return self.checkpoint_mgr.has_resumable(user_id)
+
+    def resume_last_turn(
+        self, user_id: str, nudge: str = "Please continue from where you left off.",
+    ) -> str | None:
+        """Resume a previously failed/timed-out turn from its saved checkpoints.
+
+        Continues the saved LangGraph thread (skipping completed steps) instead
+        of restarting the turn.  Returns the agent's response, or None when
+        there is nothing to resume.  Requires ``CHECKPOINT_RESUME_ENABLED``
+        (otherwise failed turns aren't retained).
+        """
+        self._rebuild_if_needed()
+        self._reset_to_primary_provider()
+        turn = self.checkpoint_mgr.resume_turn(user_id)
+        if turn is None:
+            return None
+
+        _cbs: list = []
+        try:
+            from prax.observability.callbacks import get_otel_callbacks
+            _cbs.extend(get_otel_callbacks())
+        except Exception:
+            pass
+        config = {
+            **self.checkpoint_mgr.graph_config(turn),
+            "recursion_limit": settings.agent_max_tool_calls,
+            "callbacks": _cbs,
+        }
+        try:
+            result = self._invoke_with_retry(
+                [HumanMessage(content=f"[SYSTEM] {nudge}")], config, user_id,
+            )
+        finally:
+            self.checkpoint_mgr.end_turn(user_id)
+
+        for msg in reversed(result.get("messages", [])):
+            if isinstance(msg, AIMessage) and msg.content:
+                return msg.content
+        return ""
+
     def _invoke_with_retry(
         self,
         messages: list[BaseMessage],
@@ -1083,7 +1262,10 @@ class ConversationAgent:
                     "Agent graph failed (user=%s): %s", user_id, exc,
                 )
 
-                # Multi-perspective error analysis for structured recovery
+                # Multi-perspective error analysis for structured recovery.
+                # The diagnosis is injected back into the message stream (when
+                # enabled) so the model re-plans the current trajectory WITH the
+                # diagnosis in context, instead of blindly re-running the step.
                 try:
                     from prax.agent.error_recovery import build_recovery_context
                     turn = self.checkpoint_mgr.get_turn(user_id)
@@ -1094,8 +1276,27 @@ class ConversationAgent:
                         attempt=attempt,
                     )
                     logger.info("Recovery context: %s", recovery_ctx[:200])
+                    if settings.recovery_context_injection_enabled and recovery_ctx:
+                        messages = list(messages) + [
+                            HumanMessage(content=f"[SYSTEM — recovery guidance]\n{recovery_ctx}")
+                        ]
                 except Exception:
                     pass
+
+                # Cross-provider failover: if this looks like a provider-side
+                # failure and a fallback provider is configured, rebind the
+                # graph to it and retry on a clean thread (opt-in).
+                if self._maybe_failover(exc, user_id):
+                    turn = self.checkpoint_mgr.get_turn(user_id)
+                    if turn is not None:
+                        import uuid
+                        turn.thread_id = f"{user_id}:{uuid.uuid4().hex[:12]}"
+                        config = {
+                            **self.checkpoint_mgr.graph_config(turn),
+                            "recursion_limit": settings.agent_max_tool_calls,
+                            "callbacks": _callbacks,
+                        }
+                    continue
 
                 # Record failure for metacognitive learning
                 try:
@@ -1407,6 +1608,25 @@ class ConversationAgent:
                 warning = "; ".join(flagged_parts)
                 logger.warning("Claim audit flagged response (user=%s scheduled=%s): %s",
                                user_id, scheduled, warning)
+                # Trend the guard firings so the inline checks become an
+                # alertable production signal, not just a per-turn correction.
+                _guard_types = []
+                if findings:
+                    _guard_types.append("numeric_claim")
+                if narrative:
+                    _guard_types.append("narrative")
+                if artifact_location:
+                    _guard_types.append("artifact_location")
+                if plan_mismatch:
+                    _guard_types.append("plan_completion")
+                if scheduled_grounding:
+                    _guard_types.append("scheduled_evidence_floor")
+                try:
+                    from prax.observability.metrics import HALLUCINATION_GUARD
+                    for _gt in _guard_types:
+                        HALLUCINATION_GUARD.labels(type=_gt).inc()
+                except Exception:
+                    pass
                 post_to_channel("general", f"[Claim Audit] {warning}", agent_name="Auditor")
                 push_live_output("Auditor", f"Flagged: {warning}\n", status="completed")
                 log_activity("Auditor", "audit", f"Claim audit flagged: {warning}")
@@ -1454,6 +1674,21 @@ class ConversationAgent:
                             "couldn't resolve a location for a live "
                             "forecast._"
                         )
+                elif settings.claim_audit_attended_quarantine:
+                    # Attended turn: surface the uncertainty to the user
+                    # instead of only posting it to the internal Auditor channel.
+                    _labels = {
+                        "numeric_claim": "a figure I couldn't verify against tool output",
+                        "narrative": "news/weather I couldn't confirm with a live source",
+                        "artifact_location": "a file/link location I couldn't confirm",
+                        "plan_completion": "a completion claim that may be only partial",
+                        "scheduled_evidence_floor": "insufficiently-sourced content",
+                    }
+                    reasons = "; ".join(_labels.get(t, t) for t in _guard_types) or "unverified content"
+                    response = response.rstrip() + (
+                        f"\n\n_Heads up: a self-check flagged {reasons}. "
+                        "Please double-check before relying on it._"
+                    )
             else:
                 push_live_output("Auditor", "No claims flagged.\n", status="completed")
                 log_activity("Auditor", "audit", "Claim audit passed — no issues found")

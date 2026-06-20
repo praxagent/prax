@@ -17,7 +17,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 try:
-    from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+    from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 
     LLM_CALLS = Counter(
         "prax_llm_calls_total",
@@ -57,6 +57,21 @@ try:
         ["tool"],
     )
 
+    # Hallucination/grounding guard firings (claim_audit, semantic-entropy) so
+    # the inline per-turn guards become a trended, alertable production signal.
+    HALLUCINATION_GUARD = Counter(
+        "prax_hallucination_guard_total",
+        "Times a grounding/hallucination guard fired",
+        ["type"],  # e.g. claim_audit, narrative, scheduled_briefing, semantic_entropy
+    )
+
+    # Live-traffic eval quality (reference-free), updated by the nightly job.
+    EVAL_QUALITY = Gauge(
+        "prax_eval_quality",
+        "Reference-free live-traffic eval quality (0-1), by axis",
+        ["axis"],  # overall | grounding | relevancy | correctness
+    )
+
     METRICS_AVAILABLE = True
 
 except ImportError:
@@ -67,6 +82,7 @@ except ImportError:
         def labels(self, **kwargs): return self
         def inc(self, amount=1): pass
         def observe(self, amount): pass
+        def set(self, amount): pass
 
     LLM_CALLS = _NoOp()
     LLM_TOKENS = _NoOp()
@@ -74,6 +90,8 @@ except ImportError:
     SPOKE_CALLS = _NoOp()
     SPOKE_DURATION = _NoOp()
     TOOL_CALLS = _NoOp()
+    HALLUCINATION_GUARD = _NoOp()
+    EVAL_QUALITY = _NoOp()
     CONTENT_TYPE_LATEST = "text/plain"
     METRICS_AVAILABLE = False
 

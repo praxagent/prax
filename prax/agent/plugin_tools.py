@@ -897,6 +897,19 @@ def plugin_import(repo_url: str, name: str | None = None, plugin_subfolder: str 
     # plugins yet.  The user must explicitly confirm before activation.
     warnings = result.get("security_warnings", [])
     if warnings:
+        # Hard gate: record requires-acknowledgement against the plugin's loader
+        # rel-keys so load_all() refuses to activate it until acknowledged. This
+        # makes the gate load-time-enforced, not just a prompt the model can skip.
+        try:
+            loader = get_plugin_loader()
+            from prax.services.workspace_service import get_workspace_plugins_dir
+            plugins_dir = get_workspace_plugins_dir(uid)
+            if plugins_dir:
+                loader.add_workspace_plugins_dir(plugins_dir)
+            for key in loader.discover_shared_keys(result.get("name", "")):
+                loader.registry.flag_requires_acknowledgement(key)
+        except Exception:
+            pass
         _audit_plugin_event(
             TraceEvent.PLUGIN_SECURITY_WARN, result.get("name", repo_url),
             f"warnings={len(warnings)}",
@@ -970,6 +983,14 @@ def plugin_import_activate(name: str) -> str:
             loader.add_workspace_plugins_dir(plugins_dir)
     except Exception:
         pass
+    # This call IS the explicit, confirmed acknowledgement (the tool itself is
+    # HIGH-risk, so a user confirmation gated reaching here). Clear the
+    # requires-acknowledgement flag for this plugin so the loader will activate
+    # it, using the same sanitized name the importer recorded under.
+    import re as _re
+    safe_name = _re.sub(r"[^a-zA-Z0-9_-]", "_", name)
+    for key in loader.discover_shared_keys(safe_name):
+        loader.registry.acknowledge_warnings(key)
     loader.load_all()
     return f"Plugin '{name}' activated. {_format_load_status(loader.get_load_errors())}"
 

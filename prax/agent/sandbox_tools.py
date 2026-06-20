@@ -7,7 +7,7 @@ from langchain_core.tools import tool
 
 from prax.agent.action_policy import RiskLevel, risk_tool
 from prax.agent.user_context import current_user_id
-from prax.services import sandbox_service
+from prax.services.sandbox_bridge import configured_client as get_client
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,10 @@ def sandbox_shell(command: str, timeout: int = 60) -> str:
         command: The shell command to run.
         timeout: Max seconds to wait (default 60).
     """
+    from prax.settings import settings
+    if not settings.sandbox_available:
+        return "Sandbox is disabled (SANDBOX_ENABLED=false); no shell is available."
+
     from prax.agent.user_context import current_active_view
 
     active_view = current_active_view.get()
@@ -56,7 +60,7 @@ def sandbox_shell(command: str, timeout: int = 60) -> str:
             logger.exception("sandbox_shell: terminal_exec failed, falling through to docker exec")
 
     # Default: run via docker exec and return structured output
-    result = sandbox_service.run_shell(command, timeout=timeout)
+    result = get_client().run_shell(command, timeout=timeout)
     if "error" in result:
         return f"Shell error: {result['error']}"
     parts = []
@@ -79,7 +83,8 @@ def sandbox_start(task_description: str, model: str | None = None) -> str:
     Returns the session_id — pass it to sandbox_message/review/finish/abort
     if you have multiple sessions running.
     """
-    result = sandbox_service.start_session(_get_user_id(), task_description, model=model)
+    from prax.services import sandbox_sync
+    result = sandbox_sync.start_session(get_client(), _get_user_id(), task_description, model=model)
     if "error" in result:
         return f"Failed to start sandbox: {result['error']}"
     return (
@@ -140,7 +145,7 @@ def sandbox_message(message: str, model: str | None = None, session_id: str | No
 
     If session_id is omitted, targets the most recently created session.
     """
-    result = sandbox_service.send_message(_get_user_id(), message, model=model, session_id=session_id)
+    result = get_client().send_message(_get_user_id(), message, model=model, session_id=session_id)
     if result.get("auto_aborted"):
         return (
             f"⚠️ Sandbox AUTO-ABORTED: {result['error']}. "
@@ -168,7 +173,7 @@ def sandbox_review(session_id: str | None = None) -> str:
     Shows elapsed time, files created/modified, and conversation state.
     If session_id is omitted, shows the most recent session.
     """
-    result = sandbox_service.review_session(_get_user_id(), session_id=session_id)
+    result = get_client().review_session(_get_user_id(), session_id=session_id)
     if "error" in result:
         return f"Sandbox error: {result['error']}"
     files = result.get("files", [])
@@ -195,7 +200,8 @@ def sandbox_finish(summary: str = "", session_id: str | None = None) -> str:
     archive for future reference. Provide a brief summary of what was accomplished.
     If session_id is omitted, finishes the most recent session.
     """
-    result = sandbox_service.finish_session(_get_user_id(), summary=summary, session_id=session_id)
+    from prax.services import sandbox_sync
+    result = sandbox_sync.finish_session(get_client(), _get_user_id(), summary=summary, session_id=session_id)
     if "error" in result:
         return f"Sandbox error: {result['error']}"
     path = result.get("archived_path", "unknown")
@@ -213,7 +219,7 @@ def sandbox_abort(session_id: str | None = None) -> str:
     is stuck or producing unwanted results.
     If session_id is omitted, aborts the most recent session.
     """
-    result = sandbox_service.abort_session(_get_user_id(), session_id=session_id)
+    result = get_client().abort_session(_get_user_id(), session_id=session_id)
     if "error" in result:
         return f"Sandbox error: {result['error']}"
     elapsed = result.get("elapsed_seconds", "?")
@@ -228,7 +234,7 @@ def sandbox_search(query: str) -> str:
     Returns matching solutions from the archive so you can re-execute them
     instead of solving the problem from scratch.
     """
-    results = sandbox_service.search_solutions(_get_user_id(), query)
+    results = get_client().search_solutions(_get_user_id(), query)
     if not results:
         return f"No archived solutions match '{query}'."
     lines = []
@@ -245,7 +251,7 @@ def sandbox_execute(solution_id: str, command: str | None = None) -> str:
     a specific command to run. If no command is given, the agent will look
     for build.sh or main.py in the solution directory.
     """
-    result = sandbox_service.execute_solution(_get_user_id(), solution_id, command=command)
+    result = get_client().execute_solution(_get_user_id(), solution_id, command=command)
     if "error" in result:
         return f"Sandbox error: {result['error']}"
     return (
@@ -267,7 +273,7 @@ def sandbox_install(package_name: str) -> str:
     Note: Packages installed this way persist until the sandbox container restarts.
     For permanent additions, ask the user to update the sandbox Dockerfile.
     """
-    result = sandbox_service.install_package(package_name)
+    result = get_client().install_package(package_name)
     if "error" in result:
         hints = result.get("local_install_hints")
         if hints:
@@ -291,7 +297,7 @@ def sandbox_rebuild(dockerfile_content: str | None = None) -> str:
     Only works in Docker deployment mode. The rebuild takes a few minutes.
     All active sandbox sessions should be finished first.
     """
-    result = sandbox_service.rebuild_sandbox(dockerfile_content)
+    result = get_client().rebuild_sandbox(dockerfile_content)
     if "error" in result:
         return f"Sandbox rebuild failed: {result['error']}"
     return f"Sandbox rebuilt and restarted successfully (image: {result['image']})."
@@ -466,7 +472,7 @@ def _view_lines(path: str, start: int, count: int) -> dict:
         f"END {{print \"---TOTAL:\" NR}}' "
         f"{_shell_quote(path)}"
     )
-    result = sandbox_service.run_shell(cmd, timeout=15)
+    result = get_client().run_shell(cmd, timeout=15)
     return result
 
 
@@ -564,6 +570,9 @@ def sandbox_goto(path: str, line: int, window: int = 100) -> str:
 
 
 def build_sandbox_tools() -> list:
+    from prax.settings import settings
+    if not settings.sandbox_available:
+        return []
     return [
         sandbox_shell, terminal_history,
         sandbox_start, sandbox_message, sandbox_review,

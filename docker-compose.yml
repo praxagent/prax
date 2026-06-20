@@ -8,6 +8,7 @@ services:
       dockerfile: Dockerfile
       additional_contexts:
         teamwork: ${TEAMWORK_PATH:-../teamwork}
+        prax-sandbox: ${PRAX_SANDBOX_PATH:-../prax-sandbox}
     ports:
       - "3000:8000"   # TeamWork web UI
       - "8000:8000"   # TeamWork API (for Vite dev proxy)
@@ -63,10 +64,11 @@ services:
       start_period: 30s
 
   # ── Sandbox (coding agents + Chrome + desktop) ────────────────────
+  # Image source lives in the sibling prax-sandbox repo (override with
+  # PRAX_SANDBOX_PATH).  `docker compose up --build` builds it automatically.
   sandbox:
     build:
-      context: ./sandbox
-      dockerfile: Dockerfile
+      context: ${PRAX_SANDBOX_PATH:-../prax-sandbox}/sandbox
     image: prax-sandbox:latest
     restart: unless-stopped
     environment:

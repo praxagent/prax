@@ -38,7 +38,41 @@ Prax applies the following mitigations against this class of attack:
 Imported plugins execute in **isolated subprocesses** with a stripped environment (no API keys, no secrets). The OS process boundary prevents credential theft and memory-space attacks. However:
 
 - **Side-channel attacks** (timing, cache) are theoretically possible but impractical over JSON-RPC pipes.
-- **Capability abuse** — a malicious plugin could use `caps.http_get()` to exfiltrate data from its scoped directory to an external server. The HTTP rate limit (50 requests/invocation), filesystem scoping (plugins can only read/write their own `plugin_data/{plugin}/` directory), and HIGH-risk confirmation gate mitigate but do not eliminate this.
+- **Capability abuse** — a malicious plugin could use `caps.http_get()` to exfiltrate data from its scoped directory to an external server, or to probe internal services (SSRF). The HTTP rate limit (50 requests/invocation), filesystem scoping (plugins can only read/write their own `plugin_data/{plugin}/` directory), the **SSRF egress guard** (see below), and the HIGH-risk confirmation gate mitigate but do not eliminate this.
 - **Subprocess escape** — if a kernel vulnerability allows escaping process isolation, the subprocess has access to the host filesystem (though not to env vars). Docker container isolation (future enhancement) would add a second boundary.
 
-**Current controls:** subprocess isolation + static analysis + capabilities gateway + per-tier policy + call budgets + HIGH risk classification + user confirmation gate + audit hooks + import blockers + runtime auto-rollback + blocking security scan.
+**Current controls:** subprocess isolation + static analysis + capabilities gateway + per-tier policy + call budgets + HIGH risk classification + user confirmation gate + audit hooks + import blockers + runtime auto-rollback + blocking security scan + SSRF egress guard.
+
+### SSRF egress guard
+
+Outbound HTTP from the plugin gateway (`caps.http_get`/`http_post`) and the URL reader
+(`url_reader.fetch_markdown`) is validated by `prax/utils/ssrf.py`: an http/https scheme allowlist,
+plus rejection of any host that **is or resolves to** a non-public address. Redirects are followed
+manually so every hop is re-validated. Controlled by `SSRF_PROTECTION_ENABLED` (default on) with an
+`SSRF_ALLOWED_HOSTS` allowlist for self-hosted dev services. (The sandbox `/v1/shell` is
+deliberately arbitrary execution behind the root-equivalent daemon bearer, and is out of scope.)
+
+**Blocked address classes** — a URL is refused if its host is, or DNS-resolves to, any of these.
+The check uses Python's `ipaddress` module (`is_private`/`is_loopback`/`is_link_local`/
+`is_reserved`/`is_multicast`/`is_unspecified`), so it is not a hand-maintained list, but concretely
+that covers:
+
+| Class | Ranges | Why it's blocked |
+|-------|--------|------------------|
+| **RFC 1918 private** | `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` | internal LAN / VPC hosts |
+| **Loopback** | `127.0.0.0/8`, `::1` | services on the host itself |
+| **Link-local** | `169.254.0.0/16`, `fe80::/10` | includes the **cloud metadata endpoint** `169.254.169.254` (credential theft on AWS/GCP/Azure) |
+| **Unique-local IPv6** | `fc00::/7` | the IPv6 equivalent of RFC 1918 |
+| **Unspecified / reserved / multicast** | `0.0.0.0`, `::`, reserved + multicast blocks | non-routable / abuse-prone |
+
+IPv4-mapped IPv6 addresses (`::ffff:10.0.0.1`) are unwrapped and re-checked so they can't smuggle a
+private IPv4 past the guard. Hostnames that fail to resolve are allowed through (a non-resolving host
+is not an internal-resource risk, and the real request simply fails) — see `prax/utils/ssrf.py` for
+the rationale and the residual DNS-rebinding caveat.
+
+### Importing external plugins
+
+`plugin_import` and `plugin_import_activate` are **HIGH-risk** (confirmation-gated). When the import
+security scan finds warnings, the plugin is flagged `requires_acknowledgement` and the loader
+**refuses to activate it** until the warnings are acknowledged — a hard, load-time gate, not a
+prompt the model can skip. `plugin_import_activate` (itself HIGH-gated) records that acknowledgement.

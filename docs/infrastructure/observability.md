@@ -52,6 +52,23 @@ graph LR
 | `prax_spoke_calls_total` | Counter | `spoke`, `status` | Spoke/sub-agent delegations |
 | `prax_spoke_duration_seconds` | Histogram | `spoke` | Spoke execution duration |
 | `prax_tool_calls_total` | Counter | `tool` | Tool invocations |
+| `prax_hallucination_guard_total` | Counter | `type` | Grounding-guard firings (`numeric_claim`, `narrative`, `artifact_location`, `plan_completion`, `scheduled_evidence_floor`, `semantic_entropy`) — turns the inline per-turn guards into a trended, alertable signal |
+| `prax_eval_quality` | Gauge | `axis` (`overall`/`grounding`/`relevancy`/`correctness`) | Reference-free live-traffic eval quality, updated by the nightly job |
+
+### Evaluation
+
+Two complementary eval paths score quality (see `prax/eval/`):
+
+- **Regression gate (`make eval`)** — replays recorded failure cases through the live agent
+  and scores each with an LLM judge decomposed into three axes (grounding / relevancy /
+  correctness), so a regression localises to one dimension instead of hiding in a single
+  number. `PRAX_EVAL_MIN_PASS_RATE=0.8 make eval` fails below a threshold. Needs provider
+  keys (real calls), so it is **not** part of `make ci`. Run it before shipping a
+  system-prompt or model-config change.
+- **Nightly live-traffic eval** (`EVAL_NIGHTLY_ENABLED`) — a scheduler job samples recent
+  execution traces from `.prax/graphs`, scores them with a **reference-free** judge, and
+  publishes `prax_eval_quality` to Prometheus. This is continuous drift detection on real
+  traffic (`prax/eval/live_eval.py`, cron via `EVAL_NIGHTLY_CRON`).
 
 ### Pre-Provisioned Dashboards
 

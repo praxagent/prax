@@ -135,6 +135,10 @@ def memory_recall(query: str, top_k: int = 5) -> str:
     if not results:
         return "No relevant memories found."
 
+    # Transparency: surface which chunks (and their fused scores) backed the
+    # answer, so the retrieval provenance is inspectable in the trace.
+    _trace_retrieval(query, results)
+
     lines = []
     for r in results:
         date = r.created_at[:10] if r.created_at else "?"
@@ -143,6 +147,29 @@ def memory_recall(query: str, top_k: int = 5) -> str:
             f"- [{r.source}, {date}, imp={r.importance:.1f}]{entities}\n  {r.content}"
         )
     return "\n".join(lines)
+
+
+def _trace_retrieval(query: str, results: list) -> None:
+    """Emit a RETRIEVAL trace event with the top chunks + fused scores."""
+    try:
+        from prax.agent.trace import append_trace
+        from prax.trace_events import TraceEvent
+        chunks = [
+            {
+                "memory_id": getattr(r, "memory_id", ""),
+                "score": round(float(getattr(r, "score", 0.0)), 4),
+                "source": getattr(r, "source", ""),
+                "snippet": (getattr(r, "content", "") or "")[:160],
+            }
+            for r in results[:10]
+        ]
+        append_trace(_uid(), [{
+            "type": TraceEvent.RETRIEVAL,
+            "content": f"[RETRIEVAL] q={query[:80]!r} → {len(chunks)} chunks",
+            "chunks": chunks,
+        }])
+    except Exception:
+        pass
 
 
 @tool
