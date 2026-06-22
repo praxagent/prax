@@ -162,6 +162,22 @@ class PluginLoader:
             if p not in self._workspace_dirs:
                 self._workspace_dirs.append(p)
 
+    def discover_shared_keys(self, name: str) -> list[str]:
+        """Return the loader rel-keys for an imported ``shared/<name>`` plugin.
+
+        Used to flag/acknowledge an imported plugin's security warnings with the
+        exact key the loader uses (covers multi-plugin repos and subfolders).
+        """
+        keys: list[str] = []
+        with self._lock:
+            ws_dirs = list(self._workspace_dirs)
+        for ws_dir in ws_dirs:
+            if ws_dir.is_dir():
+                for _pf, rel_key in self._discover_plugins(ws_dir):
+                    if rel_key == f"shared/{name}" or rel_key.startswith(f"shared/{name}/"):
+                        keys.append(rel_key)
+        return keys
+
     def remove_workspace_plugins_dir(self, plugins_dir: str | Path) -> None:
         """Unregister a workspace plugins directory."""
         p = Path(plugins_dir)
@@ -227,6 +243,23 @@ class PluginLoader:
                     plugin_manifests[rel_key] = manifest
 
                 if trust_tier == PluginTrust.IMPORTED:
+                    # Activation gate: an IMPORTED plugin flagged with security
+                    # warnings at import time is NOT loaded until the warnings
+                    # are explicitly acknowledged (hard, load-time enforcement —
+                    # not just a prompt the model can skip).
+                    if (
+                        self.registry.requires_acknowledgement(rel_key)
+                        and not self.registry.is_warnings_acknowledged(rel_key)
+                    ):
+                        load_errors[rel_key] = (
+                            "blocked — unacknowledged security warnings; review the "
+                            "scan and confirm activation before this plugin will load"
+                        )
+                        logger.warning(
+                            "Blocking IMPORTED plugin %s: security warnings not acknowledged",
+                            rel_key,
+                        )
+                        continue
                     # Phase 2: IMPORTED plugins are loaded in an isolated subprocess.
                     loaded = self._load_imported_via_bridge(
                         plugin_file, rel_key, trust_tier,

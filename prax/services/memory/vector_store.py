@@ -45,7 +45,9 @@ def _get_client():
     from qdrant_client import QdrantClient
 
     url = getattr(settings, "qdrant_url", "http://localhost:6333")
-    return QdrantClient(url=url, timeout=10)
+    # check_compatibility=False skips a server-version round-trip (and its
+    # noisy warning) on each client init — irrelevant for our usage.
+    return QdrantClient(url=url, timeout=10, check_compatibility=False)
 
 
 def _ensure_collection(client) -> None:

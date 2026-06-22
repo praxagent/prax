@@ -13,7 +13,7 @@ import importlib
 
 def _load(monkeypatch, *, available=True, cdp_overrides=None):
     """Fresh cdp_tools module with a mocked cdp_service."""
-    cdp_service = importlib.import_module("prax.services.cdp_service")
+    cdp_service = importlib.import_module("prax_sandbox.cdp_service")
     monkeypatch.setattr(cdp_service, "is_available", lambda: available)
     for attr, fn in (cdp_overrides or {}).items():
         monkeypatch.setattr(cdp_service, attr, fn)

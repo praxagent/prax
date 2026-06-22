@@ -20,13 +20,33 @@ logger = logging.getLogger(__name__)
 _MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
 
-def _fetch_image_base64(url: str) -> tuple[str, str]:
-    """Download an image and return (base64_data, media_type).
+def _media_type_for_suffix(suffix: str) -> str:
+    s = suffix.lower().lstrip(".")
+    if s == "png":
+        return "image/png"
+    if s == "gif":
+        return "image/gif"
+    if s == "webp":
+        return "image/webp"
+    return "image/jpeg"
 
-    Sends an explicit ``User-Agent`` because several common image hosts
-    (Wikimedia, some news CDNs) reject ``python-requests``'s default UA
-    with HTTP 403.  Discord/Twilio CDN URLs work either way.
+
+def _fetch_image_base64(url: str) -> tuple[str, str]:
+    """Return ``(base64_data, media_type)`` for an image.
+
+    Accepts an http(s) URL **or a local file path** (also a ``file://`` URL), so
+    the agent can inspect a screenshot/file it produced — not only remote URLs.
+    Sends an explicit ``User-Agent`` for http(s) because several image hosts
+    (Wikimedia, some news CDNs) reject ``python-requests``'s default UA with 403.
     """
+    # Local file path (or file:// URL): read straight off disk.
+    if url.startswith("file://"):
+        url = url[len("file://"):]
+    if not url.startswith(("http://", "https://")):
+        from pathlib import Path
+        p = Path(url).expanduser()
+        data = p.read_bytes()[:_MAX_IMAGE_BYTES]
+        return base64.standard_b64encode(data).decode("ascii"), _media_type_for_suffix(p.suffix)
     headers = {
         "User-Agent": (
             "PraxAssistant/1.0 (+https://github.com/PraxAssistant/prax) "
@@ -51,20 +71,18 @@ def _fetch_image_base64(url: str) -> tuple[str, str]:
 
 
 def _openai_image_payload(image_url: str) -> dict:
-    """Return the ``image_url`` content block for an OpenAI-compatible call.
+    """Return the ``image_url`` content block, always inlined as a base64 ``data:`` URI.
 
-    When pointing at a local server (``VISION_BASE_URL`` set) we always inline
-    the image as a base64 ``data:`` URI: most local model servers run without
-    outbound network access and can't reach the Discord/Twilio CDN that hosts
-    the original attachment.  For real OpenAI we pass the URL through —
-    OpenAI's image fetchers handle public CDNs reliably and avoid spending
-    bytes on encoding round-trips.
+    We inline (download/read + base64) rather than passing a raw URL to the model
+    server because (a) local model servers have no outbound network, (b) hosted
+    fetchers (incl. OpenAI) intermittently fail on auth'd/expiring CDN links
+    (Discord/Twilio), and (c) a local file path obviously can't be fetched by a
+    remote server.  Inlining with our own browser-y UA is reliable across every
+    provider and source — at the cost of a few encoded bytes, which we accept.
     """
-    if settings.vision_base_url and image_url.startswith(("http://", "https://")):
-        b64_data, media_type = _fetch_image_base64(image_url)
-        data_uri = f"data:{media_type};base64,{b64_data}"
-        return {"type": "image_url", "image_url": {"url": data_uri}}
-    return {"type": "image_url", "image_url": {"url": image_url}}
+    b64_data, media_type = _fetch_image_base64(image_url)
+    data_uri = f"data:{media_type};base64,{b64_data}"
+    return {"type": "image_url", "image_url": {"url": data_uri}}
 
 
 def _analyze_openai(image_url: str, prompt: str) -> str:
@@ -184,13 +202,17 @@ def analyze_image_impl(image_url: str, prompt: str) -> str:
 
 @tool
 def analyze_image(image_url: str, prompt: str = "Describe this image in detail.") -> str:
-    """Analyze an image from a URL using the configured vision model.
+    """Analyze an image with the configured vision model.
 
-    Use this tool when the user sends an image (via SMS, Discord, or web)
-    or when you need to understand the contents of an image at a URL.
+    Use this whenever you need to understand the contents of ANY image you can
+    reference: an inbound attachment, an image at an http(s) URL (CDN links —
+    Discord/Twilio/etc. — work directly), or a local file you produced (e.g. a
+    saved browser/desktop screenshot). You do NOT need a "data URL" or an
+    "upload"; pass the URL or path you have and call this tool.
 
     Args:
-        image_url: Direct URL to the image (JPEG, PNG, GIF, WebP).
+        image_url: A direct http(s) URL to the image, OR a local file path
+                   (e.g. /tmp/cdp_screenshot_123.jpg) — JPEG, PNG, GIF, WebP.
         prompt: What to analyze — e.g. "Describe this image",
                 "What text is in this image?", "Extract the data from this chart",
                 "What's wrong with this code screenshot?".

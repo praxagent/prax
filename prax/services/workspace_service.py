@@ -1230,6 +1230,27 @@ def get_workspace_context(user_id: str, user_input: str = "") -> str:
     except Exception:
         pass
 
+    # A professor's pop quiz is awaiting an answer.  Surface it so Prax treats
+    # the learner's reply as the answer and routes it to grading, even across
+    # a context-window boundary where the original question scrolled off.
+    try:
+        from prax.services.faculty_service import has_pending_quiz
+        pending = has_pending_quiz(user_id)
+        if pending:
+            parts.append(
+                "\n\n## Pending pop quiz"
+                f"\nA professor sent a pop-quiz question for course "
+                f"`{pending.get('slug')}` and is awaiting an answer:"
+                f"\n  Q: {pending.get('question')}"
+                "\nIf the learner's message is an answer (even a partial or unsure one), "
+                "delegate to the professor to grade it — pass it to `delegate_professor` "
+                "as: \"grade this pop quiz answer for course "
+                f"{pending.get('slug')}: <their answer>\". If they're clearly changing the "
+                "subject instead, just continue normally and leave the quiz pending."
+            )
+    except Exception:
+        pass
+
     return "".join(parts)
 
 

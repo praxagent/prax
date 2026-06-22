@@ -41,6 +41,26 @@ def create_app():
     app.register_blueprint(textchat_routes)
     app.register_blueprint(user_routes)
 
+    # MCP server — expose a curated subset of Prax tools to other agents.
+    # Fail-closed: only registered when enabled AND at least one client is
+    # configured (a bearer token and/or an MCP_CLIENTS_PATH registry), so an
+    # unauthenticated endpoint can never be exposed by misconfiguration.
+    if settings.mcp_server_enabled:
+        from prax.mcp.clients import load_clients
+        clients = load_clients()
+        if clients:
+            from prax.mcp.blueprint import make_mcp_blueprint
+            app.register_blueprint(make_mcp_blueprint())
+            logging.getLogger(__name__).info(
+                "MCP server enabled at POST /mcp (%d client(s))", len(clients),
+            )
+        else:
+            logging.getLogger(__name__).error(
+                "MCP_SERVER_ENABLED is set but no clients are configured "
+                "(set MCP_BEARER_TOKEN and/or MCP_CLIENTS_PATH) — "
+                "refusing to expose an unauthenticated MCP endpoint.",
+            )
+
     # Prometheus metrics endpoint — scraped by Prometheus every 10s.
     if settings.observability_enabled:
         @app.route("/metrics")

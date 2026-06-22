@@ -647,9 +647,9 @@ def _collect_trace_artifacts(
 
 
 def _collect_note_artifacts(candidates: dict[str, dict], *, uid: str, query_tokens: set[str]) -> None:
-    from prax.settings import settings
+    from prax.services.deployment_info import effective_base_url
 
-    base_url = settings.teamwork_base_url.rstrip("/")
+    base_url = effective_base_url()
 
     try:
         from prax.services import note_service
@@ -1179,7 +1179,7 @@ def system_status() -> str:
 
         lines.append(f"**LLM:** {_settings.default_llm_provider} / {_settings.base_model}")
         lines.append(f"**Self-improve:** {'enabled' if _settings.self_improve_enabled else 'disabled'}")
-        lines.append(f"**Sandbox:** {'persistent' if _settings.sandbox_persistent else 'ephemeral'}")
+        lines.append(f"**Sandbox:** {'persistent' if _settings.sandbox_available else 'disabled'}")
 
         # Recent errors from app log.
         log_path = _settings.log_path
@@ -1400,7 +1400,14 @@ def run_python(code: str, packages: str = "") -> str:
         code: Python code to execute. Can be a one-liner or a full script.
         packages: Space-separated packages to install first (e.g. "requests beautifulsoup4").
     """
-    from prax.services.sandbox_service import run_shell
+    from prax.settings import settings
+    if not settings.sandbox_available:
+        return (
+            "run_python requires the sandbox (SANDBOX_ENABLED=false). "
+            "Enable the sandbox to execute Python in its scratch venv."
+        )
+    from prax.services.sandbox_bridge import configured_client as get_client
+
     commands = []
     if packages.strip():
         commands.append(f"uv pip install -q {packages}")
@@ -1411,7 +1418,7 @@ def run_python(code: str, packages: str = "") -> str:
     commands.append(f"cat > {script_path} << 'PRAX_PYTHON_EOF'\n{code}\nPRAX_PYTHON_EOF")
     commands.append(f"python3 {script_path}")
     full_cmd = " && ".join(commands)
-    result = run_shell(full_cmd, timeout=120)
+    result = get_client().run_shell(full_cmd, timeout=120)
     stdout = result.get("stdout", "")
     stderr = result.get("stderr", "")
     exit_code = result.get("exit_code", -1)

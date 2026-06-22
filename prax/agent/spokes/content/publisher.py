@@ -36,11 +36,11 @@ def update_draft(slug: str, content: str, title: str | None = None) -> dict:
 
     Returns dict with ``slug``, ``url``, and ``title`` on success.
     """
+    from prax.services.deployment_info import effective_base_url
     from prax.services.note_service import publish_notes, update_note
-    from prax.settings import settings
 
     user_id = _get_user_id()
-    teamwork_url = settings.teamwork_base_url.rstrip("/")
+    teamwork_url = effective_base_url()
     try:
         result = update_note(user_id, slug, content=content, title=title)
         pub = publish_notes(user_id, teamwork_url, slug=slug)

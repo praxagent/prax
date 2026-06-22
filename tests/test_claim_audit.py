@@ -1,6 +1,7 @@
 """Tests for prax.agent.claim_audit — deterministic claim grounding checks."""
 from __future__ import annotations
 
+import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 
 from prax.agent.claim_audit import (
@@ -18,37 +19,31 @@ from prax.agent.claim_audit import (
 # ---------------------------------------------------------------------------
 
 class TestClaimDetection:
-    def test_detects_dollar_amount(self):
+    @pytest.mark.parametrize(
+        ("text", "expected_claims", "expect_single_ungrounded"),
+        [
+            # test_detects_dollar_amount: also asserts a single ungrounded finding.
+            ("The cheapest is $83 one-way.", ["$83"], True),
+            # test_detects_dollar_with_cents
+            ("It costs $1,234.56.", ["$1,234.56"], False),
+            # test_detects_euro_and_pound: two distinct claims must appear.
+            ("€50 in Paris, £100 in London.", ["€50", "£100"], False),
+            # test_detects_percentage
+            ("Performance improved by 42.5%.", ["42.5%"], False),
+            # test_detects_ranking: substring match (claim text may carry context).
+            ("It's ranked #3 globally.", ["#3"], False),
+        ],
+    )
+    def test_detects_claim(self, text, expected_claims, expect_single_ungrounded):
         tool_results = ["Some tool returned general context."]
-        findings = audit_claims("The cheapest is $83 one-way.", tool_results)
-        assert len(findings) == 1
-        assert findings[0]["claim"] == "$83"
-        assert findings[0]["grounded"] is False
-
-    def test_detects_dollar_with_cents(self):
-        tool_results = ["Some tool returned general context."]
-        findings = audit_claims("It costs $1,234.56.", tool_results)
+        findings = audit_claims(text, tool_results)
         claims = [f["claim"] for f in findings]
-        assert "$1,234.56" in claims
-
-    def test_detects_euro_and_pound(self):
-        tool_results = ["Some tool returned general context."]
-        findings = audit_claims("€50 in Paris, £100 in London.", tool_results)
-        claims = [f["claim"] for f in findings]
-        assert "€50" in claims
-        assert "£100" in claims
-
-    def test_detects_percentage(self):
-        tool_results = ["Some tool returned general context."]
-        findings = audit_claims("Performance improved by 42.5%.", tool_results)
-        claims = [f["claim"] for f in findings]
-        assert "42.5%" in claims
-
-    def test_detects_ranking(self):
-        tool_results = ["Some tool returned general context."]
-        findings = audit_claims("It's ranked #3 globally.", tool_results)
-        claims = [f["claim"] for f in findings]
-        assert any("#3" in c for c in claims)
+        for expected in expected_claims:
+            assert any(expected in c for c in claims)
+        if expect_single_ungrounded:
+            assert len(findings) == 1
+            assert findings[0]["claim"] == expected_claims[0]
+            assert findings[0]["grounded"] is False
 
     def test_no_claims_returns_empty(self):
         findings = audit_claims("Hello, how can I help you?", ["tool result"])

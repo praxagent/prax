@@ -150,13 +150,13 @@ def _build_research_tools(depth: int = 0) -> list:
     # Add multi-model consensus (professor) if at least 2 LLM providers
     # are configured. This uses expensive pro-tier models.
     try:
-        from prax.agent.spokes.professor.agent import _available_providers, multi_model_query
+        from prax.agent.multi_model import _available_providers, multi_model_query
         if len(_available_providers()) >= 2:
             tools.append(multi_model_query)
-            logger.info("Professor capability enabled (%d providers available)",
+            logger.info("Multi-model consensus enabled (%d providers available)",
                         len(_available_providers()))
     except Exception:
-        pass  # Professor not available — that's fine
+        pass  # Multi-model consensus not available — that's fine
 
     # Only the top-level research agent can decompose into sub-research.
     if depth == 0:

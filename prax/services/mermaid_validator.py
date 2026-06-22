@@ -158,6 +158,12 @@ def validate_render(content: str, *, timeout: int = 30) -> list[str]:
     blocks = extract_blocks(content)
     if not blocks:
         return []
+    from prax.settings import settings
+    if settings.sandbox_remote:
+        # The render round-trips a temp file through the shared workspace mount,
+        # which a remote sandbox can't see. Degrade gracefully (fast tier ran).
+        logger.debug("remote sandbox — skipping render-time mermaid validation")
+        return []
     if not _mmdc_available():
         logger.debug("mmdc not available — skipping render-time mermaid validation")
         return []

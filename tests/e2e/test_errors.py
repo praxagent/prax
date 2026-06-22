@@ -27,7 +27,7 @@ def test_no_active_sandbox(run_e2e):
             ai("It looks like you don't have an active sandbox session. Would you like me to start one?"),
         ],
         mocks={
-            "prax.services.sandbox_service.send_message": {
+            "prax_sandbox.control_plane.send_message": {
                 "error": "No active sandbox session.",
             },
         },
@@ -112,7 +112,7 @@ def test_sandbox_max_rounds_reached(run_e2e):
             ),
         ],
         mocks={
-            "prax.services.sandbox_service.send_message": {
+            "prax_sandbox.control_plane.send_message": {
                 "error": "Sandbox has reached the maximum of 10 message rounds. Use sandbox_finish to save what you have, or sandbox_abort to discard.",
                 "rounds_used": 10,
                 "max_rounds": 10,

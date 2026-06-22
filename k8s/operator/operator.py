@@ -239,9 +239,14 @@ def _build_sandbox_pod(
     container: dict[str, Any] = {
         "name": "sandbox",
         "image": image,
-        "ports": [{"containerPort": 8080, "name": "http"}],
+        # The prax-sandbox image serves OpenCode on 4096 and CDP on 9223.
+        # (9223 is reachable only on the pod network; never NodePort/host it.)
+        "ports": [
+            {"containerPort": 4096, "name": "opencode"},
+            {"containerPort": 9223, "name": "cdp"},
+        ],
         "readinessProbe": {
-            "httpGet": {"path": "/healthz", "port": 8080},
+            "httpGet": {"path": "/global/health", "port": 4096},
             "initialDelaySeconds": 5,
             "periodSeconds": 10,
         },

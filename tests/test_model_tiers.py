@@ -61,10 +61,23 @@ def test_get_available_tiers_excludes_disabled(_mock_settings):
     assert Tier.PRO not in names  # disabled by default
 
 
-def test_resolve_model_returns_requested_tier():
-    assert resolve_model("low") == "gpt-5.4-nano"
-    assert resolve_model("medium") == "gpt-5.4-mini"
-    assert resolve_model("high") == "gpt-5.4"
+@pytest.mark.parametrize(
+    ("requested", "expected"),
+    [
+        # test_resolve_model_returns_requested_tier
+        ("low", "gpt-5.4-nano"),
+        ("medium", "gpt-5.4-mini"),
+        ("high", "gpt-5.4"),
+        # test_resolve_model_defaults_to_low
+        (None, "gpt-5.4-nano"),
+        # test_resolve_model_handles_unknown_tier
+        ("ultra", "gpt-5.4-nano"),
+        # test_resolve_model_accepts_tier_enum
+        (Tier.HIGH, "gpt-5.4"),
+    ],
+)
+def test_resolve_model(requested, expected):
+    assert resolve_model(requested) == expected
 
 
 def test_resolve_model_falls_back_when_disabled(_mock_settings):
@@ -81,19 +94,6 @@ def test_resolve_model_falls_up_when_lower_disabled(_mock_settings):
     # LOW disabled, MEDIUM disabled — should fall up to HIGH
     result = resolve_model("low")
     assert result == "gpt-5.4"
-
-
-def test_resolve_model_defaults_to_low():
-    assert resolve_model(None) == "gpt-5.4-nano"
-
-
-def test_resolve_model_handles_unknown_tier():
-    # Unknown tier string should default to LOW
-    assert resolve_model("ultra") == "gpt-5.4-nano"
-
-
-def test_resolve_model_accepts_tier_enum():
-    assert resolve_model(Tier.HIGH) == "gpt-5.4"
 
 
 def test_tier_summary_format():

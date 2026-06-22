@@ -436,6 +436,35 @@ def _load_all_users() -> None:
             task_runner_service.register_user(_scheduler, user_dir.name)
 
 
+def _run_nightly_eval() -> None:
+    """Job body: reference-free live-traffic eval → Prometheus quality gauges."""
+    try:
+        from prax.eval.live_eval import run_live_traffic_eval
+        report = run_live_traffic_eval(sample_size=settings.eval_nightly_sample_size)
+        logger.info("Nightly live-traffic eval complete: %s", report)
+    except Exception:
+        logger.exception("Nightly live-traffic eval failed")
+
+
+def _register_eval_job() -> None:
+    """Register the nightly live-traffic eval (opt-in via EVAL_NIGHTLY_ENABLED)."""
+    if not settings.eval_nightly_enabled or _scheduler is None:
+        return
+    try:
+        cron_kwargs = _parse_cron(settings.eval_nightly_cron)
+    except ValueError:
+        logger.warning("Invalid EVAL_NIGHTLY_CRON %r — nightly eval not scheduled", settings.eval_nightly_cron)
+        return
+    _scheduler.add_job(
+        _run_nightly_eval,
+        trigger=CronTrigger(timezone="UTC", **cron_kwargs),
+        id="system:nightly_eval",
+        replace_existing=True,
+        name="Nightly live-traffic eval",
+    )
+    logger.info("Registered nightly live-traffic eval (%s UTC)", settings.eval_nightly_cron)
+
+
 def init_scheduler() -> None:
     """Initialize and start the background scheduler.  Call once at app startup."""
     global _scheduler
@@ -444,6 +473,7 @@ def init_scheduler() -> None:
     _scheduler = BackgroundScheduler(daemon=True)
     _scheduler.start()
     _load_all_users()
+    _register_eval_job()
     logger.info("Scheduler started")
 
 

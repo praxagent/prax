@@ -56,9 +56,10 @@ def test_analyze_openai_uses_base_url_and_inlines_remote_image(monkeypatch):
     assert "cdn.discordapp.com" not in image_block["image_url"]["url"]
 
 
-def test_analyze_openai_remote_passes_url_through(monkeypatch):
-    """Real OpenAI path: no base_url, public CDN URL passes straight through —
-    we don't waste bandwidth roundtripping the image bytes through Prax."""
+def test_analyze_openai_remote_inlines_image(monkeypatch):
+    """Hosted OpenAI path now ALSO inlines the image as base64.  Passing a raw
+    CDN URL through is unreliable — auth'd/expiring Discord/Twilio links fail in
+    the provider's own fetcher — so we always download + inline with our UA."""
     from prax.agent import vision_tools
     from prax.settings import settings
 
@@ -69,10 +70,10 @@ def test_analyze_openai_remote_passes_url_through(monkeypatch):
     monkeypatch.setattr(settings, "openai_key", "sk-real", raising=False)
 
     fetched = {"called": False}
-    def _should_not_run(_url):
+    def _fetch(_url):
         fetched["called"] = True
-        return ("x", "image/png")
-    monkeypatch.setattr(vision_tools, "_fetch_image_base64", _should_not_run)
+        return ("ZmFrZQ==", "image/png")
+    monkeypatch.setattr(vision_tools, "_fetch_image_base64", _fetch)
 
     fake_client = _stub_openai_response("openai said: a cat")
     with patch("openai.OpenAI", return_value=fake_client) as ctor:
@@ -91,8 +92,42 @@ def test_analyze_openai_remote_passes_url_through(monkeypatch):
     image_block = next(
         b for b in create_kwargs["messages"][0]["content"] if b["type"] == "image_url"
     )
-    assert image_block["image_url"]["url"] == "https://cdn.discordapp.com/img.jpg"
-    assert fetched["called"] is False, "must not download the image when going to real OpenAI"
+    # Reliability over bandwidth: the image is inlined, never the raw CDN URL.
+    assert image_block["image_url"]["url"].startswith("data:image/png;base64,")
+    assert "cdn.discordapp.com" not in image_block["image_url"]["url"]
+    assert fetched["called"] is True
+
+
+def test_fetch_image_base64_reads_local_file(tmp_path):
+    """analyze_image must be able to inspect a local file (e.g. a saved
+    screenshot), not only a remote URL — read straight off disk, infer the
+    media type from the suffix."""
+    from prax.agent import vision_tools
+
+    png = tmp_path / "shot.png"
+    png.write_bytes(b"\x89PNG\r\n\x1a\n fake-image-bytes")
+    b64, media = vision_tools._fetch_image_base64(str(png))
+    import base64 as _b64
+    assert _b64.standard_b64decode(b64).startswith(b"\x89PNG")
+    assert media == "image/png"
+
+    # file:// URLs and ~ expansion also resolve to the local file.
+    b64b, mediab = vision_tools._fetch_image_base64(f"file://{png}")
+    assert b64b == b64 and mediab == "image/png"
+
+
+def test_openai_payload_inlines_local_path(tmp_path, monkeypatch):
+    """A local path (a screenshot) must become a base64 data URI for the model —
+    a remote server obviously can't open a host file path."""
+    from prax.agent import vision_tools
+    from prax.settings import settings
+
+    monkeypatch.setattr(settings, "vision_base_url", None, raising=False)  # hosted path
+    jpg = tmp_path / "cdp_screenshot_1.jpg"
+    jpg.write_bytes(b"\xff\xd8\xff fake-jpeg")
+    block = vision_tools._openai_image_payload(str(jpg))
+    assert block["type"] == "image_url"
+    assert block["image_url"]["url"].startswith("data:image/jpeg;base64,")
 
 
 def test_analyze_openai_prefers_vision_api_key_over_openai_key(monkeypatch):

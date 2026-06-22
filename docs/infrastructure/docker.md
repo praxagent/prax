@@ -65,7 +65,7 @@ docker run -d -p 5001:5001 --restart always \
   prax
 ```
 
-Build the sandbox image separately:
+Build the sandbox image separately (it lives in the sibling **prax-sandbox** repo):
 ```bash
-docker build -t prax-sandbox:latest sandbox/
+cd ../prax-sandbox && make build          # -> prax-sandbox:latest
 ```

@@ -27,6 +27,38 @@ def observability_config():
     })
 
 
+@teamwork_routes.route("/teamwork/deployment", methods=["GET"])
+def deployment_config():
+    """Return deployment / reachability info for the TeamWork Settings panel.
+
+    Surfaces how Prax is reachable (Tailscale/ngrok/local), the base URL links
+    actually use (auto-derived when on Tailscale), and any advisories — so the
+    user can see at a glance whether off-network links will work.
+    """
+    try:
+        from prax.services.deployment_info import get_deployment_info
+        info = get_deployment_info()
+    except Exception:
+        logger.debug("deployment_info unavailable", exc_info=True)
+        return jsonify({"available": False})
+    ts = info.get("tailscale") or {}
+    return jsonify({
+        "available": True,
+        "in_docker": info.get("in_docker"),
+        "tailscale_active": bool(ts.get("available")),
+        "tailscale_hostname": ts.get("hostname"),
+        "ts_hostname_env": info.get("ts_hostname_env"),
+        "ngrok_url": info.get("ngrok_url"),
+        "public_base_url": info.get("public_base_url"),
+        "public_via": info.get("public_via"),
+        "teamwork_base_url": info.get("teamwork_base_url"),
+        "effective_base_url": info.get("effective_base_url"),
+        "effective_via": info.get("effective_via"),
+        "autodetect": info.get("autodetect"),
+        "advisories": info.get("advisories") or [],
+    })
+
+
 @teamwork_routes.route("/teamwork/sync-history", methods=["POST"])
 def sync_history():
     """Sync historical SMS/Discord conversations to TeamWork channels.

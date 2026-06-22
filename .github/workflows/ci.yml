@@ -12,6 +12,12 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
+      # The sandbox tooling lives in a sibling repo, consumed via the
+      # `prax-sandbox` editable path source (../prax-sandbox) in pyproject.toml.
+      # uv needs it on disk to generate package metadata during `uv sync`.
+      - name: Checkout prax-sandbox (sibling path dependency)
+        run: git clone --depth 1 https://github.com/praxagent/prax-sandbox.git ../prax-sandbox
+
       - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
         with:
           python-version: "3.13"

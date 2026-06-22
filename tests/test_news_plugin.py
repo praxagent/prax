@@ -70,31 +70,38 @@ class TestParseSources:
         assert "NPR News Now" in names
         assert "Deutschlandfunk" in names
 
-    def test_rss_source(self):
-        sources = _parse_sources("- Blog | rss | https://blog.com/feed")
-        assert sources == [{"name": "Blog", "type": "rss", "url": "https://blog.com/feed"}]
+    @pytest.mark.parametrize(
+        ("config", "expected"),
+        [
+            # test_rss_source
+            (
+                "- Blog | rss | https://blog.com/feed",
+                {"name": "Blog", "type": "rss", "url": "https://blog.com/feed"},
+            ),
+            # test_hackernews_source
+            ("- HN | hackernews", {"name": "HN", "type": "hackernews", "url": ""}),
+            # test_audio_source
+            ("- Radio | audio | npr", {"name": "Radio", "type": "audio", "url": "npr"}),
+        ],
+    )
+    def test_source_type(self, config, expected):
+        sources = _parse_sources(config)
+        assert sources == [expected]
 
-    def test_hackernews_source(self):
-        sources = _parse_sources("- HN | hackernews")
-        assert sources[0]["type"] == "hackernews"
-        assert sources[0]["url"] == ""
-
-    def test_audio_source(self):
-        sources = _parse_sources("- Radio | audio | npr")
-        assert sources[0]["type"] == "audio"
-        assert sources[0]["url"] == "npr"
-
-    def test_ignores_non_list_lines(self):
-        sources = _parse_sources("# Header\nText\n- Valid | rss | https://x.com/feed")
-        assert len(sources) == 1
-
-    def test_ignores_malformed(self):
-        sources = _parse_sources("- No pipe here")
-        assert len(sources) == 0
-
-    def test_ignores_unknown_types(self):
-        sources = _parse_sources("- Bad | foobar | https://x.com")
-        assert len(sources) == 0
+    @pytest.mark.parametrize(
+        ("config", "expected_count"),
+        [
+            # test_ignores_non_list_lines
+            ("# Header\nText\n- Valid | rss | https://x.com/feed", 1),
+            # test_ignores_malformed
+            ("- No pipe here", 0),
+            # test_ignores_unknown_types
+            ("- Bad | foobar | https://x.com", 0),
+        ],
+    )
+    def test_ignores_lines(self, config, expected_count):
+        sources = _parse_sources(config)
+        assert len(sources) == expected_count
 
 
 # ---------------------------------------------------------------------------

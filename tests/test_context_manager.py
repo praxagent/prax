@@ -1,6 +1,7 @@
 """Tests for context window management."""
 from __future__ import annotations
 
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from prax.agent.context_manager import (
@@ -416,30 +417,20 @@ class TestCompactHistory:
 class TestGetContextLimit:
     """Per-model context limits — exact names, substrings, unknown, tiers."""
 
-    def test_exact_model_gpt54_mini(self):
+    @pytest.mark.parametrize(
+        ("model", "expected"),
+        [
+            ("gpt-5.4-mini", 100_000),
+            ("claude-opus-4-6", 160_000),
+            ("gpt-5.4-nano", 12_000),
+            ("gemini-2.0-flash", 800_000),
+            ("deepseek-chat", 50_000),
+        ],
+    )
+    def test_exact_model(self, model, expected):
         from prax.agent.context_manager import get_context_limit
 
-        assert get_context_limit(model="gpt-5.4-mini") == 100_000
-
-    def test_exact_model_claude_opus(self):
-        from prax.agent.context_manager import get_context_limit
-
-        assert get_context_limit(model="claude-opus-4-6") == 160_000
-
-    def test_exact_model_gpt54_nano(self):
-        from prax.agent.context_manager import get_context_limit
-
-        assert get_context_limit(model="gpt-5.4-nano") == 12_000
-
-    def test_exact_model_gemini_flash(self):
-        from prax.agent.context_manager import get_context_limit
-
-        assert get_context_limit(model="gemini-2.0-flash") == 800_000
-
-    def test_exact_model_deepseek(self):
-        from prax.agent.context_manager import get_context_limit
-
-        assert get_context_limit(model="deepseek-chat") == 50_000
+        assert get_context_limit(model=model) == expected
 
     def test_substring_match(self):
         """A model name containing a known key should match."""
@@ -461,25 +452,19 @@ class TestGetContextLimit:
 
         assert get_context_limit(model="totally-unknown") == 12_000
 
-    def test_tier_fallback_low(self):
+    @pytest.mark.parametrize(
+        ("tier", "expected"),
+        [
+            ("low", 12_000),
+            ("medium", 50_000),
+            ("high", 100_000),
+            ("pro", 160_000),
+        ],
+    )
+    def test_tier_fallback(self, tier, expected):
         from prax.agent.context_manager import get_context_limit
 
-        assert get_context_limit(tier="low") == 12_000
-
-    def test_tier_fallback_medium(self):
-        from prax.agent.context_manager import get_context_limit
-
-        assert get_context_limit(tier="medium") == 50_000
-
-    def test_tier_fallback_high(self):
-        from prax.agent.context_manager import get_context_limit
-
-        assert get_context_limit(tier="high") == 100_000
-
-    def test_tier_fallback_pro(self):
-        from prax.agent.context_manager import get_context_limit
-
-        assert get_context_limit(tier="pro") == 160_000
+        assert get_context_limit(tier=tier) == expected
 
     def test_model_takes_precedence_over_tier(self):
         """Even if tier=low, a known model should use the model's limit."""

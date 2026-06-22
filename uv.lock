@@ -11,7 +11,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-04-04T02:24:19.375689Z"
+exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
 exclude-newer-span = "P7D"
 
 [[package]]
@@ -2573,6 +2573,7 @@ dependencies = [
     { name = "patchright" },
     { name = "pillow" },
     { name = "playwright" },
+    { name = "prax-sandbox" },
     { name = "prometheus-client" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -2644,6 +2645,7 @@ requires-dist = [
     { name = "patchright", specifier = ">=1.51.3" },
     { name = "pillow", specifier = ">=12.1.1" },
     { name = "playwright", specifier = "==1.51.0" },
+    { name = "prax-sandbox", editable = "../prax-sandbox" },
     { name = "prometheus-client", specifier = ">=0.24.1" },
     { name = "pydantic", specifier = "==2.10.4" },
     { name = "pydantic-settings", specifier = "==2.11.0" },
@@ -2670,6 +2672,28 @@ provides-extras = ["test"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "ruff", specifier = ">=0.15.7" }]
+
+[[package]]
+name = "prax-sandbox"
+version = "0.1.0"
+source = { editable = "../prax-sandbox" }
+dependencies = [
+    { name = "docker" },
+    { name = "pytest" },
+    { name = "requests" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "docker", specifier = ">=7.0.0" },
+    { name = "fastapi", marker = "extra == 'daemon'", specifier = ">=0.115" },
+    { name = "httpx", marker = "extra == 'daemon'", specifier = ">=0.27" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "requests", specifier = ">=2.31" },
+    { name = "uvicorn", extras = ["standard"], marker = "extra == 'daemon'", specifier = ">=0.30" },
+    { name = "websockets", marker = "extra == 'daemon'", specifier = ">=13" },
+]
+provides-extras = ["daemon"]
 
 [[package]]
 name = "primp"

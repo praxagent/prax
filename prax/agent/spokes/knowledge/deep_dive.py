@@ -346,11 +346,11 @@ def _note_publisher(
     slug: str | None = None,
 ) -> dict:
     """Publish a note via the note_service."""
+    from prax.services.deployment_info import effective_base_url
     from prax.services.note_service import publish_notes, save_and_publish, update_note
-    from prax.settings import settings
 
     uid = current_user_id.get() or "unknown"
-    teamwork_url = settings.teamwork_base_url.rstrip("/")
+    teamwork_url = effective_base_url()
     try:
         if slug:
             # Update existing note.

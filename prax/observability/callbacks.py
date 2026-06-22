@@ -29,6 +29,10 @@ class OTelLLMCallback(BaseCallbackHandler):
         super().__init__()
         self._spans: dict[UUID, Any] = {}
         self._start_times: dict[UUID, float] = {}
+        # Provider tracked per run_id at start so the circuit-breaker
+        # attribution is correct on BOTH the success and error paths — the
+        # error callback has no model/serialized to infer from.
+        self._providers: dict[UUID, str] = {}
 
     def on_llm_start(
         self,
@@ -40,6 +44,10 @@ class OTelLLMCallback(BaseCallbackHandler):
         **kwargs: Any,
     ) -> None:
         self._start_times[run_id] = time.monotonic()
+        # Track provider for circuit-breaker attribution BEFORE the tracer
+        # early-return — breaker accounting must work even when OTel tracing
+        # is unconfigured (lite deployments, tests).
+        self._providers[run_id] = _infer_provider(serialized)
 
         tracer = _get_tracer()
         if not tracer:
@@ -69,6 +77,10 @@ class OTelLLMCallback(BaseCallbackHandler):
         **kwargs: Any,
     ) -> None:
         self._start_times[run_id] = time.monotonic()
+        provider = _infer_provider(serialized)
+        # Track provider for circuit-breaker attribution BEFORE the tracer
+        # early-return (see on_llm_start).
+        self._providers[run_id] = provider
 
         tracer = _get_tracer()
         if not tracer:
@@ -76,7 +88,6 @@ class OTelLLMCallback(BaseCallbackHandler):
 
         model = kwargs.get("invocation_params", {}).get("model_name") or \
                 serialized.get("kwargs", {}).get("model", "unknown")
-        provider = _infer_provider(serialized)
 
         # Resolve tier from the factory's latest choice for this model
         tier = _infer_tier_for_model(model)
@@ -119,10 +130,11 @@ class OTelLLMCallback(BaseCallbackHandler):
         # Record Prometheus metrics
         _record_metrics(model, input_tokens, output_tokens, elapsed)
 
-        # Circuit breaker: record success
+        # Circuit breaker: record success.  Prefer the provider captured at
+        # start; fall back to model-name inference for older call paths.
         try:
             from prax.agent.circuit_breaker import get_breaker
-            provider = _infer_provider_from_model(model)
+            provider = self._providers.pop(run_id, None) or _infer_provider_from_model(model)
             get_breaker(f"llm:{provider}").record_success()
         except Exception:
             pass
@@ -144,6 +156,9 @@ class OTelLLMCallback(BaseCallbackHandler):
         **kwargs: Any,
     ) -> None:
         self._start_times.pop(run_id, None)
+        # Provider captured at start — the only reliable attribution on the
+        # error path (no model/serialized is passed to this callback).
+        provider = self._providers.pop(run_id, None)
         span = self._spans.pop(run_id, None)
         if span:
             span.set_attribute("error", True)
@@ -153,18 +168,12 @@ class OTelLLMCallback(BaseCallbackHandler):
         # Record error metric
         _record_error_metric()
 
-        # Circuit breaker: record failure
+        # Circuit breaker: record failure against the REAL provider so each
+        # provider's breaker reflects its own failure rate (previously this
+        # always blamed 'openai').
         try:
             from prax.agent.circuit_breaker import get_breaker
-            # Try to infer provider from the error or span attributes
-            provider = "unknown"
-            if span:
-                try:
-                    # Best effort — span may have gen_ai.system attribute
-                    provider = "openai"  # fallback
-                except Exception:
-                    pass
-            get_breaker(f"llm:{provider}").record_failure()
+            get_breaker(f"llm:{provider or 'unknown'}").record_failure()
         except Exception:
             pass
 

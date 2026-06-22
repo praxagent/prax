@@ -446,3 +446,47 @@ def test_get_namespace_stats_empty(fake_session):
     fake_session._default_result = FakeResult()
     stats = get_namespace_stats("user1", "empty_ns")
     assert stats["concepts"] == 0
+
+
+# ---------------------------------------------------------------------------
+# _knowledge_search_terms (multi-variant expansion)
+# ---------------------------------------------------------------------------
+
+
+def test_knowledge_search_terms_expansion_off():
+    from prax.services.memory.knowledge_graph import _knowledge_search_terms
+    from prax.settings import settings
+
+    orig = settings.retrieval_query_expansion_enabled
+    settings.retrieval_query_expansion_enabled = False
+    try:
+        assert _knowledge_search_terms("Transformer Models") == ["transformer models"]
+    finally:
+        settings.retrieval_query_expansion_enabled = orig
+
+
+def test_knowledge_search_terms_expansion_on(monkeypatch):
+    from prax.services.memory import retrieval
+    from prax.services.memory.knowledge_graph import _knowledge_search_terms
+    from prax.settings import settings
+
+    monkeypatch.setattr(settings, "retrieval_query_expansion_enabled", True)
+    monkeypatch.setattr(settings, "retrieval_query_expansion_n", 3)
+    monkeypatch.setattr(
+        retrieval, "_expand_queries",
+        lambda q, n: [q, "attention mechanism", "self-attention"],
+    )
+    terms = _knowledge_search_terms("Attention")
+    assert terms == ["attention", "attention mechanism", "self-attention"]
+
+
+def test_search_knowledge_passes_terms_list(fake_session):
+    """The refactored search binds a $terms list (ANY-match), not a single $q."""
+    from prax.services.memory.knowledge_graph import search_knowledge
+
+    fake_session._default_result = FakeResult(records=[])
+    search_knowledge("user1", "attention")
+    query, params = fake_session.queries[0]
+    assert "terms" in params
+    assert params["terms"] == ["attention"]
+    assert "ANY(t IN $terms" in query

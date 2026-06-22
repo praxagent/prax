@@ -61,8 +61,25 @@ spec:
                 name: {{ include "prax.fullname" . }}-config
           env:
             # Service discovery overrides — point to Kubernetes service names
+            {{- if .Values.sandbox.daemon.url }}
+            # Remote sandbox via the control daemon (TLS + bearer). The app does
+            # NOT reach the sandbox's 4096/9223 directly in this mode.
+            - name: SANDBOX_DAEMON_URL
+              value: {{ .Values.sandbox.daemon.url | quote }}
+            - name: SANDBOX_DAEMON_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "prax.fullname" . }}-secrets
+                  key: SANDBOX_DAEMON_TOKEN
+            - name: SANDBOX_TLS_VERIFY
+              value: {{ .Values.sandbox.daemon.tlsVerify | default "true" | quote }}
+            {{- else }}
+            # In-cluster sandbox via service DNS
             - name: SANDBOX_HOST
               value: {{ include "prax.fullname" . }}-sandbox
+            - name: BROWSER_CDP_URL
+              value: http://{{ include "prax.fullname" . }}-sandbox:9223
+            {{- end }}
             - name: TEAMWORK_URL
               value: http://{{ include "prax.fullname" . }}-teamwork:8000
             - name: QDRANT_URL
@@ -71,8 +88,6 @@ spec:
               value: bolt://{{ include "prax.fullname" . }}-neo4j:7687
             - name: OLLAMA_BASE_URL
               value: http://{{ include "prax.fullname" . }}-ollama:11434
-            - name: BROWSER_CDP_URL
-              value: http://{{ include "prax.fullname" . }}-sandbox:9223
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: http://{{ include "prax.fullname" . }}-tempo:4318
             - name: GRAFANA_URL

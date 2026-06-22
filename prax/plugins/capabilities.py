@@ -138,18 +138,18 @@ class PluginCapabilities:
         self._http_request_count += 1
 
     def http_get(self, url: str, **kwargs: Any) -> Any:
-        """Audited HTTP GET. Returns a ``requests.Response``."""
+        """Audited, SSRF-guarded HTTP GET. Returns a ``requests.Response``."""
         self._check_http()
-        import requests
+        from prax.utils.ssrf import safe_request
         logger.info("Plugin %s HTTP GET %s", self.plugin_rel_path, url)
-        return requests.get(url, timeout=kwargs.pop("timeout", 30), **kwargs)
+        return safe_request("get", url, timeout=kwargs.pop("timeout", 30), **kwargs)
 
     def http_post(self, url: str, **kwargs: Any) -> Any:
-        """Audited HTTP POST. Returns a ``requests.Response``."""
+        """Audited, SSRF-guarded HTTP POST. Returns a ``requests.Response``."""
         self._check_http()
-        import requests
+        from prax.utils.ssrf import safe_request
         logger.info("Plugin %s HTTP POST %s", self.plugin_rel_path, url)
-        return requests.post(url, timeout=kwargs.pop("timeout", 30), **kwargs)
+        return safe_request("post", url, timeout=kwargs.pop("timeout", 30), **kwargs)
 
     # ------------------------------------------------------------------
     # Workspace files — scoped to user's workspace

@@ -55,7 +55,6 @@ _CONSUMER_SERVICES = [
     "note_service.py",
     "project_service.py",
     "course_service.py",
-    "sandbox_service.py",
 ]
 
 

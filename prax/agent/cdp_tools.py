@@ -9,9 +9,9 @@ Consolidated into 2 tools to stay within API tool count limits.
 from __future__ import annotations
 
 from langchain_core.tools import tool
+from prax_sandbox import cdp_service
 
 from prax.agent.action_policy import RiskLevel, risk_tool
-from prax.services import cdp_service
 
 
 @tool
@@ -46,7 +46,11 @@ def sandbox_browser_read(action: str = "text") -> str:
         result = cdp_service.screenshot()
         if "error" in result:
             return f"Browser error: {result['error']}"
-        return f"Screenshot saved: {result['path']}"
+        path = result["path"]
+        return (
+            f"Screenshot saved to {path}. To read/describe what's on the page, "
+            f"call analyze_image with that path now (don't stop here)."
+        )
 
     elif action in ("scroll_down", "scroll_up"):
         direction = "down" if action == "scroll_down" else "up"

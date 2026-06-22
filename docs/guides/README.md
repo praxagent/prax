@@ -8,7 +8,8 @@ Practical guides for setting up, extending, and testing Prax.
 - [Extending](extending.md) — Plugin system, manual tool registration, workspace locking
 - [Testing](testing.md) — Unit tests, e2e tests, integration tests, A/B testing
 - [Channels](channels.md) — TeamWork, Discord, Twilio setup
-- [Local models — vision and inference](local-vision.md) — Run Prax fully off-OpenAI: point both `analyze_image` and the chat LLM at a local llama.cpp / vLLM / Ollama server.  Includes a verified Qwen3.6-35B-A3B config for 16 GB GPUs.
+- [Local models — vision and inference](local-vision.md) — Run Prax fully off-OpenAI: point both `analyze_image` and the chat LLM at a local llama.cpp / vLLM / Ollama server.  Includes a verified Qwen3.6-35B-A3B config for 16 GB GPUs, co-hosting two models on one GPU, and pointers to cloud GPU + fine-tuning.
+- [GPU access — local, cloud, least-privilege power control](cloud-gpu.md) — Plug-and-play GPU for Prax: a decision flow (local → cloud → hosted fallback), a top-~10 cloud-GPU-provider table (provision + start/stop + scopable creds + $), and a **secure "on/off only"** design (ARN-pinned AWS IAM + GCP custom role + a provider-agnostic power-broker + threat model) so Prax can launch a GPU, serve a model, and power it off — and *nothing else*. No model hard-wired; recurring recipes become workspace plugins.
 - [Library](../library.md) — Hierarchical knowledge base (Project → Notebook → Note) with author provenance and the Karpathy-inspired raw/outputs split
 - [Scheduler](scheduler.md) — Cron jobs, reminders, timezone, YAML format, TeamWork UI
 - [Trajectory Export](trajectory-export.md) — Real-time training data export with outcome classification

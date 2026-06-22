@@ -20,7 +20,7 @@
 
 See [Quick Start](#quick-start) at the top of this README for the fast path.
 
-**Sandbox code execution** requires both Docker Desktop running **and** the sandbox image built (`docker build -t prax-sandbox:latest sandbox/`). Without the image, sandbox tools will fail with a "pull access denied" error — it's a local image, not on Docker Hub. If Docker itself isn't running, the agent falls back to saving source files to the workspace.
+**Sandbox code execution** requires both Docker Desktop running **and** the sandbox image built. The sandbox lives in the sibling [prax-sandbox](https://github.com/praxagent/prax-sandbox) repo — build it with `cd ../prax-sandbox && make build` (docker-compose builds it for you). Without the image, sandbox tools fail with a "pull access denied" error — it's a local image, not on Docker Hub. If Docker isn't running, the agent falls back to saving source files to the workspace. See [Providing Prax a sandbox](../infrastructure/sandbox.md) (incl. remote mode).
 
 **Browser automation** requires Playwright: `uv run playwright install chromium`
 

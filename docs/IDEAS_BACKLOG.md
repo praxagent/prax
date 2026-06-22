@@ -453,6 +453,192 @@ Distilled from reading these customer stories + cookbook recipes against the bug
 
 ---
 
+## Layer 4 — research quality
+
+### 13. STORM-style grounded multi-perspective research for `deep_dive`
+
+- **Source**: Stanford OVAL Lab, **STORM** — *"Assisting in Writing Wikipedia-like
+  Articles From Scratch with Large Language Models"*, Shao et al., **NAACL 2024**.
+  Paper: https://arxiv.org/abs/2402.14207 · Code (MIT):
+  https://github.com/stanford-oval/storm · Live demo: https://storm.genie.stanford.edu
+  (STORM = *Synthesis of Topic Outlines through Retrieval and Multi-perspective
+  Question Asking*.)
+- **Why it matters**: STORM's measured win (≈25% more organized, ≈10% broader
+  coverage vs outline-driven baselines, in the FreshWiki human eval) comes from
+  **perspective discovery → multi-perspective question-asking _grounded in
+  retrieval_ → outline → cited synthesis**. Prax's `note_deep_dive`
+  (`prax/agent/spokes/knowledge/deep_dive.py`) already does *research → write →
+  multi-pass reviewer/critique* with related-note retrieval, plus grounding via
+  `url_reader` (Jina) and `claim_audit`. The one piece STORM has that we don't is
+  the **explicit multi-perspective decomposition + contradiction map** before
+  synthesis — that's the part worth borrowing.
+- **What NOT to do**: the viral "4 copy-paste prompts" version (simulate 5
+  experts → contradiction map → synthesis → self-critique) **drops retrieval**.
+  Ungrounded "simulate experts" pulls from parametric memory — the exact
+  unsourced-confidence failure mode Prax's reliability work exists to prevent.
+  Adopting it literally would regress us. Borrow the *structure*, keep our
+  grounding. (Reference is the paper, deliberately **not** the tweet.)
+- **Prax mapping**: add an optional, flag-gated `multi_perspective` mode to
+  `note_deep_dive`: generate N perspectives, ask **retrieval-backed** questions
+  per perspective, build a contradiction map resolved against sources, then run
+  the existing synthesis + reviewer/critique passes. Gate behind a setting
+  (default off) and **measure with the eval harness** — never spike a benchmark
+  (`CLAUDE.md`). Composes with #6 (evidence floor) and #12 (citations).
+- **Effort**: ~1–2 days for a grounded prototype behind a flag.
+- **Status**: not started — **but tracked in evals so it can't be lost**: the
+  rubric lives as a golden at
+  [`prax/eval/goldens/research_multiperspective.yaml`](../prax/eval/goldens/research_multiperspective.yaml),
+  loaded by `prax/eval/goldens.py`, surfaced by `make eval`, and guarded by a
+  key-free CI test (`tests/test_eval_goldens.py`) so deleting/forgetting it fails
+  CI. Today the golden measures the **baseline gap** (deep_dive has no explicit
+  multi-perspective stage); when the mode above ships, the same golden measures
+  the improvement. This is the concrete "how do we not lose track of it" answer,
+  and a minimal down-payment on #11 (real eval framework → goldens directory).
+
+### 14. Our own schema-constrained document-extraction model (commercial-friendly Lift)
+
+- **Source / context**: [Datalab Lift](research/lift-document-extraction.md) is
+  best-in-class but non-commercial (Modified OpenRAIL-M). Full plan:
+  [`research/diy-document-extraction-model.md`](research/diy-document-extraction-model.md).
+- **Why it matters**: PDF/image + JSON Schema → guaranteed-valid typed JSON is a
+  real gap in Prax's read/convert stack. **Key insight: the validity guarantee is
+  decode-time (constrained decoding) — free on any permissive base, zero training**;
+  training only buys value-accuracy. So a commercial-clean, no-egress extractor
+  exists after Phase 0.
+- **Prax mapping**: ≈70% scaffolded [verified] — `finetune_service.py`
+  orchestration + LoRA hot-swap, `llm_factory.py:222` vLLM provider,
+  `vision_tools.py` base64 path, `pdf_service`/`url_reader`, `make sandbox-gpu`,
+  `prax/eval/goldens.py` injectable judge/replay seams. Greenfield ≈30%: a deployed
+  vLLM with `guided_json`, the schema param threaded through provider+vision_tools,
+  a deterministic field/full-doc/validity comparator, a VLM training script +
+  `pypdfium2` renderer, and the ML deps.
+- **Phases**: P0 constrained-decode MVP on Qwen3(-VL) Apache-2.0 (days) → P1 LoRA
+  SFT on synthetic+permissive data for accuracy (weeks) → P2 optional vision VLM +
+  GRPO on field-accuracy. License Apache-2.0 throughout (provenance manifest; no
+  distilling frontier APIs into product weights).
+- **Honest gate**: if you only need valid JSON from clean docs, a frontier API with
+  structured outputs already does it — build only for data-residency / unit-cost /
+  hard-tail / ship-the-weights.
+- **Effort**: P0 days; P1 weeks; total to a credible 8B ≈ 50–200 GPU-hours
+  (~$100–600), dominated by data labor.
+- **Status**: not started — tracked in evals via
+  [`prax/eval/goldens/document_extract.yaml`](../prax/eval/goldens/document_extract.yaml).
+
+### 15. Visual (screenshot) RAG — PixelRAG-style
+
+- **Source**: [`research/pixelrag-visual-rag.md`](research/pixelrag-visual-rag.md)
+  (StarTrail-org/PixelRAG, **Apache-2.0**).
+- **Why it matters**: Prax retrieval is text-only (`knowledge_search`/Qdrant,
+  `url_reader`, Library, Neo4j, `trace_search`) — it can't answer questions about
+  tables/charts/layout. Retrieval over **page images** (render→tile→embed with a
+  Qwen3-VL embedder→FAISS→reader) recovers that.
+- **Prax mapping**: we already own the render half (sandbox CDP/Playwright + browser
+  spoke). Adoption = a self-hosted Qwen3-VL embedder + an image-embedding index
+  (FAISS or a Qdrant image collection), exposed as a **flag-gated, off-by-default
+  visual-RAG mode**. Don't use the hosted `api.pixelrag.ai` for private docs.
+- **Adopt-candidate** (Apache-2.0, unlike Lift). Shares the Qwen3-VL backbone with
+  #14's Phase 2, so the two efforts compound.
+- **Effort**: ~1 week for a self-hosted prototype behind a flag; GPU for the embedder.
+- **Status**: not started — would get a visual-retrieval golden when built (per the
+  [eval-goldens pattern](#process-notes)).
+
+### 16. Plug-and-play cloud GPU: scoped power on/off + serve-on-demand
+
+- **Source / context**: reference
+  [`research/two-qwen3-on-one-spark.md`](research/two-qwen3-on-one-spark.md); full
+  design in [`guides/cloud-gpu.md`](guides/cloud-gpu.md).
+- **Why it matters**: the local-LLM / fine-tuning / vision rails assume a GPU, but
+  most deploys (and the sandbox) often have none. Launch → serve vLLM → use →
+  **power OFF** makes the whole `VLLM_BASE_URL` / finetune stack usable anywhere
+  and matures fine-tuning — adoptably, without bloating core.
+- **Prax mapping (~80% scaffolded)** [verified]: `VLLM_BASE_URL` / `VISION_BASE_URL`
+  rails + the `vllm` provider in `llm_factory.py`; `make sandbox-gpu` +
+  `docker-compose.gpu.yml` (local-GPU detect/serve); `finetune_service`
+  load/unload-adapter; the plugin `permissions.md` capability ceiling
+  (`extending.md`); the `prax-sandbox/docs/remote.md` bearer+TLS+single-port
+  template. **Greenfield ~20%**: a `gpu_power(on|off|status)` tool/plugin, the
+  scoped on/off credential (or power-broker), and an optional auto-start flow.
+- **Security gate (firm)**: power on/off **only** — never create/destroy/resize/SSH/
+  data. Enforced in TWO layers (provider-scoped cred *or* a power-broker, **plus**
+  the plugin `permissions.md` ceiling). Prefer serverless scale-to-zero (Modal)
+  where latency allows — removes the credential entirely. Reuse the shipped
+  ephemeral-TTL creds + SSRF guard + HIGH-risk confirmation gate. Blast radius of a
+  leak = "the GPU flaps on/off" — not a data breach, not unbounded spend.
+- **No-hardcode**: ship the **ability** (a GPU endpoint + sandbox code-writing),
+  never a specific model (Whisper/image-gen/video/SAM3…). Repeated recipes graduate
+  to workspace plugins.
+- **Effort**: docs/design done (this entry + cloud-gpu.md); a reference `gpu_power`
+  plugin ~½ day; auto-start orchestration ~1–2 days.
+- **Status**: design only — no behavior-changing code yet.
+
+### 17. Success-side procedural capture ("skills" done right) + similarity recall
+
+- **Source**: [`research/agent-skills-discipline.md`](research/agent-skills-discipline.md)
+  (Anson Biggs, *"You're Probably Using Agent Skills Wrong"*, 2026-06). The article's
+  point is the **authoring discipline**, not the `SKILL.md` file shape: an artifact
+  should be born from a **gap discovered by actually solving a problem**, never
+  generated speculatively for one the model can't solve.
+- **Why it matters**: Prax already self-authors *code* after a real need
+  (`plugin_write`, `system_prompt.md:81`) and already does progressive disclosure
+  (`progress_*`, `trace_search`). But **every learning loop keys on failure**
+  (metacognitive ≥3-occurrence patterns, the failure journal, negative feedback) or
+  graduates the lesson into a **Python plugin**. There is no **success-side,
+  knowledge-not-code** lane: after solving a hard, project-specific task the *hard
+  way*, Prax has nowhere structured to crystallize the **generalized procedure** as
+  reusable prose — `metacognitive.record_success` only decays a failure score, it
+  authors nothing. Second gap: no **recall by task-similarity** (a stored procedure
+  isn't surfaced when a similar task recurs).
+- **Prax mapping** [verified]: invert the existing gap signal in
+  `prax/agent/metacognitive.py` (which already fires post-hoc on real difficulty) to
+  the success case; persist a markdown "playbook" (`name` + one-line `description`
+  frontmatter + abstracted steps + optional script/reference links) alongside
+  `self_tools` (`prax/services/self_tool_registry_service.py:21`) so it round-trips
+  via `workspace_push` — **not** a new store; recall via the user-notes token-overlap
+  selector (`prax/services/workspace_service.py:626`) or `trace_search` embeddings,
+  injected by progressive disclosure (description first, body on demand).
+- **Guardrail (from the article)**: author **only after a gap is overcome**, never
+  speculatively — abstract this into prompt selectivity (encode the *class*, per
+  `CLAUDE.md` "never spike benchmarks", not the example). Lowest-risk slice; can ship
+  as a one-line prompt rule independently of the capture mechanism.
+- **Open question (gates the build)**: is this a genuinely new tier, or just a recall
+  policy + a frontmatter convention over the **Library / self_tools / memory** we
+  already have? Resolve before building — a redundant subsystem violates "Prax stays
+  nimble."
+- **Effort**: the prompt guardrail ~10 min; a flag-gated, default-off capture+recall
+  prototype ~1–2 days (reusing the metacognitive trigger + workspace selector).
+- **Status**: not started — tracked in evals via
+  [`prax/eval/goldens/skill_capture_reuse.yaml`](../prax/eval/goldens/skill_capture_reuse.yaml)
+  (rubric measures the baseline gap today; the same rubric measures the gain when
+  capture ships), so the idea can't be lost.
+
+### 18. Wire learned tier/role routing (close the bandit loop) — Conductor/Trinity-style
+
+- **Source**: [`research/fugu-learned-orchestration.md`](research/fugu-learned-orchestration.md)
+  (Sakana Fugu; ICLR 2026 **Conductor** RL-orchestrator + **Trinity** evolutionary
+  Thinker/Worker/Verifier coordinator).
+- **Why it matters**: Prax's delegation is **heuristic** (orchestrator LLM
+  tool-choice over a fixed spoke/category map) and model routing is **static**
+  (tiers + per-component config). The learned-routing scaffolding already exists but
+  is **dormant**: `prax/agent/tier_bandit.py` (Thompson sampler) never has
+  `select_tier`/`record_outcome` called on the live path, and `difficulty.py`'s
+  estimate is discarded. Fugu is external proof that a *learned* router over a frozen
+  model pool is the high-value direction — and Trinity shows it can be **cheap**
+  (tiny, evolutionary, no worker fine-tuning).
+- **Prax mapping** [verified]: close the loop on the existing bandit — `select_tier`
+  at component entry (`llm_factory.build_llm`/`get_component_config`), `record_outcome`
+  at turn end (`orchestrator.py`), behind a flag, **measured against static routing**
+  (never spike — `CLAUDE.md`). A Trinity-style **Thinker/Worker/Verifier** role layer
+  maps onto the existing diverse-reviewer / `multi_model_query` / verifier patterns
+  over current tiers/providers. Conductor-style RL delegation is a larger, later step.
+- **Note**: the provider-independence half of Fugu is already shipped (cross-provider
+  failover + the new terminal-failure denylist+notify, `llm_fallback.py`). This item
+  is the *learned-routing* half only.
+- **Effort**: wiring + flag + an eval comparison ~2–4 days; RL delegation is research-scale.
+- **Status**: not started — `model-routing.md` now documents the dormant bandit
+  honestly (no longer overstates it as wired).
+
+---
+
 ## Recommended ordering — "what I'd ship this week"
 
 Ranked by impact-per-hour against the specific problem of *"don't SMS the user fabricated news at 9am."*
