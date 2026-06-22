@@ -122,6 +122,9 @@ _HIGH: set[str] = {
     # importing / activating EXTERNAL plugin code — supply-chain risk, gate it
     "plugin_import",
     "plugin_import_activate",
+    # cloud GPU power — starts/stops a billable instance (external write)
+    "gpu_power_on",
+    "gpu_power_off",
 }
 
 _MEDIUM: set[str] = {
@@ -176,6 +179,8 @@ _LOW: set[str] = {
     "sandbox_shell",
     # read-only utilities
     "get_current_datetime",
+    # cloud GPU power — read-only status check
+    "gpu_power_status",
 }
 
 TOOL_RISK_MAP: dict[str, RiskLevel] = {

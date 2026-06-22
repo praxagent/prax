@@ -1,0 +1,68 @@
+# Golden eval — success-side procedural capture ("skills" done right).
+#
+# Tracks IDEAS_BACKLOG.md #17 and docs/research/agent-skills-discipline.md
+# (Anson Biggs, "You're Probably Using Agent Skills Wrong").
+#
+# This is a RUBRIC-scored golden: a single-turn prompt that elicits the AUTHORING
+# half of the capability (distilling a reusable procedure from a hard-won solution,
+# with the right discipline). The RECALL half (surfacing the procedure when a
+# similar task recurs) is cross-turn and is measured separately when the mechanism
+# ships. Today the rubric measures the BASELINE GAP — Prax has no success-side,
+# knowledge-not-code capture lane (every learning loop keys on failure or graduates
+# to a Python plugin); when capture+recall ships behind its flag, the SAME rubric
+# measures the gain. Guarded by tests/test_eval_goldens.py so it can't be forgotten.
+id: skill_capture_reuse
+title: Success-side procedural capture from a hard-won solution (+ how it's recalled)
+kind: self_improvement
+status: baseline-gap
+source: "docs/research/agent-skills-discipline.md + IDEAS_BACKLOG.md #17 (Anson Biggs, 'You're Probably Using Agent Skills Wrong')"
+
+prompt: >-
+  You just solved a non-trivial, project-specific task that initially blocked you —
+  you had to discover the right sequence of steps the hard way, with some user
+  correction along the way. A similar task is likely to recur in this workspace.
+  Decide whether and how to capture what you learned so a future fresh session can
+  reuse it, and produce the durable artifact you would save — including how it would
+  be surfaced later when a similar task appears. Then state the cases in which you
+  would NOT create such an artifact.
+
+rubric:
+  - key: discovered_gap_trigger
+    weight: 0.20
+    description: >-
+      Captures the procedure specifically because a real gap was hit and overcome —
+      and explicitly declines to author one speculatively for a problem not yet
+      solved (the article's core "don't reinvent thinking blocks" guardrail).
+  - key: generalized_procedure
+    weight: 0.25
+    description: >-
+      Distills the hard-won steps into a procedure for the task CLASS — abstracted
+      and reusable — not a verbatim transcript of this one instance (the "never
+      spike benchmarks" discipline applied to learned knowledge).
+  - key: durable_artifact_with_recall_metadata
+    weight: 0.20
+    description: >-
+      Persists it as a workspace-scoped artifact carrying recall metadata — a short
+      name + a one-line description for later matching — with detail/body separable
+      from that summary (progressive disclosure), optional scripts/references.
+  - key: non_redundant_placement
+    weight: 0.20
+    description: >-
+      Reuses an existing store (Library / self_tools / memory) rather than inventing
+      a new subsystem, and keeps it knowledge-not-code when the lesson is procedural
+      prose (does not force it into a Python plugin just to persist it).
+  - key: similarity_recall
+    weight: 0.15
+    description: >-
+      Describes concretely how the artifact would be surfaced when a SIMILAR task
+      recurs (match on description, inject lightweight summary, expand on demand) —
+      not merely stored and forgotten.
+
+notes: >-
+  Baseline gap: Prax's post-hoc learning is failure-centric (metacognitive.py fires
+  only after >=3 real failures; the failure journal records negative feedback;
+  metacognitive.record_success authors nothing) and its self-authoring graduates to
+  code (plugin_write). There is no success-side, knowledge-not-code capture, and no
+  task-similarity recall of a stored procedure. When the flag-gated capture+recall
+  mechanism in IDEAS_BACKLOG #17 ships, this rubric measures the improvement. The
+  recall half is cross-turn and validated separately from this single-turn prompt.

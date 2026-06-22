@@ -1,6 +1,8 @@
 """Tests for the runtime model override system in the orchestrator."""
 from __future__ import annotations
 
+import pytest
+
 import prax.agent.orchestrator as orchestrator_mod
 
 
@@ -15,13 +17,16 @@ class TestSetModelOverride:
         """Clean up override after each test."""
         orchestrator_mod._model_override = None
 
-    def test_set_override_stores_value(self):
-        orchestrator_mod.set_model_override("gpt-5.4-pro")
-        assert orchestrator_mod.get_model_override() == "gpt-5.4-pro"
-
-    def test_set_override_different_model(self):
-        orchestrator_mod.set_model_override("claude-opus-4-6")
-        assert orchestrator_mod.get_model_override() == "claude-opus-4-6"
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "gpt-5.4-pro",
+            "claude-opus-4-6",
+        ],
+    )
+    def test_set_override_stores_value(self, model):
+        orchestrator_mod.set_model_override(model)
+        assert orchestrator_mod.get_model_override() == model
 
     def test_set_override_replaces_previous(self):
         orchestrator_mod.set_model_override("gpt-5.4-mini")
@@ -55,20 +60,18 @@ class TestAutoClears:
     def teardown_method(self):
         orchestrator_mod._model_override = None
 
-    def test_auto_clears_override(self):
-        orchestrator_mod.set_model_override("gpt-5.4-pro")
-        assert orchestrator_mod.get_model_override() == "gpt-5.4-pro"
-        orchestrator_mod.set_model_override("auto")
-        assert orchestrator_mod.get_model_override() is None
-
-    def test_auto_case_insensitive(self):
-        orchestrator_mod.set_model_override("gpt-5.4-mini")
-        orchestrator_mod.set_model_override("AUTO")
-        assert orchestrator_mod.get_model_override() is None
-
-    def test_auto_mixed_case(self):
-        orchestrator_mod.set_model_override("gpt-5.4")
-        orchestrator_mod.set_model_override("Auto")
+    @pytest.mark.parametrize(
+        ("initial", "auto"),
+        [
+            ("gpt-5.4-pro", "auto"),
+            ("gpt-5.4-mini", "AUTO"),
+            ("gpt-5.4", "Auto"),
+        ],
+    )
+    def test_auto_clears_override(self, initial, auto):
+        orchestrator_mod.set_model_override(initial)
+        assert orchestrator_mod.get_model_override() == initial
+        orchestrator_mod.set_model_override(auto)
         assert orchestrator_mod.get_model_override() is None
 
     def test_none_clears_override(self):

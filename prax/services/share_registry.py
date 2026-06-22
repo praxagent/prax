@@ -25,7 +25,7 @@ import logging
 import os
 import threading
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -37,6 +37,72 @@ _locks_guard = threading.Lock()
 ENTRY_KIND_FILE = "file"
 ENTRY_KIND_COURSE = "course"
 ENTRY_KIND_NOTE = "note"
+
+
+# --------------------------------------------------------------------------- #
+# Optional TTL / expiry (SHARE_LINK_TTL_ENABLED, default off)
+# --------------------------------------------------------------------------- #
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _parse_iso(value: str) -> datetime | None:
+    """Parse an ISO-8601 timestamp → aware datetime (UTC if naive), or None."""
+    try:
+        s = value.strip()
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+    except (ValueError, TypeError, AttributeError):
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+
+
+def _ttl_expiry_iso(base: datetime | None = None) -> str | None:
+    """ISO expiry for a new (or renewed) share, or None when TTL is disabled."""
+    from prax.settings import settings
+    if not settings.share_link_ttl_enabled:
+        return None
+    ttl = int(settings.share_link_ttl_seconds or 0)
+    if ttl <= 0:
+        return None
+    return ((base or _now()) + timedelta(seconds=ttl)).isoformat()
+
+
+def _entry_expired(entry: dict[str, Any], now: datetime | None = None) -> bool:
+    """True when *entry* carries an ``expires_at`` in the past.
+
+    Fail-closed: an unparseable expiry counts as expired. Entries without an
+    ``expires_at`` (everything created while the feature was off) never expire.
+    """
+    exp = entry.get("expires_at")
+    if not exp:
+        return False
+    when = _parse_iso(exp)
+    if when is None:
+        logger.warning("share entry %r has unparseable expires_at=%r — treating as expired",
+                       entry.get("token"), exp)
+        return True
+    return when <= (now or _now())
+
+
+def _renew(user_id: str, entries: dict[str, dict[str, Any]],
+           existing: dict[str, Any]) -> dict[str, Any]:
+    """Refresh an idempotent course/note entry's lease on re-publish, persisting
+    if the expiry changed. TTL on → extend; TTL off → drop any stale expiry so
+    the re-published share is permanent again. Caller holds the user lock."""
+    expires_at = _ttl_expiry_iso()
+    changed = False
+    if expires_at:
+        if existing.get("expires_at") != expires_at:
+            existing["expires_at"] = expires_at
+            changed = True
+    elif existing.pop("expires_at", None) is not None:
+        changed = True
+    if changed:
+        _save(user_id, entries)
+    return existing
 
 
 def _lock_for(user_id: str) -> threading.Lock:
@@ -107,14 +173,18 @@ def register_file(user_id: str, abs_path: str, *,
     ext = os.path.splitext(abs_path)[1]
     token = uuid.uuid4().hex
     public_name = f"{uuid.uuid4().hex}{ext}"
+    created = _now()
     entry = {
         "kind": ENTRY_KIND_FILE,
         "token": token,
         "abs_path": abs_path,
         "public_name": public_name,
-        "created_at": datetime.now(UTC).isoformat(),
+        "created_at": created.isoformat(),
         "created_via": channel or "unknown",
     }
+    expires_at = _ttl_expiry_iso(created)
+    if expires_at:
+        entry["expires_at"] = expires_at
     with _lock_for(user_id):
         entries = _load(user_id)
         entries[token] = entry
@@ -135,15 +205,18 @@ def register_course(user_id: str, course_id: str, *,
         for existing in entries.values():
             if (existing.get("kind") == ENTRY_KIND_COURSE
                     and existing.get("slug") == course_id):
-                return existing
+                return _renew(user_id, entries, existing)
         token = uuid.uuid4().hex
         entry = {
             "kind": ENTRY_KIND_COURSE,
             "token": token,
             "slug": course_id,
-            "created_at": datetime.now(UTC).isoformat(),
+            "created_at": _now().isoformat(),
             "created_via": channel or "unknown",
         }
+        expires_at = _ttl_expiry_iso()
+        if expires_at:
+            entry["expires_at"] = expires_at
         entries[token] = entry
         _save(user_id, entries)
     return entry
@@ -160,15 +233,18 @@ def register_note(user_id: str, note_slug: str, *,
         for existing in entries.values():
             if (existing.get("kind") == ENTRY_KIND_NOTE
                     and existing.get("slug") == note_slug):
-                return existing
+                return _renew(user_id, entries, existing)
         token = uuid.uuid4().hex
         entry = {
             "kind": ENTRY_KIND_NOTE,
             "token": token,
             "slug": note_slug,
-            "created_at": datetime.now(UTC).isoformat(),
+            "created_at": _now().isoformat(),
             "created_via": channel or "unknown",
         }
+        expires_at = _ttl_expiry_iso()
+        if expires_at:
+            entry["expires_at"] = expires_at
         entries[token] = entry
         _save(user_id, entries)
     return entry
@@ -198,14 +274,18 @@ def revoke_by_slug(user_id: str, kind: str, slug: str) -> bool:
 
 def lookup_by_token(user_id: str, token: str) -> dict[str, Any] | None:
     with _lock_for(user_id):
-        return _load(user_id).get(token)
+        entry = _load(user_id).get(token)
+    if entry is not None and _entry_expired(entry):
+        return None
+    return entry
 
 
 def is_course_public(user_id: str, course_id: str) -> bool:
     with _lock_for(user_id):
         for entry in _load(user_id).values():
             if (entry.get("kind") == ENTRY_KIND_COURSE
-                    and entry.get("slug") == course_id):
+                    and entry.get("slug") == course_id
+                    and not _entry_expired(entry)):
                 return True
     return False
 
@@ -214,7 +294,8 @@ def is_note_public(user_id: str, note_slug: str) -> bool:
     with _lock_for(user_id):
         for entry in _load(user_id).values():
             if (entry.get("kind") == ENTRY_KIND_NOTE
-                    and entry.get("slug") == note_slug):
+                    and entry.get("slug") == note_slug
+                    and not _entry_expired(entry)):
                 return True
     return False
 
@@ -253,6 +334,8 @@ def find_file_share_globally(token: str,
             continue
         if public_name is not None and entry.get("public_name") != public_name:
             continue
+        if _entry_expired(entry):
+            continue
         return entry
     return None
 
@@ -279,15 +362,24 @@ def _slug_registered_globally(kind: str, slug: str) -> bool:
         if not isinstance(entries, dict):
             continue
         for entry in entries.values():
-            if entry.get("kind") == kind and entry.get("slug") == slug:
+            if (entry.get("kind") == kind and entry.get("slug") == slug
+                    and not _entry_expired(entry)):
                 return True
     return False
 
 
 def list_all(user_id: str) -> list[dict[str, Any]]:
-    """Return every registered share, with the resolved public URL when ngrok is up."""
+    """Return every live registered share, with the resolved public URL when ngrok
+    is up. Expired shares are dropped and purged from disk opportunistically."""
     with _lock_for(user_id):
-        entries = list(_load(user_id).values())
+        all_entries = _load(user_id)
+        live = {t: e for t, e in all_entries.items() if not _entry_expired(e)}
+        if len(live) != len(all_entries):
+            logger.info("share registry: purged %d expired entr%s for %s",
+                        len(all_entries) - len(live),
+                        "y" if len(all_entries) - len(live) == 1 else "ies", user_id)
+            _save(user_id, live)
+        entries = list(live.values())
     for entry in entries:
         entry["url"] = _public_url(
             entry["token"],

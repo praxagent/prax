@@ -30,6 +30,7 @@ It is **off by default** and **fail-closed**: the endpoint is only mounted when 
 | Control | How |
 |---|---|
 | **Bearer auth** | Constant-time (`hmac.compare_digest`) check of `Authorization: Bearer <MCP_BEARER_TOKEN>` on every request; 401 otherwise. |
+| **Optional token expiry** | With `MCP_TOKEN_EXPIRY_ENABLED=true`, a client's `expires_at` (ISO-8601) is enforced — an expired token is rejected exactly like an invalid one (401), and an unreadable expiry is treated as expired (fail-closed). Default off → tokens never expire. Lets you hand a short-lived token to another agent and let it lapse instead of rotating. |
 | **Fail-closed** | The blueprint is registered only when enabled AND a token is set. `MCP_SERVER_ENABLED=true` with no token logs an error and mounts nothing. |
 | **Per-caller allowlist** | Each client exposes only the tools in *its own* allowlist (the authorization boundary). To grant a trusted caller *write* (MEDIUM) tools, list them in that client's `allow`. |
 | **Never HIGH** | A tool classified HIGH-risk is refused even if allowlisted — at build time *and* call time. HIGH tools are destructive/irreversible and expect a human confirmation an external caller can't give. (To expose a constrained capability, wrap a narrow MEDIUM tool instead.) |
@@ -86,6 +87,26 @@ distinct caller with its own token, identity, and allowlist:
 `MCP_TOOL_ALLOWLIST`): `get_current_datetime`, `memory_recall`, `knowledge_search`,
 `knowledge_namespaces`, `conversation_search`, `trace_search`, `trace_detail` — all read-only
 (`prax/mcp/server.py:DEFAULT_ALLOWLIST`).
+
+**Optional: expiring tokens (default off).** Hand a caller a token that lapses on its own
+instead of living forever. Turn enforcement on and stamp each token with an expiry:
+
+```bash
+MCP_TOKEN_EXPIRY_ENABLED=true        # enforce expires_at everywhere (default false)
+MCP_TOKEN_EXPIRES_AT=2026-12-31T00:00:00Z   # expiry for the single-token client (optional)
+```
+
+```jsonc
+// in a registry entry:
+{ "name": "research-agent", "token": "…", "user_id": "u_research",
+  "allow": ["knowledge_search"], "expires_at": "2026-12-31T00:00:00Z" }
+```
+
+Semantics: enforcement is **flag-gated** (off → `expires_at` is ignored, so existing static
+tokens are unaffected). A client with no `expires_at` never expires. Past expiry, the token is
+rejected with `401` as if it had never been issued; a malformed timestamp is treated as expired
+(fail-closed). The check is on every request, so you can shorten/extend a lease by editing the
+registry file with no restart.
 
 Expose the endpoint to other machines the same way as the rest of Prax (tailscale serve / a
 reverse proxy with TLS) — the bearer token is the auth boundary; put TLS in front of it.

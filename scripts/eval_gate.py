@@ -18,6 +18,29 @@ import os
 import sys
 
 
+def _report_goldens() -> None:
+    """Surface curated 'golden' quality targets every run so roadmap items
+    tracked as goldens stay visible (IDEAS_BACKLOG #13). Listing is key-free;
+    set PRAX_EVAL_GOLDENS=1 to actually replay + score them (needs keys + cost).
+    """
+    from prax.eval.goldens import run_golden_suite
+
+    score = os.environ.get("PRAX_EVAL_GOLDENS", "").lower() in ("1", "true", "yes")
+    report = run_golden_suite(replay=score)
+    if report["total"] == 0:
+        return
+    print("\n--- Golden quality targets ---")
+    if not score:
+        for r in report["results"]:
+            print(f"  • {r['id']} [{r.get('status') or 'tracked'}] — {r['title']}")
+        print("  (set PRAX_EVAL_GOLDENS=1 to replay + score these)")
+    else:
+        for r in report["results"]:
+            total = r.get("total")
+            print(f"  • {r['id']}: {total if total is not None else 'n/a'} — {r['title']}")
+        print(f"  goldens avg: {report['avg']} ({report['scored']}/{report['total']} scored)")
+
+
 def main() -> int:
     from prax.eval.runner import run_eval_suite
 
@@ -27,6 +50,11 @@ def main() -> int:
     report = run_eval_suite(max_cases=max_cases)
     summary = {k: report.get(k) for k in ("total", "passed", "failed", "score", "pass_rate", "axes")}
     print(json.dumps(summary, indent=2))
+
+    try:
+        _report_goldens()
+    except Exception as exc:  # never let golden reporting break the gate
+        print(f"(golden reporting skipped: {exc})")
 
     if report.get("total", 0) == 0:
         print("No eval cases recorded — nothing to gate.")

@@ -25,9 +25,22 @@ import hmac
 import json
 import logging
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_iso(value: str) -> datetime | None:
+    """Parse an ISO-8601 timestamp → aware datetime (UTC if naive), or None."""
+    try:
+        s = value.strip()
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+    except (ValueError, TypeError, AttributeError):
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
 
 @dataclass(frozen=True)
@@ -37,6 +50,8 @@ class MCPClient:
     allow: frozenset[str] | None = None  # None → server's DEFAULT_ALLOWLIST
     token: str = field(default="", repr=False)
     token_sha256: str = field(default="", repr=False)
+    # Optional ISO-8601 expiry; enforced only when MCP_TOKEN_EXPIRY_ENABLED is set.
+    expires_at: str | None = None
 
     def matches(self, presented: str) -> bool:
         """Constant-time check that *presented* is this client's token."""
@@ -46,6 +61,22 @@ class MCPClient:
         if self.token:
             return hmac.compare_digest(presented.encode("utf-8"), self.token.encode("utf-8"))
         return False
+
+    def is_expired(self, now: datetime | None = None) -> bool:
+        """True when this client carries an ``expires_at`` that is in the past.
+
+        Fail-closed: a malformed timestamp counts as expired (a token with an
+        unreadable lease must not authenticate). Clients without an
+        ``expires_at`` never expire.
+        """
+        if not self.expires_at:
+            return False
+        when = _parse_iso(self.expires_at)
+        if when is None:
+            logger.warning("MCP client %r has unparseable expires_at=%r — treating as expired",
+                           self.name, self.expires_at)
+            return True
+        return when <= (now or datetime.now(UTC))
 
 
 def _parse_allow(value) -> frozenset[str] | None:
@@ -90,6 +121,7 @@ def _clients_from_file() -> list[MCPClient]:
                 allow=_parse_allow(entry.get("allow")),
                 token=token,
                 token_sha256=token_sha256,
+                expires_at=(entry.get("expires_at") or None),
             ))
         except Exception:
             logger.warning("Skipping malformed MCP client entry #%d", i, exc_info=True)
@@ -105,6 +137,7 @@ def legacy_client() -> MCPClient:
         user_id=settings.mcp_user_id or None,
         allow=_parse_allow(settings.mcp_tool_allowlist),
         token=settings.mcp_bearer_token or "",
+        expires_at=(settings.mcp_token_expires_at or None),
     )
 
 
@@ -120,11 +153,20 @@ def load_clients() -> list[MCPClient]:
 
 def resolve_client(presented: str | None) -> MCPClient | None:
     """Resolve a presented bearer token to a client, or None. Constant-time-ish:
-    every client is checked (no early break on match)."""
+    every client is checked (no early break on match).
+
+    When ``MCP_TOKEN_EXPIRY_ENABLED`` is set, a matching-but-expired client is
+    treated as no match (the token is rejected as if invalid)."""
     if not presented:
         return None
+    from prax.settings import settings
+    enforce_expiry = settings.mcp_token_expiry_enabled
     matched: MCPClient | None = None
     for client in load_clients():
         if client.matches(presented) and matched is None:
+            if enforce_expiry and client.is_expired():
+                logger.warning("MCP client %r presented a valid token but it expired (%s)",
+                               client.name, client.expires_at)
+                continue
             matched = client
     return matched

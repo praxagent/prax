@@ -142,6 +142,8 @@ def _bare_agent():
     agent._primary_provider = "openai"
     agent._active_provider = "openai"
     agent._tried_providers = {"openai"}
+    agent._denylisted = {}
+    agent._pending_denylist_notices = []
     agent._orchestrator_tier = "medium"
     agent.tools = []
     agent.checkpoint_mgr = CheckpointManager()

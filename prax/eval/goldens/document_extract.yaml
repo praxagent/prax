@@ -1,0 +1,49 @@
+# Golden eval — schema-constrained document extraction (our own "Lift").
+#
+# Tracks IDEAS_BACKLOG.md #14 and docs/research/diy-document-extraction-model.md.
+# This is a COMPARATOR-scored golden, not an LLM-rubric one: correctness is
+# measured deterministically (schema-validity rate, per-field accuracy, full-doc
+# accuracy) by a comparator wired in during Phase 0 via run_golden_suite's
+# replay_fn/judge seam. Until that lands it has NO `rubric`, so `make eval` lists
+# it as "comparator-scored — not wired" rather than fake-scoring it. Its presence
+# is guarded by tests/test_eval_goldens.py so the capability can't be forgotten.
+id: document_extract
+title: Schema-constrained document extraction (PDF/image + JSON Schema -> typed JSON)
+kind: doc_extract
+status: planned   # Phase 0 wires the deterministic comparator
+source: "docs/research/diy-document-extraction-model.md (vs Datalab Lift)"
+
+prompt: >-
+  Given a document and a JSON Schema, extract a JSON object that matches the
+  schema exactly (schema-constrained decoding), pulling correct field values
+  including any that span multiple pages.
+
+# No `rubric:` on purpose — see header. The fields below are the forward-looking
+# payload the Phase-0 comparator will consume (the loader ignores extra keys);
+# they are illustrative until the comparator + a labeled eval set exist.
+metrics:
+  - schema_validity_rate    # should be ~100% once guided decoding is on (proves the constraint)
+  - field_accuracy          # JSONPath-flattened leaf match, type-aware normalization
+  - full_document_accuracy  # all fields correct (expected to be low — that's the point)
+  - latency_p50_p95
+
+payload_example:
+  json_schema:
+    type: object
+    properties:
+      invoice_number: { type: string }
+      total_amount:   { type: number }
+      line_items:
+        type: array
+        items:
+          type: object
+          properties:
+            description: { type: string }
+            amount:      { type: number }
+  # expected_json + doc_path are supplied per-case with the labeled eval set
+  # (kept under $PRAX_EVAL_DIR per the isolation rule in prax/eval/README.md).
+
+notes: >-
+  Phase 0 builds the comparator and a small labeled (doc, schema, gold JSON) set;
+  this golden then measures validity + field/full-doc accuracy of our own
+  constrained-decoded / fine-tuned extractor. A low full-doc number is expected.

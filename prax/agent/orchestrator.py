@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Iterable
 
 from langchain.agents import create_agent as create_react_agent
@@ -23,6 +24,13 @@ _MAX_PLAN_CONTINUATIONS = 3
 # recoverable URL/content-fetch failure.  Keep this low so bad sites don't trap
 # the turn forever.
 _MAX_RECOVERY_CONTINUATIONS = 2
+
+# A plan-housekeeping acknowledgement that must never be surfaced as the user-
+# facing reply (e.g. "Done — the plan is cleared.", "Plan cleared").
+_PLAN_ACK_RE = re.compile(
+    r"^\s*(done[.!,—\-\s]*)?(the\s+)?plan\s+(is\s+)?(now\s+)?(been\s+)?clear(ed)?\.?\s*$",
+    re.IGNORECASE,
+)
 
 # Keywords/patterns that suggest a request is complex enough to benefit from
 # a plan.  Checked case-insensitively against the user input.
@@ -93,9 +101,15 @@ def _load_system_prompt() -> str:
             "packages (pdflatex, ffmpeg, etc.) require those packages on the host; if a "
             "plugin reports missing deps, guide the user to install them."
         )
+    try:
+        from prax.services.deployment_info import summary_line
+        deployment = summary_line()
+    except Exception:
+        deployment = "unknown"
     prompt = mgr.load("system_prompt.md", {
         "AGENT_NAME": settings.agent_name,
         "RUNTIME_ENV": runtime_env,
+        "DEPLOYMENT": deployment,
         "SANDBOX_GUIDANCE": sandbox_guidance,
         "MODEL_TIERS": tier_for_system_prompt(),
     })
@@ -142,6 +156,13 @@ class ConversationAgent:
         ).lower()
         self._active_provider: str = self._primary_provider
         self._tried_providers: set[str] = {self._primary_provider}
+        # Providers denylisted this process after a *terminal* failure
+        # (auth/billing/access/decommissioned) — see _maybe_failover. Maps
+        # provider -> {"kind", "detail", "ts"}; auto-re-probed after a cooldown.
+        self._denylisted: dict[str, dict] = {}
+        # User-facing notices queued when a provider is denylisted, drained into
+        # the turn's response so the user learns *why* (e.g. a late bill).
+        self._pending_denylist_notices: list[str] = []
         self.checkpoint_mgr = CheckpointManager()
         self.tools = get_registered_tools()
         self.graph = create_react_agent(
@@ -210,10 +231,66 @@ class ConversationAgent:
         )
         self._active_provider = provider.lower()
 
+    def _is_denylisted(self, provider: str) -> bool:
+        """True if *provider* is currently denylisted (auto-expires after the cooldown)."""
+        prov = (provider or "").lower()
+        entry = self._denylisted.get(prov)
+        if not entry:
+            return False
+        cooldown = settings.llm_provider_denylist_cooldown_seconds
+        if cooldown and cooldown > 0:
+            import time
+            if time.time() - entry["ts"] >= cooldown:
+                self._denylisted.pop(prov, None)
+                logger.info("Denylist cooldown elapsed for provider '%s' — re-probing.", prov)
+                return False
+        return True
+
+    def _denylist_provider(self, provider: str, kind: str, detail: str) -> None:
+        """Remove *provider* from the live pool after a terminal failure."""
+        import time
+        prov = (provider or "").lower()
+        self._denylisted[prov] = {"kind": kind, "detail": detail, "ts": time.time()}
+        logger.warning("Denylisted provider '%s' (%s: %s) from the model pool.", prov, kind, detail)
+        try:
+            from prax.services.health_telemetry import EventCategory, Severity, record_event
+            record_event(
+                EventCategory.RETRY, Severity.ERROR, component="orchestrator",
+                details=f"LLM provider denylisted: {prov} ({kind}: {detail})",
+            )
+        except Exception:
+            pass
+
+    def _drain_denylist_notice(self) -> str:
+        """Pop queued denylist notices as a response suffix (deduped, order-preserving)."""
+        if not self._pending_denylist_notices:
+            return ""
+        notices, self._pending_denylist_notices = self._pending_denylist_notices, []
+        seen: set[str] = set()
+        uniq = [n for n in notices if not (n in seen or seen.add(n))]
+        return "\n\n" + "\n\n".join(uniq)
+
     def _reset_to_primary_provider(self) -> None:
-        """At turn start, fail back to the primary provider if we drifted off it."""
+        """At turn start, fail back to the primary provider if we drifted off it.
+
+        If the primary is currently denylisted (a terminal failure that hasn't
+        cooled down yet), start the turn on the first healthy fallback instead,
+        so we don't immediately re-hit the dead provider.
+        """
         primary = self._primary_provider
         self._tried_providers = {primary}
+        if self._is_denylisted(primary):
+            try:
+                from prax.agent.llm_fallback import get_fallback_providers
+                for fb in get_fallback_providers(primary):
+                    if self._is_denylisted(fb["provider"]):
+                        continue
+                    self._bind_provider(fb["provider"], fb.get("model"))
+                    self._tried_providers.add(fb["provider"])
+                    logger.info("Primary '%s' denylisted — starting turn on '%s'.", primary, fb["provider"])
+                    return
+            except Exception:
+                logger.warning("Could not select a healthy provider for denylisted primary '%s'", primary, exc_info=True)
         if self._active_provider != primary:
             try:
                 self._bind_provider(primary, None)
@@ -222,7 +299,15 @@ class ConversationAgent:
                 logger.warning("Could not reset to primary provider '%s'", primary, exc_info=True)
 
     def _maybe_failover(self, exc: BaseException, user_id: str) -> bool:
-        """Fail over to the next configured provider if *exc* is provider-side.
+        """Fail over to the next healthy provider if *exc* is provider-side.
+
+        Transient errors (rate limit / overload / 5xx / connection) fail over
+        and reset to primary next turn.  *Terminal* errors (auth / billing /
+        access / decommissioned — which a retry won't fix) additionally DENYLIST
+        the failing provider from the pool and queue a user-facing notice
+        explaining the likely cause, so the user can fix the root problem (a late
+        bill, a revoked key, lost access) instead of Prax silently re-hitting a
+        dead provider every turn.
 
         Returns True when a fallback provider was activated (the caller should
         retry), False otherwise.  No-op unless ``settings.llm_fallback_enabled``.
@@ -230,27 +315,48 @@ class ConversationAgent:
         if not settings.llm_fallback_enabled:
             return False
         try:
-            from prax.agent.llm_fallback import get_fallback_providers, is_provider_error
-            if not is_provider_error(exc):
+            from prax.agent.llm_fallback import (
+                classify_provider_error,
+                get_fallback_providers,
+                terminal_user_notice,
+            )
+            kind = classify_provider_error(exc)
+            if kind is None:
                 return False
+            terminal = kind != "transient" and settings.llm_provider_denylist_enabled
+            denied = self._active_provider
+            detail = type(exc).__name__  # type name only — the message can echo the API key
+            cooldown = settings.llm_provider_denylist_cooldown_seconds
+            if terminal:
+                self._denylist_provider(denied, kind, detail)
             for fb in get_fallback_providers(self._primary_provider):
-                if fb["provider"] in self._tried_providers:
+                prov = fb["provider"]
+                if prov in self._tried_providers or self._is_denylisted(prov):
                     continue
-                self._tried_providers.add(fb["provider"])
+                self._tried_providers.add(prov)
                 logger.warning(
-                    "Provider '%s' failed (%s) — failing over to '%s'",
-                    self._active_provider, type(exc).__name__, fb["provider"],
+                    "Provider '%s' failed (%s/%s) — failing over to '%s'",
+                    denied, kind, type(exc).__name__, prov,
                 )
-                self._bind_provider(fb["provider"], fb.get("model"))
+                self._bind_provider(prov, fb.get("model"))
                 try:
                     from prax.services.health_telemetry import EventCategory, Severity, record_event
                     record_event(
                         EventCategory.RETRY, Severity.WARNING, component="orchestrator",
-                        details=f"LLM failover {self._primary_provider} -> {fb['provider']} ({type(exc).__name__})",
+                        details=f"LLM failover {denied} -> {prov} ({kind}/{type(exc).__name__})",
                     )
                 except Exception:
                     pass
+                if terminal:
+                    self._pending_denylist_notices.append(
+                        terminal_user_notice(denied, kind, detail, continuing=prov, cooldown_seconds=cooldown)
+                    )
                 return True
+            # No healthy fallback left — still tell the user why the pool shrank.
+            if terminal:
+                self._pending_denylist_notices.append(
+                    terminal_user_notice(denied, kind, detail, continuing=None, cooldown_seconds=cooldown)
+                )
         except Exception:
             logger.debug("Failover evaluation failed", exc_info=True)
         return False
@@ -426,6 +532,29 @@ class ConversationAgent:
         "web_summary_tool": "summary",
     }
 
+    # Phrases where the agent OFFERS to take an obvious next step rather than
+    # taking it ("I saved a screenshot, I can take the next step and inspect it").
+    _OFFER_NEXT_STEP_MARKERS = frozenset({
+        "i can take the next step",
+        "take the next step and",
+        "i can inspect",
+        "i can describe",
+        "i can analyze",
+        "want me to inspect",
+        "want me to describe",
+        "want me to analyze",
+        "shall i inspect",
+        "if you want, i can",
+        "if you'd like, i can",
+        "i can go ahead and",
+    })
+
+    # Tool-output signs that an intermediate artifact was just produced — the
+    # thing the offer above is about using.
+    _ARTIFACT_PRODUCED_MARKERS = frozenset({
+        "screenshot saved", "saved to", "saved:", "downloaded", "/tmp/", "captured",
+    })
+
     @classmethod
     def _response_has_caveat(cls, content: str) -> str | None:
         """Return the first caveat marker found in ``content``, else None.
@@ -510,6 +639,49 @@ class ConversationAgent:
             "looks wrong; use delegate_browser if you have not already; or "
             "fetch a discovered working URL. If all distinct recovery paths "
             "fail, then report the exact attempts and stop."
+        )
+
+    @classmethod
+    def _should_continue_after_offer(cls, user_input: str, messages: list) -> bool:
+        """Detect a 'produced an artifact, then OFFERED to use it' stall.
+
+        Generalizes the transcript failure ("I saved a screenshot... I can take
+        the next step and inspect it") to any chain where the agent created an
+        intermediate (screenshot/download/file) and then offered to take the
+        obvious next step instead of taking it. Default-on
+        (``AUTONOMY_FOLLOWTHROUGH_ENABLED``) — the user shouldn't have to nudge.
+        """
+        if not settings.autonomy_followthrough_enabled:
+            return False
+        response = cls._last_ai_content(messages).lower()
+        if not response or not any(m in response for m in cls._OFFER_NEXT_STEP_MARKERS):
+            return False
+        for msg in messages or []:
+            if isinstance(msg, ToolMessage):
+                content = (msg.content or "").lower()
+                if any(k in content for k in cls._ARTIFACT_PRODUCED_MARKERS):
+                    return True
+        return False
+
+    @staticmethod
+    def _offer_followthrough_nudge() -> str:
+        return (
+            "[SYSTEM] You produced an intermediate result (e.g. a saved "
+            "screenshot/download/file) and your draft only OFFERS to take the "
+            "next step ('I can take the next step and inspect it'). Don't offer — "
+            "take it now: feed the artifact to the right tool (e.g. analyze_image "
+            "on the saved path), then give the user the actual result. Only stop "
+            "if the next step is expensive, irreversible, or genuinely ambiguous."
+        )
+
+    @staticmethod
+    def _plan_ack_recovery_nudge(user_input: str) -> str:
+        return (
+            "[SYSTEM] Your last message was only internal plan housekeeping "
+            "(e.g. 'the plan is cleared'), which is NOT an answer to the user. "
+            f"The user's request was: {user_input!r}. Carry it out now and reply "
+            "with the actual result. Never surface plan-clear or other bookkeeping "
+            "as your response."
         )
 
     @staticmethod
@@ -910,6 +1082,43 @@ class ConversationAgent:
                     recovery_messages, config, turn.user_id, heartbeat,
                 )
 
+            # Follow-through enforcement (default-on): if the agent produced an
+            # artifact and only OFFERED to use it, make it take the step.
+            offer_continuations = 0
+            while (
+                self._should_continue_after_offer(user_input, result.get("messages", []))
+                and offer_continuations < _MAX_RECOVERY_CONTINUATIONS
+                and _time.monotonic() < _run_max_deadline
+            ):
+                offer_continuations += 1
+                logger.info(
+                    "Follow-through enforcement: continuation %d/%d (user=%s)",
+                    offer_continuations, _MAX_RECOVERY_CONTINUATIONS, uid,
+                )
+                offer_messages = result.get("messages", []) + [
+                    HumanMessage(content=self._offer_followthrough_nudge()),
+                ]
+                result = self._invoke_graph_once(
+                    offer_messages, config, turn.user_id, heartbeat,
+                )
+
+            # Plan-ack guard (default-on): a plan-housekeeping ack must never be
+            # the user-facing reply. Re-prompt once to answer the real request.
+            if (
+                settings.autonomy_followthrough_enabled
+                and _PLAN_ACK_RE.match(self._last_ai_content(result.get("messages", [])).strip())
+                and _time.monotonic() < _run_max_deadline
+            ):
+                logger.info(
+                    "Plan-ack guard: housekeeping ack surfaced as reply; re-prompting (user=%s)", uid,
+                )
+                ack_messages = result.get("messages", []) + [
+                    HumanMessage(content=self._plan_ack_recovery_nudge(user_input)),
+                ]
+                result = self._invoke_graph_once(
+                    ack_messages, config, turn.user_id, heartbeat,
+                )
+
             if _time.monotonic() >= _run_max_deadline:
                 run_status = "timed_out"
                 run_error_summary = f"Agent run exceeded {_run_max_timeout}s maximum wall-clock timeout."
@@ -1122,7 +1331,9 @@ class ConversationAgent:
             summary=(run_error_summary or response)[:200] if (run_error_summary or response) else "",
             tool_calls=_graph_cb._tool_count,
         )
-        return response
+        # Surface any "provider denylisted" heads-up queued during failover so the
+        # user learns *why* the pool shrank (late bill, revoked key, lost access).
+        return response + self._drain_denylist_notice()
 
     @staticmethod
     def _is_invalid_checkpoint_error(exc: Exception) -> bool:
@@ -1176,8 +1387,8 @@ class ConversationAgent:
 
         for msg in reversed(result.get("messages", [])):
             if isinstance(msg, AIMessage) and msg.content:
-                return msg.content
-        return ""
+                return str(msg.content) + self._drain_denylist_notice()
+        return self._drain_denylist_notice().lstrip("\n")
 
     def _invoke_with_retry(
         self,

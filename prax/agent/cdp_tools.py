@@ -46,7 +46,11 @@ def sandbox_browser_read(action: str = "text") -> str:
         result = cdp_service.screenshot()
         if "error" in result:
             return f"Browser error: {result['error']}"
-        return f"Screenshot saved: {result['path']}"
+        path = result["path"]
+        return (
+            f"Screenshot saved to {path}. To read/describe what's on the page, "
+            f"call analyze_image with that path now (don't stop here)."
+        )
 
     elif action in ("scroll_down", "scroll_up"):
         direction = "down" if action == "scroll_down" else "up"

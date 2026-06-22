@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from prax.utils.time_format import format_current_time, format_relative_time
 
 
@@ -28,40 +30,27 @@ class TestFormatRelativeTime:
         result = format_relative_time(ts)
         assert "sec ago" in result
 
-    def test_minutes_ago(self):
+    @pytest.mark.parametrize(
+        ("delta", "expected", "mode"),
+        [
+            (timedelta(minutes=15), "15 min ago", "exact"),
+            (timedelta(hours=3), "3h ago", "exact"),
+            (timedelta(days=2), "2d ago", "exact"),
+            (timedelta(days=14), "2w ago", "exact"),
+            (timedelta(days=90), "mo ago", "substr"),
+            (timedelta(days=800), "y ago", "substr"),
+            (-timedelta(hours=1), "in the future", "exact"),
+        ],
+        ids=["minutes", "hours", "days", "weeks", "months", "years", "future"],
+    )
+    def test_duration_buckets(self, delta, expected, mode):
         now = datetime.now(UTC)
-        ts = _iso(now - timedelta(minutes=15))
-        assert format_relative_time(ts) == "15 min ago"
-
-    def test_hours_ago(self):
-        now = datetime.now(UTC)
-        ts = _iso(now - timedelta(hours=3))
-        assert format_relative_time(ts) == "3h ago"
-
-    def test_days_ago(self):
-        now = datetime.now(UTC)
-        ts = _iso(now - timedelta(days=2))
-        assert format_relative_time(ts) == "2d ago"
-
-    def test_weeks_ago(self):
-        now = datetime.now(UTC)
-        ts = _iso(now - timedelta(days=14))
-        assert format_relative_time(ts) == "2w ago"
-
-    def test_months_ago(self):
-        now = datetime.now(UTC)
-        ts = _iso(now - timedelta(days=90))
-        assert "mo ago" in format_relative_time(ts)
-
-    def test_years_ago(self):
-        now = datetime.now(UTC)
-        ts = _iso(now - timedelta(days=800))
-        assert "y ago" in format_relative_time(ts)
-
-    def test_future_timestamp(self):
-        now = datetime.now(UTC)
-        ts = _iso(now + timedelta(hours=1))
-        assert format_relative_time(ts) == "in the future"
+        ts = _iso(now - delta)
+        result = format_relative_time(ts)
+        if mode == "exact":
+            assert result == expected
+        else:
+            assert expected in result
 
     def test_naive_timestamp(self):
         """A naive timestamp (no tz) should be assumed UTC."""

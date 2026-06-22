@@ -64,6 +64,78 @@ def test_legacy_fallback_client(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
+# Token expiry (MCP_TOKEN_EXPIRY_ENABLED, default off)
+# --------------------------------------------------------------------------- #
+
+def _expiry_registry(tmp_path, monkeypatch, expires_at):
+    path = tmp_path / "c.json"
+    path.write_text(json.dumps({"clients": [
+        {"name": "temp", "token": "tok-t", "user_id": "u", "allow": "default",
+         "expires_at": expires_at},
+    ]}))
+    from prax.settings import settings
+    monkeypatch.setattr(settings, "mcp_clients_path", str(path))
+    monkeypatch.setattr(settings, "mcp_bearer_token", "")
+    return path
+
+
+def test_expired_token_ignored_when_flag_off(tmp_path, monkeypatch):
+    _expiry_registry(tmp_path, monkeypatch, "2000-01-01T00:00:00Z")
+    from prax.settings import settings
+    monkeypatch.setattr(settings, "mcp_token_expiry_enabled", False)
+    # Flag off → expiry not enforced; the token still resolves (back-compat).
+    assert mcp_clients.resolve_client("tok-t") is not None
+
+
+def test_expired_token_rejected_when_flag_on(tmp_path, monkeypatch):
+    _expiry_registry(tmp_path, monkeypatch, "2000-01-01T00:00:00Z")
+    from prax.settings import settings
+    monkeypatch.setattr(settings, "mcp_token_expiry_enabled", True)
+    assert mcp_clients.resolve_client("tok-t") is None
+
+
+def test_future_expiry_still_valid_when_flag_on(tmp_path, monkeypatch):
+    _expiry_registry(tmp_path, monkeypatch, "2999-01-01T00:00:00Z")
+    from prax.settings import settings
+    monkeypatch.setattr(settings, "mcp_token_expiry_enabled", True)
+    c = mcp_clients.resolve_client("tok-t")
+    assert c is not None and c.name == "temp"
+
+
+def test_malformed_expiry_is_failclosed_when_flag_on(tmp_path, monkeypatch):
+    _expiry_registry(tmp_path, monkeypatch, "not-a-date")
+    from prax.settings import settings
+    monkeypatch.setattr(settings, "mcp_token_expiry_enabled", True)
+    assert mcp_clients.resolve_client("tok-t") is None
+
+
+def test_client_without_expiry_never_expires(tmp_path, monkeypatch):
+    path = tmp_path / "c.json"
+    path.write_text(json.dumps({"clients": [
+        {"name": "perm", "token": "tok-p", "user_id": "u", "allow": "default"},
+    ]}))
+    from prax.settings import settings
+    monkeypatch.setattr(settings, "mcp_clients_path", str(path))
+    monkeypatch.setattr(settings, "mcp_bearer_token", "")
+    monkeypatch.setattr(settings, "mcp_token_expiry_enabled", True)
+    assert mcp_clients.resolve_client("tok-p") is not None
+
+
+def test_legacy_token_expiry(monkeypatch):
+    from prax.settings import settings
+    monkeypatch.setattr(settings, "mcp_clients_path", "")
+    monkeypatch.setattr(settings, "mcp_bearer_token", "legacy-tok")
+    monkeypatch.setattr(settings, "mcp_user_id", "u_legacy")
+    monkeypatch.setattr(settings, "mcp_tool_allowlist", "")
+    monkeypatch.setattr(settings, "mcp_token_expires_at", "2000-01-01T00:00:00Z")
+    monkeypatch.setattr(settings, "mcp_token_expiry_enabled", True)
+    assert mcp_clients.resolve_client("legacy-tok") is None
+    # The same token resolves once expiry enforcement is switched off.
+    monkeypatch.setattr(settings, "mcp_token_expiry_enabled", False)
+    assert mcp_clients.resolve_client("legacy-tok") is not None
+
+
+# --------------------------------------------------------------------------- #
 # Per-client tool scoping + identity
 # --------------------------------------------------------------------------- #
 

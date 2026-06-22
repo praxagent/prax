@@ -222,20 +222,80 @@ The Docker image bundles Prax + TeamWork + Qdrant + Neo4j into one container. To
 **Shortcut — `make` targets.** Once the prerequisites below are in place, you don't have to start each piece by hand:
 
 ```bash
-make run-local-min    # Prax core only, foreground — memory/sandbox/TeamWork all OFF (Ctrl-C to stop)
-make run-local-all    # full no-Docker stack in the background: Qdrant + Neo4j + TeamWork + Prax
-make local-status     # probe each service's port, report up/down
-make local-logs       # tail -F every .local-run/*.log
-make shutdown         # stop everything run-local-all started
+make run-local-min     # Prax core only, foreground — memory/sandbox/TeamWork all OFF (Ctrl-C to stop)
+make run-local-all     # full local stack in the background: Qdrant + Neo4j + TeamWork + sandbox + Prax
+make run-local-all-dev # same as run-local-all but DEBUG=true — Prax restarts on code change (Werkzeug reloader)
+make run-local-all-tail-dev # run-local-all-dev + a Tailscale serve exposing the TeamWork UI over HTTPS
+make local-status      # probe each service's port, report up/down
+make smoke             # connectivity smoke test — verify everything is CONNECTED, not just up
+make integration       # FROM CLEAN: tear down, clear derived state, bring the stack up, run smoke (pre-PR)
+make local-logs        # tail -F every .local-run/*.log
+make shutdown          # stop everything run-local-all started (processes, containers, and the Tailscale serve)
 ```
 
-`run-local-all` is opinionated — memory **on**, TeamWork **on**, sandbox **off** (the sandbox is Docker-only). PIDs and logs land in `.local-run/`. Each backing service is skipped with a warning (never a hard failure) if its binary isn't found: `qdrant` (or `./qdrant`), `neo4j`, and a sibling TeamWork checkout — override its location with `make run-local-all TEAMWORK_PATH=/path/to/teamwork`. The manual steps below are exactly what those targets automate, in case you want to run a piece yourself.
+> **Verify a fresh install.** `make local-status` only checks ports; **`make smoke`**
+> (after `make run-local-all`) asserts the cross-service *wiring* a fresh clone needs —
+> TeamWork serves its built SPA, TeamWork→Prax proxy works, the sandbox CDP/desktop
+> WebSocket upgrades succeed, and Prax reaches memory + the sandbox. To prove this on
+> *your own* box before opening a PR, run **`make integration`**: it tears the running
+> stack down, deletes the derived state that masks fresh-download bugs (the built
+> TeamWork SPA, the `.local-run` markers), brings everything up from scratch, and runs
+> `make smoke` — its exit code is the pass/fail signal. (It's disruptive — it stops your
+> live local stack — and heavy: it rebuilds the SPA and starts the Chrome+desktop
+> sandbox, so budget ~4GB free RAM. `REBUILD_SANDBOX=1` also rebuilds the sandbox image
+> from scratch; `SANDBOX_PATH=/nonexistent` skips it for a core-only run.) The
+> `Fresh-install integration` GitHub workflow (`.github/workflows/fresh-install.yml`,
+> nightly/manual) runs the *same* `make integration` on a **clean runner** that clones
+> all three repos — so "works on a fresh download," not just on a machine you've been
+> hacking on, is continuously proven.
+
+> **Prerequisite — Node.js (for the TeamWork web UI).** The TeamWork UI is a React app that must
+> be compiled (or run via the Vite dev server). Without **Node.js + npm** on the host, TeamWork's
+> backend still runs but `/` returns `{"detail":"Not Found"}` (no UI). `make run-local-all` builds
+> the UI automatically when `npm` is present (and `run-local-all-dev` runs it with hot-reload);
+> if `npm` is missing it warns and serves API-only. Node **18+** is enough (TeamWork uses Vite 5).
+> Install it:
+> - **macOS:** `brew install node` — or download the LTS installer from [nodejs.org](https://nodejs.org/).
+> - **Windows:** `winget install OpenJS.NodeJS.LTS` (or `choco install nodejs-lts`) — or the [nodejs.org](https://nodejs.org/) installer.
+> - **Linux (Debian/Ubuntu):** `sudo apt install nodejs npm` (Ubuntu's `nodejs` package omits `npm`,
+>   so install both) — or, for a newer Node, the [NodeSource](https://github.com/nodesource/distributions) repo / [nvm](https://github.com/nvm-sh/nvm).
+> - **Any OS via nvm:** `nvm install --lts`.
+>
+> Verify with `node --version && npm --version`, then re-run the `make` target.
+
+`run-local-all` brings up the whole stack — memory **on**, TeamWork **on**, sandbox **on**. Prax and TeamWork run as plain host processes; **Qdrant, Neo4j and the sandbox run in Docker** (Prax connects to their published localhost ports). Everything persists under the user's workspace (default `PRAX_USER=local`): Qdrant/Neo4j data in `workspaces/$PRAX_USER/.services/{qdrant,neo4j}`, and the sandbox's `/workspace` is bind-mounted to `workspaces/$PRAX_USER` — so memory **and** sandbox files survive restarts rather than vaporizing with the containers. The sandbox inherits Prax's API keys (`.env`'s `ANTHROPIC_KEY`/`OPENAI_KEY` → the sandbox's `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`). PIDs and logs land in `.local-run/`. If the sandbox is expected (Docker + checkout present) but fails to start, `run-local-all` hard-fails instead of silently disabling it.
+
+Each backing service is skipped with an **actionable install hint** (never a hard failure) if it can't start — Qdrant and Neo4j prefer Docker (falling back to a native `qdrant`/`neo4j` binary), plus a sibling TeamWork checkout and a sibling `prax-sandbox` checkout (Docker-only). Override locations/owner with `make run-local-all TEAMWORK_PATH=/path/to/teamwork SANDBOX_PATH=/path/to/prax-sandbox PRAX_USER=alice`. By default the sibling repos are expected next to this one:
+
+```bash
+git clone https://github.com/praxagent/teamwork      ../teamwork
+git clone https://github.com/praxagent/prax-sandbox  ../prax-sandbox
+```
+
+**Docker images.** The first `run-local-all` pulls `qdrant/qdrant` and `neo4j:5` automatically (via `docker run`) and builds the sandbox image from its checkout — the first run is therefore slow. To pre-warm the cache (or just to watch progress), pull them yourself first:
+
+```bash
+docker pull qdrant/qdrant
+docker pull neo4j:5
+```
+
+`make` deliberately does **not** run `docker pull` for you: auto-pull happens through the Docker daemon, which honours its own proxy/registry settings. **Behind a proxy**, configure Docker itself (daemon `HTTP_PROXY`/`HTTPS_PROXY` or `~/.docker/config.json`, see [Docker's proxy docs](https://docs.docker.com/engine/cli/proxy/)) — not `make`. Neo4j takes ~20–40s to accept Bolt connections on a cold start; `run-local-all` waits for it (via `cypher-shell "RETURN 1"`) before starting Prax, so the reported status reflects reality.
+
+For live-reload development use `make run-local-all-dev` — Prax runs under the Werkzeug reloader (`DEBUG=true`) and restarts when you edit its source. (Tailscale is a separate concern: `make tailscale-up`.) The manual steps below are exactly what those targets automate, in case you want to run a piece yourself.
 
 **Prerequisites**
 
 - **Python 3.13** and [**uv**](https://docs.astral.sh/uv/) (the package manager — not pip)
-- For memory (on by default): **Qdrant** and **Neo4j** running locally. You can skip these entirely with `MEMORY_ENABLED=false` (STM still works; LTM degrades silently).
-- *Optional:* Ollama (only if you set `EMBEDDING_PROVIDER=ollama`); Docker (only for the code-execution sandbox — see the caveat below).
+- For memory (on by default): **Qdrant** and **Neo4j**. `run-local-all` starts these in Docker for you (or uses native binaries if Docker is absent). You can skip memory entirely with `MEMORY_ENABLED=false` (STM still works; LTM degrades silently).
+- **Docker** — used by `run-local-all` for Qdrant, Neo4j, and the code-execution sandbox. Not required if you run memory natively and don't need the sandbox.
+  - Your user must be able to run `docker` **without `sudo`** (the Makefile calls plain `docker`). If `make run-local-all` / `make integration` reports `permission denied while trying to connect to the Docker API at unix:///var/run/docker.sock`, add yourself to the `docker` group, then start a **fresh login shell** (group changes only apply to new sessions):
+
+    ```bash
+    sudo usermod -aG docker "$USER"   # then log out and back in
+    # …or activate it in the current shell without re-login:
+    newgrp docker                      # (or run a single command: sg docker -c 'make integration')
+    ```
+- *Optional:* Ollama (only if you set `EMBEDDING_PROVIDER=ollama`).
 
 **Installing the dev toolchain (Ubuntu)**
 
@@ -517,49 +577,102 @@ If Prax keeps asking "should I proceed?" or "do you want me to...?" when the ans
 
 ## Roadmap
 
-- [x] LangGraph ReAct agent with tool calling
-- [x] PDF extraction pipeline (opendataloader-pdf)
-- [x] Git-backed per-user workspace with agent tools
-- [x] Workspace context injection in system prompt
-- [x] Structural refactor (shared Twilio client, Pydantic settings, modular services)
-- [x] Sandbox code execution (Docker + OpenCode)
-- [x] Solution archiving and reuse
-- [x] Interactive sandbox sessions (main agent <-> coding agent feedback loop)
-- [x] Multi-model support with mid-session switching
-- [x] Round-based budget control for sandbox sessions
-- [x] Scheduled recurring messages (APScheduler + YAML + timezone-aware cron)
-- [x] Self-improving fine-tuning (vLLM + Unsloth QLoRA + hot-swap)
-- [x] Self-modification via staging clone + verify-then-deploy + PR workflow
-- [x] Browser automation (Playwright + credential store + persistent profiles + VNC login)
-- [x] Discord bot (free alternative to Twilio for text messaging)
-- [x] Local model support (vLLM with OpenAI-compatible API)
-- [x] Configurable agent name (AGENT_NAME)
-- [x] One-time reminders (APScheduler DateTrigger)
-- [x] User to-do list (natural language task management)
-- [x] Link history (URL logging to workspace)
+> The code-execution sandbox is now its own repo — its roadmap lives in
+> [**prax-sandbox**](https://github.com/praxagent/prax-sandbox#roadmap). This list covers the
+> harness itself. The harness keeps only thin bridges to the sandbox
+> (`prax/services/sandbox_bridge.py`, `prax/agent/sandbox_tools.py`).
+
+### Shipped
+
+**Agent core & models**
+- [x] LangGraph hub-and-spoke ReAct agent (orchestrator + domain spokes)
+- [x] Multi-provider LLM factory with mid-session switching, local vLLM, and multi-model consensus
+- [x] Agent task planning (multi-step decomposition) + instruction persistence
+
+**Reliability & resilience**
+- [x] Cross-provider LLM failover (rate-limit / overload / breaker-aware)
+- [x] Per-dependency circuit breakers for external services
+- [x] Durable checkpoints (in-memory / SQLite) with automatic retry-from-last-good-state
+- [x] User-initiated resume of a failed/timed-out turn from saved checkpoints
+- [x] Within-turn recovery-context injection on retry after a tool-chain failure
+- [x] Multi-perspective (4-angle) error recovery + tool-call loop detection
+- [x] Health watchdog + append-only telemetry with self-repair advisories
+
+**Security & governance**
+- [x] Single governance choke point — risk classify + arg scrub + confirm gate + audit + budget
+- [x] Deny-by-default tool boundaries (unknown tools → HIGH) + scoped HIGH-risk confirmation
+- [x] SSRF egress guard (blocks internal/metadata addresses, per-redirect-hop revalidation)
+- [x] Hard plugin-activation gate for security-flagged imports
+- [x] Earned-trust relaxation + configurable autonomy profiles (guided / balanced / autonomous)
+- [x] Deterministic claim-auditor (numeric + grounding checks) over final responses
+
+**Memory, knowledge & retrieval**
+- [x] Two-layer memory: bounded auditable STM + Qdrant/Neo4j LTM with bi-temporal consolidation + dual decay
+- [x] Hybrid retrieval (weighted RRF over dense + sparse + graph) with neighbourhood expansion
+- [x] Retrieval precision: LLM relevance rerank + query expansion (paraphrase/HyDE variants)
+- [x] Hybrid (dense+sparse) semantic search over knowledge-graph concepts
+- [x] OKF (Open Knowledge Format) export/import bridge for portable interchange
+- [x] Durable structured-memory ledger that works without vector/graph infra
 - [x] Dynamic user notes (per-user preferences and personality)
-- [x] Agent task planning (multi-step decomposition)
-- [x] Lightweight URL fetching (fetch_url_content with oEmbed support)
-- [x] Instruction persistence (reread_instructions tool)
-- [x] Plugin system (hot-swappable tools, prompts, and LLM routing with subprocess sandbox + auto-rollback)
-- [x] Folder-per-plugin layout with auto-generated CATALOG.md
-- [x] Reader-to-plugin migration (NPR, web summary, PDF, YouTube, arXiv, Deutschlandfunk)
-- [x] Plugin repository support (separate private git repo with SSH deploy key)
-- [x] Subprocess isolation for imported plugins (Phase 2 — JSON-RPC bridge, stripped env, capabilities proxy)
-- [x] Adaptive tier selection via Thompson Sampling bandit
-- [x] Difficulty-driven routing (signal-fused complexity estimation)
-- [x] Multi-perspective error recovery (4-angle failure analysis before retry)
-- [x] Metacognitive failure profiles (per-component pattern learning with confidence decay)
-- [x] Self-verification (workspace file and delegation output checks before delivery)
-- [x] Two-layer memory system (STM scratchpad + LTM with Qdrant vectors, Neo4j graph, weighted RRF, dual decay, validation gate, multi-graph, bi-temporal edges)
-- [ ] Apple Silicon support (MLX backend as alternative to vLLM/CUDA)
-- [ ] Sandbox Docker image build + integration test with live OpenCode
-- [ ] Voice-triggered sandbox sessions
-- [ ] Schedule firing with workspace file attachments (e.g., daily PDF digest)
-- [ ] MCP server integration for sandbox tooling
+
+**Evaluation & observability**
+- [x] Reference-free live-traffic eval, decomposed into grounding / relevancy / correctness axes
+- [x] Failure-replay eval runner + regression suite (LLM judge); `make eval` quality gate
+- [x] Nightly continuous-eval job publishing `prax_eval_quality` gauges to Prometheus
+- [x] OpenTelemetry / Prometheus metrics + tracing; observability-as-tools (agent queries its own health)
+- [x] Semantic search over past execution traces ("have I solved this before?")
+
+**Prompting & routing**
+- [x] Selective system-prompt assembly (drops unneeded topic sections on simple turns)
+- [x] Intent-clarification gate (asks one question on ambiguous-and-irreversible requests)
+- [x] Thompson Sampling tier bandit + difficulty-driven routing
+- [x] Metacognitive failure profiles injected as prompt warnings + self-verification of outputs
+
+**Plugins & extensibility**
+- [x] Plugin system — folder-per-plugin, hot-swap, subprocess isolation, capabilities proxy, auto-rollback
+- [x] Auto-generated plugin catalog (import-free metadata parse)
+- [x] Separate git repo for agent-authored plugins (push + cherry-pick workflow)
+- [x] Self-authored-tool registry tracking rationale / state / performance
+
+**Interop (MCP)**
+- [x] MCP server exposing a curated, governed tool subset to other agents
+- [x] Per-caller identity + per-caller allowlist; fail-closed bearer endpoint
+
+**Channels, identity & sharing**
+- [x] Unified UUID identity with provider linking across SMS / Discord / TeamWork
+- [x] Twilio SMS + voice, Discord bot, configurable agent name
+- [x] TeamWork web-UI integration; public share registry (per-file/course/note via ngrok URL)
+
+**Tasks, scheduling & Library**
+- [x] Background task runner — auto-executes Kanban + todo items assigned to the agent
+- [x] Library: hierarchical Project → Notebook → Note knowledge base with Kanban
+- [x] Per-space rolling progress log (hard char cap + LLM compaction)
+- [x] Recurring schedules (timezone-aware cron) + one-time reminders + user to-do list
+
+**Workspace, documents & readers**
+- [x] Git-backed per-user workspace with context injection
+- [x] PDF extraction + document pipelines (LaTeX render, Mermaid validate, Hugo publishing)
+- [x] Content readers (arXiv, YouTube, audio transcription, news) + lightweight URL fetch
+- [x] Browser automation (Patchright: navigate, forms, stored-credential login)
+
+**Teaching & self-improvement**
+- [x] Faculty of professor personas teaching adaptive one-lesson-at-a-time courses
+- [x] Self-improving fine-tuning (trajectory export + QLoRA/Unsloth + vLLM adapter hot-swap)
+- [x] Self-modification (staging clone → verify → deploy / PR) — executed via the sandbox
+
+**Deployment**
+- [x] Docker Compose (lite / full / GPU) + Kubernetes Helm chart + operator CRDs (`PraxInstance` / `PraxWorkspace`)
+
+### Planned
+
+- [ ] Apple Silicon (MLX) local-inference backend
+- [ ] Schedule firing with workspace file attachments (e.g. daily PDF digest)
 - [ ] Discord voice channel support (join, listen, speak)
-- [ ] Multi-step browser workflows (e.g., "check my Twitter DMs every morning")
-- [ ] Adapter A/B testing (serve two adapters, compare quality metrics)
+- [ ] Multi-step browser workflows (recorded / replayable recipes)
+- [ ] Adapter A/B testing (champion / challenger LoRA evaluation)
+- [ ] SSRF guard DNS-rebinding hardening (pin the resolved IP into the socket)
+- [ ] MCP Streamable-HTTP streaming / SSE responses
+- [ ] Durable cross-restart checkpoints by default + automatic "resume?" prompt
 
 ## License
 

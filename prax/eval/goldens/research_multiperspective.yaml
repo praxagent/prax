@@ -1,0 +1,57 @@
+# Golden eval — STORM-style grounded multi-perspective research.
+#
+# Source: Stanford OVAL "STORM" (Shao et al., NAACL 2024) —
+#   https://arxiv.org/abs/2402.14207 · https://github.com/stanford-oval/storm
+# Tracks IDEAS_BACKLOG.md #13. Today this measures the BASELINE gap (deep_dive
+# has no explicit multi-perspective stage); when the grounded multi-perspective
+# mode ships, the same rubric measures the improvement. Reference is the paper,
+# deliberately NOT the popular ungrounded "4 prompts" tweet.
+id: research_multiperspective
+title: STORM-style grounded multi-perspective research
+kind: research
+status: baseline-gap   # no multi-perspective stage yet; rubric tracks progress
+source: "Stanford OVAL STORM (NAACL 2024) — arxiv.org/abs/2402.14207"
+
+prompt: >-
+  Research the long-term reliability and maintainability trade-offs of a
+  microservices architecture versus a modular monolith for a small (≈6-engineer)
+  product team. Give me a sourced briefing I can act on.
+
+# Weighted rubric. score_golden() asks the judge to score each `key` 0.0–1.0;
+# the weighted average is the golden's total. Keys are the contract the judge
+# scores against — keep them stable so scores trend across runs.
+rubric:
+  - key: perspective_coverage
+    weight: 2.0
+    description: >-
+      Covers at least three distinct, non-overlapping expert lenses relevant to
+      the topic (e.g. the hands-on practitioner, the academic/evidence view, the
+      skeptic, the cost/incentives view, the historical-pattern view) — not one
+      framing restated.
+  - key: contradiction_mapping
+    weight: 2.0
+    description: >-
+      Explicitly surfaces where the perspectives or sources disagree, names the
+      specific clashing claims, and states what evidence/question would resolve
+      the biggest contradiction.
+  - key: grounding_citations
+    weight: 2.0
+    description: >-
+      Claims are backed by retrieved sources / citations (the agent actually
+      fetched or referenced material), not asserted from parametric memory.
+      Unsourced confident claims score low.
+  - key: synthesis
+    weight: 1.5
+    description: >-
+      Integrates the perspectives into a coherent briefing with findings ranked
+      by reliability, noting which perspectives support vs challenge each.
+  - key: self_critique
+    weight: 1.5
+    description: >-
+      Includes an honest self-review: weakest/least-confident claims, possible
+      bias or an over-represented voice, and a missing angle worth adding.
+
+notes: >-
+  This is a forward-looking quality target, not a regression of an observed
+  failure. A low total here is expected until IDEAS_BACKLOG #13 ships — that is
+  the point: it keeps the gap measured and visible instead of forgotten.

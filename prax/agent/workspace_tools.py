@@ -647,9 +647,9 @@ def _collect_trace_artifacts(
 
 
 def _collect_note_artifacts(candidates: dict[str, dict], *, uid: str, query_tokens: set[str]) -> None:
-    from prax.settings import settings
+    from prax.services.deployment_info import effective_base_url
 
-    base_url = settings.teamwork_base_url.rstrip("/")
+    base_url = effective_base_url()
 
     try:
         from prax.services import note_service

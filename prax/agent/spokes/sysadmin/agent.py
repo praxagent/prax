@@ -94,6 +94,7 @@ plugin management, configuration, source inspection, and self-maintenance tasks.
 def build_tools() -> list:
     """Return all tools available to the sysadmin spoke."""
     from prax.agent.ast_tools import build_ast_tools
+    from prax.agent.deployment_tools import build_deployment_tools
     from prax.agent.plugin_fix_agent import delegate_plugin_fix
     from prax.agent.plugin_tools import build_plugin_tools
     from prax.agent.self_improve_agent import delegate_self_improve
@@ -101,6 +102,7 @@ def build_tools() -> list:
     return (
         build_plugin_tools()
         + build_ast_tools()
+        + build_deployment_tools()
         + [delegate_self_improve, delegate_plugin_fix]
     )
 

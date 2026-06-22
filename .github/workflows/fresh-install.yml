@@ -1,0 +1,70 @@
+name: Fresh-install integration
+
+# Proves a CLEAN checkout brings the whole stack up and everything CONNECTS —
+# not just that unit tests pass on a developer's accreted local machine. This is
+# the harness that would have caught the regressions we hit (TeamWork frontend
+# not built, TeamWork->sandbox panel wiring, Prax->sandbox CDP, missing Node).
+#
+# Heavy (builds the sandbox image + the TeamWork SPA, runs 5 services), so it is
+# manual + nightly, NOT per-PR. If the sandbox (Chrome + desktop) OOMs the default
+# runner, run on a larger runner or drop it for a core-only check by cloning
+# without ../prax-sandbox.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 7 * * *"  # nightly 07:00 UTC
+
+jobs:
+  fresh-install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      FLASK_SECRET_KEY: "ci-test-key"
+      PRAX_USER: "ci"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # Sibling repos at the paths the Makefile expects (../prax-sandbox, ../teamwork).
+      - name: Checkout sibling repos (sandbox + TeamWork)
+        run: |
+          git clone --depth 1 https://github.com/praxagent/prax-sandbox.git ../prax-sandbox
+          git clone --depth 1 https://github.com/praxagent/teamwork.git ../teamwork
+
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+        with:
+          python-version: "3.13"
+
+      - uses: actions/setup-node@v4  # TeamWork SPA build needs Node 18+
+        with:
+          node-version: "20"
+
+      # Boot-only env. The smoke test makes NO LLM calls, so dummy keys are fine —
+      # we are verifying connectivity, not model behaviour. (CI never touches .env
+      # on a real deploy; this file is created only inside the runner.)
+      - name: Write a minimal boot .env
+        run: |
+          {
+            echo "FLASK_SECRET_KEY=ci-test-key"
+            echo "OPENAI_KEY=sk-ci-dummy"
+            echo "ANTHROPIC_KEY=sk-ant-ci-dummy"
+          } > .env
+
+      # The exact command a developer runs locally before opening a PR
+      # (`make integration`) — single source of truth. On this clean runner the
+      # cleanup it does (shutdown + clearing the built SPA / .local-run) is a
+      # no-op; it then brings up Qdrant + Neo4j + the sandbox (builds the image)
+      # + TeamWork (builds the SPA, runs the API) + Prax, and runs the
+      # connectivity smoke test. Fails the job on any critical disconnect.
+      - name: Fresh-install integration (make integration)
+        run: make integration
+
+      - name: Dump service logs on failure
+        if: failure()
+        run: |
+          for f in .local-run/*.log; do
+            echo "===== $f ====="; tail -150 "$f" || true
+          done
+
+      - name: Shut everything down
+        if: always()
+        run: make shutdown

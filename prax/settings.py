@@ -183,6 +183,27 @@ class AppSettings(BaseSettings):
             "have credentials configured (excluding the primary)."
         ),
     )
+    llm_provider_denylist_enabled: bool = Field(
+        default=True, alias="LLM_PROVIDER_DENYLIST_ENABLED",
+        description=(
+            "When cross-provider failover is on (LLM_FALLBACK_ENABLED), a "
+            "*terminal* provider failure — auth / billing / access / "
+            "decommissioned, which a retry won't fix — denylists that provider "
+            "from the pool (so it isn't hammered every turn) and surfaces a "
+            "user-facing notice explaining the likely cause (e.g. an unpaid "
+            "bill or a revoked key), instead of silently retrying. Set false to "
+            "treat every failure as transient. No effect when LLM_FALLBACK_ENABLED "
+            "is off."
+        ),
+    )
+    llm_provider_denylist_cooldown_seconds: int = Field(
+        default=1800, alias="LLM_PROVIDER_DENYLIST_COOLDOWN_SECONDS",
+        description=(
+            "How long a terminally-failed provider stays denylisted before Prax "
+            "re-probes it once (default 1800s = 30 min). 0 = stay denylisted "
+            "until the process restarts."
+        ),
+    )
     recovery_context_injection_enabled: bool = Field(
         default=True, alias="RECOVERY_CONTEXT_INJECTION",
         description=(
@@ -191,6 +212,19 @@ class AppSettings(BaseSettings):
             "the message stream on an orchestrator retry so the model "
             "re-plans the current trajectory with the diagnosis in context, "
             "rather than blindly re-running the failed step."
+        ),
+    )
+    autonomy_followthrough_enabled: bool = Field(
+        default=True, alias="AUTONOMY_FOLLOWTHROUGH_ENABLED",
+        description=(
+            "When true (the default), the orchestrator enforces follow-through: "
+            "(1) if the agent produced an artifact (screenshot/download/file) then "
+            "merely OFFERED to use it ('I can take the next step and inspect it'), "
+            "it is nudged to actually take that step; (2) a plan-housekeeping ack "
+            "(e.g. 'the plan is cleared') is never allowed to be the user-facing "
+            "reply — the agent is re-prompted to answer the real request. Default "
+            "ON deliberately: the user shouldn't have to keep telling Prax to go. "
+            "Set false to disable (kill switch)."
         ),
     )
     retrieval_query_expansion_enabled: bool = Field(
@@ -271,6 +305,40 @@ class AppSettings(BaseSettings):
             "token_sha256, user_id, allow}]}) for PER-CALLER identity: each "
             "caller's token maps to its own Prax user_id and tool allowlist. "
             "Merged with the legacy single-token client when MCP_BEARER_TOKEN is set."
+        ),
+    )
+    mcp_token_expiry_enabled: bool = Field(
+        default=False, alias="MCP_TOKEN_EXPIRY_ENABLED",
+        description=(
+            "When true, enforce an optional 'expires_at' (ISO-8601) on MCP client "
+            "tokens — in MCP_CLIENTS_PATH entries, or MCP_TOKEN_EXPIRES_AT for the "
+            "legacy single-token client. Expired tokens are rejected exactly as if "
+            "invalid. Default OFF → tokens never expire (backward compatible)."
+        ),
+    )
+    mcp_token_expires_at: str = Field(
+        default="", alias="MCP_TOKEN_EXPIRES_AT",
+        description=(
+            "Optional ISO-8601 expiry for the legacy single-token client "
+            "(MCP_BEARER_TOKEN), e.g. 2026-12-31T00:00:00Z. Only enforced when "
+            "MCP_TOKEN_EXPIRY_ENABLED is true."
+        ),
+    )
+    share_link_ttl_enabled: bool = Field(
+        default=False, alias="SHARE_LINK_TTL_ENABLED",
+        description=(
+            "When true, public share links (workspace_share_file, course/note "
+            "publish) get an expiry stamped at creation and are auto-revoked "
+            "(404 + purged on next listing) once expired. Default OFF → shares "
+            "live until explicitly revoked (backward compatible)."
+        ),
+    )
+    share_link_ttl_seconds: int = Field(
+        default=604800, alias="SHARE_LINK_TTL_SECONDS",
+        description=(
+            "Lifetime in seconds for new public share links when "
+            "SHARE_LINK_TTL_ENABLED is true (default 604800 = 7 days). "
+            "Re-publishing a course/note renews its lease."
         ),
     )
     knowledge_hybrid_enabled: bool = Field(
@@ -407,6 +475,19 @@ class AppSettings(BaseSettings):
     finetune_learning_rate: float = Field(default=2e-4, alias="FINETUNE_LEARNING_RATE")
     finetune_lora_rank: int = Field(default=16, alias="FINETUNE_LORA_RANK")
 
+    # Cloud GPU power control (optional, default off — plug-and-play). Prax holds
+    # ONLY a bearer token to a user-run power-broker that can do nothing but
+    # start/stop one pre-provisioned GPU. Unset ⇒ no GPU-power capability (the
+    # gpu_power plugin registers no tools). See docs/guides/cloud-gpu.md.
+    gpu_provider: str = Field(default="", alias="GPU_PROVIDER",
+        description="GPU power backend: none|broker|aws|gcp. Empty = no capability.")
+    gpu_power_broker_url: str = Field(default="", alias="GPU_POWER_BROKER_URL",
+        description="URL of the least-privilege power-broker (on/off only).")
+    gpu_power_broker_token: str = Field(default="", alias="GPU_POWER_BROKER_TOKEN", repr=False,
+        description="Bearer token for the power-broker — the ONLY GPU credential Prax holds.")
+    gpu_instance_id: str = Field(default="", alias="GPU_INSTANCE_ID",
+        description="Optional instance label for status (the broker hard-codes the real ID).")
+
     # Browser
     browser_headless: bool = Field(default=True, alias="BROWSER_HEADLESS")
     browser_timeout: int = Field(default=30000, alias="BROWSER_TIMEOUT")
@@ -507,6 +588,11 @@ class AppSettings(BaseSettings):
     # users on Tailscale should set this to https://<host>.<tailnet>.ts.net so
     # links work from their laptop without rewriting.
     teamwork_base_url: str = Field(default="http://localhost:8000", alias="TEAMWORK_BASE_URL")
+    # When TEAMWORK_BASE_URL is unset/localhost, auto-derive the public base URL
+    # for shareable links from the live deployment (Tailscale MagicDNS / ngrok)
+    # so a Tailscale deploy "just works" without editing .env.  An explicit,
+    # non-local TEAMWORK_BASE_URL always wins.  Set false for strict config-only.
+    public_url_autodetect: bool = Field(default=True, alias="PUBLIC_URL_AUTODETECT")
 
     # Discord
     discord_bot_token: str | None = Field(default=None, alias="DISCORD_BOT_TOKEN")

@@ -45,6 +45,15 @@
       "occurrences": 1,
       "last_seen": 1781699892.0843277,
       "compensating_instruction": "Previous runs hit TypeError \u2014 verify tool args before calling."
+    },
+    "graph_ConnectionError": {
+      "pattern_id": "graph_ConnectionError",
+      "description": "Graph invocation failed: ConnectionError: Circuit breaker OPEN for provider 'openai'",
+      "category": "",
+      "confidence": 0.5,
+      "occurrences": 1,
+      "last_seen": 1782097626.6690361,
+      "compensating_instruction": "Previous runs hit ConnectionError \u2014 verify tool args before calling."
     }
   }
 }

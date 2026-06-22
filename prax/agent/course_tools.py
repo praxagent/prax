@@ -204,10 +204,10 @@ def course_publish(course_id: str, public: bool = False) -> str:
             publicly.
     """
     from prax.services import share_registry
-    from prax.settings import settings
+    from prax.services.deployment_info import effective_base_url
 
     uid = _get_user_id()
-    teamwork_url = settings.teamwork_base_url.rstrip("/")
+    teamwork_url = effective_base_url()
 
     try:
         result = course_service.build_course_site(uid, course_id, teamwork_url)

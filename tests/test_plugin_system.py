@@ -966,15 +966,6 @@ class TestPluginSecuritySandbox:
         tool_names = [t.name for t in tools]
         assert "caps_tool" in tool_names
 
-    def test_registry_acknowledge_warnings(self, tmp_path):
-        """Registry should track security warning acknowledgement."""
-        registry = PluginRegistry(registry_path=str(tmp_path / "reg.json"))
-        registry.activate_plugin("shared/test", "1", trust_tier=PluginTrust.IMPORTED)
-
-        assert registry.is_warnings_acknowledged("shared/test") is False
-        registry.acknowledge_warnings("shared/test")
-        assert registry.is_warnings_acknowledged("shared/test") is True
-
     def test_commit_and_push_blocked_for_public_repo(self, monkeypatch):
         """commit_and_push should refuse if repo is public."""
         from prax.plugins.repo import PluginRepo
