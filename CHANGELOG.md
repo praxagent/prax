@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.0](https://github.com/praxagent/prax/compare/v0.15.0...v0.16.0) (2026-06-22)
+
+
+### Features
+
+* separate sandbox, other refinements ([#30](https://github.com/praxagent/prax/issues/30)) ([c91d8e5](https://github.com/praxagent/prax/commit/c91d8e5f6c20a8dd561af73c423f3d3704b4479d))
+
 ## [0.15.0](https://github.com/praxagent/prax/compare/v0.14.0...v0.15.0) (2026-04-11)
 
 
