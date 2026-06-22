@@ -272,6 +272,23 @@ VLLM_BASE_URL=http://127.0.0.1:8000/v1
 BASE_MODEL=Qwen/Qwen2.5-VL-7B-Instruct
 ```
 
+### Co-hosting two models on one GPU
+
+To serve a **heavy** model and a **fast** model from one box (the local analog of
+Prax's low/medium/high tiers), run two vLLM backends behind one OpenAI-compatible
+proxy (e.g. LiteLLM) and point `VLLM_BASE_URL` at the proxy, routing components via
+`llm_routing.yaml`. Two gotchas from
+[`../research/two-qwen3-on-one-spark.md`](../research/two-qwen3-on-one-spark.md):
+
+- **`gpu_memory_utilization` is a fraction of TOTAL VRAM, not free VRAM.** Size the
+  models so their fractions sum to **< ~0.95** (leave ~5 GiB CUDA overhead).
+- **Load the big model first**, then `nvidia-smi --query-gpu=memory.used
+  --format=csv`, then size the small one against (free − ~5 GiB) — measured
+  residency ≠ targets. Use **FP8** to fit large models.
+
+Add `--enable-auto-tool-choice --tool-call-parser hermes` so the local model can
+call tools (Prax needs this).
+
 ## Ollama
 
 ```bash
@@ -286,6 +303,28 @@ LLM_PROVIDER=vllm
 VLLM_BASE_URL=http://127.0.0.1:11434/v1
 BASE_MODEL=qwen2.5vl:7b
 ```
+
+## Cloud GPU (no local GPU? launch one on demand)
+
+A cloud GPU running vLLM is **just a remote `VLLM_BASE_URL`** — once it's up,
+nothing on the inference path changes. The full guide — top providers, how to
+**launch / serve / power off**, and a **least-privilege "on/off only"** capability
+(so Prax can never do more than flip the GPU) — is in
+[`cloud-gpu.md`](cloud-gpu.md). The plug-and-play flow: GPU present locally → use
+it; absent → power a scoped cloud box on, point `VLLM_BASE_URL` at it, power it off
+when done. No model is hard-wired; Prax serves what it needs on demand and saves
+recurring recipes as workspace plugins.
+
+## Fine-tuning path
+
+The same GPU unlocks fine-tuning: Prax has a harvest → LoRA-train → verify →
+promote loop (`finetune_service.run_self_improvement_cycle`, vLLM adapter hot-swap
+via `/v1/load_lora_adapter`, `scripts/finetune_train.py` — Unsloth QLoRA in a
+separate CUDA venv), gated on `FINETUNE_ENABLED`. A QLoRA of an 8B fits ~24 GB; a
+real run on an A100-80GB is ~30–80 GPU-hours (~$40–105). See
+[`cloud-gpu.md`](cloud-gpu.md) for *how to rent that A100 and turn it off* and
+[`../research/diy-document-extraction-model.md`](../research/diy-document-extraction-model.md)
+for an end-to-end build that exercises this path.
 
 ## Verifying it works
 

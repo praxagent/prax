@@ -47,7 +47,13 @@ class EvalResult:
     id: str = ""
     case_id: str = ""
     passed: bool = False
-    score: float = 0.0  # 0.0 = total failure, 1.0 = perfect
+    score: float = 0.0  # 0.0 = total failure, 1.0 = perfect (overall)
+    # Decomposed quality axes (0.0–1.0) so a regression localises to a single
+    # dimension instead of hiding inside one holistic number.  Default 0.0 and
+    # populated by the judge; old persisted results simply lack them.
+    grounding: float = 0.0      # did the answer match what tools actually returned
+    relevancy: float = 0.0      # did it address what the user asked
+    correctness: float = 0.0    # is the substance right / failure mode gone
     new_output: str = ""
     reasoning: str = ""
     judge_model: str = ""
@@ -149,8 +155,15 @@ the user asked for, and the original failure mode is no longer present.
 - 0.1-0.3: Marginal improvement at best.
 - 0.0: The same failure or worse.
 
+Also score three orthogonal axes (0.0–1.0) so a regression can be localised:
+- **grounding**: are the answer's claims supported by what tools actually \
+returned (no fabrication)?
+- **relevancy**: does the answer address what the user actually asked?
+- **correctness**: is the substance right and the original failure mode gone?
+
 Respond with EXACTLY this JSON format (no other text):
-{{"score": <float>, "passed": <bool>, "reasoning": "<1-2 sentences>"}}
+{{"score": <float>, "passed": <bool>, "grounding": <float>, \
+"relevancy": <float>, "correctness": <float>, "reasoning": "<1-2 sentences>"}}
 
 A score >= 0.7 counts as passed."""
 
@@ -162,10 +175,12 @@ def _judge_output(
     feedback_comment: str,
     failure_category: str,
     tier: str = "low",
-) -> tuple[float, bool, str, str]:
+) -> tuple[float, bool, str, str, dict]:
     """Use an LLM to judge whether the failure has been addressed.
 
-    Returns (score, passed, reasoning, model_name).
+    Returns ``(score, passed, reasoning, model_name, axes)`` where *axes* is a
+    dict with ``grounding``/``relevancy``/``correctness`` floats.  Callers may
+    unpack only the first four elements for backward compatibility.
     """
     from prax.agent.llm_factory import build_llm
 
@@ -197,10 +212,15 @@ def _judge_output(
         score = float(data.get("score", 0.0))
         passed = bool(data.get("passed", score >= 0.7))
         reasoning = str(data.get("reasoning", ""))
-        return score, passed, reasoning, model_name
+        axes = {
+            "grounding": float(data.get("grounding", score)),
+            "relevancy": float(data.get("relevancy", score)),
+            "correctness": float(data.get("correctness", score)),
+        }
+        return score, passed, reasoning, model_name, axes
     except Exception as e:
         logger.warning("LLM judge failed: %s", e)
-        return 0.0, False, f"Judge error: {e}", model_name
+        return 0.0, False, f"Judge error: {e}", model_name, {}
 
 
 # ---------------------------------------------------------------------------
@@ -268,8 +288,9 @@ def run_eval(
     else:
         new_output = "(replay skipped — no user input or replay disabled)"
 
-    # Judge the new output
-    score, passed, reasoning, model = _judge_output(
+    # Judge the new output.  Unpack defensively so older 4-tuple judges (and
+    # test mocks) keep working while the decomposed-axes judge returns a 5th.
+    judged = _judge_output(
         user_input=case.user_input,
         original_output=case.agent_output,
         new_output=new_output,
@@ -277,11 +298,16 @@ def run_eval(
         failure_category=case.failure_category,
         tier=judge_tier,
     )
+    score, passed, reasoning, model = judged[:4]
+    axes = judged[4] if len(judged) > 4 else {}
 
     result = EvalResult(
         case_id=case_id,
         passed=passed,
         score=score,
+        grounding=float(axes.get("grounding", 0.0)),
+        relevancy=float(axes.get("relevancy", 0.0)),
+        correctness=float(axes.get("correctness", 0.0)),
         new_output=new_output[:2000],
         reasoning=reasoning,
         judge_model=model,
@@ -345,14 +371,20 @@ def run_eval_suite(
 
     passed = sum(1 for r in results if r.passed)
     failed = len(results) - passed
-    avg_score = sum(r.score for r in results) / len(results) if results else 0.0
+    n = len(results)
+    avg_score = sum(r.score for r in results) / n if n else 0.0
 
     report = {
-        "total": len(results),
+        "total": n,
         "passed": passed,
         "failed": failed,
         "score": round(avg_score, 3),
-        "pass_rate": round(passed / len(results), 3) if results else 0.0,
+        "pass_rate": round(passed / n, 3) if n else 0.0,
+        "axes": {
+            "grounding": round(sum(r.grounding for r in results) / n, 3) if n else 0.0,
+            "relevancy": round(sum(r.relevancy for r in results) / n, 3) if n else 0.0,
+            "correctness": round(sum(r.correctness for r in results) / n, 3) if n else 0.0,
+        },
         "results": [asdict(r) for r in results],
     }
 

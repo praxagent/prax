@@ -7,6 +7,7 @@ services:
       dockerfile: Dockerfile.lite
       additional_contexts:
         teamwork: ${TEAMWORK_PATH:-../teamwork}
+        prax-sandbox: ${PRAX_SANDBOX_PATH:-../prax-sandbox}
     entrypoint: ["bash", "scripts/entrypoint-lite.sh"]
     ports:
       - "3000:8000"   # TeamWork web UI
@@ -45,10 +46,11 @@ services:
       retries: 5
       start_period: 45s
 
+  # Image source lives in the sibling prax-sandbox repo (override with
+  # PRAX_SANDBOX_PATH).  `docker compose up --build` builds it automatically.
   sandbox:
     build:
-      context: ./sandbox
-      dockerfile: Dockerfile
+      context: ${PRAX_SANDBOX_PATH:-../prax-sandbox}/sandbox
     image: prax-sandbox:latest
     restart: unless-stopped
     environment:
@@ -68,3 +70,37 @@ services:
       timeout: 3s
       start_period: 15s
       retries: 5
+
+  # ── Tailscale sidecar (optional, same as the full stack) ──────────────
+  # Skipped unless COMPOSE_PROFILES=tailscale (and TS_AUTHKEY is set). Exposes
+  # TeamWork (prax:8000) over the tailnet at https://<host>.<tailnet>.ts.net/.
+  # Lite has no Grafana, so the :3001 route in serve-config.json has no backend
+  # (harmless — the :443 TeamWork route is what matters).
+  tailscale:
+    image: tailscale/tailscale:latest
+    profiles: ["tailscale"]
+    hostname: tailscale-sidecar
+    cap_add:
+      - net_admin
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY:?TS_AUTHKEY is required when the tailscale profile is active — see https://login.tailscale.com/admin/settings/keys}
+      - TS_HOSTNAME=${TS_HOSTNAME:-prax}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_SERVE_CONFIG=/config/serve-config.json
+      - TS_EXTRA_ARGS=${TS_EXTRA_ARGS:-}
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - ./tailscale/serve-config.json:/config/serve-config.json:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "tailscale", "status", "--peers=false"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  # Tailscale node state — keeps the same device identity across restarts.
+  tailscale-state:

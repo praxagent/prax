@@ -44,6 +44,9 @@ _audit_buffer: list[dict] = []
 # Cleared on ``drain_audit_log()`` (i.e. once per agent turn).
 _high_risk_seen: set[str] = set()
 _high_risk_confirmed: bool = False
+# Per-tool confirmations — used when settings.high_risk_scoped_confirm is on,
+# so confirming ONE high-risk action does not unlock ALL of them for the turn.
+_high_risk_confirmed_tools: set[str] = set()
 
 # Budget tracking — soft limit on tool calls per turn.
 _tool_call_count: int = 0
@@ -63,6 +66,7 @@ def drain_audit_log() -> list[dict]:
     entries = list(_audit_buffer)
     _audit_buffer.clear()
     _high_risk_seen.clear()
+    _high_risk_confirmed_tools.clear()
     _high_risk_confirmed = False
     _tool_call_count = 0
     _tool_call_budget = 0
@@ -91,6 +95,15 @@ def extend_budget(additional: int) -> None:
 def get_budget_status() -> tuple[int, int]:
     """Return (calls_used, budget)."""
     return _tool_call_count, _tool_call_budget
+
+
+def _scoped_confirm() -> bool:
+    """True when HIGH-risk confirmation should unlock only the confirmed tool."""
+    try:
+        from prax.settings import settings
+        return bool(settings.high_risk_scoped_confirm)
+    except Exception:
+        return False
 
 
 def _user_explicitly_requested_action(tool_name: str) -> bool:
@@ -226,11 +239,21 @@ def wrap_with_governance(tool: BaseTool) -> BaseTool:
             pass
 
         # --- HIGH-risk gate with smart auto-approve ---
-        if risk is RiskLevel.HIGH and not _high_risk_confirmed:
+        # When ``high_risk_scoped_confirm`` is on, a confirmation unlocks ONLY
+        # the specific tool that was confirmed, not every HIGH-risk tool for the
+        # turn (the default, broader behaviour).
+        scoped = _scoped_confirm()
+        already_confirmed = (
+            tool_name in _high_risk_confirmed_tools if scoped else _high_risk_confirmed
+        )
+        if risk is RiskLevel.HIGH and not already_confirmed:
             # Smart confirmation: if the user explicitly requested this
             # action (e.g., "click the login button"), auto-approve.
             if _user_explicitly_requested_action(tool_name):
-                _high_risk_confirmed = True
+                if scoped:
+                    _high_risk_confirmed_tools.add(tool_name)
+                else:
+                    _high_risk_confirmed = True
                 logger.info(
                     "Smart auto-approve: %s (user explicitly requested action)",
                     tool_name,
@@ -249,6 +272,9 @@ def wrap_with_governance(tool: BaseTool) -> BaseTool:
                     f"Please confirm with the user before proceeding. "
                     f"To execute, call {tool_name} again with the same arguments."
                 )
+            elif scoped:
+                # User confirmed — unlock ONLY this tool for the turn.
+                _high_risk_confirmed_tools.add(tool_name)
             else:
                 # User confirmed — unlock all HIGH-risk tools for this turn.
                 _high_risk_confirmed = True
@@ -260,6 +286,11 @@ def wrap_with_governance(tool: BaseTool) -> BaseTool:
                 entropy_warning = check_semantic_entropy(tool_name, kwargs)
                 if entropy_warning:
                     logger.warning("Semantic entropy blocked %s: %s", tool_name, entropy_warning)
+                    try:
+                        from prax.observability.metrics import HALLUCINATION_GUARD
+                        HALLUCINATION_GUARD.labels(type="semantic_entropy").inc()
+                    except Exception:
+                        pass
                     _audit_buffer.append(log_action(
                         tool_name, risk, kwargs,
                         result=f"BLOCKED — semantic entropy ({entropy_warning[:80]})",

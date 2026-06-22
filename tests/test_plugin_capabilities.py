@@ -48,25 +48,19 @@ def builtin_caps():
 # ---------------------------------------------------------------------------
 
 class TestGetConfig:
-    def test_imported_blocks_secret_key(self, imported_caps):
+    @pytest.mark.parametrize(
+        "blocked_key",
+        [
+            "openai_key",
+            "api_secret",
+            "auth_token",
+            "db_password",
+            "user_credential",
+        ],
+    )
+    def test_imported_blocks_secret_key(self, imported_caps, blocked_key):
         with pytest.raises(PermissionError, match="secret config key"):
-            imported_caps.get_config("openai_key")
-
-    def test_imported_blocks_key_containing_secret(self, imported_caps):
-        with pytest.raises(PermissionError, match="secret config key"):
-            imported_caps.get_config("api_secret")
-
-    def test_imported_blocks_key_containing_token(self, imported_caps):
-        with pytest.raises(PermissionError, match="secret config key"):
-            imported_caps.get_config("auth_token")
-
-    def test_imported_blocks_key_containing_password(self, imported_caps):
-        with pytest.raises(PermissionError, match="secret config key"):
-            imported_caps.get_config("db_password")
-
-    def test_imported_blocks_key_containing_credential(self, imported_caps):
-        with pytest.raises(PermissionError, match="secret config key"):
-            imported_caps.get_config("user_credential")
+            imported_caps.get_config(blocked_key)
 
     def test_imported_allows_safe_key(self, imported_caps, monkeypatch):
         mock_settings = MagicMock()

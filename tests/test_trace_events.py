@@ -6,7 +6,8 @@ class TestTraceEventVocabulary:
     def test_all_expected_types_exist(self):
         from prax.trace_events import TraceEvent
         expected = {
-            "user", "assistant", "system", "tool_call", "tool_result", "audit", "error",
+            "user", "assistant", "system", "tool_call", "tool_result", "retrieval",
+            "audit", "error",
             "decision",
             "plugin_import", "plugin_activate", "plugin_block",
             "plugin_rollback", "plugin_remove", "plugin_security_warn",

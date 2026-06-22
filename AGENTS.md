@@ -43,7 +43,7 @@ Settings: [`prax/settings.py`](prax/settings.py).
 | Business logic services (conversation, workspace, memory, library, teamwork) | `prax/services/` |
 | Flask route blueprints | `prax/blueprints/` |
 | Plugins + capability gateway | `prax/plugins/` |
-| Docker sandbox (Claude Code / OpenCode / Codex inside a container) | `sandbox/` |
+| Docker sandbox (Claude Code / OpenCode / Codex inside a container) | separate repo `../prax-sandbox/` (dep `prax_sandbox_client`) |
 | Tests (unit + e2e) | `tests/` |
 | Utility scripts | `scripts/` |
 | Deployment modes: full compose, lite compose, k8s | `docker-compose.yml`, `docker-compose.lite.yml`, `k8s/` |

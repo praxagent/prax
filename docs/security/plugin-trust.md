@@ -21,7 +21,7 @@ Plugins imported from external repos pass through multiple security gates before
 | **Subprocess sandbox testing** | Before activation, plugins are imported in a separate subprocess with a stripped environment and 30-second timeout. Failures prevent activation. |
 | **Runtime monitoring + auto-rollback** | Active plugin tools are wrapped with failure tracking. After consecutive failures, the plugin is automatically rolled back to its previous version. |
 | **Governance layer** | All tools (built-in and plugin) pass through a single governance choke point with risk classification (LOW/MEDIUM/HIGH), confirmation gating for HIGH-risk actions, and audit logging to the workspace trace. |
-| **Blocking security scan** | `import_plugin_repo()` and `update_plugin_repo()` flag security warnings and require explicit acknowledgement before activation. |
+| **Blocking security scan** | `import_plugin_repo()` and `update_plugin_repo()` flag security warnings and require explicit acknowledgement before activation. The flag is recorded in the registry (`requires_acknowledgement`) and **enforced at load time**: `loader.load_all()` refuses to activate a flagged IMPORTED plugin until `acknowledge_warnings()` clears it — not a prompt the model can skip. `plugin_import` / `plugin_import_activate` are themselves HIGH-risk (confirmation-gated). |
 
 ## Subprocess isolation
 

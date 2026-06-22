@@ -1,7 +1,13 @@
 """Tests for hybrid retrieval engine (RRF fusion)."""
 
+from prax.services.memory import retrieval as _retrieval
 from prax.services.memory.models import MemoryResult
-from prax.services.memory.retrieval import _extract_key_terms, rrf_fuse
+from prax.services.memory.retrieval import (
+    _expand_queries,
+    _extract_key_terms,
+    _rerank,
+    rrf_fuse,
+)
 
 
 def _mr(mid: str, score: float = 1.0, content: str = "", importance: float = 0.5) -> MemoryResult:
@@ -129,3 +135,64 @@ class TestSparseEncoding:
         # "the" is a stop word, so results should be similar
         # (same tokens after filtering)
         assert len(result_with) == len(result_without)
+
+
+class TestQueryExpansion:
+    def test_n_le_1_returns_original_only(self):
+        assert _expand_queries("hello", 1) == ["hello"]
+
+    def test_expands_and_dedupes(self, monkeypatch):
+        monkeypatch.setattr(
+            _retrieval, "_llm_complete",
+            lambda prompt: "1. what is my dog's name\n- the name of my pet dog\nhello world\n",
+        )
+        out = _expand_queries("hello world", 3)
+        # Original first, then up to n-1 cleaned variants, original-dup dropped.
+        assert out[0] == "hello world"
+        assert "what is my dog's name" in out
+        assert "the name of my pet dog" in out
+        assert len(out) <= 3
+
+    def test_degrades_to_original_on_empty(self, monkeypatch):
+        monkeypatch.setattr(_retrieval, "_llm_complete", lambda prompt: "")
+        assert _expand_queries("hi there", 3) == ["hi there"]
+
+
+class TestRerank:
+    def test_reorders_by_relevance(self, monkeypatch):
+        cands = [_mr("a"), _mr("b"), _mr("c")]
+        # Judge says c is most relevant, then a, then b.
+        monkeypatch.setattr(
+            _retrieval, "_llm_complete",
+            lambda prompt: "0:30\n1:10\n2:95\n",
+        )
+        out = _rerank("q", cands, max_candidates=20)
+        assert [r.memory_id for r in out] == ["c", "a", "b"]
+
+    def test_preserves_tail_beyond_max_candidates(self, monkeypatch):
+        cands = [_mr("a"), _mr("b"), _mr("c")]
+        monkeypatch.setattr(_retrieval, "_llm_complete", lambda prompt: "0:10\n1:90\n")
+        out = _rerank("q", cands, max_candidates=2)
+        # head [a,b] reranked → [b,a]; tail [c] untouched at the end.
+        assert [r.memory_id for r in out] == ["b", "a", "c"]
+
+    def test_degrades_to_input_order_on_unparseable(self, monkeypatch):
+        cands = [_mr("a"), _mr("b")]
+        monkeypatch.setattr(_retrieval, "_llm_complete", lambda prompt: "garbage with no scores")
+        out = _rerank("q", cands, max_candidates=20)
+        assert [r.memory_id for r in out] == ["a", "b"]
+
+
+class TestDenseArmExpansionFlag:
+    def test_disabled_calls_search_dense_once(self, monkeypatch):
+        from prax.settings import settings
+        monkeypatch.setattr(settings, "retrieval_query_expansion_enabled", False)
+        calls = {"n": 0}
+        monkeypatch.setattr("prax.services.memory.embedder.embed_text", lambda q: [0.0])
+        def _search_dense(uid, vec, top_k, min_importance=0.0):
+            calls["n"] += 1
+            return [_mr("a")]
+        monkeypatch.setattr("prax.services.memory.vector_store.search_dense", _search_dense)
+        out = _retrieval._dense_arm("u", "query", top_k=5, min_importance=0.0)
+        assert calls["n"] == 1
+        assert [r.memory_id for r in out] == ["a"]

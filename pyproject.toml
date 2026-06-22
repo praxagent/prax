@@ -61,6 +61,7 @@ dependencies = [
     "tree-sitter-javascript>=0.25.0",
     "tree-sitter-typescript>=0.23.2",
     "datasets>=4.8.4",
+    "prax-sandbox",
 ]
 
 [project.optional-dependencies]
@@ -143,6 +144,11 @@ show_missing = true
 # within 24-72 hours; a 7-day buffer gives the community ample time to flag
 # and yank compromised versions before they enter our dependency tree.
 exclude-newer = "7 days"
+
+# The sandbox tooling lives in its own repo (sibling dir). Editable path source
+# so local edits to prax-sandbox are picked up without a reinstall.
+[tool.uv.sources]
+prax-sandbox = { path = "../prax-sandbox", editable = true }
 
 [dependency-groups]
 dev = [

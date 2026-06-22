@@ -28,6 +28,10 @@ TEST_ENV = {
     "PHONE_TO_EMAIL_MAP": '{"+10000000000": "tester@example.com"}',
     "PHONE_TO_GREETING_MAP": '{"+10000000000": "greeting.mp3"}',
     "WORKSPACE_DIR": "/tmp/test_workspaces",
+    # Link building is config-only in tests so generated URLs are deterministic
+    # regardless of whether the test host happens to run Tailscale/ngrok.  The
+    # auto-detect path (default ON in prod) is exercised in test_deployment_info.
+    "PUBLIC_URL_AUTODETECT": "false",
     "SANDBOX_IMAGE": "prax-sandbox:latest",
     "SANDBOX_TIMEOUT": "1800",
     "SANDBOX_MAX_CONCURRENT": "5",
@@ -83,4 +87,31 @@ def configure_test_env(monkeypatch, tmp_path):
                 monkeypatch.setattr(mod, "settings", new_settings)
             except Exception:
                 pass
+
+    # Circuit breakers live in a process-global registry
+    # (prax.agent.circuit_breaker._breakers).  Reset them before each test so
+    # accumulated LLM-call failures from one test don't leave a breaker OPEN and
+    # mask another test's assertions — e.g. build_llm()'s provider-validation
+    # raising ConnectionError ("breaker OPEN") instead of ValueError.
+    try:
+        from prax.agent.circuit_breaker import reset_all as _reset_breakers
+        _reset_breakers()
+    except Exception:
+        pass
+
+    # User-context ContextVars are process-global. Many tests do
+    # `current_user_id.set(...)` without resetting the token, so the value leaks
+    # into the next test (which may not set it). Reset them to their declared
+    # defaults per-test — fixes that latent cross-test leak.
+    try:
+        from prax.agent import user_context as _uc
+        _uc.current_user_id.set(None)
+        _uc.current_user.set(None)
+        _uc.current_channel_id.set(None)
+        _uc.current_channel_name.set("")
+        _uc.current_user_message.set("")
+        _uc.current_component.set("orchestrator")
+        _uc.current_active_view.set("")
+    except Exception:
+        pass
     yield

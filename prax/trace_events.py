@@ -28,6 +28,7 @@ class TraceEvent(StrEnum):
     SYSTEM = "system"
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
+    RETRIEVAL = "retrieval"
     AUDIT = "audit"
     ERROR = "error"
     DECISION = "decision"

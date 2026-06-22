@@ -345,8 +345,8 @@ def save_and_publish(
     ``{"error": ...}``.
     """
     from prax.services import share_registry
+    from prax.services.deployment_info import effective_base_url
     from prax.services.mermaid_validator import validate_fast, validate_render
-    from prax.settings import settings
 
     if source_url:
         content = f"**Source:** [{source_url}]({source_url})\n\n---\n\n{content}"
@@ -362,7 +362,7 @@ def save_and_publish(
         return {"error": "Note has broken mermaid diagram(s) — " + "; ".join(render_errors)}
 
     meta = create_note(user_id, title, content, tags or [])
-    teamwork_url = settings.teamwork_base_url.rstrip("/")
+    teamwork_url = effective_base_url()
 
     result = publish_notes(user_id, teamwork_url, slug=meta["slug"])
     if "error" in result:

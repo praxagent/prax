@@ -58,9 +58,15 @@ TeamWork content router (`teamwork/routers/content.py`) at
 `http://localhost:8000/notes/<slug>/` and `/courses/<id>/`.  TeamWork is
 bound to the host network only — it is **not** exposed via the ngrok
 tunnel — so this path has no authentication and reach is controlled by
-network position.  The user-facing URL is whatever
-`TEAMWORK_BASE_URL` points to: `http://localhost:8000` by default,
-`https://<host>.<tailnet>.ts.net` for Tailscale users.
+network position.  The user-facing URL is the *effective base URL*
+(`prax/services/deployment_info.py:effective_base_url`): an explicit,
+non-local `TEAMWORK_BASE_URL` always wins; otherwise, when
+`PUBLIC_URL_AUTODETECT` is on (the default), Prax auto-derives the
+public URL from the live deployment — `https://<host>.<tailnet>.ts.net`
+on Tailscale, or the ngrok URL — so links work off-network **without
+editing `.env`**.  It falls back to `http://localhost:8000` only when no
+public URL can be detected.  Set `PUBLIC_URL_AUTODETECT=false` for
+strict config-only behaviour.
 
 **Public path (opt-in).**  When the user explicitly says "share this
 publicly", `course_publish(public=True)` or `save_and_publish(public=True)`
@@ -73,6 +79,20 @@ the registry hits, ngrok serves the page at
 registry powers per-file shares (`workspace_share_file`); use
 `workspace_list_shares` to enumerate active shares and
 `workspace_unshare_file` to revoke by token.
+
+**Optional: auto-expiring shares (default off).**  Set
+`SHARE_LINK_TTL_ENABLED=true` and every *new* share — file, course, or
+note — gets an `expires_at` stamped at creation
+(`SHARE_LINK_TTL_SECONDS`, default `604800` = 7 days).  Past expiry the
+registry-gated routes 404 as if the share were never created, and the
+dead entry is purged from `.shares.json` on the next
+`workspace_list_shares` call.  Re-publishing a course/note renews its
+lease.  The feature is flag-gated and only affects shares created while
+it is on: existing shares (no `expires_at`) live until explicitly
+revoked, so the default behaviour is unchanged.  This pairs with
+expiring MCP tokens (`MCP_TOKEN_EXPIRY_ENABLED`) as the "hand out a
+capability that lapses on its own" pattern — see
+[`docs/infrastructure/mcp-server.md`](mcp-server.md).
 
 For direct browsing of notes, raw captures, outputs, tasks, and
 everything else, the TeamWork **Library panel** reads the markdown via

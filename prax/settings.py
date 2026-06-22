@@ -80,6 +80,14 @@ class AppSettings(BaseSettings):
     running_in_docker: bool = Field(default=False, alias="RUNNING_IN_DOCKER")
 
     # Sandbox
+    sandbox_enabled: bool = Field(
+        default=True, alias="SANDBOX_ENABLED",
+        description=(
+            "Master switch for the Docker sandbox (coding agents, browser, "
+            "desktop). Set false to run Prax as a pure harness with no sandbox "
+            "tools, spokes, or container dependency."
+        ),
+    )
     sandbox_image: str = Field(default="prax-sandbox:latest", alias="SANDBOX_IMAGE")
     sandbox_host: str = Field(default="localhost", alias="SANDBOX_HOST")
     sandbox_timeout: int = Field(default=1800, alias="SANDBOX_TIMEOUT")
@@ -88,6 +96,14 @@ class AppSettings(BaseSettings):
     sandbox_mem_limit: str = Field(default="1g", alias="SANDBOX_MEM_LIMIT")
     sandbox_cpu_limit: int = Field(default=2_000_000_000, alias="SANDBOX_CPU_LIMIT")
     sandbox_max_rounds: int = Field(default=10, alias="SANDBOX_MAX_ROUNDS")
+    # Remote sandbox daemon — empty = in-process (local), the default. Set to a
+    # daemon URL (https://host:8843) to drive a sandbox on a remote box.
+    sandbox_daemon_url: str = Field(default="", alias="SANDBOX_DAEMON_URL")
+    sandbox_daemon_token: str = Field(default="", alias="SANDBOX_DAEMON_TOKEN")
+    # TLS verification for the daemon: "true"/"false" or a path to a CA bundle.
+    sandbox_tls_verify: str = Field(default="true", alias="SANDBOX_TLS_VERIFY")
+    sandbox_client_cert: str = Field(default="", alias="SANDBOX_CLIENT_CERT")  # opt-in mTLS
+    sandbox_client_key: str = Field(default="", alias="SANDBOX_CLIENT_KEY")
 
     # Agent autonomy level — controls how constrained the agent is.
     # guided:    current behavior, all safety gates, prescriptive workflow rules
@@ -147,11 +163,307 @@ class AppSettings(BaseSettings):
             "check above doesn't fire because the invoke never returns)."
         ),
     )
+    llm_fallback_enabled: bool = Field(
+        default=False, alias="LLM_FALLBACK_ENABLED",
+        description=(
+            "When true, the orchestrator transparently fails over to an "
+            "alternate LLM provider after a provider-side failure (rate "
+            "limit, overload, connection error, or an OPEN circuit breaker) "
+            "instead of surfacing the error to the user.  Off by default so "
+            "single-provider deployments behave exactly as before."
+        ),
+    )
+    llm_fallback_chain: str = Field(
+        default="", alias="LLM_FALLBACK_CHAIN",
+        description=(
+            "Ordered, comma-separated 'provider[:model]' fallback chain used "
+            "when LLM_FALLBACK_ENABLED is set — e.g. "
+            "'anthropic:claude-sonnet-4-20250514,google:gemini-2.5-pro'.  "
+            "When empty, the chain is auto-derived from whichever providers "
+            "have credentials configured (excluding the primary)."
+        ),
+    )
+    llm_provider_denylist_enabled: bool = Field(
+        default=True, alias="LLM_PROVIDER_DENYLIST_ENABLED",
+        description=(
+            "When cross-provider failover is on (LLM_FALLBACK_ENABLED), a "
+            "*terminal* provider failure — auth / billing / access / "
+            "decommissioned, which a retry won't fix — denylists that provider "
+            "from the pool (so it isn't hammered every turn) and surfaces a "
+            "user-facing notice explaining the likely cause (e.g. an unpaid "
+            "bill or a revoked key), instead of silently retrying. Set false to "
+            "treat every failure as transient. No effect when LLM_FALLBACK_ENABLED "
+            "is off."
+        ),
+    )
+    llm_provider_denylist_cooldown_seconds: int = Field(
+        default=1800, alias="LLM_PROVIDER_DENYLIST_COOLDOWN_SECONDS",
+        description=(
+            "How long a terminally-failed provider stays denylisted before Prax "
+            "re-probes it once (default 1800s = 30 min). 0 = stay denylisted "
+            "until the process restarts."
+        ),
+    )
+    recovery_context_injection_enabled: bool = Field(
+        default=True, alias="RECOVERY_CONTEXT_INJECTION",
+        description=(
+            "When true, the structured multi-perspective failure diagnosis "
+            "(error_recovery.build_recovery_context) is injected back into "
+            "the message stream on an orchestrator retry so the model "
+            "re-plans the current trajectory with the diagnosis in context, "
+            "rather than blindly re-running the failed step."
+        ),
+    )
+    autonomy_followthrough_enabled: bool = Field(
+        default=True, alias="AUTONOMY_FOLLOWTHROUGH_ENABLED",
+        description=(
+            "When true (the default), the orchestrator enforces follow-through: "
+            "(1) if the agent produced an artifact (screenshot/download/file) then "
+            "merely OFFERED to use it ('I can take the next step and inspect it'), "
+            "it is nudged to actually take that step; (2) a plan-housekeeping ack "
+            "(e.g. 'the plan is cleared') is never allowed to be the user-facing "
+            "reply — the agent is re-prompted to answer the real request. Default "
+            "ON deliberately: the user shouldn't have to keep telling Prax to go. "
+            "Set false to disable (kill switch)."
+        ),
+    )
+    retrieval_query_expansion_enabled: bool = Field(
+        default=False, alias="RETRIEVAL_QUERY_EXPANSION",
+        description=(
+            "When true, hybrid memory retrieval generates a few paraphrase / "
+            "HyDE query variants (cheap LOW-tier LLM), embeds each, and unions "
+            "their dense hits before RRF fusion — a recall win for queries "
+            "whose phrasing differs from how the memory was stored."
+        ),
+    )
+    retrieval_query_expansion_n: int = Field(
+        default=3, alias="RETRIEVAL_QUERY_EXPANSION_N",
+        description="Number of query variants (including the original) to union when expansion is on.",
+    )
+    retrieval_rerank_enabled: bool = Field(
+        default=False, alias="RETRIEVAL_RERANK",
+        description=(
+            "When true, a relevance-rerank pass (LLM-judge) re-scores the "
+            "fused candidate set against the query before truncating to "
+            "top_k, so low-relevance-but-recent/important memories can't "
+            "outrank on-topic ones."
+        ),
+    )
+    retrieval_rerank_candidates: int = Field(
+        default=20, alias="RETRIEVAL_RERANK_CANDIDATES",
+        description="Max number of top fused candidates to send through the rerank pass.",
+    )
+    ssrf_protection_enabled: bool = Field(
+        default=True, alias="SSRF_PROTECTION_ENABLED",
+        description=(
+            "When true (default), outbound HTTP from the plugin gateway and the "
+            "URL reader is validated against an SSRF guard: only http/https, and "
+            "the host must not be (or resolve to) a private/loopback/link-local/"
+            "reserved address — blocking access to localhost and the cloud "
+            "metadata endpoint (169.254.169.254). Redirects are re-validated."
+        ),
+    )
+    ssrf_allowed_hosts: str = Field(
+        default="", alias="SSRF_ALLOWED_HOSTS",
+        description=(
+            "Comma-separated hostnames/IPs allowed through the SSRF guard even if "
+            "they resolve to a private range — e.g. 'localhost,127.0.0.1' for local "
+            "development against a self-hosted service."
+        ),
+    )
+    mcp_server_enabled: bool = Field(
+        default=False, alias="MCP_SERVER_ENABLED",
+        description=(
+            "When true, expose a curated subset of Prax tools to OTHER agents over "
+            "the Model Context Protocol (JSON-RPC at POST /mcp). Fail-closed: the "
+            "endpoint is only registered when a bearer token is also set."
+        ),
+    )
+    mcp_bearer_token: str = Field(
+        default="", alias="MCP_BEARER_TOKEN", repr=False,
+        description="Required bearer token for the MCP endpoint (constant-time checked).",
+    )
+    mcp_user_id: str = Field(
+        default="", alias="MCP_USER_ID",
+        description=(
+            "The Prax user identity the MCP server acts as — every exposed tool runs "
+            "under this user's context (workspace, memory, approved secrets)."
+        ),
+    )
+    mcp_tool_allowlist: str = Field(
+        default="", alias="MCP_TOOL_ALLOWLIST",
+        description=(
+            "Comma-separated tool names exposed to the legacy single-token client "
+            "(MCP_BEARER_TOKEN). Empty uses a small safe read-only default set. "
+            "HIGH-risk tools are refused even if listed."
+        ),
+    )
+    mcp_clients_path: str = Field(
+        default="", alias="MCP_CLIENTS_PATH",
+        description=(
+            "Path to a JSON MCP client registry ({\"clients\":[{name, token|"
+            "token_sha256, user_id, allow}]}) for PER-CALLER identity: each "
+            "caller's token maps to its own Prax user_id and tool allowlist. "
+            "Merged with the legacy single-token client when MCP_BEARER_TOKEN is set."
+        ),
+    )
+    mcp_token_expiry_enabled: bool = Field(
+        default=False, alias="MCP_TOKEN_EXPIRY_ENABLED",
+        description=(
+            "When true, enforce an optional 'expires_at' (ISO-8601) on MCP client "
+            "tokens — in MCP_CLIENTS_PATH entries, or MCP_TOKEN_EXPIRES_AT for the "
+            "legacy single-token client. Expired tokens are rejected exactly as if "
+            "invalid. Default OFF → tokens never expire (backward compatible)."
+        ),
+    )
+    mcp_token_expires_at: str = Field(
+        default="", alias="MCP_TOKEN_EXPIRES_AT",
+        description=(
+            "Optional ISO-8601 expiry for the legacy single-token client "
+            "(MCP_BEARER_TOKEN), e.g. 2026-12-31T00:00:00Z. Only enforced when "
+            "MCP_TOKEN_EXPIRY_ENABLED is true."
+        ),
+    )
+    share_link_ttl_enabled: bool = Field(
+        default=False, alias="SHARE_LINK_TTL_ENABLED",
+        description=(
+            "When true, public share links (workspace_share_file, course/note "
+            "publish) get an expiry stamped at creation and are auto-revoked "
+            "(404 + purged on next listing) once expired. Default OFF → shares "
+            "live until explicitly revoked (backward compatible)."
+        ),
+    )
+    share_link_ttl_seconds: int = Field(
+        default=604800, alias="SHARE_LINK_TTL_SECONDS",
+        description=(
+            "Lifetime in seconds for new public share links when "
+            "SHARE_LINK_TTL_ENABLED is true (default 604800 = 7 days). "
+            "Re-publishing a course/note renews its lease."
+        ),
+    )
+    knowledge_hybrid_enabled: bool = Field(
+        default=True, alias="KNOWLEDGE_HYBRID_ENABLED",
+        description=(
+            "When true (default), knowledge-graph concept search fuses semantic "
+            "vector retrieval (Qdrant) with keyword matching instead of relying "
+            "on substring matching alone.  Degrades automatically to keyword "
+            "search when Qdrant/the embedder is unavailable."
+        ),
+    )
+    eval_nightly_enabled: bool = Field(
+        default=False, alias="EVAL_NIGHTLY_ENABLED",
+        description=(
+            "When true, a nightly scheduler job samples recent execution "
+            "traces, scores them with a reference-free judge, and publishes "
+            "aggregate quality to Prometheus (prax_eval_quality) — continuous "
+            "drift detection on live traffic."
+        ),
+    )
+    eval_nightly_sample_size: int = Field(
+        default=25, alias="EVAL_NIGHTLY_SAMPLE_SIZE",
+        description="How many recent traces the nightly live-traffic eval samples.",
+    )
+    eval_nightly_cron: str = Field(
+        default="0 4 * * *", alias="EVAL_NIGHTLY_CRON",
+        description="5-field cron expression for the nightly live-traffic eval job.",
+    )
+    checkpoint_backend: str = Field(
+        default="memory", alias="CHECKPOINT_BACKEND",
+        description=(
+            "LangGraph checkpointer backend: 'memory' (default, ephemeral) or "
+            "'sqlite' (durable — checkpoint data survives a process restart). "
+            "Falls back to memory if the durable backend can't be constructed."
+        ),
+    )
+    checkpoint_db_path: str = Field(
+        default=".prax/checkpoints.sqlite", alias="CHECKPOINT_DB_PATH",
+        description="On-disk path for the SQLite checkpointer when CHECKPOINT_BACKEND=sqlite.",
+    )
+    checkpoint_resume_enabled: bool = Field(
+        default=False, alias="CHECKPOINT_RESUME_ENABLED",
+        description=(
+            "When true, a failed/timed-out turn's checkpoints are retained (for "
+            "CHECKPOINT_RESUME_TTL seconds) instead of purged, so the user can "
+            "resume from the failure point — skipping completed steps — instead "
+            "of restarting the whole turn."
+        ),
+    )
+    checkpoint_resume_ttl_seconds: int = Field(
+        default=3600, alias="CHECKPOINT_RESUME_TTL",
+        description="How long (seconds) a failed turn stays resumable.",
+    )
+    checkpoint_resume_state_path: str = Field(
+        default=".prax/resumable.json", alias="CHECKPOINT_RESUME_STATE_PATH",
+        description=(
+            "Where the resumable-turn pointers are persisted (only when "
+            "CHECKPOINT_RESUME_ENABLED).  Lets a failed turn be resumed after a "
+            "process restart with CHECKPOINT_BACKEND=sqlite.  Delete this file "
+            "to discard all pending resumes."
+        ),
+    )
+    unknown_tool_high_risk: bool = Field(
+        default=False, alias="UNKNOWN_TOOL_HIGH_RISK",
+        description=(
+            "Deny-by-default: when true, a tool with no static risk "
+            "classification (and not an imported plugin) defaults to HIGH risk "
+            "— requiring confirmation — instead of MEDIUM-and-run."
+        ),
+    )
+    high_risk_scoped_confirm: bool = Field(
+        default=False, alias="HIGH_RISK_SCOPED_CONFIRM",
+        description=(
+            "When true, confirming a HIGH-risk tool unlocks ONLY that tool for "
+            "the turn, instead of unlocking every HIGH-risk tool after the "
+            "first confirmation."
+        ),
+    )
+    claim_audit_attended_quarantine: bool = Field(
+        default=False, alias="CLAIM_AUDIT_ATTENDED_QUARANTINE",
+        description=(
+            "When true, ungrounded-claim warnings are appended to the "
+            "user-facing reply on attended (interactive) turns too — not only "
+            "posted to the internal Auditor channel. Scheduled turns always "
+            "quarantine regardless of this flag."
+        ),
+    )
+    intent_clarification_enabled: bool = Field(
+        default=False, alias="INTENT_CLARIFICATION_ENABLED",
+        description=(
+            "When true, a cheap LOW-tier pre-flight gate runs before the main "
+            "agent loop: if a request is BOTH ambiguous AND potentially "
+            "irreversible/costly, it returns a single clarifying question "
+            "instead of guessing. Biased strongly toward proceeding."
+        ),
+    )
+    prompt_selectivity_enabled: bool = Field(
+        default=False, alias="PROMPT_SELECTIVITY_ENABLED",
+        description=(
+            "When true, topic-specific optional sections of the orchestrator "
+            "system prompt (e.g. document pipelines, math/LaTeX, teaching) are "
+            "dropped when the request shows no signal of needing them — "
+            "shrinking the base prompt on simple turns. Off by default ships "
+            "the full prompt unchanged."
+        ),
+    )
 
     @property
     def sandbox_persistent(self) -> bool:
         """True when the sandbox is always-on (docker-compose deployment)."""
         return self.running_in_docker
+
+    @property
+    def sandbox_available(self) -> bool:
+        """True when sandbox tooling should be wired into the agent.
+
+        The one switch callers check before registering sandbox tools/spokes,
+        running ``run_python`` in the sandbox, or probing sandbox health.
+        """
+        return self.sandbox_enabled
+
+    @property
+    def sandbox_remote(self) -> bool:
+        """True when the sandbox is driven via a remote control daemon."""
+        return bool(self.sandbox_daemon_url.strip())
 
     # Fine-tuning / Local Models (optional — GPU required)
     finetune_enabled: bool = Field(default=False, alias="FINETUNE_ENABLED")
@@ -162,6 +474,19 @@ class AppSettings(BaseSettings):
     finetune_max_steps: int = Field(default=60, alias="FINETUNE_MAX_STEPS")
     finetune_learning_rate: float = Field(default=2e-4, alias="FINETUNE_LEARNING_RATE")
     finetune_lora_rank: int = Field(default=16, alias="FINETUNE_LORA_RANK")
+
+    # Cloud GPU power control (optional, default off — plug-and-play). Prax holds
+    # ONLY a bearer token to a user-run power-broker that can do nothing but
+    # start/stop one pre-provisioned GPU. Unset ⇒ no GPU-power capability (the
+    # gpu_power plugin registers no tools). See docs/guides/cloud-gpu.md.
+    gpu_provider: str = Field(default="", alias="GPU_PROVIDER",
+        description="GPU power backend: none|broker|aws|gcp. Empty = no capability.")
+    gpu_power_broker_url: str = Field(default="", alias="GPU_POWER_BROKER_URL",
+        description="URL of the least-privilege power-broker (on/off only).")
+    gpu_power_broker_token: str = Field(default="", alias="GPU_POWER_BROKER_TOKEN", repr=False,
+        description="Bearer token for the power-broker — the ONLY GPU credential Prax holds.")
+    gpu_instance_id: str = Field(default="", alias="GPU_INSTANCE_ID",
+        description="Optional instance label for status (the broker hard-codes the real ID).")
 
     # Browser
     browser_headless: bool = Field(default=True, alias="BROWSER_HEADLESS")
@@ -263,6 +588,11 @@ class AppSettings(BaseSettings):
     # users on Tailscale should set this to https://<host>.<tailnet>.ts.net so
     # links work from their laptop without rewriting.
     teamwork_base_url: str = Field(default="http://localhost:8000", alias="TEAMWORK_BASE_URL")
+    # When TEAMWORK_BASE_URL is unset/localhost, auto-derive the public base URL
+    # for shareable links from the live deployment (Tailscale MagicDNS / ngrok)
+    # so a Tailscale deploy "just works" without editing .env.  An explicit,
+    # non-local TEAMWORK_BASE_URL always wins.  Set false for strict config-only.
+    public_url_autodetect: bool = Field(default=True, alias="PUBLIC_URL_AUTODETECT")
 
     # Discord
     discord_bot_token: str | None = Field(default=None, alias="DISCORD_BOT_TOKEN")

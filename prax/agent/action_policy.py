@@ -119,6 +119,12 @@ _HIGH: set[str] = {
     "plugin_activate",
     "plugin_write",
     "self_improve_deploy",
+    # importing / activating EXTERNAL plugin code — supply-chain risk, gate it
+    "plugin_import",
+    "plugin_import_activate",
+    # cloud GPU power — starts/stops a billable instance (external write)
+    "gpu_power_on",
+    "gpu_power_off",
 }
 
 _MEDIUM: set[str] = {
@@ -173,6 +179,8 @@ _LOW: set[str] = {
     "sandbox_shell",
     # read-only utilities
     "get_current_datetime",
+    # cloud GPU power — read-only status check
+    "gpu_power_status",
 }
 
 TOOL_RISK_MAP: dict[str, RiskLevel] = {
@@ -185,10 +193,12 @@ TOOL_RISK_MAP: dict[str, RiskLevel] = {
 
 
 def get_risk_level(tool_name: str) -> RiskLevel:
-    """Return the risk level for *tool_name*, defaulting to MEDIUM.
+    """Return the risk level for *tool_name*.
 
-    IMPORTED plugin tools are automatically elevated to HIGH risk so
-    they require user confirmation before execution.
+    Static classification wins.  IMPORTED plugin tools are automatically
+    elevated to HIGH.  Unclassified tools default to MEDIUM — unless
+    ``settings.unknown_tool_high_risk`` is set, which makes the default HIGH
+    (deny-by-default: an unrecognised tool must be confirmed before it runs).
     """
     # Static classification takes precedence.
     static = TOOL_RISK_MAP.get(tool_name)
@@ -209,6 +219,14 @@ def get_risk_level(tool_name: str) -> RiskLevel:
                 return RiskLevel.HIGH
     except Exception:
         pass  # Best-effort — don't break risk classification
+
+    # Deny-by-default for unrecognised tools when enabled.
+    try:
+        from prax.settings import settings
+        if settings.unknown_tool_high_risk:
+            return RiskLevel.HIGH
+    except Exception:
+        pass
 
     return RiskLevel.MEDIUM
 

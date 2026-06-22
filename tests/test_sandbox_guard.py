@@ -29,32 +29,17 @@ from prax.plugins.sandbox_guard import (
 class TestAuditHook:
     """Test the plugin audit hook blocks dangerous events for IMPORTED plugins."""
 
-    def test_blocks_subprocess_for_imported(self):
+    @pytest.mark.parametrize(("event", "match"), [
+        ("subprocess.Popen", "subprocess creation"),
+        ("os.system", "os.system"),
+        ("ctypes.dlopen", "ctypes"),
+    ])
+    def test_blocks_dangerous_event_for_imported(self, event, match):
         path_token = current_plugin_rel_path.set("shared/evil")
         trust_token = current_plugin_trust.set(PluginTrust.IMPORTED)
         try:
-            with pytest.raises(PluginSecurityViolation, match="subprocess creation"):
-                _plugin_audit_hook("subprocess.Popen", ())
-        finally:
-            current_plugin_rel_path.reset(path_token)
-            current_plugin_trust.reset(trust_token)
-
-    def test_blocks_os_system_for_imported(self):
-        path_token = current_plugin_rel_path.set("shared/evil")
-        trust_token = current_plugin_trust.set(PluginTrust.IMPORTED)
-        try:
-            with pytest.raises(PluginSecurityViolation, match="os.system"):
-                _plugin_audit_hook("os.system", ())
-        finally:
-            current_plugin_rel_path.reset(path_token)
-            current_plugin_trust.reset(trust_token)
-
-    def test_blocks_ctypes_for_imported(self):
-        path_token = current_plugin_rel_path.set("shared/evil")
-        trust_token = current_plugin_trust.set(PluginTrust.IMPORTED)
-        try:
-            with pytest.raises(PluginSecurityViolation, match="ctypes"):
-                _plugin_audit_hook("ctypes.dlopen", ())
+            with pytest.raises(PluginSecurityViolation, match=match):
+                _plugin_audit_hook(event, ())
         finally:
             current_plugin_rel_path.reset(path_token)
             current_plugin_trust.reset(trust_token)
@@ -97,35 +82,14 @@ class TestAuditHook:
 class TestImportBlocker:
     """Test the sys.meta_path import blocker."""
 
-    def test_blocks_subprocess_for_imported(self):
+    @pytest.mark.parametrize("module", ["subprocess", "ctypes", "pickle"])
+    def test_blocks_module_for_imported(self, module):
         blocker = PluginImportBlocker()
         path_token = current_plugin_rel_path.set("shared/evil")
         trust_token = current_plugin_trust.set(PluginTrust.IMPORTED)
         try:
             with pytest.raises(ImportError, match="not permitted to import"):
-                blocker.find_module("subprocess")
-        finally:
-            current_plugin_rel_path.reset(path_token)
-            current_plugin_trust.reset(trust_token)
-
-    def test_blocks_ctypes_for_imported(self):
-        blocker = PluginImportBlocker()
-        path_token = current_plugin_rel_path.set("shared/evil")
-        trust_token = current_plugin_trust.set(PluginTrust.IMPORTED)
-        try:
-            with pytest.raises(ImportError, match="not permitted to import"):
-                blocker.find_module("ctypes")
-        finally:
-            current_plugin_rel_path.reset(path_token)
-            current_plugin_trust.reset(trust_token)
-
-    def test_blocks_pickle_for_imported(self):
-        blocker = PluginImportBlocker()
-        path_token = current_plugin_rel_path.set("shared/evil")
-        trust_token = current_plugin_trust.set(PluginTrust.IMPORTED)
-        try:
-            with pytest.raises(ImportError, match="not permitted to import"):
-                blocker.find_module("pickle")
+                blocker.find_module(module)
         finally:
             current_plugin_rel_path.reset(path_token)
             current_plugin_trust.reset(trust_token)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import textwrap
@@ -23,6 +24,29 @@ from prax.plugins.rpc import (
     send,
     tool_to_metadata,
 )
+
+# ---------------------------------------------------------------------------
+# Shared helpers / fixtures
+# ---------------------------------------------------------------------------
+
+def _make_plugin(tmp_path, code, subdir="test_plugin"):
+    """Write a plugin to tmp_path under tools/<subdir>/ and return its path."""
+    plugin_dir = tmp_path / "tools" / subdir
+    plugin_dir.mkdir(parents=True)
+    plugin_file = plugin_dir / "plugin.py"
+    plugin_file.write_text(code)
+    return str(plugin_file)
+
+
+@pytest.fixture
+def subprocess_env():
+    """Minimal env for the plugin host subprocess (no parent secrets)."""
+    return {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": os.environ.get("HOME", "/tmp"),
+        "LANG": os.environ.get("LANG", "en_US.UTF-8"),
+        "PYTHONPATH": os.environ.get("PYTHONPATH", ""),
+    }
 
 # ---------------------------------------------------------------------------
 # RPC protocol tests
@@ -67,17 +91,9 @@ class TestRPC:
 # ---------------------------------------------------------------------------
 
 class TestHost:
-    def _make_plugin(self, tmp_path, code):
-        """Write a plugin to tmp_path and return its path."""
-        plugin_dir = tmp_path / "tools" / "test_plugin"
-        plugin_dir.mkdir(parents=True)
-        plugin_file = plugin_dir / "plugin.py"
-        plugin_file.write_text(code)
-        return str(plugin_file)
-
-    def test_host_register_and_invoke(self, tmp_path):
+    def test_host_register_and_invoke(self, tmp_path, subprocess_env):
         """Test the full host lifecycle: register → invoke → shutdown."""
-        plugin_path = self._make_plugin(tmp_path, textwrap.dedent("""\
+        plugin_path = _make_plugin(tmp_path, textwrap.dedent("""\
             from langchain_core.tools import tool
 
             @tool
@@ -89,21 +105,13 @@ class TestHost:
                 return [greet]
         """))
 
-        import os
-        env = {
-            "PATH": os.environ.get("PATH", ""),
-            "HOME": os.environ.get("HOME", "/tmp"),
-            "LANG": os.environ.get("LANG", "en_US.UTF-8"),
-            "PYTHONPATH": os.environ.get("PYTHONPATH", ""),
-        }
-
         proc = subprocess.Popen(
             [sys.executable, "-m", "prax.plugins.host"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=env,
+            env=subprocess_env,
         )
 
         try:
@@ -138,9 +146,9 @@ class TestHost:
             if proc.poll() is None:
                 proc.kill()
 
-    def test_host_invoke_unknown_tool(self, tmp_path):
+    def test_host_invoke_unknown_tool(self, tmp_path, subprocess_env):
         """Invoking a non-existent tool returns an error."""
-        plugin_path = self._make_plugin(tmp_path, textwrap.dedent("""\
+        plugin_path = _make_plugin(tmp_path, textwrap.dedent("""\
             from langchain_core.tools import tool
 
             @tool
@@ -152,21 +160,13 @@ class TestHost:
                 return [dummy]
         """))
 
-        import os
-        env = {
-            "PATH": os.environ.get("PATH", ""),
-            "HOME": os.environ.get("HOME", "/tmp"),
-            "LANG": os.environ.get("LANG", "en_US.UTF-8"),
-            "PYTHONPATH": os.environ.get("PYTHONPATH", ""),
-        }
-
         proc = subprocess.Popen(
             [sys.executable, "-m", "prax.plugins.host"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=env,
+            env=subprocess_env,
         )
 
         try:
@@ -189,9 +189,9 @@ class TestHost:
             if proc.poll() is None:
                 proc.kill()
 
-    def test_host_caps_callback(self, tmp_path):
+    def test_host_caps_callback(self, tmp_path, subprocess_env):
         """Plugin calls caps.get_config() which triggers a callback to parent."""
-        plugin_path = self._make_plugin(tmp_path, textwrap.dedent("""\
+        plugin_path = _make_plugin(tmp_path, textwrap.dedent("""\
             from langchain_core.tools import tool
 
             def register(caps):
@@ -203,21 +203,13 @@ class TestHost:
                 return [config_reader]
         """))
 
-        import os
-        env = {
-            "PATH": os.environ.get("PATH", ""),
-            "HOME": os.environ.get("HOME", "/tmp"),
-            "LANG": os.environ.get("LANG", "en_US.UTF-8"),
-            "PYTHONPATH": os.environ.get("PYTHONPATH", ""),
-        }
-
         proc = subprocess.Popen(
             [sys.executable, "-m", "prax.plugins.host"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=env,
+            env=subprocess_env,
         )
 
         try:
@@ -258,18 +250,11 @@ class TestHost:
 # ---------------------------------------------------------------------------
 
 class TestBridge:
-    def _make_plugin(self, tmp_path, code):
-        plugin_dir = tmp_path / "tools" / "bridge_test"
-        plugin_dir.mkdir(parents=True)
-        plugin_file = plugin_dir / "plugin.py"
-        plugin_file.write_text(code)
-        return str(plugin_file)
-
     def test_bridge_register_and_invoke(self, tmp_path):
         """Full bridge lifecycle: register + invoke + shutdown."""
         from prax.plugins.bridge import PluginBridge
 
-        plugin_path = self._make_plugin(tmp_path, textwrap.dedent("""\
+        plugin_path = _make_plugin(tmp_path, textwrap.dedent("""\
             from langchain_core.tools import tool
 
             @tool
@@ -279,7 +264,7 @@ class TestBridge:
 
             def register():
                 return [add]
-        """))
+        """), subdir="bridge_test")
 
         bridge = PluginBridge("bridge_test")
         try:
@@ -296,7 +281,7 @@ class TestBridge:
         """Bridge services capability callbacks from the subprocess."""
         from prax.plugins.bridge import PluginBridge
 
-        plugin_path = self._make_plugin(tmp_path, textwrap.dedent("""\
+        plugin_path = _make_plugin(tmp_path, textwrap.dedent("""\
             from langchain_core.tools import tool
 
             def register(caps):
@@ -306,7 +291,7 @@ class TestBridge:
                     uid = caps.get_user_id()
                     return f"uid={uid}"
                 return [get_uid]
-        """))
+        """), subdir="bridge_test")
 
         mock_caps = MagicMock()
         mock_caps.get_user_id.return_value = "user_123"
@@ -326,7 +311,7 @@ class TestBridge:
         """Tool that raises an exception returns an error through the bridge."""
         from prax.plugins.bridge import PluginBridge
 
-        plugin_path = self._make_plugin(tmp_path, textwrap.dedent("""\
+        plugin_path = _make_plugin(tmp_path, textwrap.dedent("""\
             from langchain_core.tools import tool
 
             @tool
@@ -336,7 +321,7 @@ class TestBridge:
 
             def register():
                 return [explode]
-        """))
+        """), subdir="bridge_test")
 
         bridge = PluginBridge("error_test")
         try:
@@ -350,7 +335,7 @@ class TestBridge:
         """Shutdown terminates the subprocess."""
         from prax.plugins.bridge import PluginBridge
 
-        plugin_path = self._make_plugin(tmp_path, textwrap.dedent("""\
+        plugin_path = _make_plugin(tmp_path, textwrap.dedent("""\
             from langchain_core.tools import tool
 
             @tool
@@ -360,7 +345,7 @@ class TestBridge:
 
             def register():
                 return [noop]
-        """))
+        """), subdir="bridge_test")
 
         bridge = PluginBridge("shutdown_test")
         bridge.register(plugin_path, "imported")
@@ -375,18 +360,11 @@ class TestBridge:
 # ---------------------------------------------------------------------------
 
 class TestSubprocessIsolation:
-    def _make_plugin(self, tmp_path, code):
-        plugin_dir = tmp_path / "tools" / "security_test"
-        plugin_dir.mkdir(parents=True)
-        plugin_file = plugin_dir / "plugin.py"
-        plugin_file.write_text(code)
-        return str(plugin_file)
-
     def test_subprocess_cannot_read_env_secrets(self, tmp_path):
         """Plugin in subprocess cannot see parent's OPENAI_KEY."""
         from prax.plugins.bridge import PluginBridge
 
-        plugin_path = self._make_plugin(tmp_path, textwrap.dedent("""\
+        plugin_path = _make_plugin(tmp_path, textwrap.dedent("""\
             import os
             from langchain_core.tools import tool
 
@@ -397,7 +375,7 @@ class TestSubprocessIsolation:
 
             def register():
                 return [read_env]
-        """))
+        """), subdir="security_test")
 
         bridge = PluginBridge("env_test")
         try:
@@ -414,7 +392,7 @@ class TestSubprocessIsolation:
         """Subprocess still has basic env vars like PATH."""
         from prax.plugins.bridge import PluginBridge
 
-        plugin_path = self._make_plugin(tmp_path, textwrap.dedent("""\
+        plugin_path = _make_plugin(tmp_path, textwrap.dedent("""\
             import os
             from langchain_core.tools import tool
 
@@ -425,7 +403,7 @@ class TestSubprocessIsolation:
 
             def register():
                 return [read_env]
-        """))
+        """), subdir="security_test")
 
         bridge = PluginBridge("path_test")
         try:

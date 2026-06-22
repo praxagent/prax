@@ -92,6 +92,25 @@ research-route tools are exposed to the Research Agent.
 > importing the LLM factory, and `caps.get_config()` instead of reading `prax.settings`
 > directly. Zero-arg `register()` still works for backward-compatible built-in plugins.
 
+**Plugins that drive external infra (e.g. GPU power on/off).** `permissions.md` is
+the second least-privilege layer for capabilities like the cloud-GPU power control
+in [`cloud-gpu.md`](cloud-gpu.md). A plugin that only POSTs `{action:"on"|"off"}` to
+a user-run power-broker should declare *nothing but* `http` + one scoped secret —
+making it structurally incapable of anything else:
+
+```markdown
+# Permissions
+## capabilities
+- http
+## secrets
+- GPU_POWER_BROKER_TOKEN
+## allowed_commands
+(none)
+```
+
+This is how "the GPU plugin can only flip the GPU" is enforced *in the harness*,
+on top of whatever the cloud credential itself is scoped to.
+
 **Lifecycle:**
 
 1. **Write** — `plugin_write("weather", code)` creates the folder, saves `plugin.py` + `README.md`, runs sandbox tests

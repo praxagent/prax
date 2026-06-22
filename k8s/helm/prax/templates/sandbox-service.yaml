@@ -1,3 +1,4 @@
+{{- if .Values.sandbox.inCluster }}
 # Headless service — enables stable DNS for StatefulSet pods
 # (e.g., prax-sandbox-0.prax-sandbox-headless)
 apiVersion: v1
@@ -43,3 +44,4 @@ spec:
       protocol: TCP
   selector:
     {{- include "prax.componentSelectorLabels" (dict "component" "sandbox" "context" $) | nindent 4 }}
+{{- end }}

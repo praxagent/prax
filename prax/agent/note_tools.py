@@ -151,8 +151,8 @@ def note_update(note_id: str, content: str, title: str = "", tags: str = "") -> 
         )
 
         # Always rebuild — TeamWork serves the local URL, no ngrok needed.
-        from prax.settings import settings
-        teamwork_url = settings.teamwork_base_url.rstrip("/")
+        from prax.services.deployment_info import effective_base_url
+        teamwork_url = effective_base_url()
         result = note_service.publish_notes(uid, teamwork_url, slug=meta["slug"])
         if "error" in result:
             # Note is saved — Hugo publish is best-effort for the web page.

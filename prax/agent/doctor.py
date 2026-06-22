@@ -88,32 +88,14 @@ def _check_sandbox() -> str:
     try:
         from prax.settings import settings
 
-        if not settings.running_in_docker:
-            import subprocess
+        if not settings.sandbox_available:
+            return "[OK] Sandbox: disabled (SANDBOX_ENABLED=false)"
 
-            result = subprocess.run(
-                ["docker", "info"],
-                capture_output=True,
-                timeout=5,
-            )
-            if result.returncode != 0:
-                return "[WARN] Sandbox: Docker not available (docker info failed)"
-            return "[OK] Sandbox: Docker available (ephemeral mode)"
+        from prax.services.sandbox_bridge import configured_client as get_client
 
-        # In Docker -- check if sandbox container is reachable
-        sandbox_url = os.environ.get("SANDBOX_URL", "")
-        if not sandbox_url:
-            return "[WARN] Sandbox: running in Docker but SANDBOX_URL not set"
-
-        import requests
-
-        try:
-            resp = requests.get(f"{sandbox_url}/health", timeout=3)
-            if resp.ok:
-                return f"[OK] Sandbox: persistent mode, healthy at {sandbox_url}"
-            return f"[WARN] Sandbox: {sandbox_url} returned {resp.status_code}"
-        except Exception:
-            return f"[WARN] Sandbox: {sandbox_url} unreachable"
+        if get_client().health():
+            return "[OK] Sandbox: persistent mode, healthy"
+        return "[WARN] Sandbox: enabled but not reachable (check the sandbox container)"
     except Exception as e:
         return f"[FAIL] Sandbox: {e}"
 

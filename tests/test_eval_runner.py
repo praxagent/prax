@@ -18,6 +18,59 @@ class TestEvalResult:
         assert len(r.id) == 12
         assert r.created_at
 
+    def test_decomposed_axes_default_zero(self):
+        r = EvalResult(case_id="c1")
+        assert r.grounding == 0.0
+        assert r.relevancy == 0.0
+        assert r.correctness == 0.0
+
+
+class TestJudgeDecomposedAxes:
+    def test_judge_output_parses_axes(self, monkeypatch):
+        from prax.eval import runner
+
+        fake_llm = MagicMock()
+        fake_llm.invoke.return_value = MagicMock(
+            content='{"score": 0.9, "passed": true, "grounding": 0.8, '
+                    '"relevancy": 1.0, "correctness": 0.7, "reasoning": "ok"}'
+        )
+        fake_llm.model_name = "gpt-x"
+        monkeypatch.setattr("prax.agent.llm_factory.build_llm", lambda **kw: fake_llm)
+
+        out = runner._judge_output("q", "old", "new", "fb", "cat")
+        assert len(out) == 5
+        score, passed, reasoning, model, axes = out
+        assert score == 0.9 and passed is True
+        assert axes == {"grounding": 0.8, "relevancy": 1.0, "correctness": 0.7}
+
+    def test_run_eval_stores_axes(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "prax.services.memory.failure_journal._journal_dir", lambda: tmp_path,
+        )
+        monkeypatch.setattr(
+            "prax.services.memory.failure_journal._store_neo4j", lambda c: None,
+        )
+        monkeypatch.setattr(
+            "prax.services.memory.failure_journal._store_qdrant", lambda c: None,
+        )
+        from prax.services.memory.failure_journal import record_failure
+        case = record_failure(user_id="u1", user_input="x", agent_output="y", feedback_comment="z")
+
+        monkeypatch.setattr(
+            "prax.eval.runner._judge_output",
+            lambda **kw: (0.9, True, "fixed", "gpt-x",
+                          {"grounding": 0.8, "relevancy": 1.0, "correctness": 0.7}),
+        )
+        monkeypatch.setattr("prax.eval.runner._replay_input", lambda uid, inp: "new answer")
+        results_dir = tmp_path / "eval_results"
+        results_dir.mkdir()
+        monkeypatch.setattr("prax.eval.runner._results_file", lambda: results_dir / "r.jsonl")
+
+        result = run_eval(case_id=case.id, replay=True)
+        assert result.grounding == 0.8
+        assert result.relevancy == 1.0
+        assert result.correctness == 0.7
+
 
 # ---------------------------------------------------------------------------
 # run_eval

@@ -165,7 +165,14 @@ def delete_namespace(user_id: str, namespace: str) -> int:
                 ns=namespace,
             )
             record = result.single()
-            return record["deleted"] if record else 0
+            deleted = record["deleted"] if record else 0
+        # Drop the namespace's concept vectors too (best-effort).
+        try:
+            from prax.services.memory import knowledge_vectors
+            knowledge_vectors.delete_namespace_vectors(user_id, namespace)
+        except Exception:
+            pass
+        return deleted
     except Exception:
         logger.exception("Failed to delete namespace %s for user %s", namespace, user_id)
         return 0
@@ -232,7 +239,15 @@ def add_concept(
                 props=str(props),
             )
             record = result.single()
-            return record["id"] if record else cid
+            cid = record["id"] if record else cid
+        # Mirror the concept into the vector index for semantic search
+        # (best-effort; degrades to keyword-only if unavailable).
+        try:
+            from prax.services.memory import knowledge_vectors
+            knowledge_vectors.upsert_concept(user_id, namespace, cid, display, description)
+        except Exception:
+            pass
+        return cid
     except Exception:
         logger.exception(
             "Failed to add concept '%s' to namespace %s", name, namespace
@@ -400,66 +415,255 @@ def link_to_memory(
 # ---------------------------------------------------------------------------
 
 
+def _knowledge_search_terms(query: str) -> list[str]:
+    """Return the lowercased match terms for a knowledge search.
+
+    With ``retrieval_query_expansion_enabled``, the query is expanded into a
+    few paraphrase variants so the substring match catches alternate phrasings
+    (a recall win over the bare single-term CONTAINS).  With it off, this is
+    just ``[query.lower()]`` — identical to the original behaviour.
+    """
+    base = query.strip().lower()
+    try:
+        from prax.settings import settings
+        if not settings.retrieval_query_expansion_enabled:
+            return [base]
+        from prax.services.memory.retrieval import _expand_queries
+        variants = _expand_queries(query, settings.retrieval_query_expansion_n)
+        terms: list[str] = []
+        for v in variants:
+            t = v.strip().lower()
+            if t and t not in terms:
+                terms.append(t)
+        return terms or [base]
+    except Exception:
+        return [base]
+
+
+_CONCEPT_RETURN = """
+    RETURN c.id AS id,
+           c.name AS name,
+           c.display_name AS display_name,
+           c.namespace AS namespace,
+           c.description AS description,
+           c.importance AS importance,
+           c.source AS source,
+           c.source_type AS source_type
+"""
+
+
+def _keyword_search(
+    user_id: str, query: str, namespace: str | None, limit: int,
+) -> list[dict]:
+    """Keyword (multi-variant substring) concept search arm."""
+    terms = _knowledge_search_terms(query)
+    where = (
+        "ANY(t IN $terms WHERE toLower(c.name) CONTAINS t "
+        "OR toLower(c.description) CONTAINS t "
+        "OR toLower(c.display_name) CONTAINS t)"
+    )
+    match_count = (
+        "size([t IN $terms WHERE toLower(c.name) CONTAINS t "
+        "OR toLower(c.description) CONTAINS t "
+        "OR toLower(c.display_name) CONTAINS t])"
+    )
+    match_clause = (
+        "MATCH (c:KnowledgeConcept {user_id: $uid, namespace: $ns})"
+        if namespace
+        else "MATCH (c:KnowledgeConcept {user_id: $uid})"
+    )
+    cypher = f"""
+        {match_clause}
+        WHERE {where}
+        {_CONCEPT_RETURN},
+               {match_count} AS match_count
+        ORDER BY match_count DESC, c.importance DESC
+        LIMIT $limit
+    """
+    params: dict = {"uid": user_id, "terms": terms, "limit": limit}
+    if namespace:
+        params["ns"] = namespace
+    with _session() as session:
+        rows = [dict(r) for r in session.run(cypher, **params)]
+    for row in rows:
+        row.pop("match_count", None)
+    return rows
+
+
+def _get_concepts_by_ids(user_id: str, ids: list[str]) -> dict[str, dict]:
+    """Hydrate concept records for vector-only hits, keyed by id."""
+    if not ids:
+        return {}
+    cypher = f"""
+        MATCH (c:KnowledgeConcept {{user_id: $uid}})
+        WHERE c.id IN $ids
+        {_CONCEPT_RETURN}
+    """
+    try:
+        with _session() as session:
+            return {r["id"]: dict(r) for r in session.run(cypher, uid=user_id, ids=ids)}
+    except Exception:
+        logger.debug("Concept hydration failed", exc_info=True)
+        return {}
+
+
 def search_knowledge(
     user_id: str,
     query: str,
     namespace: str | None = None,
     limit: int = 20,
 ) -> list[dict]:
-    """Search concepts across knowledge graph namespaces."""
+    """Search concepts via hybrid semantic + keyword retrieval.
+
+    The keyword arm (multi-variant substring) and the semantic arm (Qdrant
+    vector search over concept embeddings) are fused with Reciprocal Rank
+    Fusion.  When the vector backend is unavailable, this is exactly the
+    keyword arm — so it always works, just with less recall.
+    """
     ensure_kg_indexes()
-    search_term = query.strip().lower()
+    try:
+        keyword = _keyword_search(user_id, query, namespace, limit)
+    except Exception:
+        logger.exception("KG keyword search failed for query '%s'", query)
+        keyword = []
+
+    # Semantic arm (best-effort; empty when Qdrant/embedder unavailable).
+    try:
+        from prax.services.memory import knowledge_vectors
+        vector_hits = knowledge_vectors.search(user_id, query, namespace, top_k=limit * 2)
+    except Exception:
+        vector_hits = []
+
+    if not vector_hits:
+        return keyword
+
+    # Fuse the two ranked id-orderings.
+    from prax.services.memory.knowledge_vectors import _rrf
+    kw_ids = [r["id"] for r in keyword]
+    vec_ids = [cid for cid, _ in vector_hits]
+    fused = _rrf([kw_ids, vec_ids])
+
+    by_id = {r["id"]: r for r in keyword}
+    missing = [cid for cid, _ in fused if cid not in by_id]
+    by_id.update(_get_concepts_by_ids(user_id, missing))
+
+    ordered = [by_id[cid] for cid, _ in fused if cid in by_id]
+    return ordered[:limit]
+
+
+def reindex_user_concepts(user_id: str, batch_limit: int = 5000) -> int:
+    """Backfill the vector index for a user's existing concepts.
+
+    New concepts are vector-indexed automatically on :func:`add_concept`; run
+    this once after enabling hybrid search (or upgrading) to index the backlog.
+    Returns the number of concepts (re)indexed.  No-op when the vector backend
+    is unavailable.
+    """
+    from prax.services.memory import knowledge_vectors
+    if not knowledge_vectors.available():
+        return 0
     try:
         with _session() as session:
-            if namespace:
-                result = session.run(
-                    """
-                    MATCH (c:KnowledgeConcept {user_id: $uid, namespace: $ns})
-                    WHERE toLower(c.name) CONTAINS $q
-                       OR toLower(c.description) CONTAINS $q
-                       OR toLower(c.display_name) CONTAINS $q
-                    RETURN c.id AS id,
-                           c.name AS name,
-                           c.display_name AS display_name,
-                           c.namespace AS namespace,
-                           c.description AS description,
-                           c.importance AS importance,
-                           c.source AS source,
-                           c.source_type AS source_type
-                    ORDER BY c.importance DESC
-                    LIMIT $limit
-                    """,
-                    uid=user_id,
-                    ns=namespace,
-                    q=search_term,
-                    limit=limit,
-                )
-            else:
-                result = session.run(
-                    """
-                    MATCH (c:KnowledgeConcept {user_id: $uid})
-                    WHERE toLower(c.name) CONTAINS $q
-                       OR toLower(c.description) CONTAINS $q
-                       OR toLower(c.display_name) CONTAINS $q
-                    RETURN c.id AS id,
-                           c.name AS name,
-                           c.display_name AS display_name,
-                           c.namespace AS namespace,
-                           c.description AS description,
-                           c.importance AS importance,
-                           c.source AS source,
-                           c.source_type AS source_type
-                    ORDER BY c.importance DESC
-                    LIMIT $limit
-                    """,
-                    uid=user_id,
-                    q=search_term,
-                    limit=limit,
-                )
-            return [dict(r) for r in result]
+            rows = [dict(r) for r in session.run(
+                """
+                MATCH (c:KnowledgeConcept {user_id: $uid})
+                RETURN c.id AS id, c.namespace AS namespace,
+                       c.display_name AS display_name, c.description AS description
+                LIMIT $limit
+                """,
+                uid=user_id, limit=batch_limit,
+            )]
     except Exception:
-        logger.exception("KG search failed for query '%s'", query)
+        logger.exception("Concept reindex query failed for user %s", user_id)
+        return 0
+    count = 0
+    for r in rows:
+        knowledge_vectors.upsert_concept(
+            user_id, r.get("namespace") or "", r["id"],
+            r.get("display_name") or "", r.get("description") or "",
+        )
+        count += 1
+    logger.info("Reindexed %d knowledge concepts for user %s", count, user_id)
+    return count
+
+
+# ---------------------------------------------------------------------------
+# Open Knowledge Format (OKF) interchange — export/import as plain markdown
+# files.  See prax/services/memory/okf_bridge.py and
+# docs/research/open-knowledge-format.md.
+# ---------------------------------------------------------------------------
+
+def list_concepts(user_id: str, namespace: str) -> list[dict]:
+    """Return all concepts in a namespace (for OKF export)."""
+    try:
+        with _session() as session:
+            return [dict(r) for r in session.run(
+                """
+                MATCH (c:KnowledgeConcept {user_id: $uid, namespace: $ns})
+                RETURN c.id AS id, c.name AS name, c.display_name AS display_name,
+                       c.description AS description, c.importance AS importance,
+                       c.source AS source, c.source_type AS source_type,
+                       c.created_at AS created_at, c.updated_at AS updated_at
+                """,
+                uid=user_id, ns=namespace,
+            )]
+    except Exception:
+        logger.exception("Failed to list concepts for namespace %s", namespace)
         return []
+
+
+def list_relations(user_id: str, namespace: str) -> list[dict]:
+    """Return all intra-namespace concept relations (for OKF export)."""
+    try:
+        with _session() as session:
+            return [dict(r) for r in session.run(
+                """
+                MATCH (s:KnowledgeConcept {user_id: $uid, namespace: $ns})
+                      -[r:KNOWLEDGE_RELATES]->
+                      (t:KnowledgeConcept {user_id: $uid, namespace: $ns})
+                RETURN s.id AS from_id, t.id AS to_id, r.type AS type
+                """,
+                uid=user_id, ns=namespace,
+            )]
+    except Exception:
+        logger.exception("Failed to list relations for namespace %s", namespace)
+        return []
+
+
+def export_namespace_okf(user_id: str, namespace: str, dest_dir: str) -> dict:
+    """Export a namespace's concepts + relations as an OKF bundle at *dest_dir*."""
+    from prax.services.memory import okf_bridge
+    concepts = list_concepts(user_id, namespace)
+    relations = list_relations(user_id, namespace)
+    return okf_bridge.write_bundle(concepts, relations, dest_dir, namespace)
+
+
+def import_okf(user_id: str, src_dir: str, namespace: str = "imported") -> dict:
+    """Import an OKF bundle at *src_dir* into the knowledge graph under *namespace*.
+
+    Concepts are added via :func:`add_concept` (so they are also vector-indexed)
+    and markdown cross-links become :func:`add_knowledge_relation` edges.
+    """
+    from prax.services.memory import okf_bridge
+    records, edges = okf_bridge.read_bundle(src_dir)
+    for rec in records:
+        add_concept(
+            user_id=user_id,
+            namespace=namespace,
+            name=rec["name"],
+            description=rec.get("description", ""),
+            source=rec.get("source", ""),
+            source_type=rec.get("source_type", "concept"),
+        )
+    rel_count = 0
+    for source_name, rtype, target_name in edges:
+        if add_knowledge_relation(user_id, namespace, source_name, rtype, target_name):
+            rel_count += 1
+    logger.info(
+        "Imported OKF bundle: %d concepts, %d relations into namespace %s",
+        len(records), rel_count, namespace,
+    )
+    return {"namespace": namespace, "concepts": len(records), "relations": rel_count}
 
 
 # ---------------------------------------------------------------------------

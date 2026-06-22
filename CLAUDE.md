@@ -31,9 +31,13 @@ prax/
   settings.py           # Pydantic settings (env vars)
 tests/                  # Unit + integration tests
 scripts/                # Utility scripts
-sandbox/                # Docker sandbox (OpenCode, Claude Code, Codex)
 docs/                   # Documentation (architecture, agents, guides, research)
 ```
+
+The **sandbox** (coding agents + browser + desktop container) is its own repo,
+`../prax-sandbox`, consumed via the `prax_sandbox_client` dependency (uv path
+source). Prax runs with or without it (`SANDBOX_ENABLED`); local or remote
+(`SANDBOX_DAEMON_URL`). See `docs/infrastructure/sandbox.md`.
 
 ## Key Patterns
 
@@ -95,6 +99,27 @@ docs/                   # Documentation (architecture, agents, guides, research)
   reviewer-LLM narrative; prefer over `conversation_search` when
   you want semantic task-similarity rather than keyword matching.
   See `prax/services/trace_search_service.py`.
+- **Reliability & quality flags** — a set of opt-in features
+  (cross-provider LLM failover, durable checkpoints + resume,
+  continuous/decomposed evals + `make eval`, retrieval rerank/query
+  expansion + hybrid knowledge search, prompt selectivity, intent
+  clarification, deny-by-default tool boundaries, hallucination-guard
+  metrics) all gate behind env flags that **default to prior
+  behaviour** (so `make ci` stays green keyless).  All flags are in
+  `prax/settings.py` + `.env-example`; the rationale and per-feature
+  anchors are in
+  [`docs/research/reliable-agentic-systems-bayer.md`](docs/research/reliable-agentic-systems-bayer.md).
+  When extending these, preserve the default-off contract and gate
+  behaviour changes so the eval gate governs rollout.
+- **MCP server** (`prax/mcp/`, default-off) — exposes a curated,
+  bearer-gated subset of Prax tools to *other* agents over the Model
+  Context Protocol (`POST /mcp`, JSON-RPC, no SDK dep). Fail-closed
+  (mounts only when a client is configured). **Per-caller identity**:
+  each client token (`MCP_BEARER_TOKEN` or an `MCP_CLIENTS_PATH`
+  registry) maps to its own Prax `user_id` + tool allowlist; write
+  (MEDIUM) tools are grantable per-caller, HIGH never; governance stays
+  in front. The "make Prax usable by other agents" surface. See
+  [`docs/infrastructure/mcp-server.md`](docs/infrastructure/mcp-server.md).
 
 ## Rules
 

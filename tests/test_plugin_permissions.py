@@ -242,23 +242,46 @@ class TestCapabilitiesEnforcement:
             permissions=perms,
         )
 
-    def test_llm_blocked_without_permission(self):
-        perms = PluginPermissions(capabilities=frozenset({"http"}))
+    @pytest.mark.parametrize(
+        ("perms", "invoke", "match"),
+        [
+            # llm: granted http only, build_llm() must be blocked
+            (
+                PluginPermissions(capabilities=frozenset({"http"})),
+                lambda caps: caps.build_llm(),
+                "does not declare 'llm'",
+            ),
+            # http: granted llm only, http_get() must be blocked
+            (
+                PluginPermissions(capabilities=frozenset({"llm"})),
+                lambda caps: caps.http_get("https://example.com"),
+                "does not declare 'http'",
+            ),
+            # commands: granted llm only, run_command() must be blocked
+            (
+                PluginPermissions(capabilities=frozenset({"llm"})),
+                lambda caps: caps.run_command(["echo", "hi"]),
+                "does not declare 'commands'",
+            ),
+            # tts: granted llm only, tts_synthesize() must be blocked
+            (
+                PluginPermissions(capabilities=frozenset({"llm"})),
+                lambda caps: caps.tts_synthesize("hello", "/tmp/out.mp3"),
+                "does not declare 'tts'",
+            ),
+            # transcription: granted llm only, transcribe_audio() must be blocked
+            (
+                PluginPermissions(capabilities=frozenset({"llm"})),
+                lambda caps: caps.transcribe_audio("/tmp/audio.mp3"),
+                "does not declare 'transcription'",
+            ),
+        ],
+        ids=["llm", "http", "commands", "tts", "transcription"],
+    )
+    def test_capability_blocked_without_permission(self, perms, invoke, match):
         caps = self._make_caps(perms)
-        with pytest.raises(PermissionError, match="does not declare 'llm'"):
-            caps.build_llm()
-
-    def test_http_blocked_without_permission(self):
-        perms = PluginPermissions(capabilities=frozenset({"llm"}))
-        caps = self._make_caps(perms)
-        with pytest.raises(PermissionError, match="does not declare 'http'"):
-            caps.http_get("https://example.com")
-
-    def test_commands_blocked_without_permission(self):
-        perms = PluginPermissions(capabilities=frozenset({"llm"}))
-        caps = self._make_caps(perms)
-        with pytest.raises(PermissionError, match="does not declare 'commands'"):
-            caps.run_command(["echo", "hi"])
+        with pytest.raises(PermissionError, match=match):
+            invoke(caps)
 
     def test_command_whitelist_enforced(self):
         perms = PluginPermissions(
@@ -268,18 +291,6 @@ class TestCapabilitiesEnforcement:
         caps = self._make_caps(perms)
         with pytest.raises(PermissionError, match="not allowed to run 'curl'"):
             caps.run_command(["curl", "https://evil.com"])
-
-    def test_tts_blocked_without_permission(self):
-        perms = PluginPermissions(capabilities=frozenset({"llm"}))
-        caps = self._make_caps(perms)
-        with pytest.raises(PermissionError, match="does not declare 'tts'"):
-            caps.tts_synthesize("hello", "/tmp/out.mp3")
-
-    def test_transcription_blocked_without_permission(self):
-        perms = PluginPermissions(capabilities=frozenset({"llm"}))
-        caps = self._make_caps(perms)
-        with pytest.raises(PermissionError, match="does not declare 'transcription'"):
-            caps.transcribe_audio("/tmp/audio.mp3")
 
     def test_no_permissions_object_allows_tier_policy(self):
         """When permissions=None (no permissions.md), fall through to tier policy."""

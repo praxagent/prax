@@ -335,23 +335,11 @@ class TestSyncIdempotency:
             12678093704: SAMPLE_SMS_MESSAGES,
         })
 
-        from prax.services.teamwork_service import TeamWorkClient
-
-        client = TeamWorkClient.__new__(TeamWorkClient)
-        client.base_url = "http://fake:8000"
-        client.api_key = ""
-        client._project_id = "test-project"
-        client._channels = {"sms": "sms-chan-id", "discord": "discord-chan-id"}
-        client._agents = {"Prax": "prax-agent-id"}
+        client, mock_settings = TestSyncClassification()._make_client(db_path)
 
         bulk_called = []
         client.bulk_import_messages = lambda msgs: bulk_called.append(msgs) or len(msgs)
         client.get_channel_message_count = lambda _: 50  # Already has messages
-
-        mock_settings = MagicMock()
-        mock_settings.database_name = db_path
-        mock_settings.discord_allowed_users = None
-        mock_settings.teamwork_user_phone = ""
 
         with patch("prax.services.teamwork_service.settings", mock_settings):
             result = client.sync_conversation_history()
@@ -366,14 +354,7 @@ class TestSyncIdempotency:
             12678093704: SAMPLE_SMS_MESSAGES,
         })
 
-        from prax.services.teamwork_service import TeamWorkClient
-
-        client = TeamWorkClient.__new__(TeamWorkClient)
-        client.base_url = "http://fake:8000"
-        client.api_key = ""
-        client._project_id = "test-project"
-        client._channels = {"sms": "sms-chan-id", "discord": "discord-chan-id"}
-        client._agents = {"Prax": "prax-agent-id"}
+        client, mock_settings = TestSyncClassification()._make_client(db_path)
 
         cleared = []
         imported = []
@@ -381,11 +362,6 @@ class TestSyncIdempotency:
         client.bulk_import_messages = lambda msgs: imported.extend(msgs) or len(msgs)
         client.get_channel_message_count = lambda _: 50
         client.clear_channel_messages = lambda name: cleared.append(name) or 50
-
-        mock_settings = MagicMock()
-        mock_settings.database_name = db_path
-        mock_settings.discord_allowed_users = None
-        mock_settings.teamwork_user_phone = ""
 
         with patch("prax.services.teamwork_service.settings", mock_settings):
             result = client.sync_conversation_history(force=True)

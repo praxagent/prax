@@ -125,6 +125,26 @@ class PluginRegistry:
             entry = self._data["plugins"].get(rel_path, {})
             return entry.get("security_warnings_acknowledged", False)
 
+    def flag_requires_acknowledgement(self, rel_path: str) -> None:
+        """Mark a plugin as having unacknowledged security warnings.
+
+        Set at import time when the security scan finds concerns; the loader
+        refuses to activate such a plugin until :meth:`acknowledge_warnings`
+        clears it.  Resets any prior acknowledgement.
+        """
+        with self._lock:
+            entry = self._data["plugins"].setdefault(rel_path, {})
+            entry["requires_acknowledgement"] = True
+            entry["security_warnings_acknowledged"] = False
+            self._save()
+        logger.info("Plugin %s flagged: requires security acknowledgement", rel_path)
+
+    def requires_acknowledgement(self, rel_path: str) -> bool:
+        """Return True if the plugin was imported with unacknowledged warnings."""
+        with self._lock:
+            entry = self._data["plugins"].get(rel_path, {})
+            return entry.get("requires_acknowledgement", False)
+
     # ------------------------------------------------------------------
     # Plugin permissions
     # ------------------------------------------------------------------

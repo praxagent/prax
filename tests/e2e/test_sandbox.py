@@ -27,19 +27,19 @@ def test_sandbox_start_message_finish(run_e2e):
             ),
         ],
         mocks={
-            "prax.services.sandbox_service.start_session": {
+            "prax_sandbox.control_plane.start_session": {
                 "session_id": "abc12345-1234-1234-1234-123456789abc",
                 "status": "running",
                 "model": "anthropic/claude-sonnet-4-5",
             },
-            "prax.services.sandbox_service.send_message": {
+            "prax_sandbox.control_plane.send_message": {
                 "session_id": "abc12345-1234-1234-1234-123456789abc",
                 "model": "anthropic/claude-sonnet-4-5",
                 "response": {"response": "Done! Created csv_processor.py with CSV filtering logic."},
                 "rounds_used": 1,
                 "rounds_remaining": 9,
             },
-            "prax.services.sandbox_service.finish_session": {
+            "prax_sandbox.control_plane.finish_session": {
                 "session_id": "abc12345-1234-1234-1234-123456789abc",
                 "status": "finished",
                 "archived_path": "/workspaces/10000000000/archive/code/abc12345",
@@ -60,7 +60,7 @@ def test_sandbox_review(run_e2e):
             ai("Your sandbox session is running with 2 out of 10 rounds used. No files have been created yet."),
         ],
         mocks={
-            "prax.services.sandbox_service.review_session": {
+            "prax_sandbox.control_plane.review_session": {
                 "session_id": "abc12345-1234-1234-1234-123456789abc",
                 "status": "running",
                 "model": "anthropic/claude-sonnet-4-5",
@@ -86,7 +86,7 @@ def test_sandbox_abort(run_e2e):
             ai("I've aborted the sandbox session. It ran for about 5 minutes and used 3 rounds. Would you like to start a new session?"),
         ],
         mocks={
-            "prax.services.sandbox_service.abort_session": {
+            "prax_sandbox.control_plane.abort_session": {
                 "session_id": "abc12345-1234-1234-1234-123456789abc",
                 "status": "aborted",
                 "elapsed_seconds": 300,
@@ -110,7 +110,7 @@ def test_sandbox_with_model_switch(run_e2e):
             ai("I've switched to Claude and asked it to try a pandas-based approach. The response looks more promising."),
         ],
         mocks={
-            "prax.services.sandbox_service.send_message": {
+            "prax_sandbox.control_plane.send_message": {
                 "session_id": "abc12345-1234-1234-1234-123456789abc",
                 "model": "anthropic/claude-sonnet-4-5",
                 "response": {"response": "Rewritten using pandas. Much cleaner now."},
@@ -137,7 +137,7 @@ def test_sandbox_timeout_suggests_abort(run_e2e):
             ),
         ],
         mocks={
-            "prax.services.sandbox_service.send_message": {
+            "prax_sandbox.control_plane.send_message": {
                 "session_id": "abc12345-1234-1234-1234-123456789abc",
                 "model": "anthropic/claude-sonnet-4-5",
                 "response": {"error": "Sandbox timed out waiting for response (5 min)"},
@@ -164,7 +164,7 @@ def test_sandbox_auto_abort_on_consecutive_failures(run_e2e):
             ),
         ],
         mocks={
-            "prax.services.sandbox_service.send_message": {
+            "prax_sandbox.control_plane.send_message": {
                 "error": (
                     "Sandbox session auto-aborted after 3 consecutive failures. "
                     "The coding agent appears stuck. "
