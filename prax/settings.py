@@ -17,6 +17,15 @@ class AppSettings(BaseSettings):
     debug: bool = Field(default=False, alias="DEBUG")
     log_path: str = Field(default="app.log", alias="LOG_PATH")
     port: int = Field(default=5001, alias="PORT")
+    # Interface the Flask app binds. Secure-by-default: 127.0.0.1 (loopback only),
+    # so a native/host deployment is NOT reachable from the network — a reverse
+    # proxy (e.g. `tailscale serve`, which dials localhost) still works. Set to
+    # 0.0.0.0 ONLY when something else owns the security boundary: the container
+    # image sets it (its netns is isolated; exposure = the published port/Service),
+    # or when you front Prax with an AUTHENTICATING reverse proxy (IAP / Cloudflare
+    # Access / oauth2-proxy) and a firewall that admits only that proxy. See
+    # docs/security/network-exposure.md.
+    bind_host: str = Field(default="127.0.0.1", alias="PRAX_HOST")
     database_name: str = Field(default="conversations.db", alias="DATABASE_NAME")
     identity_db: str = Field(default="identity.db", alias="IDENTITY_DB")
 
@@ -52,9 +61,9 @@ class AppSettings(BaseSettings):
     low_enabled: bool = Field(default=True, alias="LOW_ENABLED")
     medium_model: str = Field(default="gpt-5.4-mini", alias="MEDIUM_MODEL")
     medium_enabled: bool = Field(default=True, alias="MEDIUM_ENABLED")
-    high_model: str = Field(default="gpt-5.4", alias="HIGH_MODEL")
+    high_model: str = Field(default="gpt-5.5", alias="HIGH_MODEL")
     high_enabled: bool = Field(default=True, alias="HIGH_ENABLED")
-    pro_model: str = Field(default="gpt-5.4-pro", alias="PRO_MODEL")
+    pro_model: str = Field(default="gpt-5.5-pro", alias="PRO_MODEL")
     pro_enabled: bool = Field(default=False, alias="PRO_ENABLED")
 
     # Vision / image understanding.  ``vision_provider`` selects the routing:
@@ -348,6 +357,15 @@ class AppSettings(BaseSettings):
             "vector retrieval (Qdrant) with keyword matching instead of relying "
             "on substring matching alone.  Degrades automatically to keyword "
             "search when Qdrant/the embedder is unavailable."
+        ),
+    )
+    eval_auditor_enabled: bool = Field(
+        default=False, alias="EVAL_AUDITOR_ENABLED",
+        description=(
+            "When true, the golden suite runs a high-tier supervising AUDITOR "
+            "that re-checks only the criteria the cheap (low-tier) judge passed "
+            "and may veto impressive-but-vacuous answers (1->0). Eval-time only, "
+            "off by default — see docs/research/diffuse-ai-control-judge-robustness.md."
         ),
     )
     eval_nightly_enabled: bool = Field(

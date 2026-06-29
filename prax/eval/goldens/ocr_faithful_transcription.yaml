@@ -1,0 +1,60 @@
+# Golden eval — faithful OCR of HARD documents (Unlimited-OCR vs. the current stack).
+#
+# Tracks IDEAS_BACKLOG.md #14 (OCR front-end option) and
+# docs/research/unlimited-ocr.md. The decision this golden governs: does a
+# VLM-OCR path (Baidu Unlimited-OCR, MIT, served via SGLang) transcribe HARD
+# documents — scanned / handwritten / table-heavy / multi-column / multi-page —
+# more faithfully than Prax's current text-extraction read stack (url_reader.py
+# Jina + pdf_service opendataloader), enough to justify a flag-gated self-hosted
+# model? "Validate before defaulting on" (per the research note) is exactly this.
+#
+# COMPARATOR-scored, not an LLM rubric: faithfulness is measured deterministically
+# against gold transcripts (character/word accuracy, table-cell F1, reading-order /
+# cross-page continuity, hallucinated-span rate) by a comparator wired in when the
+# model is served. Until then it has NO `rubric`, so `make eval` lists it as
+# "comparator-scored — not wired" rather than fake-scoring it. Its presence is
+# guarded by tests/test_eval_goldens.py so the decision can't be quietly dropped.
+id: ocr_faithful_transcription
+title: Faithful OCR of hard documents (Unlimited-OCR vs. Jina/opendataloader)
+kind: ocr_compare
+status: planned   # wires when Unlimited-OCR is served (SGLang, OpenAI-compatible)
+source: "docs/research/unlimited-ocr.md (baidu/Unlimited-OCR, MIT) + IDEAS_BACKLOG.md #14"
+
+prompt: >-
+  Given a hard document (scanned / handwritten / table-heavy / multi-column /
+  multi-page), produce a faithful structured transcription that preserves the
+  text, the table structure, the reading order, and any context that spans page
+  boundaries.
+
+# No `rubric:` on purpose — see header. The fields below are the forward-looking
+# payload the comparator will consume (the loader ignores extra keys). The point
+# is an A/B: the SAME hard-doc set is read by each engine and scored vs. gold, so
+# the metric is the *delta* over the current stack, not an absolute number.
+engines:
+  - current   # url_reader.py (Jina) + pdf_service.py (opendataloader) — the baseline
+  - unlimited_ocr   # baidu/Unlimited-OCR via SGLang OpenAI-compatible endpoint
+
+metrics:
+  - char_word_accuracy        # vs gold transcript, normalized
+  - table_cell_f1             # structure preserved, not flattened to prose
+  - reading_order_continuity  # multi-column / cross-page order correct
+  - hallucinated_span_rate    # VLM failure mode — invented text on low-quality scans (lower is better)
+  - latency_p50_p95
+
+payload_example:
+  case_classes:
+    - scanned_invoice_multipage
+    - handwritten_form
+    - dense_financial_table
+    - two_column_academic_pdf
+  # gold transcripts + doc paths supplied per-case with the labeled eval set,
+  # kept under $PRAX_EVAL_DIR per the isolation rule in prax/eval/README.md.
+
+notes: >-
+  Adopt-decision gate, not a benchmark to spike: Unlimited-OCR earns a flag-gated,
+  self-hosted slot ONLY where it beats the current stack on the hard classes by a
+  margin worth running a GPU model for — and where its hallucinated-span rate stays
+  low (the VLM risk the research note flags). Where the current text-extraction
+  stack is already faithful (clean web/text docs), it stays the default. Composes
+  with #14: this is the OCR front-end stage measured before the constrained-decode
+  (typed-JSON) stage.

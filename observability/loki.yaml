@@ -1,0 +1,49 @@
+# Loki config for the Prax observability stack.
+#
+# Mirrors the upstream loki:3.4 single-binary default, but ADDS retention so the
+# log volume can't grow without bound on a long-running deployment. Without a
+# compactor + retention_period, Loki keeps every log line forever (the image's
+# built-in /etc/loki/local-config.yaml has no retention → infinite).
+#
+# Retention here is 7 days (168h). Override by editing retention_period below.
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2020-10-24
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  # How long log lines are kept before the compactor deletes them.
+  retention_period: 168h
+
+compactor:
+  working_directory: /loki/compactor
+  # retention_enabled + a delete store are what actually enforce
+  # retention_period above; without them Loki compacts but never deletes.
+  retention_enabled: true
+  delete_request_store: filesystem
+  compaction_interval: 10m
+  retention_delete_delay: 2h
+  retention_delete_worker_count: 150

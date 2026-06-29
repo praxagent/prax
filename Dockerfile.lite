@@ -148,5 +148,10 @@ EXPOSE 3000 5001 4040 6333 7474 7687
 
 ENV FLASK_APP=app.py
 ENV FLASK_RUN_HOST=0.0.0.0
+# app.py's app.run() binds settings.bind_host (PRAX_HOST), default 127.0.0.1 for
+# safety on host installs. In-container the netns is isolated and exposure is the
+# published port / Service / firewall, so bind all interfaces here. See
+# docs/security/network-exposure.md.
+ENV PRAX_HOST=0.0.0.0
 
 ENTRYPOINT ["bash", "scripts/entrypoint-lite.sh"]
