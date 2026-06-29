@@ -142,16 +142,27 @@ services:
       - "3200:3200"   # Tempo query API
       - "4317:4317"   # OTLP gRPC
       - "4318:4318"   # OTLP HTTP
+    # Cap the container's own json-file stdout logs so they can't fill the disk
+    # on a long-running stack. Anchor reused by the other observability services.
+    logging: &obs-logging
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # Loki — log aggregation (receives logs from Promtail)
   loki:
     image: grafana/loki:3.4.2
     profiles: ["observability"]
-    command: ["-config.file=/etc/loki/local-config.yaml"]
+    # Our config adds a compactor + 7-day retention (the image default keeps logs
+    # forever). See observability/loki.yaml.
+    command: ["-config.file=/etc/loki/loki.yaml"]
     ports:
       - "3100:3100"
     volumes:
+      - ./observability/loki.yaml:/etc/loki/loki.yaml:ro
       - loki-data:/loki
+    logging: *obs-logging
 
   # Promtail — ships Docker container logs to Loki
   promtail:
@@ -162,8 +173,13 @@ services:
       - ./observability/promtail.yaml:/etc/promtail/config.yaml:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      # Host logs from a NATIVELY-run stack (`make run-local-all`). In the
+      # all-Docker path this dir is empty/absent, so the prax-native scrape job
+      # tails nothing — harmless. :ro so promtail can only read.
+      - ./.local-run:/var/log/prax-native:ro
     depends_on:
       - loki
+    logging: *obs-logging
 
   # Prometheus — metrics (scrapes /metrics from Prax)
   prometheus:
@@ -176,8 +192,14 @@ services:
     volumes:
       - ./observability/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
+    # Lets the prometheus.yaml `host.docker.internal:5001` target resolve to the
+    # host, so a NATIVELY-run Prax (`make run-local-all`) is scrapeable. Harmless
+    # in the all-Docker path (the in-network `prax:5001` target is used instead).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "9090:9090"
+    logging: *obs-logging
 
   # Grafana — unified dashboards (traces + logs + metrics)
   # Bound to host port 3002 so it doesn't conflict with the tailscale
@@ -201,6 +223,7 @@ services:
       - tempo
       - loki
       - prometheus
+    logging: *obs-logging
 
   # ── Tailscale sidecar (private HTTPS access from your laptop) ─────
   # Opt-in.  To enable, add to .env:

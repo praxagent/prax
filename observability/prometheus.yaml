@@ -4,7 +4,14 @@ global:
 
 scrape_configs:
   - job_name: "prax"
+    # Two targets so one config serves both deployment shapes:
+    #   * prax:5001                 — Prax running as a compose container (all-Docker).
+    #   * host.docker.internal:5001 — Prax running NATIVELY on the host (the
+    #                                 `make run-local-all` path). Resolves via the
+    #                                 host-gateway extra_hosts mapping on the
+    #                                 prometheus service in docker-compose.yml.
+    # Whichever shape isn't in use simply reports its target DOWN — harmless.
     static_configs:
-      - targets: ["prax:5001"]
+      - targets: ["prax:5001", "host.docker.internal:5001"]
     metrics_path: /metrics
     scrape_interval: 10s

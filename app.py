@@ -248,7 +248,7 @@ if __name__ == '__main__':
     debug_bool = settings.debug
     app.run(
         debug=debug_bool,
-        host='0.0.0.0',
+        host=settings.bind_host,  # 127.0.0.1 by default; PRAX_HOST=0.0.0.0 to expose (see settings)
         port=settings.port,
         exclude_patterns=[
             "**/.git/*",

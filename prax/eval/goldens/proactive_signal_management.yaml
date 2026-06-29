@@ -1,0 +1,73 @@
+# Golden eval — outer-loop signal discipline: notice -> deduplicated signal -> prioritize.
+#
+# Tracks IDEAS_BACKLOG.md #23 (ambient initiative loop) and Jason Zhou's "loop
+# engineering" (X, 2026-06; github.com/JayZeeDesign/loop-engineer-template). Sibling
+# to proactive_initiative_judgment.yaml: that golden measures WHEN to act vs. stay
+# quiet; THIS one measures the data discipline that makes the outer loop *compound*
+# — turning a fleeting "noticing" into a durable, deduplicated, prioritizable
+# SIGNAL, and prioritizing from the signal store rather than from one-off impulses.
+#
+# A "signal" = a structured, durable record of something worth working on
+# (frequency-accumulating, dedup-by-theme). Without it the ambient loop notices the
+# same thing forever and never compounds; with it, separate loops read each other's
+# signals. Prax has no signal type today (closest: Library notes/Kanban).
+#
+# RUBRIC-scored, single-turn, baseline-gap. When the signal artifact + ambient loop
+# ship (#23), the SAME rubric measures the gain. Guarded by tests/test_eval_goldens.py.
+id: proactive_signal_management
+title: Turn a recurring observation into a deduplicated, prioritizable signal (outer-loop discipline)
+kind: self_improvement
+status: baseline-gap
+source: "Jason Zhou, 'loop engineering' (X, 2026-06) + IDEAS_BACKLOG.md #23"
+
+prompt: >-
+  Over the last few days, across the channels and tasks you watch, the same theme
+  has surfaced several times from different sources — e.g. multiple people hitting
+  the same friction, or several tasks stalling for the same underlying reason. You
+  already logged something about it once before. Decide how you would record this so
+  that it accumulates into something the system can act on and learn from over time,
+  rather than a pile of one-off notes — and then explain how you would use that
+  record (and others like it) to decide what is actually worth working on next.
+
+rubric:
+  - key: structured_durable_signal
+    weight: 0.25
+    description: >-
+      Captures the theme as a STRUCTURED, durable artifact (a "signal") with a
+      consistent schema — sources, evidence, suggested next action, a timeline —
+      not a free-form note that's trapped in one session. The record outlives the
+      turn and any single loop.
+  - key: dedup_and_frequency
+    weight: 0.30
+    description: >-
+      Recognizes it has seen this before and UPDATES/increments the existing signal
+      (frequency, sources, timeline) rather than creating a duplicate. Dedup-by-theme
+      with an accumulating frequency is the core mechanic — "never create a new
+      signal when the theme already exists."
+  - key: prioritize_from_the_store
+    weight: 0.20
+    description: >-
+      Decides what to work on next by reading the SIGNAL STORE (frequency, priority,
+      recency, cross-source corroboration) — not from a single impulse. Higher
+      frequency / multi-source signals rise; this is how the loop compounds.
+  - key: lifecycle_and_links
+    weight: 0.15
+    description: >-
+      Gives the signal a lifecycle (open → acted → resolved) and links it to its
+      sources and any spawned task, so its history is auditable and other loops can
+      read/act on it later (the shared-artifact / compounding idea).
+  - key: reuses_existing_stores
+    weight: 0.10
+    description: >-
+      Builds on Prax's existing durable stores (Library notes/Kanban, progress logs,
+      memory) — e.g. a new Library artifact kind — rather than inventing a parallel
+      subsystem; keeps it nimble.
+
+notes: >-
+  Baseline gap: Prax has the Library (notes/Kanban/tasks), per-space progress logs,
+  and memory, but no "signal" artifact — a deduplicated, frequency-accumulating
+  record of something worth working on that multiple loops read/write. That artifact
+  is what lets #23's outer loop turn "noticing" into durable, prioritizable work and
+  compound across loops. When it ships, this rubric measures whether the
+  notice->dedup->prioritize discipline is real. Composes with
+  proactive_initiative_judgment.yaml (when to act) and #22 (did the action land).

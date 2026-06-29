@@ -23,3 +23,26 @@ scrape_configs:
         target_label: "stream"
       - source_labels: ["__meta_docker_compose_service"]
         target_label: "service"
+
+  # Native host logs — the `make run-local-all` path runs Prax/TeamWork/etc. as
+  # host processes (not containers), so Docker SD above can't see them. This job
+  # tails the host's .local-run/*.log, mounted at /var/log/prax-native by the
+  # promtail volume in docker-compose.yml. In the all-Docker path that mount is an
+  # empty (or absent) dir, so this job simply tails nothing — harmless.
+  - job_name: prax-native
+    static_configs:
+      - targets: ["localhost"]
+        labels:
+          job: prax-native
+          __path__: /var/log/prax-native/*.log
+    pipeline_stages:
+      # Derive a `service` label from the log filename (prax.log -> prax,
+      # teamwork.log -> teamwork, …) so native logs group like the container ones.
+      - match:
+          selector: '{job="prax-native"}'
+          stages:
+            - regex:
+                source: filename
+                expression: '/var/log/prax-native/(?P<service>[^/]+)\.log$'
+            - labels:
+                service:
