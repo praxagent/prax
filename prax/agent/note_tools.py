@@ -66,6 +66,54 @@ def _looks_fabricated(title: str, content: str) -> str | None:
     return None
 
 
+# Login-wall / paywall boilerplate markers. Synthesizing a note from a page that
+# returned only these produces a garbage summary of the login screen — better to
+# escalate (sandbox browser, or open the desktop and ask the user to log in).
+_WALL_MARKERS = (
+    "log in", "sign up", "create account", "new to x?", "log in to x",
+    "javascript is not available", "enable javascript", "please enable javascript",
+    "subscribe to read", "you have reached your article limit",
+    "please sign in", "members only", "to continue reading",
+)
+
+
+def _looks_walled_or_thin(url: str, content: str) -> bool:
+    """True if the fetched content is a login wall / paywall / near-empty page.
+
+    Two signals: (1) almost nothing came back, (2) the text is dominated by
+    auth/subscribe boilerplate. X/Twitter status & article pages reliably wall
+    the real body for logged-out fetches, so we treat a single marker as enough
+    there. The point is to bail BEFORE the expensive deep-dive loop and escalate.
+    """
+    text = (content or "").strip()
+    if len(text) < 400:
+        return True
+    low = text.lower()
+    hits = sum(1 for m in _WALL_MARKERS if m in low)
+    host_walled = any(h in url for h in ("x.com/", "twitter.com/")) and (
+        "/status/" in url or "/i/article/" in url
+    )
+    return hits >= 2 or (host_walled and hits >= 1)
+
+
+def _escalation_message(url: str) -> str:
+    """What to do when a page is walled/thin — escalate, don't synthesize."""
+    return (
+        f"⚠️ I couldn't get the real content from {url} — it's behind a login "
+        "wall / returned only boilerplate, so I will NOT synthesize a note from "
+        "it (that just produces a summary of the login page, with a garbage "
+        "title).\n\n"
+        "To get the actual article, escalate instead of noting the wall:\n"
+        "1. **Render it in the sandbox browser** — `delegate_browser` to load the "
+        "page in the sandbox's Chrome (which may already be logged in), then pass "
+        "the rendered text to `note_deep_dive` directly.\n"
+        "2. **Open it on the desktop and ask the user to log in** — `delegate_desktop` "
+        "to open the page in the noVNC desktop, ask the user to log into the site "
+        "there, then re-run `note_from_url`.\n"
+        "Pick one (or ask the user which they prefer)."
+    )
+
+
 @tool
 def note_create(title: str, content: str, tags: str = "") -> str:
     """Create a note from the current conversation and publish it as a web page.
@@ -288,9 +336,12 @@ def note_from_url(url: str, topic_hint: str = "", tags: str = "") -> str:
 
     Args:
         url: The web page to create a note from.
-        topic_hint: Optional extra context to sharpen the note's angle
-            (e.g. "focus on the ROP gadget selection strategy").  If
-            empty, the topic is derived from the article title.
+        topic_hint: Optional SHORT angle to sharpen the note (e.g. "focus on
+            the ROP gadget selection strategy"). This is NOT the title and NOT
+            an instruction — do not pass task descriptions like "concise note
+            capturing the main points…"; leave it empty and the title is taken
+            from the article itself. Long/instruction-like hints are ignored as
+            titles.
         tags: Comma-separated tags.
 
     Notes:
@@ -312,16 +363,30 @@ def note_from_url(url: str, topic_hint: str = "", tags: str = "") -> str:
             "with the rendered text as source_content."
         )
 
-    # Build the topic line for the deep-dive pipeline.  First line of
-    # the topic becomes the note title.
-    if topic_hint.strip():
-        topic = topic_hint.strip()
-        if page_title and page_title.lower() not in topic.lower():
-            topic = f"{topic}\n\n(Based on: {page_title})"
-    elif page_title:
-        topic = page_title
+    # Bail BEFORE the expensive deep-dive loop if the page is a login wall /
+    # thin boilerplate — escalate to the sandbox instead of summarizing it.
+    if _looks_walled_or_thin(url, content):
+        return _escalation_message(url)
+
+    # Build the topic line for the deep-dive pipeline.  First line of the topic
+    # becomes the note title — so it must be a real TITLE, never an instruction
+    # or a URL. The hint only sharpens the ANGLE; a clean page title wins.
+    pt = (page_title or "").strip().splitlines()[0].strip()
+    if pt.lower().startswith(("http://", "https://", "t.co/", "www.")):
+        pt = ""  # X/redirect shells report a URL as the "title" — useless as a slug
+    hint = topic_hint.strip()
+    # A short, single-line hint can serve as a title; a long/multi-line one is an
+    # instruction (the bug in the trace) and must never become the slug.
+    hint_title_ok = bool(hint) and len(hint) <= 80 and "\n" not in hint
+    if pt:
+        topic = f"{pt}\n\n(Angle: {hint})" if hint else pt
+    elif hint_title_ok:
+        topic = hint
     else:
-        topic = f"Deep dive: {url}"
+        from urllib.parse import urlparse
+        topic = f"Notes from {urlparse(url).netloc or url}"
+        if hint:
+            topic = f"{topic}\n\n(Angle: {hint})"
 
     # Include the source URL in the context so the note can cite it.
     source_content = (

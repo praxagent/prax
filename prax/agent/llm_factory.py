@@ -172,18 +172,37 @@ def build_llm(
     if provider_name == "openai":
         if not settings.openai_key:
             raise ValueError("OPENAI_KEY is required for OpenAI provider")
-        # Phase 3: enable logprobs for entropy analysis when provider
-        # supports it.  The LogprobCallbackHandler silently no-ops if
-        # the response doesn't contain logprob data.
-        try:
-            from prax.agent.logprob_analyzer import get_logprob_callback
-            callbacks = list(callbacks) + [get_logprob_callback()]
-        except Exception:
-            pass
+        # The "pro"/reasoning models route through OpenAI's **Responses API**,
+        # which (a) rejects `logprobs`/`top_logprobs` — raising
+        # `Responses.create() got an unexpected keyword argument 'logprobs'` and
+        # crashing the spoke (this is what killed the gpt-5.4-pro professor) — and
+        # (b) only accepts the default temperature. Detect them and skip both the
+        # logprobs entropy machinery and the custom temperature.
+        _ml = (model_name or "").lower()
+        # Reasoning / "pro" models reject `logprobs` (a hard 400) and a custom
+        # temperature. VERIFIED rejecters: any `-pro` (gpt-5.4-pro, gpt-5.5-pro),
+        # the `o*` series, and **gpt-5.5** (full) — `gpt-5.5` + logprobs returns
+        # `400 'logprobs' is not supported with this model`. gpt-5.4 and below
+        # (nano/mini/full) DO support logprobs. NOTE: this is a name denylist; the
+        # robust long-term fix is to catch the 400 and auto-disable logprobs for
+        # the offending model (see model-routing.md §14).
+        _responses_api = (
+            ("-pro" in _ml)
+            or _ml.startswith(("o1", "o3", "o4"))
+            or _ml.startswith("gpt-5.5")
+        )
+        # Phase 3: logprobs for entropy analysis — Chat Completions models only.
+        # The LogprobCallbackHandler silently no-ops if there's no logprob data.
+        if not _responses_api:
+            try:
+                from prax.agent.logprob_analyzer import get_logprob_callback
+                callbacks = list(callbacks) + [get_logprob_callback()]
+            except Exception:
+                pass
         return ChatOpenAI(
             model=model_name,
             api_key=settings.openai_key,
-            temperature=temp,
+            temperature=(1.0 if _responses_api else temp),
             callbacks=callbacks,
             # Per-request HTTP timeout — prevents a stalled OpenAI
             # connection from hanging the orchestrator forever.  Without
@@ -192,7 +211,7 @@ def build_llm(
             # though agent_run_timeout exists (that timeout is only
             # checked AFTER graph.invoke returns).
             timeout=settings.llm_request_timeout,
-            model_kwargs={"logprobs": True, "top_logprobs": 5},
+            model_kwargs=({} if _responses_api else {"logprobs": True, "top_logprobs": 5}),
         )
 
     if provider_name == "anthropic":

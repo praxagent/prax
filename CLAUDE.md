@@ -39,6 +39,27 @@ The **sandbox** (coding agents + browser + desktop container) is its own repo,
 source). Prax runs with or without it (`SANDBOX_ENABLED`); local or remote
 (`SANDBOX_DAEMON_URL`). See `docs/infrastructure/sandbox.md`.
 
+## Docs placement — federate by ownership
+
+Prax, **TeamWork** (`../teamwork`), and **prax-sandbox** (`../prax-sandbox`) are
+separate, independently-cloneable repos. Both add-ons are **agent-agnostic** (you
+can run them with a different harness), so a doc belongs to the repo that **owns
+the thing it documents**, not wherever it's convenient:
+
+- **Component-intrinsic docs** (TeamWork's own UI/panels/mobile UX/API; the
+  sandbox's container/browser/desktop/remote internals) live in **that repo's
+  `docs/`** — `teamwork/docs/`, `prax-sandbox/docs/`.
+- **Prax docs** cover Prax itself **and the integration** — how Prax *drives*
+  TeamWork or *consumes* the sandbox (e.g. `docs/infrastructure/sandbox.md` is the
+  Prax↔sandbox integration doc; the sandbox internals are in `prax-sandbox/docs/`).
+- **Smell test:** if a doc still makes sense to someone running the component with
+  a *different* agent, it belongs in the component repo. If it only makes sense
+  with Prax as the brain, it stays here. Heavy mentions ≠ ownership — most Prax
+  docs reference the sandbox/TeamWork because Prax integrates with them.
+- Same rule for backlog ideas: component-facing ideas live in the component's
+  backlog (`teamwork/docs/BACKLOG.md`); cross-cutting items are tracked on both
+  sides with a cross-link (see `docs/IDEAS_BACKLOG.md` #21).
+
 ## Key Patterns
 
 - All tools go through `prax/agent/governed_tool.py` (risk classification, audit logging)

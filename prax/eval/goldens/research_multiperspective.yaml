@@ -40,6 +40,10 @@ rubric:
       Claims are backed by retrieved sources / citations (the agent actually
       fetched or referenced material), not asserted from parametric memory.
       Unsourced confident claims score low.
+    # Verifiable beats judgeable: a grounded answer MUST carry source markers.
+    # Scored deterministically — a URL, a [n] footnote, or an (Author, 2024)
+    # cite. No markers at all = ungrounded, full stop (no LLM judgement needed).
+    verify: 'https?://|\[\d+\]|\([^)]*\d{4}[^)]*\)'
   - key: synthesis
     weight: 1.5
     description: >-

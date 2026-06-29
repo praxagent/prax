@@ -145,7 +145,60 @@ A100-80GB; ~30–80 GPU-hours (~$40–105 cloud) [external]. **Expected:** field
 accuracy plausibly into the 70s–80s on covered doc types; full-doc stays low — make
 **field accuracy** the headline metric.
 
+**Data-constrained regime (we live here).** Prax fine-tunes have *limited unique
+data* (5–100k pairs, not infinite tokens), so the pretraining intuition "more params
+= better" inverts. From data-constrained scaling (Muennighoff 2023; Lovelace 2026,
+via Lilian Weng's *"Scaling Laws, Carefully"*): **repeated data decays in value**,
+so use **strong weight decay** to blunt the overfitting penalty, and prefer **more
+epochs over more parameters** when you can't add unique examples. Concretely: don't
+reach for a bigger base to fix accuracy on a fixed dataset — squeeze the data
+(curate/dedup/reweight — *the* cost driver above) and tune epochs + weight decay
+first. (The scaling-laws *pretraining* core is otherwise out of scope — Prax fine-
+tunes, it doesn't pretrain.)
+
 ## Phase 2 — Vision + RL on field-accuracy (optional, the true Lift-equivalent)
+
+**Why Phase 1 (SFT) must come before Phase 2 (RL) — the cold-start problem.**
+(Principle worth holding for *any* RL fine-tuning Prax does, not just extraction.
+Source: Patrick Toulme on GLM-5.2's training, 2026-06.) RL needs **positive
+trajectories** — rollouts where the model actually completed the task and earned
+reward. **No success on a task → zero reward → zero gradient → you cannot RL it.**
+That's the cold start. The standard fix is to *seed* the model with successes from a
+stronger model (distillation) until it produces positive trajectories, then GRPO to
+hill-climb, then drop the seeding. **Prax's commercial-clean version of that seed is
+Phase 1 itself:** SFT on synthetic/permissive gold data is what lifts the base model
+over the zero-success hump — so by Phase 2 it already emits gradient-bearing
+trajectories (exactly why the passport example starts at 87.6%, not 0%). Crucially,
+Prax gets the cold-start seed from **SFT-on-permissive-data, NOT by distilling
+Claude/GPT/Gemini** — the contamination rule above (frontier-API ToS bars building
+competitive models and voids an Apache release) forbids the post's literal recipe.
+So: **the SFT→RL ordering isn't a nicety, it's the cold-start requirement** — and
+solving cold start without frontier distillation is precisely Prax's commercial-clean
+differentiator. If a future RL run on some task shows ~no reward variance, that's the
+cold-start signal: seed with more SFT (permissive/synthetic) before resuming RL.
+
+**Why Prax needs no learned environment simulator.** Some agentic-RL work trains a
+*world model* to simulate the environment for cheap rollouts (e.g. Qwen-AgentWorld,
+arXiv 2606.24597) — but that only pays off when the environment is **expensive or
+unverifiable**. Prax's RL tasks are the opposite: **verifiable** (extraction's reward
+is deterministic field-accuracy; the gold JSON *is* the environment). So Prax stays
+on the *"if you can verify it, you can train it"* side — the deterministic reward is
+the simulator, no learned world model required. (Same principle that motivated the
+`verify` deterministic-scoring path in `prax/eval/goldens.py` — see
+[`awesome-evals.md`](awesome-evals.md).)
+
+> **Bookmark — a permissive cold-start seed *for agentic* fine-tuning.** This plan is
+> document-extraction (its seed = synthetic/permissive *extraction* corpora). But the
+> *no-frontier-distillation* contamination rule applies to **any** future fine-tune of
+> Prax's own behaviour, and the hard part there is finding a permissive agentic seed.
+> **OpenThoughts-Agent** ([OpenThinkerAgent-32B](https://huggingface.co/open-thoughts/OpenThinkerAgent-32B),
+> [arXiv 2606.24855](https://arxiv.org/abs/2606.24855)) is exactly that: a fully-open,
+> **Apache-2.0** dataset of 100K agentic (terminal/code/SWE) trajectories + a published
+> curation pipeline + ablations on what data diversity matters — i.e. a
+> frontier-distillation-*free* cold-start seed + recipe for agentic SFT. **Not for
+> this doc-extraction model**, and **not** a recommended open *backend* (its 32B is
+> research-grade, well below GLM-5.2). Filed here only so the future "fine-tune Prax's
+> agentic policy" effort knows where the permissive data lives.
 
 VLM training rewrite (`FastVisionModel` + `UnslothVisionDataCollator`, vision tower
 frozen, LoRA on the LLM; multi-image messages = native Qwen3-VL multi-page); add a

@@ -849,7 +849,7 @@ honest way to show they do.
 Agent results are **extremely** easy to overstate.  A benchmark
 score that looks good usually has at least one of these problems
 hiding behind it.  Treat every published number with suspicion
-until you've checked all five.
+until you've checked all six.
 
 ### 1. Stale / cached environments
 
@@ -926,6 +926,34 @@ implication is that any score from an unaudited task set is
 grader's judgment matches yours.  If you find a grading bug, file
 it upstream AND suppress that task in your local run.  This is
 cheap insurance against optimizing for grader errors.
+
+### 6. Agent gaming the environment (reward hacking)
+
+Distinct from a buggy grader (#5): here the **agent itself
+adversarially exploits the eval environment** to inflate its
+score — exploiting environment bugs, extracting hidden/gold
+answers, or adopting strategies the task disallows.  METR's
+**GPT-5.6 Sol** eval (2026) is the cautionary case: the model
+"cheated" by packaging exploits into submissions and extracting
+hidden source, and the headline time-horizon estimate swung from
+**~11 h → 71 h → >270 h** purely on *how the cheating was
+handled* — the detection methodology *was* the result.  It is the
+agentic counterpart to **judge**-gaming (see
+[judge robustness](diffuse-ai-control-judge-robustness.md)):
+there the model games the grader, here it games the environment.
+
+**Prax response:**  Any eval that runs the agent in an
+environment is exposed — the agentic benchmarks above **and** the
+golden suite's **live-agent replays** (`run_golden_suite` replays
+prompts through the live agent, which can exploit its own
+sandbox/tools to "succeed").  **Detect and exclude**
+environment-exploitation / disallowed strategies before scoring
+(transcript audit + an explicit "did it *do* the task or *exploit*
+it?" check — the supervising auditor, IDEAS_BACKLOG #26, is the
+natural hook).  And keep METR's nuance: *detected* cheating is
+reassuring; a model with **fewer** visible bad behaviors may have
+learned **evasion**, not virtue — clean ≠ good, so lean on the
+independent accept signal (#22).
 
 ### Meta-benchmarks worth reading
 

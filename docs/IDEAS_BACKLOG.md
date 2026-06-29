@@ -516,6 +516,13 @@ Distilled from reading these customer stories + cookbook recipes against the bug
   SFT on synthetic+permissive data for accuracy (weeks) → P2 optional vision VLM +
   GRPO on field-accuracy. License Apache-2.0 throughout (provenance manifest; no
   distilling frontier APIs into product weights).
+- **OCR front-end option**: for **hard** docs (scanned/handwritten/table-heavy/
+  multi-page) where text-extraction (`url_reader`/`pdf_service`) loses structure,
+  [Baidu **Unlimited-OCR**](research/unlimited-ocr.md) (DeepSeek-OCR lineage, **MIT**,
+  OpenAI-compatible via SGLang) is a self-hostable **faithful-transcription stage**
+  *before* constrained decode: `PDF/image → Unlimited-OCR → faithful text/layout →
+  guided_json → typed JSON`. MIT is the unlock Lift lacked. Adopt-candidate;
+  validate quality vs. the current read stack before defaulting on.
 - **Honest gate**: if you only need valid JSON from clean docs, a frontier API with
   structured outputs already does it — build only for data-residency / unit-cost /
   hard-tail / ship-the-weights.
@@ -604,6 +611,17 @@ Distilled from reading these customer stories + cookbook recipes against the bug
   policy + a frontmatter convention over the **Library / self_tools / memory** we
   already have? Resolve before building — a redundant subsystem violates "Prax stays
   nimble."
+- **Concrete blueprint — Browser-BC / "Journey Forge Local"**
+  ([github.com/Einsia/Browser-BC](https://github.com/Einsia/Browser-BC)): a working
+  instantiation of this idea, scoped to browser tasks — *record trajectory → atomize
+  → classify per-capability → **bucket same-capability segments (dedup)** → distill a
+  reusable `SKILL.md` from real successes.* Two borrowables: (1) **distill from a real
+  successful trajectory**, not hand-authored (matches the "born from a gap you solved"
+  guardrail); (2) **capability-bucketing = dedup-by-theme**, the same accumulate-don't-
+  duplicate mechanic as the signals primitive (#23). It also steers the **first capture
+  domain**: the **browser spoke** — repetitive tasks ("export from app X") + an existing
+  **CDP/Playwright trajectory stream** to record from = the highest-value place to start
+  the record→distill→recall loop. *(Pattern only — the tool is separate + unlicensed.)*
 - **Effort**: the prompt guardrail ~10 min; a flag-gated, default-off capture+recall
   prototype ~1–2 days (reusing the metacognitive trigger + workspace selector).
 - **Status**: not started — tracked in evals via
@@ -611,31 +629,439 @@ Distilled from reading these customer stories + cookbook recipes against the bug
   (rubric measures the baseline gap today; the same rubric measures the gain when
   capture ships), so the idea can't be lost.
 
-### 18. Wire learned tier/role routing (close the bandit loop) — Conductor/Trinity-style
+### 18. Wire learned tier/role routing (close the dormant bandit loop)
 
-- **Source**: [`research/fugu-learned-orchestration.md`](research/fugu-learned-orchestration.md)
-  (Sakana Fugu; ICLR 2026 **Conductor** RL-orchestrator + **Trinity** evolutionary
-  Thinker/Worker/Verifier coordinator).
+- **Source**: Prax's own dormant scaffolding + [ATLAS](https://github.com/itigges22/ATLAS)
+  (signal-fused difficulty estimator integrated with bandit-based tier routing — the
+  target shape). See [`research/model-routing.md`](research/model-routing.md). *(An
+  earlier version of this entry cited Sakana **Fugu** / Conductor / Trinity as
+  external validation; that citation was **pulled** — Fugu's benchmark comparisons
+  were community-noted as unfair, cross-source/cross-scaffold. The idea stands on
+  Prax's own code + ATLAS regardless; see
+  [`research/provider-independence-export-control.md`](research/provider-independence-export-control.md).)*
 - **Why it matters**: Prax's delegation is **heuristic** (orchestrator LLM
   tool-choice over a fixed spoke/category map) and model routing is **static**
   (tiers + per-component config). The learned-routing scaffolding already exists but
   is **dormant**: `prax/agent/tier_bandit.py` (Thompson sampler) never has
   `select_tier`/`record_outcome` called on the live path, and `difficulty.py`'s
-  estimate is discarded. Fugu is external proof that a *learned* router over a frozen
-  model pool is the high-value direction — and Trinity shows it can be **cheap**
-  (tiny, evolutionary, no worker fine-tuning).
+  estimate is discarded — so the learning loop never closes.
 - **Prax mapping** [verified]: close the loop on the existing bandit — `select_tier`
   at component entry (`llm_factory.build_llm`/`get_component_config`), `record_outcome`
   at turn end (`orchestrator.py`), behind a flag, **measured against static routing**
-  (never spike — `CLAUDE.md`). A Trinity-style **Thinker/Worker/Verifier** role layer
-  maps onto the existing diverse-reviewer / `multi_model_query` / verifier patterns
-  over current tiers/providers. Conductor-style RL delegation is a larger, later step.
-- **Note**: the provider-independence half of Fugu is already shipped (cross-provider
-  failover + the new terminal-failure denylist+notify, `llm_fallback.py`). This item
-  is the *learned-routing* half only.
+  (never spike — `CLAUDE.md`). A **Thinker/Worker/Verifier** role layer maps onto the
+  existing diverse-reviewer / `multi_model_query` / verifier patterns over current
+  tiers/providers; RL-trained delegation is a larger, later step.
+- **Escalation target — a Mixture-of-Agents "virtual provider".** Beyond escalating a
+  hard turn to a higher *tier*, escalate it to a MoA *ensemble*: cheap reference models
+  (no tool schemas, stripped context) feed an aggregator that acts — integrated at the
+  `llm_factory` model-provider layer so the orchestrator just "picks a model" (cleaner
+  than the `multi_model_query` tool; preserves the agent loop + caching). **Strictly
+  difficulty-gated** (N models/turn is expensive) and governed by accept-rate (#22).
+  See [`research/model-routing.md`](research/model-routing.md) §15 (Nous Hermes MoA).
+- **Note**: the provider-independence half is already shipped (cross-provider
+  failover + terminal-failure denylist+notify, `llm_fallback.py` — see
+  [`research/provider-independence-export-control.md`](research/provider-independence-export-control.md)).
+  This item is the *learned-routing* half only.
 - **Effort**: wiring + flag + an eval comparison ~2–4 days; RL delegation is research-scale.
 - **Status**: not started — `model-routing.md` now documents the dormant bandit
   honestly (no longer overstates it as wired).
+
+### 19. Failure-driven self-improvement via trace-observable diffing — "Learning Mechanics" loop
+
+- **Source**: [Ziming Liu, *"Discovering 108 Tricks to Accelerate Grokking"*](https://kindxiaoming.github.io/blog/2026/grokking-tricks/)
+  (2026-06). The transferable idea is **not grokking** (a training-dynamics
+  phenomenon Prax doesn't have) but the **loop**: instrument broadly → let an agent
+  identify which observables *predict* the outcome (instead of a human guessing the
+  metric) → hypothesize an **abstracted** intervention → **verify before rollout**.
+- **Why it matters**: Prax already owns every rung *in isolation* — execution traces
+  + `trace_search`/`trace_detail`/`review_my_traces` are the broad instrumentation;
+  the "never spike benchmarks / fix the problem class" rule (`CLAUDE.md`) is the
+  abstraction doctrine; goldens + `make eval` are the gate. What's missing is the
+  **loop that connects them**: introspection and the eval gate don't talk to each
+  other through a *discovery* step, and post-hoc failure analysis
+  (`prax/agent/metacognitive.py`, the failure journal) keys on a failure **in
+  isolation** rather than **diffing it against a passing sibling** to localize the
+  predictive observable.
+- **Prax mapping**: a flag-gated, default-off `trace_diff(pass_id, fail_id)`
+  introspection step that contrasts two traces of the same task class, surfaces the
+  diverging span / missing retrieval / changed tool result, and feeds an
+  *abstracted* fix proposal into `make eval` before rollout. Reuse the existing trace
+  store + decomposed evals — **not** a new "metrics / learning-mechanics" subsystem
+  (keep Prax nimble). Composes with #11 (real eval framework) and #18 (close the
+  bandit loop).
+- **Guardrail**: the loop must **decline** when signal is insufficient (no
+  contrasting passing run, noisy/non-reproducible flake) rather than fabricate a
+  root cause — same honesty discipline as #17's "author only after a gap is
+  overcome."
+- **Effort**: a `trace_diff` introspection tool + the abstracted-fix-proposal prompt
+  ~1–2 days; the closed auto-loop (propose → eval → flag-gated adopt) is larger.
+- **Status**: not started — tracked in evals via
+  [`prax/eval/goldens/failure_driven_trace_diff.yaml`](../prax/eval/goldens/failure_driven_trace_diff.yaml)
+  (rubric measures the baseline gap today; the same rubric measures the gain when the
+  loop ships), so the idea can't be lost.
+
+### 20. Make sovereign / open-backend deployment first-class (validate the agent loop on an open backend)
+
+- **Source**: assessing open backends for Prax. Two recommended models (see
+  [`guides/cloud-gpu.md`](guides/cloud-gpu.md#sovereign--data-resident-deployment--which-open-model-to-serve)):
+  **GLM-5.2** (Z.ai — 744B MoE / ~40B active, 1M ctx, **MIT**, strong agentic/coding +
+  tool-calling) as the *frontier-capability* pick, and [Apertus](https://apertvs.ai/)
+  (Swiss AI Initiative — EU AI Act-built, 1000+ languages) as the *compliance/multilingual*
+  pick. **GLM-5.2 is the lead candidate to validate first** — its strong BFCL-class
+  tool-calling is the best chance the 97-tool loop runs at fidelity on an open backend.
+- **Why it matters**: Prax should serve **all** users, including those under
+  **sovereignty / on-prem / no-egress / EU AI Act** constraints — the one scenario the
+  default hosted backends (Claude et al., remote + US-hosted) can't satisfy. The
+  *inference wiring* for this already exists and is **verified**: the `vllm`/`local`
+  provider path (`prax/agent/llm_factory.py:219-230`) constructs cleanly against an
+  Apertus server (`build_llm(provider='vllm', model='swiss-ai/Apertus-70B')` →
+  `ChatOpenAI` bound to `VLLM_BASE_URL`). Documented in
+  [`guides/cloud-gpu.md`](guides/cloud-gpu.md#sovereign--data-resident-deployment--which-open-model-to-serve)
+  + `.env-example`.
+- **The actual gap (what's NOT free)**: wiring an endpoint ≠ the **97-tool agent loop
+  running at fidelity** on an open backend. Open models vary widely on OpenAI-style
+  **tool-calling**, **instruction adherence** under a long system prompt, and
+  **long-context** behaviour — and Prax leans hard on all three (orchestrator +
+  delegation + governed tools). Unproven today; can't be assumed from "the URL loads."
+- **Prax mapping**: run the existing smoke/eval surface against a self-hosted
+  open backend via vLLM (start with **GLM-5.2**, then Apertus) — the fresh-install
+  smoke test (`scripts/smoke_test.py`) plus the golden suite (`make eval`) — to
+  *measure* tool-call success rate, schema adherence, and delegation correctness on
+  the open backend vs. the hosted default. (Hosted OpenAI-compatible endpoints with
+  a key — e.g. Baseten — need a small `base_url`+key provider option first; the
+  self-hosted `vllm` path is already drop-in.) Where it falls
+  short, the fix is an **abstraction** (prompt/tool-schema robustness that helps every
+  weaker backend), never a per-model hack (`CLAUDE.md` "never spike"). Compose with the
+  cross-provider failover already shipped (`llm_fallback.py`) so a sovereign deployment
+  can still tier within its own model pool.
+- **Effort**: a one-off validation pass against a rented/served Apertus ~half a day;
+  hardening the agent loop for weaker tool-callers is open-ended (scope to findings).
+- **Status**: not started — documented as a supported *config* today; this item is the
+  *prove-it-works-well* follow-up that makes it first-class.
+
+### 21. Portable, live-syncing "components" — make Library notes/outputs embeddable
+
+- **Source**: [`research/teamwork-vs-microsoft-loop.md`](research/teamwork-vs-microsoft-loop.md)
+  (comparison with Microsoft Loop, 2026-06). Loop's one genuinely transferable
+  primitive is the **portable component**: a piece of content (list/table/note)
+  that can be embedded in many places and **stays in sync** as the source changes.
+- **Why it matters**: today a Library note or an agent **output** (a generated
+  table, chart, task list) is **pinned in one place**. There's no way to drop a
+  *live reference* to it into a chat message or another note that re-renders when
+  the source updates — so agent results aren't portable the way Loop components
+  are. This is a real gap for a workspace whose whole point is *producing*
+  artifacts, and it needs **none** of Loop's M365/cloud machinery.
+- **Prax/TeamWork mapping**: a **transclusion-by-reference** primitive — embed a
+  Library note/output by id into a message or note; TeamWork renders it live and
+  re-renders on change (the WebSocket stream already pushes updates). Composes
+  with the existing Library (Project→Space→Notebook→Note,
+  `prax/services/library_service.py`) + outputs store — a reference + a renderer,
+  **not** a new content type. Cross-cutting: the *artifact/reference model* is
+  Prax-side; the *embed rendering* is TeamWork-side.
+- **Guardrail / explicitly NOT in scope**: do **not** chase Loop's M365
+  integration, sensitivity/retention labels, or **multi-human CRDT co-editing** —
+  wrong audience for an agent-teammate harness, large surface, low payoff here.
+  The value is *portability of agent output*, not real-time human co-authoring.
+- **Effort**: design the reference/transclusion model + a live-embed renderer
+  ~2–4 days for a first slice (notes first, then outputs); live-update reuses the
+  existing WS push.
+- **Status**: not started — documented in the Loop comparison as the single
+  adopt-candidate; tracked here so it isn't lost. **Cross-cutting**: the TeamWork
+  rendering half is also tracked in TeamWork's own backlog
+  (`teamwork/docs/BACKLOG.md` #1); this entry owns the Prax artifact/reference
+  model. Keep the two in sync on the reference shape.
+
+### 22. Loop-health metric — "cost per accepted change" (+ premature-completion guard)
+
+- **Source**: Anatoli Kopadze, *"Loops explained"* (X, 2026-06-20). Most of the
+  piece restates loop anatomy Prax already embodies (plan→execute→**verify**→
+  iterate, maker≠checker, durable state, success+hard-cap stop conditions). Two
+  ideas are worth keeping: (a) the metric that actually decides whether an
+  autonomous loop is net-positive is **cost per *accepted* change** — not tokens
+  spent or iterations run — and below a ~50% accept rate a loop costs more than it
+  returns; (b) the **"Ralph Wiggum loop"** failure (the agent declares done on a
+  half-finished job and the loop keeps spending silently).
+- **Why it matters** [verified]: Prax's metrics (`prax/observability/metrics.py`)
+  track tokens / latency / call counts (`LLM_TOKENS`, `LLM_DURATION`, …) and
+  reference-free `EVAL_QUALITY`, but **nothing joins cost to *accepted* outcomes**.
+  The accept signal **already exists** — `prax/services/feedback_service.py`
+  (thumbs up/down on agent messages) — it's just never tied to token cost. And the
+  task runner's `_report_success` (`prax/services/task_runner_service.py:278`)
+  treats *completion* as success with **no accept gate** — a direct Ralph-Wiggum
+  exposure for the autonomous pickup loop.
+- **Prax mapping**: (1) a `prax_accepted_outcomes_total` counter + a derived
+  **cost-per-accepted-change** signal (join `LLM_TOKENS` with the
+  `feedback_service` thumbs / non-reverted task completions), surfaced on the
+  observability dashboards and alertable when accept-rate drops below a floor;
+  (2) an explicit **goal-not-met-but-exited guard** for the autonomous/scheduled
+  loops (the task runner + `EVAL_NIGHTLY`), reusing the existing
+  plan-completion / evidence-floor hallucination guards rather than a new check.
+- **Guardrail**: never conflate **completed** with **accepted** — the whole point
+  is that the model is too generous grading its own homework. The accept signal
+  must come from an independent source (user feedback, a revert, an eval gate),
+  not the loop's self-report.
+- **Effort**: the counter + dashboard panel ~half a day; wiring the accept signal
+  end-to-end + the premature-exit guard ~1–2 days.
+- **Status**: not started — tracked in evals via
+  [`prax/eval/goldens/loop_cost_per_accepted_change.yaml`](../prax/eval/goldens/loop_cost_per_accepted_change.yaml)
+  (rubric measures the baseline gap today; the same rubric measures the gain when
+  the metric + guard ship), so the idea can't be lost.
+
+### 23. Ambient initiative loop — make Prax proactive, not just reactive (governed by #22)
+
+- **Source**: Anthropic **Claude Tag** (a collaborative AI teammate in Slack:
+  multiplayer/shared channel context, contextual memory, async self-scheduled
+  execution over hours/days, and **"ambient" proactive behavior** — it flags
+  relevant info and follows up on threads/tasks that have gone quiet, unprompted).
+  Direct user pain (2026-06): *"Prax is so passive."* This is the highest-value,
+  most-aligned-with-user-pain item in this backlog.
+- **Why it matters** [verified]: Prax has the *aspiration* — an **"Initiative"**
+  section in `system_prompt.md:27` ("Don't just wait for instructions… suggest,
+  don't just serve") — and pieces (the task runner, the scheduler, opt-in proactive
+  pop-quizzes, `system_prompt.md:392`). But it's only proactive **within a turn it's
+  already having**, and almost nothing *gives* it turns: Prax wakes only on a direct
+  message, an **explicitly-assigned** task (the task runner — `task_runner_service.py`,
+  pickup marker `"prax"`), a cron, or an opt-in quiz cadence. There is **no ambient
+  loop** that observes channel/workspace state and *self-initiates*. The task runner
+  (the closest engine) does "assigned chores," never "notice what needs doing" — and
+  shipped **`default=False`** (`settings.py`), so the one heartbeat was off. *(P0: now
+  enabled in the local launch — `TASK_RUNNER_ENABLED=true` in the Makefile — a bounded
+  pulse: it only executes work assigned to "prax".)*
+- **Convergence (a prioritization signal)**: independent sources keep landing on
+  this same thesis — Anatoli Kopadze (#22), Jason Zhou (below), Peter Steinberger &
+  Boris Cherny, and PostHog's *"Why we're bullish on loops"* (2026-06, same four
+  pieces: goal / context / **evaluation** / agent; "an agent on a cron pulls signals
+  from product data and emits work to subagents" = this item's outer loop). When the
+  builders of multiple major harnesses converge, that's an argument to **prioritize
+  this**. (One caution from PostHog's framing — *"agents do the verification"* — is
+  exactly where Prax stays sharper: self-verification needs an **independent** accept
+  signal, #22, not the maker grading its own homework.)
+- **Architecture (sharpened by Jason Zhou's "loop engineering",
+  [template](https://github.com/JayZeeDesign/loop-engineer-template), 2026-06)** —
+  the operational blueprint for this item. Split the harness into two nested layers:
+  - **Inner loop** = task execution (context → tools → verify). Prax *has* this
+    (orchestrator + spokes + `agent_plan` + verify).
+  - **Outer loop** = *"what should the agent work on next, and how does it learn
+    from the result?"* — the ambient layer Prax lacks; its cycle is
+    **notice → investigate → act → record → verify → decide-next**.
+  Three artifacts make the outer loop work and let loops **compound**:
+  - **Signals** *(the key new primitive — adopt)*: a structured, durable,
+    **dedup-by-theme, frequency-accumulating** record of "something worth working
+    on" (schema: type/status/priority/sources/**frequency** + observation/evidence/
+    causes/next-action/timeline; dedup rule: *increment frequency, never
+    duplicate*). This is the missing data structure — without it the outer loop has
+    nothing to accumulate "noticing" into; with it, separate loops read each other's
+    signals and compound. Prax has the Library (notes/Kanban/tasks) but **no signal
+    type** — closest fit: a new Library artifact `kind="signal"`.
+  - **Loop contracts** *(adopt)*: a per-loop README — goal, trigger/cadence,
+    workflow, **dedup rules**, timeline — so each opted-in loop is bounded,
+    auditable, and configurable (the task runner has a prompt, no contract).
+  - **Shared log / compounding**: read the latest N log entries before major work,
+    append a concise linked summary after. Prax **half-has** this — `progress_read`/
+    `progress_append` (per-space) + trace introspection; Zhou's is the cross-loop
+    generalization.
+- **Prax mapping**: an **ambient initiative tick** (the outer loop) reusing the
+  scheduler/task-runner infra — per **opted-in** channel/space, gather recent
+  activity + quiet/stalled threads + goals + memory + **open signals**, then a
+  **judgment turn that DEFAULTS TO SILENCE** unless an action is high-value *and*
+  high-confidence → either **write/increment a signal** (notice) or **act** (flag,
+  follow up, advance a stalled task, **self-schedule** a follow-up). Plus **ambient
+  channel awareness**: read activity in opted-in channels Prax wasn't tagged in.
+- **The governor (what makes it *good*, not annoying)**: wire it to the
+  **cost-per-accepted-change / loop-health metric (#22)** so proactivity
+  **self-calibrates** — throttle when its actions are ignored/rejected, expand when
+  they're accepted. This is the missing feedback loop; without it, initiative lands
+  on one of two cliffs (inert, or noisy-and-wrong — the *"don't SMS the user
+  fabricated news at 9am"* class this whole backlog is organized around).
+- **Guardrails (reuse what's shipped)**: per-channel **opt-in** + cadence (the
+  faculty pop-quiz pattern is the proven model for unprompted outreach); the
+  **hallucination/grounding guards** (never proactively assert unverified claims);
+  a hard **confidence/value threshold** biased toward silence.
+- **Effort (phased)**: **P0** enable + bound the task runner — *done* (the pulse).
+  **P1** the observe→judge→act tick, default-silent, opt-in ~3–5 days. **P2** wire
+  the #22 accept-rate governor + self-scheduled follow-ups ~days. **P3** ambient
+  cross-channel awareness.
+- **Status**: P0 shipped (task runner enabled in the local launch); P1–P3 not
+  started — tracked in evals via
+  [`prax/eval/goldens/proactive_initiative_judgment.yaml`](../prax/eval/goldens/proactive_initiative_judgment.yaml)
+  (the rubric measures the hardest part — *when to act unprompted vs. stay quiet* —
+  today and as the loop ships). Composes with **#22** (the governor) and the
+  memory/grounding stack.
+
+### 24. Move rendering (LaTeX / Mermaid / images) into the sandbox — and render diagrams for chat channels
+
+- **Source**: user directive (2026-06): *"the LaTeX and image rendering should be
+  sandbox — we shouldn't be doing that locally inside Prax."* Surfaced by a trace
+  where Prax dumped a raw ```mermaid block into **Discord** (which renders plain
+  text only), and by the fact that there is **no** Mermaid→image path at all.
+- **Why it matters** [verified]: rendering currently runs **inside the Prax
+  process** — `prax/services/latex_render.py` shells out to local `latex` +
+  ImageMagick (`subprocess`), and `discord_service._render_latex_segments` invokes
+  it to interleave math PNGs into Discord replies. That violates the *Prax-stays-
+  sleek / sandbox-is-plug-and-play* principle (heavy renderers + a headless browser
+  do **not** belong in core), and it doesn't generalize: **Mermaid has no renderer**
+  (a local `npx mmdc` probe fails — no Chrome in core), so diagrams on Discord/SMS
+  show raw source. Math is rendered, Mermaid isn't, and both are done in the wrong
+  place.
+- **Prax mapping**: a **sandbox-side render service** — the sandbox already has
+  Node + Chrome — exposing `render_latex(src)→png` and `render_mermaid(src)→png`
+  (mmdc / headless-chrome). Prax calls it over the existing sandbox client
+  (`delegate_sandbox` / `sandbox_tools`), gets back image bytes, and the channel
+  adapters attach them. Then:
+  - **Migrate** `latex_render` off local `subprocess` to the sandbox call (keep a
+    graceful fallback: if no sandbox, send a note link rather than raw source).
+  - **Add Mermaid**: extend `discord_service` to detect ```mermaid blocks and
+    interleave rendered PNGs exactly as it already does for `$$…$$` math — so a
+    Mermaid block bound for Discord/SMS becomes an image, never raw source.
+  - Aligns with the system-prompt guidance just added (chat channels render plain
+    text; render to an image in the sandbox or send a note link; never raw).
+- **Guardrail**: core must run **without** the sandbox (`SANDBOX_ENABLED=false`) —
+  so the render path degrades to a note-link, never a crash and never raw diagram
+  source presented as a visual.
+- **Effort**: the sandbox render endpoints + client wiring ~1–2 days; the Discord
+  Mermaid interleave mirrors the existing math path (~hours); migrating LaTeX off
+  local subprocess ~half a day.
+- **Status**: not started — system-prompt guidance shipped now (don't dump raw
+  Mermaid/LaTeX to Discord/SMS); this item is the real render-in-sandbox fix.
+
+### 25. Auto-disable `logprobs` on a provider 400 (end the recurring entropy-feature crash class)
+
+- **Source**: the same bug biting twice — `gpt-5.4-pro` (the professor,
+  `Responses.create() … 'logprobs'`) and then `gpt-5.5` (`400 'logprobs' is not
+  supported with this model`). Both were the entropy feature
+  (`llm_factory` injects `logprobs`/`top_logprobs` for `logprob_analyzer`) hitting a
+  reasoning model that rejects the param. See
+  [`research/model-routing.md`](research/model-routing.md) §14.
+- **Why it matters**: the current guard is a **name denylist** (`-pro` / `o*` /
+  `gpt-5.5`). It's fragile by construction — the *next* reasoning model that rejects
+  logprobs crashes **every turn on its tier** until someone hand-adds a marker.
+  Model ids change faster than this list will.
+- **Prax mapping**: make logprobs **self-disabling**. On the first call where a
+  model returns `400 … 'logprobs' is not supported` (or `temperature`), catch it,
+  **cache "no logprobs/temperature" for that model id** (process-level + persisted),
+  and **retry once without the offending param** so the turn still succeeds. Then
+  the name denylist becomes a fast-path hint, not the safety mechanism. Entropy
+  stays on where supported, off where not — with **zero** crashes and zero manual
+  upkeep.
+- **Guardrail**: the retry must be bounded (one strip-and-retry, not a loop) and the
+  cache invalidatable, so a transient 400 doesn't permanently disable a feature.
+- **Effort**: ~half a day (a wrapper around the OpenAI invoke path + a small
+  per-model capability cache).
+- **Status**: not started — name denylist holds for now (gpt-5.4/5.5 covered); this
+  is the durable fix so we stop patching the list reactively.
+
+### 26. Supervising auditor for fuzzy goldens (P0 shipped — follow-ons here)
+
+- **Source**: "Diffuse AI Control on Fuzzy Tasks"
+  ([`research/diffuse-ai-control-judge-robustness.md`](research/diffuse-ai-control-judge-robustness.md))
+  — weak LLM judges reward impressive-but-vacuous answers on fuzzy tasks; a stronger
+  scorer catches it.
+- **Why it matters**: Prax's golden judge is a **low-tier** model on irreducibly-
+  judgeable criteria — exactly the gameable case. The failure is asymmetric (weak
+  judge → false **positives**), so a high-tier **auditor re-checks only the criteria
+  the cheap judge passed** and may veto (1→0): maker≠checker applied to the judge.
+- **P0 — SHIPPED**: `goldens.score_golden(audit=…)` runs the auditor on judged
+  passes (veto power), records `vetoed`, degrades gracefully on auditor failure;
+  `verify` (deterministic) criteria are never audited. Opt-in via
+  `EVAL_AUDITOR_ENABLED` (eval-time only, default off). Tests cover veto + degrade.
+- **Follow-ons (not done)**:
+  1. **Cross-provider auditor** — point the auditor at a *different provider* so it's
+     not the same model's blind spots checking themselves (reuse the failover pool).
+  2. **"Gameable criterion" signal** — a criterion the auditor keeps vetoing is a
+     candidate to convert to a `verify` check or rewrite; surface vetoes over runs
+     (ties to the signals primitive, #23).
+  3. **Enable in `make eval`** — flip `EVAL_AUDITOR_ENABLED` on for the pre-ship gate
+     once cost/latency are confirmed acceptable.
+  4. **Variants** if needed — a 2-model *jury* (disagreement = the flag) or escalate-
+     only-on-suspicion, beyond audit-on-passes.
+- **Guardrail**: the auditor is a **better proxy, not ground truth** (the paper's own
+  caveat). Keep leaning on `verify` (deterministic) + #22 (independent accept signal)
+  so a smarter judge doesn't create false confidence.
+- **Effort**: P0 done; follow-ons ~1–2 days total.
+
+### 27. Outbound MCP / A2A client — close the interop "consumer" half (Prax consumes other agents)
+
+- **Source**: [`architecture/interoperability.md`](architecture/interoperability.md)
+  — Prax is a first-class interop *provider* (MCP server + OKF interchange) but **not
+  a consumer**. The single highest-leverage step onto the interoperability frontier.
+- **Why it matters** [verified]: `prax/mcp/` is **server-only** — it exposes Prax
+  tools to other agents; `prax/mcp/clients.py` is the inbound *caller registry*, not
+  an outbound client. Prax can't yet treat an external MCP server (or an A2A peer) as
+  a capability source. Closing this makes "expose *and* consume" symmetric.
+- **Prax mapping**: an **outbound MCP/A2A client** that registers an external server
+  as a **spoke** — its tools become governed, delegatable tools, reusing the existing
+  hub-and-spoke + `governed_tool` (risk classification) + per-caller-identity
+  machinery. **First slice:** connect to ONE configured external MCP server, surface
+  its tools through a new `delegate_external` (or a synthetic spoke), behind a flag.
+- **Guardrails**: (1) **tool overload** — imported tools must route through the
+  on-demand tool-search / hub-and-spoke discipline (don't flood the orchestrator's
+  ~50-tool budget); (2) **governance** — external tools are imported-untrusted →
+  default risk classification through the gateway, never auto-HIGH; (3) **SSRF/egress**
+  — outbound connections honor the egress allowlist; (4) per-server trust + bounded
+  timeouts.
+- **Effort**: a flag-gated single-server MCP client + spoke wiring ~2–3 days; A2A and
+  multi-server discovery later.
+- **Status**: not started — the provider half is shipped; this is the consumer half.
+
+### 28. Content provenance / credentials — make Prax's output verifiably attributable
+
+- **Source**: [`architecture/interoperability.md`](architecture/interoperability.md)
+  (Identity & provenance axis) + the interpretability bridge
+  ([`research/pangram-detector-interpretability.md`](research/pangram-detector-interpretability.md)):
+  AI content is reliably detectable, so the honest move is **attribution, not evasion**.
+- **Why it matters**: Prax *produces* content across Discord/SMS/TeamWork/notes/media
+  with **no outbound attestation**. Downstream systems must *guess* provenance.
+  Signing "produced by Prax / agent X" lets them **verify** it — the natural second
+  interop frontier, and the right side of the AI-detection world.
+- **Prax mapping**: attach **content credentials** — C2PA Content Credentials for
+  generated **media** (images/audio/video from the sandbox render/gen paths); signed
+  metadata / a provenance footer for **text notes** (the Hugo-published notes already
+  have frontmatter to carry it). **First slice:** stamp generated media with a C2PA
+  manifest at the sandbox render boundary (ties to #24's sandbox-render work), behind
+  a flag.
+- **Guardrails**: **opt-in** (some users/channels want no attribution); degrade
+  gracefully where a channel strips metadata (Discord/SMS) — never block delivery;
+  **honest** labels only (don't claim human authorship). Composes with #24
+  (sandbox rendering is where media is produced) and the MCP per-caller identity.
+- **Effort**: media C2PA stamping ~2–3 days (lib + the render boundary); text/note
+  provenance ~1 day.
+- **Status**: not started — documented as the provenance frontier in the interop doc.
+
+### 29. Self-regeneration spoke — close the recursive self-improvement loop inward
+
+- **Source**: [`agents/self-regeneration.md`](agents/self-regeneration.md) — the design.
+  "AI in the loop that improves AI," scoped to **harness** self-improvement (Prax
+  produces a better version of its own tools/prompts/routing/skills, *verified*).
+- **Why it matters**: Prax has the self-modification **surfaces** (`plugin_write`,
+  prompt-as-file, `finetune_service`, sandbox + `make ci`) and — crucially — the
+  **hard half**: a gaming-resistant fitness function (`verify` + auditor + accept-rate
+  #22 + never-spike) and safe flag-gated/checkpointed rollout. What's missing is the
+  **one spoke that closes the loop**: notice → propose → isolate → verify → canary-adopt
+  → rollback/record, run on Prax itself. It's **#23 (ambient loop) pointed inward**,
+  governed by **#22**.
+- **The precondition (non-negotiable)**: RSI optimizes brutally against its fitness
+  function — a *gameable* eval yields a version that games it (the METR env-cheating
+  finding at the self level, [`prax-benchmarks.md`](research/prax-benchmarks.md) §6).
+  So the un-gameable-eval work (#26 auditor, `verify`, #22) **gates** this — don't
+  widen self-modification autonomy faster than the fitness function earns trust.
+- **Prax mapping / first rung**: a flag-gated **self-improvement spoke**. **P1
+  (lowest-risk, most-measurable):** Prax proposes + tests a new/edited **plugin**
+  against a golden, **auto-adopting behind a flag only if `make ci` + `make eval`
+  improve without regression or spike.** That's "make a better version of one of my
+  tools, proven." **Graded-autonomy boundary** (deny-by-default, the tool-risk model
+  applied to self-changes): low-risk (plugin) auto-adopt behind the gate; medium
+  (prompt) canary + accept-rate gate; **high (orchestrator policy / weights) → human
+  PR gate** (the existing [`self-modification.md`](agents/self-modification.md) path).
+- **The line not to cross (yet)**: autonomous orchestrator-policy / system-prompt
+  edits before the fitness function is proven un-gameable — that's where a gamed eval
+  turns self-improvement into undetectable self-degradation.
+- **Effort**: P1 plugin micro-loop ~3–5 days (it's wiring existing pieces: trace-diff
+  notice + `plugin_write` + worktree + `make ci`/`make eval` gate + flag + checkpoint
+  rollback); widening to prompts/routing is later and gated on fitness-function trust.
+- **Status**: not started — tracked in evals via
+  [`prax/eval/goldens/self_regeneration_judgment.yaml`](../prax/eval/goldens/self_regeneration_judgment.yaml).
+  Composes with #19 (notice), #22 (governor), #23 (the loop engine), #26 (un-gameable
+  gate), #17 (record/compound).
 
 ---
 

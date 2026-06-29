@@ -1,0 +1,79 @@
+# Golden eval — failure-driven self-improvement via trace-observable diffing.
+#
+# Tracks IDEAS_BACKLOG.md #19 and the "Learning Mechanics" methodology in
+# Ziming Liu, "Discovering 108 Tricks to Accelerate Grokking"
+# (https://kindxiaoming.github.io/blog/2026/grokking-tricks/, 2026-06).
+#
+# The article's transferable seed is NOT grokking (a training-dynamics phenomenon
+# Prax doesn't have) but its LOOP: instrument broadly -> let an agent identify
+# which observables PREDICT the outcome (rather than a human guessing the metric)
+# -> hypothesize an ABSTRACTED intervention -> verify before rollout. Prax already
+# owns every rung in isolation (traces + trace_search/trace_detail as the broad
+# instrumentation; "never spike benchmarks" as the abstraction doctrine; goldens +
+# make eval as the gate) but has no loop that CONNECTS introspection to the eval
+# gate through observable-localization.
+#
+# This is a RUBRIC-scored, single-turn golden. It measures the BASELINE GAP today —
+# Prax's introspection (trace_search/review_my_traces) and its eval gate don't talk
+# to each other through a discovery loop, and failure analysis reasons from the lone
+# failing run rather than CONTRASTING it against a passing one. When a flag-gated
+# trace-diff / observable-localization mechanism ships, the SAME rubric measures the
+# gain. Guarded by tests/test_eval_goldens.py so it can't be forgotten.
+id: failure_driven_trace_diff
+title: Localize the predictive observable across a passing vs. failing run, then propose an abstracted, eval-gated fix
+kind: self_improvement
+status: baseline-gap
+source: "https://kindxiaoming.github.io/blog/2026/grokking-tricks/ (Ziming Liu, 'Discovering 108 Tricks to Accelerate Grokking', 2026-06) + IDEAS_BACKLOG.md #19"
+
+prompt: >-
+  An eval golden for a task CLASS you handle regularly has started failing, while a
+  near-identical instance of the same class still passes. You have full execution
+  traces for both runs (spans, tool calls, retrieved context, intermediate outputs,
+  timings). Diagnose the regression by working out WHICH signal distinguishes the
+  failing run from the passing one — do not reason from the failing run alone — then
+  propose the change you would make and how you would prove it works before rollout.
+  Finally, state the conditions under which you would DECLINE to propose a fix.
+
+rubric:
+  - key: observable_localization
+    weight: 0.25
+    description: >-
+      Localizes the regression by CONTRASTING the passing and failing traces to
+      isolate the distinguishing observable (the diverging span / missing retrieval /
+      changed tool result), rather than guessing a cause from the single failing run
+      or from priors — the article's "let the data pick the predictive observable."
+  - key: abstracted_intervention
+    weight: 0.25
+    description: >-
+      Proposes a fix at the level of the task CLASS (a prompt or code change that
+      generalizes), not a patch tailored to make this one instance pass — the
+      "never spike benchmarks / fix the problem class" discipline from CLAUDE.md.
+  - key: verification_gate
+    weight: 0.20
+    description: >-
+      Validates the proposed change against the golden/eval harness (make eval)
+      before declaring it done, and rolls it out flag-gated default-off so the eval
+      gate governs adoption — not shipped on a hunch.
+  - key: reuses_existing_introspection
+    weight: 0.15
+    description: >-
+      Builds on Prax's existing introspection surface (trace_search / trace_detail /
+      review_my_traces, decomposed evals) rather than inventing a parallel "metrics"
+      or "learning mechanics" subsystem — keeps Prax nimble.
+  - key: declines_when_unsupported
+    weight: 0.15
+    description: >-
+      Names the conditions under which it would NOT propose a fix — no contrasting
+      passing run, insufficient or noisy signal, non-reproducible flake — and surfaces
+      that honestly instead of fabricating a root cause.
+
+notes: >-
+  Baseline gap: Prax has the rungs but not the loop. Introspection (trace_search,
+  trace_detail, review_my_traces) and the eval gate (goldens + make eval) are not
+  connected by a discovery step, and post-hoc failure analysis (metacognitive.py,
+  the failure journal) keys on a failure in isolation rather than DIFFING it against
+  a passing sibling to localize the predictive observable. The article's value to
+  Prax is the loop shape, not grokking. When a flag-gated trace-diff /
+  observable-localization mechanism (e.g. a trace_diff(pass_id, fail_id) tool feeding
+  an abstracted-fix proposal into make eval) ships, this rubric measures the gain.
+  Composes with #11 (real eval framework) and #18 (close the bandit loop).

@@ -107,3 +107,12 @@ gated on resolving the overlap question before any build. See also
 [Bayer reliability](reliable-agentic-systems-bayer.md) (the post-hoc / selectivity
 principles), and [`../guides/extending.md`](../guides/extending.md) (the plugin
 self-authoring it complements).
+
+**Concrete blueprint:** Browser-BC / "Journey Forge Local"
+([github.com/Einsia/Browser-BC](https://github.com/Einsia/Browser-BC)) is a working
+implementation of this for *browser* tasks — record a successful trajectory →
+capability-bucket (dedup) → distill a reusable `SKILL.md`. It validates the
+record-from-real-success discipline and the dedup-by-theme mechanic (cf. signals,
+#23), and argues for the **browser spoke as the first capture domain** (repetitive
+tasks + an existing CDP/Playwright trajectory stream). Pattern only — separate,
+unlicensed tool. See IDEAS_BACKLOG #17 for the borrowables.

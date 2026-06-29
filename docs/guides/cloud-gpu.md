@@ -30,6 +30,103 @@ LLM / vision model) and the multi-model technique in
 The key invariant: **once a box is up and serving vLLM, it's only a URL.** All the
 hard part is *getting one cheaply and turning it off*.
 
+## Sovereign / data-resident deployment — which open model to serve
+
+The sections above answer *where the GPU comes from*; this one answers *which model
+to run on it* when the requirement is **sovereignty** — on-prem / no-egress / data
+residency / EU AI Act compliance. That's the one scenario Prax's default backend
+can't cover: Claude (and the other hosted APIs) are remote and US-hosted, so a user
+under those constraints needs an **open-weights** model served on infrastructure
+they control. No core change is needed — this is purely the existing `vllm`/`local`
+path (`prax/agent/llm_factory.py`), pointed at an open model.
+
+**Recommended open backends — pick by what's driving the choice:**
+
+- **Frontier capability + permissive license → GLM-5.2** (Z.ai). A **744B**-param
+  MoE (~40B active), **1M-context**, **MIT-licensed** model that's strong on
+  **agentic / coding** tasks at ~70–80% lower token cost than GPT-5.5 / Opus 4.8.
+  This is the best "capable open backend" when you want frontier-class behaviour on
+  weights you can self-host — and its strong tool-calling (e.g. BFCL) makes it the
+  **lead candidate for the #20 fidelity-validation pass** below. Self-host on your
+  own vLLM (drop-in via the `vllm` config below); also offered by hosted
+  OpenAI-compatible APIs (e.g. [Baseten](https://baseten.co/), NVFP4/Dynamo-tuned
+  for speed) when sovereignty *isn't* the driver — see the hosted note.
+- **EU-compliance / multilingual → [Apertus](https://apertvs.ai/)** (Swiss AI
+  Initiative — EPFL / ETH Zurich / CSCS). **EU AI Act-built** (opt-outs, PII
+  removal, memorization mitigation), **fully reproducible**, **1000+ languages**;
+  **8B**/**70B** + distilled "Apertus Mini". The pick *when compliance or broad
+  multilinguality is the driver*, not raw capability.
+
+For any other sovereign deployment, any OpenAI-compatible open model works on the
+same path.
+
+**Wiring it (self-hosted — no new code, config only):**
+
+```bash
+LLM_PROVIDER=vllm
+VLLM_BASE_URL=http://your-model-host:8000/v1   # the vLLM server you control
+# Tiers map to the model id your server exposes; for a single backend set them all
+# the same (the agent still upgrades/downgrades within one model). Examples:
+LOW_MODEL=zai-org/GLM-5.2        # or swiss-ai/Apertus-8B
+MEDIUM_MODEL=zai-org/GLM-5.2     # or swiss-ai/Apertus-70B
+HIGH_MODEL=zai-org/GLM-5.2
+PRO_MODEL=zai-org/GLM-5.2
+```
+
+Verified: `build_llm(provider='vllm', model='…')` constructs a `ChatOpenAI` bound
+to `VLLM_BASE_URL` with no core change — so the **self-hosted** inference path is
+genuinely a drop-in.
+
+> **Hosted open models (not sovereign) need a small wiring change.** GLM-5.2 is
+> also served by OpenAI-compatible *hosted* APIs (Baseten, Z.ai). Pointing Prax at
+> one isn't quite drop-in today: the `vllm` path hardcodes `api_key="not-needed"`,
+> and the `openai` path takes a key but no `base_url` override
+> (`prax/agent/llm_factory.py`). An OpenAI-compatible **"base_url + key"** provider
+> option is a minor follow-up — not wired yet. Self-hosting (above) needs nothing.
+
+> **Honest caveat (the part that *isn't* free).** Wiring the endpoint is solved;
+> what is **not** yet proven is that Prax's tool-heavy agent loop (97+ tools, long
+> system prompt, multi-step delegation) runs at acceptable *fidelity* on an open
+> backend — open models vary widely on OpenAI-style tool-calling, instruction
+> adherence, and long-context behaviour. That validation is the real work to make
+> sovereign deployment first-class, and it's tracked in
+> [`../IDEAS_BACKLOG.md`](../IDEAS_BACKLOG.md) #20 (GLM-5.2 is the lead candidate to
+> validate first) — not assumed here.
+
+> **Inference-engineering note (out of scope for Prax).** The serving-side craft
+> that makes a hosted GLM-5.2 fast — NVFP4 quantization, prefill/decode
+> disaggregation, KV-aware routing, multi-token-prediction speculation (NVIDIA
+> Dynamo / Blackwell) — is a model *provider's* concern, not Prax's: Prax consumes
+> an OpenAI-compatible endpoint and doesn't run an inference engine. The one
+> consumer-side lever, **stable-prefix / system-prompt KV-cache reuse**, is already
+> tracked as `IDEAS_BACKLOG.md` #5 (prompt caching).
+
+### Serving config — KV-cache memory for long-reasoning models
+
+Once you *self-host* (above), the **KV cache** — the per-token key/value tensors the
+server holds during generation — becomes the memory bottleneck, and it bites exactly
+the models worth self-hosting: long-reasoning ones (GLM-5.2 et al.) emit 32K+ tokens,
+and the cache alone OOMs a 24 GB GPU around ~24K tokens. Worth knowing before you
+size a box or reach for "KV cache compression"
+([NVIDIA EAI, "KV cache compression and its infra problems"](https://research.nvidia.com/labs/eai/blogs/kv-cache-compression-and-its-infra-problems/)):
+
+- **Naive token eviction does *not* free memory under vLLM/SGLang.** Paged attention
+  allocates fixed ~16-token blocks and reclaims one only when it's *entirely* empty;
+  evicting scattered tokens leaves a survivor in nearly every block → ~zero memory
+  recovered. Eviction must be paired with **compaction** (repack survivors to empty
+  whole blocks) to actually help.
+- **Don't let a compression method force *eager* attention.** Score-based methods
+  (H2O/SnapKV) need the attention matrix FlashAttention never materializes; falling
+  back to eager attention to get it erases the speed win.
+- **Where it's worth it:** geometry-aware eviction at a **2–3K-token KV budget** keeps
+  reasoning accuracy while buying ~**2.5× throughput / ~10.7× memory** vs. full cache
+  — i.e. it's a real lever for fitting a long-reasoning backend on a smaller/cheaper
+  box, *if* your serving stack does the compaction.
+
+**For the default (API-consumer) Prax this is transparent** — the provider runs the
+inference engine and KV cache; you only get the consumer-side lever (stable-prefix
+reuse, #5). This note matters only on the self-hosted/sovereign path (#20).
+
 ## Top cloud GPU providers (June 2026)
 
 Two integration shapes. **Shape A — rent-a-box:** you get an instance with a

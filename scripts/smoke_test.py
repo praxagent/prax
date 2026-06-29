@@ -22,6 +22,7 @@ import base64
 import json
 import os
 import socket
+import time
 import urllib.request
 
 H = "127.0.0.1"
@@ -33,6 +34,13 @@ NEO4J = int(os.environ.get("NEO4J_BOLT_PORT", "7687"))
 SB_OPENCODE = int(os.environ.get("SANDBOX_OPENCODE_PORT", "4096"))
 SB_CDP = int(os.environ.get("SANDBOX_CDP_PORT", "9223"))
 SB_NOVNC = int(os.environ.get("SANDBOX_NOVNC_PORT", "6080"))
+# Observability stack (LGTM). Grafana publishes on host :3002 (the tailscale
+# sidecar / serve maps the tailnet :3001 to it); the others on their native ports.
+GRAFANA = int(os.environ.get("GRAFANA_PORT", "3002"))
+LOKI = int(os.environ.get("LOKI_PORT", "3100"))
+TEMPO_QUERY = int(os.environ.get("TEMPO_QUERY_PORT", "3200"))
+TEMPO_OTLP = int(os.environ.get("TEMPO_OTLP_HTTP_PORT", "4318"))
+PROM = int(os.environ.get("PROMETHEUS_PORT", "9090"))
 
 GREEN, RED, YEL, DIM, RST = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"
 _results: list[tuple[str, str, str]] = []  # (status, name, detail)
@@ -53,6 +61,59 @@ def _http_ok(url: str, timeout: float = 6.0) -> tuple[bool, str]:
 
 def _json(url: str, timeout: float = 6.0, headers: dict | None = None):
     return json.loads(_get(url, timeout, headers).read().decode())
+
+
+def _post(url: str, body: bytes, headers: dict | None = None, timeout: float = 6.0):
+    req = urllib.request.Request(url, data=body, headers=headers or {}, method="POST")
+    return urllib.request.urlopen(req, timeout=timeout)  # noqa: S310 (localhost only)
+
+
+def _otlp_trace_roundtrip() -> tuple[bool, str]:
+    """Push a synthetic OTLP span to Tempo, then read it back by trace id.
+
+    Proves the trace pipe end-to-end (OTLP ingest :4318 → Tempo store → query
+    :3200) without needing a real agent turn (which would need provider keys).
+    Tempo accepts OTLP/JSON when Content-Type is application/json.
+    """
+    trace_id = os.urandom(16).hex()  # 32 hex chars
+    span_id = os.urandom(8).hex()    # 16 hex chars
+    now_ns = int(time.time() * 1e9)
+    payload = {
+        "resourceSpans": [{
+            "resource": {"attributes": [
+                {"key": "service.name", "value": {"stringValue": "prax-smoke"}}
+            ]},
+            "scopeSpans": [{
+                "spans": [{
+                    "traceId": trace_id, "spanId": span_id,
+                    "name": "smoke-roundtrip", "kind": 1,
+                    "startTimeUnixNano": str(now_ns - 1_000_000),
+                    "endTimeUnixNano": str(now_ns),
+                }],
+            }],
+        }],
+    }
+    try:
+        r = _post(f"http://{H}:{TEMPO_OTLP}/v1/traces",
+                  json.dumps(payload).encode(),
+                  {"Content-Type": "application/json"})
+        if not (200 <= r.status < 300):
+            return (False, f"OTLP ingest HTTP {r.status}")
+    except Exception as e:
+        return (False, f"OTLP ingest failed: {type(e).__name__}: {str(e)[:50]}")
+    # Read it back — Tempo needs a moment to make the span queryable. Note its
+    # TraceByID response encodes the trace id as BASE64 (not the hex used in the
+    # request/URL path), so match on that to confirm it's the exact span we sent.
+    want_b64 = base64.b64encode(bytes.fromhex(trace_id)).decode()
+    for _ in range(15):
+        try:
+            r = _get(f"http://{H}:{TEMPO_QUERY}/api/traces/{trace_id}", timeout=4)
+            if r.status == 200 and want_b64 in r.read().decode(errors="replace"):
+                return (True, f"span {trace_id[:8]}… ingested + queryable")
+        except Exception:
+            pass
+        time.sleep(1)
+    return (False, f"span {trace_id[:8]}… ingested but not queryable after 15s")
 
 
 def _tcp_open(host: str, port: int, timeout: float = 4.0) -> bool:
@@ -176,6 +237,46 @@ def main() -> int:  # noqa: C901 — a flat list of independent checks reads cle
             check("TeamWork → Prax proxy (/api/prax/deployment)", False, str(e)[:60])
         check("TeamWork → Prax (/api/observability/config)",
               _http_ok(f"http://{H}:{tw_port}/api/observability/config")[0], "", critical=False)
+
+    # --- Observability (optional) + data-flow -------------------------------
+    # Not just "is it up" — prove telemetry is actually arriving: logs in Loki,
+    # the Prax metrics target UP in Prometheus, and a trace round-trips Tempo.
+    print("\nObservability (LGTM stack — if enabled) + data flow:")
+    if not _tcp_open(H, GRAFANA):
+        skip("observability", f"Grafana :{GRAFANA} not open (stack not started — "
+             "'make run-local-all' brings it up)")
+    else:
+        gfok, gfd = _http_ok(f"http://{H}:{GRAFANA}/api/health")
+        check("Grafana /api/health", gfok, gfd)
+        # Datasources must be provisioned with the UIDs the Explore deep-links use.
+        try:
+            ds = _json(f"http://{H}:{GRAFANA}/api/datasources")
+            uids = {d.get("uid") for d in ds}
+            check("Grafana datasources provisioned (loki/tempo/prometheus)",
+                  {"loki", "tempo", "prometheus"} <= uids, ",".join(sorted(uids)))
+        except Exception as e:
+            check("Grafana datasources provisioned (loki/tempo/prometheus)", False, str(e)[:60])
+        # Loki — native host logs are flowing (promtail tails .local-run/*.log).
+        try:
+            vals = _json(f"http://{H}:{LOKI}/loki/api/v1/label/service/values").get("data", [])
+            check("Loki receiving native logs (service=prax)", "prax" in vals,
+                  f"services={','.join(vals[:6])}" if vals else "no service labels yet")
+        except Exception as e:
+            check("Loki receiving native logs (service=prax)", False, str(e)[:60])
+        # Prometheus — the Prax metrics scrape target is UP (host-gateway bridge).
+        try:
+            tgts = _json(f"http://{H}:{PROM}/api/v1/targets").get("data", {}).get("activeTargets", [])
+            prax_up = any(t.get("labels", {}).get("job") == "prax" and t.get("health") == "up"
+                          for t in tgts)
+            detail = next((f"{t['scrapeUrl']} {t['health']}" for t in tgts
+                           if t.get("labels", {}).get("job") == "prax" and t.get("health") == "up"),
+                          "no healthy prax target")
+            check("Prometheus scraping Prax /metrics (target up)", prax_up, detail)
+        except Exception as e:
+            check("Prometheus scraping Prax /metrics (target up)", False, str(e)[:60])
+        # Tempo — full trace pipe: OTLP ingest → store → query round-trip.
+        ok, detail = _otlp_trace_roundtrip()
+        check("Tempo trace ingest+query round-trip", ok, detail)
 
     # --- Summary ------------------------------------------------------------
     fails = [r for r in _results if r[0] == "FAIL"]
