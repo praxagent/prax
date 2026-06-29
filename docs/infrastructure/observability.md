@@ -131,6 +131,33 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile observa
 
 Open Grafana at **http://localhost:3001** (default credentials: admin/prax).
 
+### Retention & disk usage (long-running stacks)
+
+Telemetry is bounded at every sink so a long-running deployment can't fill the
+disk. None of these grow without limit:
+
+| Sink | Bound | Where |
+|------|-------|-------|
+| **Prometheus** metrics | 30 days | `--storage.tsdb.retention.time=30d` (docker-compose.yml) |
+| **Tempo** traces | 7 days | `compactor.compaction.block_retention: 168h` (`observability/tempo.yaml`) |
+| **Loki** logs | 7 days | `compactor` + `limits_config.retention_period: 168h` (`observability/loki.yaml`) — the image default keeps logs *forever*, so we ship our own config |
+| **Container stdout** (all LGTM services + Qdrant/Neo4j) | 10 MB × 3 files | json-file `max-size`/`max-file` (compose `logging` anchor; `--log-opt` on the Makefile `docker run`s) |
+| Prax in-process OTel queue | 2048 spans (memory, not disk) | `BatchSpanProcessor(max_queue_size=2048)` + a startup probe that disables the exporter if Tempo is unreachable |
+
+**Native host logs (`.local-run/*.log`)** are the one exception: the
+`make run-local-all` path runs Prax/TeamWork as host processes whose stdout is
+redirected to flat files. These are **truncated on every restart** (the launcher
+uses `>`, not `>>`), which bounds the normal dev cycle — but a native process
+left running for weeks without a restart will keep appending. For a genuinely
+long-running / production deployment, run the **containerized** stack (Docker or
+the `k8s/` chart) instead of the native make flow: there, stdout goes through the
+capped json-file driver above (or the cluster's log rotation), and Promtail still
+ships it to Loki under the 7-day retention.
+
+To change a retention window, edit the value in the file noted above and restart
+that service (`make shutdown && make run-local-all`, or
+`docker compose --profile observability up -d --force-recreate <service>`).
+
 ### Safe Degradation
 
 `OBSERVABILITY_ENABLED=true` is the default in `.env`. If you run without `--profile observability` (i.e., Tempo isn't running), the OTEL exporter **probes Tempo at startup** and silently disables itself if unreachable — no retries, no memory accumulation, no OOM risk. The `BatchSpanProcessor` queue is also capped at 2048 spans as a safety net.

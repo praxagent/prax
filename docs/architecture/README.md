@@ -7,6 +7,7 @@ Prax is organized in five layers with a clear direction of dependency: **bluepri
 - [Hub-and-Spoke Architecture](hub-and-spoke.md) — Orchestrator, spoke agents, sub-hubs, and delegation patterns
 - [Request Flows](request-flows.md) — SMS, Discord, TeamWork, sandbox, and scheduling flows
 - [Workspace](workspace.md) — Per-user git-backed file layout, TeamWork integration, Dropbox sync
+- [Interoperability frontier](interoperability.md) — Where Prax sits in the agent-interop ecosystem across five axes (expose / consume / discover / interchange / identity). Already a first-class **provider** (MCP server + OKF interchange); the highest-leverage gap is the **consumer** half — an outbound **MCP/A2A client** that makes any external agent a spoke. Content provenance is the natural second frontier; capability discovery (ARD) stays deferred
 - [Memory System](#memory-system) — STM scratchpad, LTM vector + graph, hybrid retrieval, consolidation
 
 ## High-Level System Overview

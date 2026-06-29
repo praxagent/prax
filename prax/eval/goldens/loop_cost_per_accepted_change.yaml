@@ -1,0 +1,74 @@
+# Golden eval — loop-health instrumentation: cost per ACCEPTED change.
+#
+# Tracks IDEAS_BACKLOG.md #22 and Anatoli Kopadze "Loops explained" (X, 2026-06-20).
+#
+# The article's sharp, non-obvious claim: the metric that decides whether an
+# autonomous loop is net-positive is cost-per-*accepted*-change — NOT tokens spent
+# or iterations run — and below a ~50% accept rate the loop costs more than it
+# returns. Its companion failure is the "Ralph Wiggum loop": the agent declares
+# done on a half-finished job and the loop keeps spending silently.
+#
+# This is a RUBRIC-scored, single-turn golden. It measures the BASELINE GAP today:
+# Prax's metrics (prax/observability/metrics.py) track tokens/latency/calls but
+# never join cost to *accepted* outcomes; the accept signal already exists
+# (prax/services/feedback_service.py, thumbs up/down) but isn't tied to cost; and
+# the task runner's _report_success treats COMPLETION as success with no accept
+# gate. When the cost-per-accepted-change metric + premature-completion guard ship,
+# the SAME rubric measures the gain. Guarded by tests/test_eval_goldens.py.
+id: loop_cost_per_accepted_change
+title: Instrument an autonomous loop for net value (cost per accepted change) and guard against premature "done"
+kind: self_improvement
+status: baseline-gap
+source: "Anatoli Kopadze, 'Loops explained' (X, 2026-06-20) + IDEAS_BACKLOG.md #22"
+
+prompt: >-
+  You run an autonomous loop that picks up tasks on a schedule, does the work, and
+  marks them complete on its own. Leadership asks you to prove the loop is actually
+  worth the money it spends. Decide what to measure to know whether the loop is
+  net-positive, how you would gather that signal, and what you would do when the
+  loop is no longer paying for itself. Then explain how you would stop the loop
+  from quietly spending on work that was never really finished.
+
+rubric:
+  - key: cost_per_accepted_outcome
+    weight: 0.30
+    description: >-
+      Identifies the load-bearing metric as cost per ACCEPTED change/outcome — not
+      tokens spent, iterations run, or tasks "completed". States that below a
+      threshold accept rate (~50%) the loop is net-negative and should be throttled
+      or stopped.
+  - key: independent_accept_signal
+    weight: 0.25
+    description: >-
+      The accept signal comes from a source INDEPENDENT of the loop's own
+      self-report (user thumbs/feedback, a revert/rollback, or an external eval
+      gate) — explicitly NOT the agent grading its own homework. Bonus for reusing
+      an existing signal (e.g. a feedback/thumbs store) rather than inventing one.
+  - key: completion_is_not_acceptance
+    weight: 0.20
+    description: >-
+      Calls out that "marked complete" must NOT be counted as "accepted" — the gap
+      between the loop reporting done and the outcome actually being kept is the
+      whole point.
+  - key: premature_completion_guard
+    weight: 0.15
+    description: >-
+      Adds an explicit guard for the "Ralph Wiggum" failure — agent exits on a
+      half-finished job while the loop keeps spending — e.g. a goal-not-met check
+      before accepting an exit, reusing existing completion/grounding guards.
+  - key: reuses_existing_observability
+    weight: 0.10
+    description: >-
+      Builds on the existing metrics/observability + feedback surfaces (a derived
+      metric + dashboard/alert) rather than a parallel measurement subsystem; keeps
+      it alertable when accept-rate drops below the floor.
+
+notes: >-
+  Baseline gap [verified]: prax/observability/metrics.py exposes token/latency/call
+  counters + EVAL_QUALITY but no accept-rate or cost-per-accepted-change; the accept
+  signal exists in prax/services/feedback_service.py (thumbs up/down) but is never
+  joined to cost; and prax/services/task_runner_service.py:_report_success treats
+  completion as success with no accept gate. When #22 ships (a
+  prax_accepted_outcomes_total counter + derived cost-per-accepted-change, plus a
+  premature-exit guard on the autonomous loops), this rubric measures the gain.
+  Composes with #11 (real eval framework) and the hallucination-guard metrics.

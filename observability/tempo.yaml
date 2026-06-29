@@ -21,3 +21,10 @@ storage:
       path: /var/tempo/wal
     block:
       bloom_filter_false_positive: 0.05
+
+# Bound trace retention so /var/tempo can't grow without limit on a long-running
+# stack. Explicit 7 days (Tempo's implicit default is 14d); the compactor deletes
+# blocks older than this.
+compactor:
+  compaction:
+    block_retention: 168h

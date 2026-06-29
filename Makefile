@@ -1,6 +1,6 @@
 .PHONY: lint layers test actions ci eval tailscale-up tailscale-down tailscale-status sandbox-gpu sandbox-gpu-check \
         run-local-min run-local-all run-local-all-dev run-local-all-tail-dev shutdown restart-prax restart-teamwork restart-sandbox local-status local-logs smoke integration \
-        _local-qdrant _local-neo4j _local-teamwork _local-teamwork-prod _local-teamwork-dev _local-sandbox _local-prax _tailscale-local
+        _local-qdrant _local-neo4j _local-observability _local-teamwork _local-teamwork-prod _local-teamwork-dev _local-sandbox _local-prax _tailscale-local
 
 # Tests that require a fully-configured Docker sandbox with a live
 # /plugin_data mount.  These pass locally only when the sandbox
@@ -181,7 +181,7 @@ run-local-min:
 	@echo "Starting Prax core (no memory / sandbox / TeamWork). Ctrl-C to stop."
 	@MEMORY_ENABLED=false SANDBOX_ENABLED=false TEAMWORK_ENABLED=false $(LOCAL_PY) app.py
 
-run-local-all: _local-qdrant _local-neo4j _local-teamwork _local-sandbox _local-prax
+run-local-all: _local-qdrant _local-neo4j _local-observability _local-teamwork _local-sandbox _local-prax
 	@# Prax is the last to bind (it waits for TeamWork, then boots a heavy
 	@# import graph). Poll its /health for up to ~30s so the status below
 	@# reflects reality instead of a premature "down". Ctrl-C is safe.
@@ -235,6 +235,12 @@ _tailscale-local:
 	    && { touch $(LOCAL_RUN)/.tailscale-on; \
 	         echo "TeamWork now served at https://<machine>.<tailnet>.ts.net/ (-> :$$tw_port; run 'make tailscale-status')"; } \
 	    || echo "WARN: 'tailscale serve' failed - host not on the tailnet, or HTTPS not enabled (admin console -> DNS -> HTTPS Certificates)."; \
+	  if [ -f $(LOCAL_RUN)/.observability-on ]; then \
+	    sudo tailscale serve --bg --https=3001 http://localhost:3002 \
+	      && { touch $(LOCAL_RUN)/.tailscale-grafana-on; \
+	           echo "Grafana now served at https://<machine>.<tailnet>.ts.net:3001/ (-> :3002)"; } \
+	      || echo "WARN: 'tailscale serve' for Grafana (:3001) failed - the dashboards just won't be reachable over the tailnet."; \
+	  fi; \
 	fi
 
 # Qdrant runs in Docker by default, persisting to the user's workspace so
@@ -247,7 +253,7 @@ _local-qdrant:
 	elif command -v docker >/dev/null 2>&1; then \
 	  mkdir -p "$(QDRANT_DATA)"; \
 	  docker rm -f prax-qdrant >/dev/null 2>&1 || true; \
-	  docker run -d --name prax-qdrant -p 6333:6333 -v "$(QDRANT_DATA)":/qdrant/storage qdrant/qdrant \
+	  docker run -d --name prax-qdrant -p 6333:6333 --log-opt max-size=10m --log-opt max-file=3 -v "$(QDRANT_DATA)":/qdrant/storage qdrant/qdrant \
 	    >$(LOCAL_RUN)/qdrant.log 2>&1 \
 	    && echo "Qdrant started (docker) -> :6333   data: $(QDRANT_DATA)" \
 	    || { echo "WARN: qdrant docker run failed - see $(LOCAL_RUN)/qdrant.log. LTM will degrade."; }; \
@@ -274,7 +280,7 @@ _local-neo4j:
 	elif command -v docker >/dev/null 2>&1; then \
 	  mkdir -p "$(NEO4J_DATA)/data" "$(NEO4J_DATA)/logs"; \
 	  docker rm -f prax-neo4j >/dev/null 2>&1 || true; \
-	  docker run -d --name prax-neo4j -p 7474:7474 -p 7687:7687 -e NEO4J_AUTH=neo4j/prax-memory \
+	  docker run -d --name prax-neo4j -p 7474:7474 -p 7687:7687 --log-opt max-size=10m --log-opt max-file=3 -e NEO4J_AUTH=neo4j/prax-memory \
 	    -v "$(NEO4J_DATA)/data":/data -v "$(NEO4J_DATA)/logs":/logs neo4j:5 \
 	    >$(LOCAL_RUN)/neo4j.log 2>&1 \
 	    && { echo "Neo4j started (docker) -> :7687    data: $(NEO4J_DATA)"; \
@@ -297,6 +303,35 @@ _local-neo4j:
 	  echo "      https://neo4j.com/docs/operations-manual/current/installation/linux/ (Linux)."; \
 	fi
 
+# The observability stack (Grafana/Loki/Tempo/Prometheus/Promtail) is the LGTM
+# add-on. Like Qdrant/Neo4j it runs in Docker, but it's defined in the compose
+# `observability` profile (5 services with shared config mounts), so we bring it
+# up with `docker compose --profile observability up` naming only those services
+# (the compose `prax`/`sandbox` apps are NOT named, so they stay native). The
+# config edits in observability/{prometheus,promtail}.yaml + docker-compose.yml
+# bridge the natively-run Prax to the containers (host-gateway scrape, host-log
+# mount); _local-prax points the OTLP exporter at localhost:4318. The
+# .observability-on marker lets _local-prax / _tailscale-local / shutdown know it's up.
+OBS_SERVICES := tempo loki promtail prometheus grafana
+_local-observability:
+	@mkdir -p $(LOCAL_RUN)
+	@rm -f $(LOCAL_RUN)/.observability-on
+	@if ! command -v docker >/dev/null 2>&1; then \
+	  echo "WARN: docker not found - skipping observability (Grafana/Loki/Tempo). Dashboards won't be available."; \
+	  echo "      The LGTM stack is Docker-only; install Docker Engine to enable it:"; \
+	  echo "        https://docs.docker.com/engine/install/"; \
+	elif curl -s -o /dev/null --max-time 2 http://localhost:3002/api/health; then \
+	  echo "Observability already running -> Grafana :3002 (Loki :3100, Tempo :4318, Prometheus :9090)"; \
+	  touch $(LOCAL_RUN)/.observability-on; \
+	else \
+	  docker compose --profile observability up -d $(OBS_SERVICES) \
+	      >$(LOCAL_RUN)/observability.log 2>&1 \
+	    && { touch $(LOCAL_RUN)/.observability-on; \
+	         echo "Observability started (docker) -> Grafana :3002   Tempo :4318 (OTLP)   Loki :3100   Prometheus :9090"; } \
+	    || { echo "WARN: observability stack failed to start - see $(LOCAL_RUN)/observability.log."; \
+	         echo "      Dashboards won't be available; the rest of the stack is unaffected."; }; \
+	fi
+
 _local-teamwork:
 	@mkdir -p $(LOCAL_RUN)
 	@# RESTART=true: stop the running TeamWork (backend + Vite + children) so the
@@ -314,7 +349,7 @@ _local-teamwork:
 	    fi; \
 	    rm -f "$$pf"; \
 	  done; \
-	  [ -n "$$stopped" ] && echo "TeamWork restart requested — stopped old backend + Vite."; \
+	  if [ -n "$$stopped" ]; then echo "TeamWork restart requested — stopped old backend + Vite."; fi; \
 	fi
 	@if [ -f $(LOCAL_RUN)/teamwork.pid ] && kill -0 $$(cat $(LOCAL_RUN)/teamwork.pid) 2>/dev/null; then \
 	  echo "TeamWork already running (pid $$(cat $(LOCAL_RUN)/teamwork.pid)). Use RESTART=true to force-cycle."; \
@@ -345,6 +380,7 @@ _local-teamwork-prod:
 	  fi; \
 	fi
 	@( cd "$(TEAMWORK_PATH)" && \
+	    TEAMWORK_HOST=127.0.0.1 \
 	    DATABASE_URL="sqlite+aiosqlite:///./vteam.db" \
 	    WORKSPACE_PATH="$(CURDIR)/workspaces" \
 	    PRAX_URL="http://localhost:5001" \
@@ -374,6 +410,7 @@ _local-teamwork-dev:
 	    nohup npm run dev -- --port 5173 ) \
 	      >$(LOCAL_RUN)/teamwork-vite.log 2>&1 & echo $$! >$(LOCAL_RUN)/teamwork-vite.pid; \
 	  ( cd "$(TEAMWORK_PATH)" && \
+	    TEAMWORK_HOST=127.0.0.1 \
 	    TEAMWORK_RELOAD=true \
 	    DATABASE_URL="sqlite+aiosqlite:///./vteam.db" \
 	    WORKSPACE_PATH="$(CURDIR)/workspaces" \
@@ -459,9 +496,17 @@ _local-prax:
 	  echo "Prax already running (pid $$(cat $(LOCAL_RUN)/prax.pid)). Use RESTART=true (or 'make restart-prax') to force-cycle."; \
 	else \
 	  sb=false; [ -f $(LOCAL_RUN)/.sandbox-on ] && sb=true; \
-	  MEMORY_ENABLED=true SANDBOX_ENABLED=$$sb SANDBOX_HOST=localhost TEAMWORK_ENABLED=true TEAMWORK_URL=http://localhost:8000 PRAX_USER_ID=$(PRAX_USER) DEBUG=$(DEBUG) \
+	  obs=false; obs_env=""; \
+	  if [ -f $(LOCAL_RUN)/.observability-on ]; then \
+	    obs=true; \
+	    obs_env="OBSERVABILITY_ENABLED=true OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 GRAFANA_URL=http://localhost:3002"; \
+	  else \
+	    obs_env="OBSERVABILITY_ENABLED=false"; \
+	  fi; \
+	  env MEMORY_ENABLED=true SANDBOX_ENABLED=$$sb SANDBOX_HOST=localhost TEAMWORK_ENABLED=true TEAMWORK_URL=http://localhost:8000 PRAX_USER_ID=$(PRAX_USER) DEBUG=$(DEBUG) \
+	    TASK_RUNNER_ENABLED=true $$obs_env \
 	    nohup $(LOCAL_PY) app.py >$(LOCAL_RUN)/prax.log 2>&1 & echo $$! >$(LOCAL_RUN)/prax.pid; \
-	  echo "Prax started (pid $$(cat $(LOCAL_RUN)/prax.pid)) -> :5001 (DEBUG=$(DEBUG), SANDBOX_ENABLED=$$sb, PRAX_USER_ID=$(PRAX_USER))"; \
+	  echo "Prax started (pid $$(cat $(LOCAL_RUN)/prax.pid)) -> :5001 (DEBUG=$(DEBUG), SANDBOX_ENABLED=$$sb, OBSERVABILITY_ENABLED=$$obs, PRAX_USER_ID=$(PRAX_USER))"; \
 	fi
 
 # Force-restart ONLY Prax (pick up code or .env changes) without touching the
@@ -541,10 +586,18 @@ shutdown:
 	  ( cd "$(SANDBOX_PATH)" && docker compose -f docker-compose.yml down ) >/dev/null 2>&1 && echo "  stopped sandbox (docker compose down)"; \
 	  rm -f $(LOCAL_RUN)/.sandbox-on; \
 	fi
+	@if [ -f $(LOCAL_RUN)/.observability-on ] && command -v docker >/dev/null 2>&1; then \
+	  docker compose --profile observability down >/dev/null 2>&1 && echo "  stopped observability stack (docker compose down)"; \
+	  rm -f $(LOCAL_RUN)/.observability-on; \
+	fi
 	@# Only touch Tailscale (which needs sudo) if run-local-all-tail-dev set it up.
 	@if [ -f $(LOCAL_RUN)/.tailscale-on ] && command -v tailscale >/dev/null 2>&1; then \
 	  sudo tailscale serve --https=443 off >/dev/null 2>&1 && echo "  removed tailscale :443 serve"; \
 	  rm -f $(LOCAL_RUN)/.tailscale-on; \
+	fi
+	@if [ -f $(LOCAL_RUN)/.tailscale-grafana-on ] && command -v tailscale >/dev/null 2>&1; then \
+	  sudo tailscale serve --https=3001 off >/dev/null 2>&1 && echo "  removed tailscale :3001 serve (Grafana)"; \
+	  rm -f $(LOCAL_RUN)/.tailscale-grafana-on; \
 	fi
 	@echo "Done."
 
@@ -561,6 +614,7 @@ local-status:
 	@printf "  %-9s" "TW UI";    curl -s -o /dev/null --max-time 3 http://localhost:5173/             && echo " up   -> :5173 (Vite dev)" || echo " n/a  -> :5173 (Vite dev; prod serves UI from :8000)"
 	@printf "  %-9s" "Sandbox";  curl -s -o /dev/null --max-time 3 http://localhost:4096/global/health && echo " up   -> :4096" || echo " down -> :4096"
 	@printf "  %-9s" "Prax";     curl -s -o /dev/null --max-time 3 http://localhost:5001/health        && echo " up   -> :5001" || echo " down -> :5001"
+	@printf "  %-9s" "Grafana";  curl -s -o /dev/null --max-time 3 http://localhost:3002/api/health    && echo " up   -> :3002 (Loki/Tempo/Prometheus; tailnet :3001)" || echo " n/a  -> :3002 (observability stack not running)"
 	@echo "Logs: make local-logs   Stop: make shutdown   Connectivity: make smoke"
 
 # Connectivity smoke test: not just "are ports up" (that's local-status) but "is

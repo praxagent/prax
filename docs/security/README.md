@@ -7,3 +7,4 @@ Prax applies defense-in-depth across all trust boundaries: webhook validation, p
 - [Plugin Trust & Isolation](plugin-trust.md) — Trust tiers, subprocess isolation, capabilities proxy, lifecycle audit
 - [Tool Risk Classification](tool-risk.md) — Risk levels, governance layer, supply chain hardening
 - [Configuration](configuration.md) — Environment variables, .env setup, all configuration options
+- [Network Exposure & Binding](network-exposure.md) — Why Prax/TeamWork bind loopback by default, and how to serve on `0.0.0.0` safely behind an authenticating proxy (Tailscale, IAP, Cloudflare Access, oauth2-proxy)
