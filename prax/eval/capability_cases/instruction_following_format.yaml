@@ -1,0 +1,19 @@
+# Capability case — strict output-format compliance. Tests whether the harness
+# preserves instruction-following (a weak local model often leaks prose around a
+# requested JSON blob; a good harness should not make that worse).
+id: instruction_following_format
+title: Strict format compliance — JSON-only reply
+prompt: >-
+  Reply with ONLY a single JSON object and nothing else: it must have a key
+  "status" with the string value "ok" and a key "count" with the number 3.
+checks:
+  - kind: regex
+    value: '\{[^{}]*"status"\s*:\s*"ok"[^{}]*\}'
+    weight: 1.0
+  - kind: regex
+    value: '"count"\s*:\s*3'
+    weight: 1.0
+notes: >-
+  Control-ish case: instruction-following is mostly the base model's job, so
+  lift should be small. Surfaces harnesses that wrap/append boilerplate and
+  break a "respond with only X" contract.

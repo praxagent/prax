@@ -86,6 +86,7 @@ class ConversationService:
         *,
         conversation_key: int | None = None,
         trigger: str | None = None,
+        source: str | None = None,
     ) -> str:
         """Process a user message and return the agent's response.
 
@@ -97,6 +98,8 @@ class ConversationService:
                 isolated under this key instead of the default user-derived one.
             trigger: The raw user message for display in execution graphs.
                 When ``None``, falls back to ``text``.
+            source: Origin channel (discord | sms | voice | teamwork |
+                scheduler | task_runner) — recorded on the execution graph.
         """
         # Set user context so workspace tools know which user to operate on.
         current_user_id.set(user_id)
@@ -146,6 +149,7 @@ class ConversationService:
             user_input=text,
             workspace_context=workspace_ctx,
             trigger=trigger or text,
+            source=source or "",
         )
         logger.info("Agent response for %s: %s", user_id, response[:80])
 

@@ -1,4 +1,4 @@
-.PHONY: lint layers test actions ci eval tailscale-up tailscale-down tailscale-status sandbox-gpu sandbox-gpu-check \
+.PHONY: lint layers test actions ci eval eval-capability eval-harness-lift eval-gaia eval-self-regen tailscale-up tailscale-down tailscale-status sandbox-gpu sandbox-gpu-check \
         run-local-min run-local-all run-local-all-dev run-local-all-tail-dev shutdown restart-prax restart-teamwork restart-sandbox local-status local-logs smoke integration \
         _local-qdrant _local-neo4j _local-observability _local-teamwork _local-teamwork-prod _local-teamwork-dev _local-sandbox _local-prax _tailscale-local
 
@@ -36,6 +36,39 @@ ci: actions lint layers test
 # or model-config change:  make eval   (or  PRAX_EVAL_MIN_PASS_RATE=0.8 make eval)
 eval:
 	FLASK_SECRET_KEY=$${FLASK_SECRET_KEY:-ci-test-key} uv run --python 3.13 python scripts/eval_gate.py
+
+# ── Benchmark suites — resumable, built to run overnight on a slow LOCAL model ──
+# Point .env at a local OpenAI-compatible endpoint first (ds4 / vLLM / Ollama):
+#   LLM_PROVIDER=vllm   VLLM_BASE_URL=http://<host>:<port>/v1   *_MODEL=<id>
+# No per-task timeout by default (PRAX_EVAL_TASK_TIMEOUT_S=0). All three resume:
+# re-run the same command after a kill/crash to continue where it stopped.
+# Override the tier with EVAL_TIER=low|medium|high (default medium).
+EVAL_TIER ?= medium
+
+# Daily driver — capability checks through the full harness (deterministic grade)
+eval-capability:
+	FLASK_SECRET_KEY=$${FLASK_SECRET_KEY:-ci-test-key} uv run --python 3.13 \
+		python scripts/eval_suite.py capability --tier $(EVAL_TIER)
+
+# The headline number — how much does the harness lift THIS model? (full vs bare)
+eval-harness-lift:
+	FLASK_SECRET_KEY=$${FLASK_SECRET_KEY:-ci-test-key} uv run --python 3.13 \
+		python scripts/eval_suite.py harness-lift --tier $(EVAL_TIER)
+
+# External scoreboard — resumable GAIA batch (set LIMIT=N for a quick smoke batch)
+eval-gaia:
+	FLASK_SECRET_KEY=$${FLASK_SECRET_KEY:-ci-test-key} uv run --python 3.13 \
+		python scripts/eval_suite.py gaia --level $(or $(LEVEL),1) \
+		$(if $(LIMIT),--limit $(LIMIT),) --tier $(EVAL_TIER)
+
+# The breakthrough engine — self-regeneration (#29): propose a system-prompt
+# overlay, verify against the capability suite (un-gameable), keep iff it improves
+# AND the anti-spike overseer approves. Propose-only (writes a reviewable proposal);
+# pass APPLY=1 AND set SELF_REGEN_ENABLED to auto-apply the winner (graded autonomy).
+eval-self-regen:
+	FLASK_SECRET_KEY=$${FLASK_SECRET_KEY:-ci-test-key} uv run --python 3.13 \
+		python scripts/eval_suite.py self-regen --tier $(EVAL_TIER) \
+		--rounds $(or $(ROUNDS),3) $(if $(APPLY),--apply,)
 
 # ── Tailscale Serve mappings — HOST-INSTALLED FALLBACK ────────────────
 # Preferred path is the dockerized sidecar (set TS_AUTHKEY +

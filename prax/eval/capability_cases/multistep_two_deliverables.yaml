@@ -1,0 +1,18 @@
+# Capability case — a single request bundling TWO deliverables. Probes planning
+# / decomposition: a bare model often answers only the first half. The harness
+# (agent_plan, multi-step orchestration) should deliver both.
+id: multistep_two_deliverables
+title: Two-part request — both deliverables present
+prompt: >-
+  Two things in one reply: (1) list three classic sorting algorithms, and
+  (2) give the Big-O average time complexity of quicksort.
+checks:
+  - kind: regex          # part 1: at least mentions a couple of named sorts
+    value: '(?i)(merge|quick|bubble|insertion|heap|selection)\s*sort'
+    weight: 1.0
+  - kind: regex          # part 2: quicksort average complexity n log n
+    value: '(?i)n\s*log\s*n|n\s*\*?\s*log'
+    weight: 1.5
+notes: >-
+  Tests decomposition/coverage. Harness-lift positive when the scaffolding keeps
+  both sub-tasks on the plan instead of dropping the second.

@@ -70,7 +70,7 @@ class VoiceService:
         state['in_article'] = False
         state.setdefault('read_buffer', {})[buffer_id] = []
 
-        answer = conversation_service.reply(from_num, question)
+        answer = conversation_service.reply(from_num, question, source="voice")
         for sentence in sent_tokenize(answer):
             state['read_buffer'][buffer_id].append(sentence)
         state['read_buffer'][buffer_id].append("#FINISHED#")

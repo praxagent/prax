@@ -41,7 +41,7 @@ def test_sms_service_image(monkeypatch):
     sent = {}
     agent_calls = []
 
-    def fake_reply(from_number, text):
+    def fake_reply(from_number, text, **kwargs):
         agent_calls.append(text)
         return "I see a cat in the image!"
 
@@ -69,7 +69,7 @@ def test_sms_image_with_caption(monkeypatch):
 
     agent_calls = []
 
-    def fake_reply(from_number, text):
+    def fake_reply(from_number, text, **kwargs):
         agent_calls.append(text)
         return "That's a chart showing revenue growth."
 
@@ -96,7 +96,7 @@ def test_sms_text_routes_through_agent(monkeypatch):
 
     sent = {}
 
-    def fake_reply(from_number, text):
+    def fake_reply(from_number, text, **kwargs):
         return f"echo: {text}"
 
     def fake_send(message, number):
@@ -127,7 +127,7 @@ def test_sms_agent_error_sends_apology(monkeypatch):
 
     sent = {}
 
-    def exploding_reply(from_number, text):
+    def exploding_reply(from_number, text, **kwargs):
         raise RuntimeError("LLM is down")
 
     def fake_send(message, number):
@@ -158,7 +158,7 @@ def test_sms_search_goes_through_agent(monkeypatch):
 
     agent_calls = []
 
-    def fake_reply(from_number, text):
+    def fake_reply(from_number, text, **kwargs):
         agent_calls.append(text)
         return "search results"
 
@@ -186,7 +186,7 @@ def test_sms_npr_goes_through_agent(monkeypatch):
 
     agent_calls = []
 
-    def fake_reply(from_number, text):
+    def fake_reply(from_number, text, **kwargs):
         agent_calls.append(text)
         return "https://npr.org/latest.mp3"
 
@@ -298,7 +298,7 @@ def test_sms_url_goes_through_agent(monkeypatch):
 
     agent_calls = []
 
-    def fake_reply(from_number, text):
+    def fake_reply(from_number, text, **kwargs):
         agent_calls.append(text)
         return "Here's a summary of that page..."
 
@@ -354,7 +354,7 @@ def test_sms_pdf_attachment_detected(monkeypatch):
 
     _setup_pdf_mocks(module, monkeypatch)
 
-    def fake_reply(from_number, text):
+    def fake_reply(from_number, text, **kwargs):
         agent_prompts.append(text)
         return "This paper is about X."
 
@@ -517,7 +517,7 @@ def test_sms_pdf_with_extra_instructions(monkeypatch):
     agent_prompts = []
     _setup_pdf_mocks(module, monkeypatch)
 
-    def fake_reply(from_number, text):
+    def fake_reply(from_number, text, **kwargs):
         agent_prompts.append(text)
         return "resumen"
 

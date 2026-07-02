@@ -255,6 +255,7 @@ def _on_fire(user_id: str, schedule_id: str, prompt: str, channel: str | None = 
             f"or live source can be confirmed, ask for location or say weather is "
             f"unavailable rather than inventing a forecast.] "
             f"{prompt}",
+            source="scheduler",
         )
         _deliver_message(user_id, response, channel=channel)
 

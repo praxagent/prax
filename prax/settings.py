@@ -385,6 +385,44 @@ class AppSettings(BaseSettings):
         default="0 4 * * *", alias="EVAL_NIGHTLY_CRON",
         description="5-field cron expression for the nightly live-traffic eval job.",
     )
+    self_regen_enabled: bool = Field(
+        default=False, alias="SELF_REGEN_ENABLED",
+        description=(
+            "Gate for the self-regeneration loop (#29) AUTO-APPLYING a winning "
+            "system-prompt overlay. Off by default: run_self_regen still produces "
+            "reviewable proposals + full lineage, but only auto-applies when this "
+            "is true AND apply=True (graded autonomy). The verifier (capability "
+            "suite) and overseer (anti-spike auditor) always live outside the "
+            "editable surface — see prax/eval/self_regen.py."
+        ),
+    )
+    eval_task_timeout_s: int = Field(
+        default=0, alias="PRAX_EVAL_TASK_TIMEOUT_S",
+        description=(
+            "Per-task wall-clock cap (seconds) for benchmark runs (GAIA, "
+            "capability). 0 = DISABLED (no kill) — the right default for a slow "
+            "local model on ds4/vLLM/Ollama where a single task can legitimately "
+            "take minutes to hours and you run the suite overnight or over days. "
+            "Set a positive value only as a safety rail against hung tool calls."
+        ),
+    )
+    eval_concurrency: int = Field(
+        default=1, alias="PRAX_EVAL_CONCURRENCY",
+        description=(
+            "Parallel tasks in a benchmark batch. 1 (default) suits a single "
+            "local model server; raise it only for API models that tolerate "
+            "concurrent requests."
+        ),
+    )
+    eval_usd_in_per_1m: float = Field(
+        default=0.0, alias="PRAX_EVAL_USD_IN_PER_1M",
+        description="USD per 1M prompt tokens for the cost rail. 0 (default) = a "
+                    "local/self-hosted model (cost in tokens + wall-time, not $).",
+    )
+    eval_usd_out_per_1m: float = Field(
+        default=0.0, alias="PRAX_EVAL_USD_OUT_PER_1M",
+        description="USD per 1M completion tokens for the cost rail. 0 = local model.",
+    )
     checkpoint_backend: str = Field(
         default="memory", alias="CHECKPOINT_BACKEND",
         description=(
@@ -435,6 +473,18 @@ class AppSettings(BaseSettings):
             "first confirmation."
         ),
     )
+    lethal_trifecta_guard: bool = Field(
+        default=False, alias="LETHAL_TRIFECTA_GUARD",
+        description=(
+            "When true, the capability gateway enforces the lethal-trifecta "
+            "invariant: once a turn has ingested UNTRUSTED content (browser/"
+            "research/fetch) AND read PRIVATE data (memory/knowledge/workspace), "
+            "any EXTERNAL-SINK tool (send/share/publish/browser-action) is "
+            "escalated to HIGH and requires confirmation — the architectural "
+            "defense against indirect prompt-injection exfiltration. Default off "
+            "(prior behaviour); opt in for high-security deployments."
+        ),
+    )
     claim_audit_attended_quarantine: bool = Field(
         default=False, alias="CLAIM_AUDIT_ATTENDED_QUARANTINE",
         description=(
@@ -442,6 +492,16 @@ class AppSettings(BaseSettings):
             "user-facing reply on attended (interactive) turns too — not only "
             "posted to the internal Auditor channel. Scheduled turns always "
             "quarantine regardless of this flag."
+        ),
+    )
+    verify_published_links: bool = Field(
+        default=False, alias="VERIFY_PUBLISHED_LINKS",
+        description=(
+            "When true, save_and_publish does a best-effort HEAD/GET on the note "
+            "URL right after publishing and ANNOTATES the result with a warning if "
+            "it does not resolve — so Prax never hands the user a link it hasn't "
+            "confirmed works (the journalclub 404 incident). Never blocks the save; "
+            "default off (needs the serving route reachable + network)."
         ),
     )
     intent_clarification_enabled: bool = Field(

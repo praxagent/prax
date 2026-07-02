@@ -1,8 +1,59 @@
-# prax/eval — External benchmark runners
+# prax/eval — Benchmark runners
 
-This package runs Prax against external agentic benchmarks (GAIA,
-τ-bench, AgentDojo, etc.) under **strict data isolation** and
-**cost-controlled execution**.
+This package evaluates Prax under **strict data isolation** and
+**cost-controlled execution**.  Three suites, all **resumable** and built to run
+**overnight or over multiple days on a slow local model**:
+
+| Suite | Command | What it measures | Grading |
+|---|---|---|---|
+| **Capability** | `make eval-capability` | Does the harness route, use tools, ground, and follow instructions? | Deterministic (substring / regex / spoke / tool) |
+| **Harness-lift** | `make eval-harness-lift` | *How much does the scaffolding lift this model?* — full orchestrator vs a bare LLM call, same model | Deterministic, content-only delta |
+| **GAIA** | `make eval-gaia` | External scoreboard (GAIA validation) | GAIA-style normalized match |
+
+The thesis: harden the **harness-lift** against a weak/slow local model and it
+carries straight over when a frontier model is dropped in.  Deterministic grading
+is deliberate — a slow or weak *local judge* never pollutes the signal
+("verifiable beats judgeable").
+
+## Overnight workflow on a local model (ds4 / vLLM / Ollama / llama.cpp)
+
+> Need a box to *serve* the model cheaply (CPU / Mac / DGX Spark, no rented GPU)?
+> See [`docs/guides/local-cpu-inference.md`](../../docs/guides/local-cpu-inference.md)
+> for hardware sizing and engine setup. The steps below assume the endpoint is up.
+
+1. **Point Prax at the endpoint** in `.env` — the `vllm` provider is just an
+   OpenAI-compatible client (no API key needed):
+
+   ```bash
+   LLM_PROVIDER=vllm
+   VLLM_BASE_URL=http://<host>:<port>/v1   # ds4 serves /v1/chat/completions
+   LOW_MODEL=<model-id>
+   MEDIUM_MODEL=<model-id>
+   HIGH_MODEL=<model-id>
+   ```
+
+2. **Run a suite.** No per-task timeout by default (`PRAX_EVAL_TASK_TIMEOUT_S=0`),
+   so a model generating at a few tokens/sec can take as long as it needs:
+
+   ```bash
+   make eval-harness-lift EVAL_TIER=medium      # the headline number
+   make eval-capability   EVAL_TIER=medium
+   make eval-gaia LIMIT=20 EVAL_TIER=medium     # quick GAIA smoke batch
+   ```
+
+3. **Resume is automatic.** Every task's result is durably written under
+   `$PRAX_EVAL_DIR/suites/<run>/results/<id>.json`.  Kill it, reboot, re-run the
+   same command — it skips what's done and continues.  `tail -f
+   $PRAX_EVAL_DIR/suites/<run>/progress.jsonl` to watch.
+
+Cost is reported in **real tokens + wall-time** (captured from the model's usage
+metadata, not estimated); USD rates default to 0 because a self-hosted model has
+no per-token dollar cost.  Add cases as YAML under `capability_cases/`.
+
+---
+
+The GAIA harness runs Prax against external agentic benchmarks (GAIA,
+τ-bench, AgentDojo, etc.) under the isolation + compliance rules below.
 
 ## The isolation rule (important)
 

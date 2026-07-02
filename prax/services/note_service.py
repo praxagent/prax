@@ -323,6 +323,31 @@ def search_notes(user_id: str, query: str) -> list[dict]:
         return results
 
 
+def _should_verify_links() -> bool:
+    try:
+        from prax.settings import settings
+        return bool(getattr(settings, "verify_published_links", False))
+    except Exception:
+        return False
+
+
+def _verify_url_resolves(url: str, timeout: float = 4.0) -> tuple[bool, str]:
+    """Best-effort check that a just-published URL actually resolves.
+
+    Returns ``(ok, detail)``: a HEAD (GET fallback for servers that reject HEAD)
+    under HTTP 400 counts as resolved. Errors are reported as unresolved with the
+    reason — callers only ever ANNOTATE the publish result, never block the save.
+    """
+    import requests
+    try:
+        resp = requests.head(url, timeout=timeout, allow_redirects=True)
+        if resp.status_code in (405, 501):  # HEAD not allowed → try GET
+            resp = requests.get(url, timeout=timeout, allow_redirects=True)
+        return resp.status_code < 400, f"HTTP {resp.status_code}"
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+
+
 def save_and_publish(
     user_id: str,
     title: str,
@@ -380,6 +405,18 @@ def save_and_publish(
         "title": meta["title"],
         "url": private_url,
     }
+    # Traceability: don't hand back a link we haven't confirmed works (the 404
+    # incident). Best-effort + flag-gated — annotate, never block the save.
+    if _should_verify_links():
+        ok, detail = _verify_url_resolves(private_url)
+        response["resolve_status"] = detail
+        if not ok:
+            response["warning"] = (
+                f"published but the URL did not resolve ({detail}) — the note route "
+                f"may be misconfigured or the build hasn't propagated yet; do NOT "
+                f"present this link as confirmed working"
+            )
+            logger.warning("save_and_publish: %s did not resolve (%s)", private_url, detail)
     if public:
         entry = share_registry.register_note(user_id, meta["slug"])
         public_url = share_registry.public_url_for(entry)

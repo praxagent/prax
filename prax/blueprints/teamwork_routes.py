@@ -2176,6 +2176,7 @@ def _handle_message(
                 response = conversation_service.reply(
                     user_id, prefixed_content, conversation_key=channel_key,
                     trigger=content,  # raw user message, no system prefixes
+                    source="teamwork",
                 )
 
             # Attach trace metadata so TeamWork can link to the observability stack.

@@ -48,6 +48,15 @@ _high_risk_confirmed: bool = False
 # so confirming ONE high-risk action does not unlock ALL of them for the turn.
 _high_risk_confirmed_tools: set[str] = set()
 
+# Lethal-trifecta legs touched this turn (LETHAL_TRIFECTA_GUARD).  When the turn
+# has ingested untrusted content AND read private data, an external-sink tool is
+# gated behind a DEDICATED confirmation latch (never unlocked by an ordinary
+# HIGH-risk confirmation earlier in the turn).  All cleared on drain_audit_log().
+_trifecta_untrusted: bool = False
+_trifecta_private: bool = False
+_trifecta_seen: set[str] = set()       # sinks that returned a trifecta confirmation prompt
+_trifecta_confirmed: set[str] = set()  # sinks the user has explicitly confirmed this turn
+
 # Budget tracking — soft limit on tool calls per turn.
 _tool_call_count: int = 0
 _tool_call_budget: int = 0  # Set from settings at turn start
@@ -63,6 +72,7 @@ _USER_ACTION_PATTERN = re.compile(
 def drain_audit_log() -> list[dict]:
     """Return and clear all buffered audit entries since the last drain."""
     global _high_risk_confirmed, _tool_call_count, _tool_call_budget
+    global _trifecta_untrusted, _trifecta_private
     entries = list(_audit_buffer)
     _audit_buffer.clear()
     _high_risk_seen.clear()
@@ -70,6 +80,10 @@ def drain_audit_log() -> list[dict]:
     _high_risk_confirmed = False
     _tool_call_count = 0
     _tool_call_budget = 0
+    _trifecta_untrusted = False
+    _trifecta_private = False
+    _trifecta_seen.clear()
+    _trifecta_confirmed.clear()
     # Reset loop detector at turn boundary.
     try:
         from prax.agent.loop_detector import reset as _reset_loops
@@ -155,6 +169,7 @@ def wrap_with_governance(tool: BaseTool) -> BaseTool:
 
     def _governed_run_bound(**kwargs: Any) -> Any:
         global _high_risk_confirmed, _tool_call_count
+        global _trifecta_untrusted, _trifecta_private
 
         # --- Active Inference: extract expected observation (Phase 1) ---
         expected_observation = kwargs.pop("expected_observation", None)
@@ -201,6 +216,37 @@ def wrap_with_governance(tool: BaseTool) -> BaseTool:
                     )
             except Exception:
                 pass
+
+        # --- Lethal-trifecta guard (flag-gated, default off) ---
+        # Once the turn has ingested untrusted content AND read private data, an
+        # external-sink action is the exfiltration point of an indirect prompt
+        # injection.  Gate it behind a DEDICATED confirmation latch — deliberately
+        # NOT the shared HIGH-risk latch, so an unrelated confirmation earlier in
+        # the turn cannot silently unlock the exfil action.
+        try:
+            from prax.agent.trifecta import should_escalate_sink, trifecta_guard_enabled
+            if (trifecta_guard_enabled()
+                    and tool_name not in _trifecta_confirmed
+                    and should_escalate_sink(
+                        tool_name, untrusted_seen=_trifecta_untrusted,
+                        private_seen=_trifecta_private)):
+                if tool_name not in _trifecta_seen:
+                    _trifecta_seen.add(tool_name)
+                    _audit_buffer.append(log_action(
+                        tool_name, RiskLevel.HIGH, kwargs,
+                        result="BLOCKED — lethal-trifecta confirmation required"))
+                    logger.info("Lethal-trifecta: blocked external-sink %s pending "
+                                "confirmation (turn touched untrusted + private)", tool_name)
+                    return (
+                        f"⚠️ Lethal-trifecta guard: this turn has read UNTRUSTED "
+                        f"content AND PRIVATE data, and {tool_name} sends/acts "
+                        f"externally — the classic prompt-injection exfiltration "
+                        f"point. Confirm with the user this is intended, then call "
+                        f"{tool_name} again with the same arguments to proceed."
+                    )
+                _trifecta_confirmed.add(tool_name)  # 2nd call after the prompt = confirmed
+        except Exception:
+            pass  # Guard must never break the tool path.
 
         # --- Budget tracking ---
         if _tool_call_budget > 0:
@@ -310,6 +356,23 @@ def wrap_with_governance(tool: BaseTool) -> BaseTool:
             result_str = str(result) if result is not None else None
             _audit_buffer.append(log_action(tool_name, risk, kwargs, result=result_str))
             logger.info("Tool %s finished [%s]", tool_name, risk.value)
+
+            # --- Lethal-trifecta: record which legs this turn has now touched ---
+            # A tool can touch several legs (the browser both reads untrusted
+            # pages AND acts), so check each predicate independently.
+            try:
+                from prax.agent.trifecta import (
+                    is_private_data,
+                    is_untrusted_source,
+                    trifecta_guard_enabled,
+                )
+                if trifecta_guard_enabled():
+                    if is_untrusted_source(tool_name):
+                        _trifecta_untrusted = True
+                    if is_private_data(tool_name):
+                        _trifecta_private = True
+            except Exception:
+                pass
 
             # --- Active Inference: record prediction error (Phase 1) ---
             if expected_observation and tracker:

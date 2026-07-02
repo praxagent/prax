@@ -66,6 +66,7 @@ class ExecutionGraph:
         self._lock = threading.Lock()
         self.trigger: str = ""  # User message or cron/event that started this trace
         self.session_id: str = ""  # Groups related traces into a session
+        self.source: str = ""  # Origin channel: discord | sms | voice | teamwork | scheduler | task_runner
 
     def add_node(self, node: SpanNode) -> None:
         with self._lock:
@@ -174,6 +175,8 @@ class ExecutionGraph:
                 result["trigger"] = self.trigger
             if self.session_id:
                 result["session_id"] = self.session_id
+            if self.source:
+                result["source"] = self.source
             return result
 
     def _format_node(

@@ -753,8 +753,13 @@ class ConversationAgent:
             except Exception:
                 pass
 
-    def run(self, conversation: Iterable[BaseMessage], user_input: str, workspace_context: str = "", trigger: str = "") -> str:
-        """Execute the agent graph and return the final string response."""
+    def run(self, conversation: Iterable[BaseMessage], user_input: str, workspace_context: str = "", trigger: str = "", source: str = "") -> str:
+        """Execute the agent graph and return the final string response.
+
+        *source* is the origin channel (discord | sms | voice | teamwork |
+        scheduler | task_runner) — recorded on the execution graph so a trace
+        shows where the request came from.
+        """
         import time as _time
 
         from prax.agent.trace import GraphCallbackHandler, get_trace_heartbeat, start_span
@@ -772,6 +777,15 @@ class ConversationAgent:
         # Store the user's raw input as the trace trigger so the execution
         # graph shows what started it — without system prefixes or tool guidance.
         root_span.ctx.graph.trigger = trigger or user_input
+        # Origin channel: explicit arg wins; else fall back to the channel
+        # ContextVar that discord/sms/teamwork entry points already set.
+        try:
+            from prax.agent.user_context import current_channel_name
+            _src = source or current_channel_name.get("")
+        except Exception:
+            _src = source
+        if _src:
+            root_span.ctx.graph.source = _src
 
         # Classify session — groups related traces together.
         try:
@@ -1751,12 +1765,15 @@ class ConversationAgent:
             from prax.agent.claim_audit import (
                 audit_artifact_location,
                 audit_claims,
+                audit_fabricated_links,
                 audit_narrative_grounding,
                 audit_plan_completion,
                 audit_scheduled_task_grounding,
+                audit_tool_failures,
                 decide_scheduled_briefing_action,
                 format_audit_warning,
             )
+            from prax.agent.trajectory_audit import audit_trajectory_messages
             from prax.services.teamwork_hooks import (
                 log_activity,
                 post_to_channel,
@@ -1777,6 +1794,9 @@ class ConversationAgent:
             narrative = audit_narrative_grounding(response, messages)
             artifact_location = audit_artifact_location(task_input, response, messages)
             plan_mismatch = audit_plan_completion(response, messages)
+            tool_failures = audit_tool_failures(response, tool_results)
+            fabricated_links = audit_fabricated_links(response, tool_results)
+            trifecta_trail = audit_trajectory_messages(messages)
             scheduled_grounding = (
                 audit_scheduled_task_grounding(task_input, response, messages)
                 if scheduled else None
@@ -1806,6 +1826,30 @@ class ConversationAgent:
                     f"{plan_mismatch['caveat_tool']} reply contained caveat "
                     f"{plan_mismatch['caveat_marker']!r} — the sub-agent "
                     f"said the work is partial and the response ignored it"
+                )
+            if tool_failures:
+                fails = tool_failures["failures"]
+                flagged_parts.append(
+                    f"UNACKNOWLEDGED TOOL FAILURE: {len(fails)} tool/spoke call(s) "
+                    f"CRASHED this turn (e.g. {fails[0]!r}) but the response claims "
+                    f"success and discloses no technical failure — the spoke error "
+                    f"was swallowed and must be surfaced to the user"
+                )
+            if fabricated_links:
+                urls = fabricated_links["urls"]
+                flagged_parts.append(
+                    f"FABRICATED ARTIFACT LINK: response asserts {len(urls)} "
+                    f"Prax link(s) that no tool produced (e.g. {urls[0]!r}) — the "
+                    f"agent likely invented where it saved something; verify the "
+                    f"link before presenting it"
+                )
+            if trifecta_trail:
+                flagged_parts.append(
+                    f"COMPLETED LETHAL TRIFECTA: an external sink "
+                    f"({trifecta_trail['sink']}) fired after untrusted ingest "
+                    f"({trifecta_trail['untrusted_source']}) + private read "
+                    f"({trifecta_trail['private_data']}) — confirm this was "
+                    f"user-intended, not injection-driven exfiltration"
                 )
             if scheduled_grounding:
                 called = ", ".join(scheduled_grounding["called_tools"]) or "(none)"

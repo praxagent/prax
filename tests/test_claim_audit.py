@@ -688,3 +688,60 @@ class TestScheduledBriefingAction:
     def test_empty_requirements_treated_as_pass(self):
         # Defensive: a flagged dict with no requirements shouldn't suppress.
         assert decide_scheduled_briefing_action(None, {"requirements": []}) == "pass"
+
+
+class TestAuditToolFailures:
+    """audit_tool_failures — the 'a spoke crashed but Prax reported success' guard."""
+
+    def test_flags_swallowed_spoke_crash(self):
+        from prax.agent.claim_audit import audit_tool_failures
+        # The exact trace scenario: a spoke crashed, and the response claims
+        # success with a CONTENT caveat ("could not verify") but never
+        # acknowledges the technical crash.
+        resp = ("Done — I saved a public note for that link. Caveat: the URL you "
+                "sent is login-gated, so I could not verify the content.")
+        tools = [
+            "Spoke agent failed: 'list' object has no attribute 'lower'",
+            "Saved the public note: http://x/notes/y/",
+        ]
+        out = audit_tool_failures(resp, tools)
+        assert out is not None
+        assert len(out["failures"]) == 1
+
+    def test_none_when_response_owns_the_failure(self):
+        from prax.agent.claim_audit import audit_tool_failures
+        resp = "I ran into an error in the knowledge spoke, so the note may be incomplete."
+        assert audit_tool_failures(resp, ["Spoke agent failed: boom"]) is None
+
+    def test_none_when_no_crash_occurred(self):
+        from prax.agent.claim_audit import audit_tool_failures
+        resp = "Done — saved the note."
+        assert audit_tool_failures(resp, ["Note created: X", "note_search: no results"]) is None
+
+    def test_content_caveat_does_not_excuse_a_crash(self):
+        from prax.agent.claim_audit import audit_tool_failures
+        # "unable to access" (a source caveat) must NOT suppress a real crash flag.
+        resp = "I was unable to access the page, but here is a summary."
+        assert audit_tool_failures(resp, ["Traceback (most recent call last): ..."]) is not None
+
+
+class TestAuditFabricatedLinks:
+    """audit_fabricated_links — flags Prax-artifact URLs no tool produced."""
+
+    def test_flags_ungrounded_artifact_link(self):
+        from prax.agent.claim_audit import audit_fabricated_links
+        resp = "Done — saved the public note: https://host.ts.net/notes/my-note/"
+        out = audit_fabricated_links(resp, ["note_search: no results"])
+        assert out is not None
+        assert "https://host.ts.net/notes/my-note/" in out["urls"]
+
+    def test_grounded_link_is_ok(self):
+        from prax.agent.claim_audit import audit_fabricated_links
+        resp = "Saved: https://host.ts.net/notes/my-note/"
+        tools = ["Note created: https://host.ts.net/notes/my-note/"]
+        assert audit_fabricated_links(resp, tools) is None
+
+    def test_external_citation_not_flagged(self):
+        from prax.agent.claim_audit import audit_fabricated_links
+        resp = "See https://arxiv.org/abs/1234.5678 for the method."
+        assert audit_fabricated_links(resp, []) is None  # not an artifact link

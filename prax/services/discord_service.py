@@ -290,7 +290,7 @@ def _build_bot():
 
         def _reply_with_channel() -> str:
             current_channel_name.set("discord")
-            return conversation_service.reply(user_id, prompt_input)
+            return conversation_service.reply(user_id, prompt_input, source="discord")
 
         try:
             response = await asyncio.to_thread(_reply_with_channel)

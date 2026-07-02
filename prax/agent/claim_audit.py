@@ -236,6 +236,28 @@ _FAILED_TOOL_MARKERS = (
     "err_name_not_resolved",
 )
 
+# Hard tool/spoke FAILURE markers — a crash/exception, not a soft "couldn't
+# fetch".  Their presence in a tool result means something BROKE this turn.
+_HARD_FAILURE_MARKERS = (
+    "spoke agent failed",
+    "object has no attribute",
+    "object is not subscriptable",
+    "traceback (most recent call",
+    "unhandled exception",
+    "internal error",
+    "no response and no error",
+)
+
+# System-error acknowledgment vocabulary — if the RESPONSE uses any of these it
+# has owned up to a *technical failure*.  Deliberately distinct from a content
+# caveat like "could not verify the login-gated page": that discloses a source
+# limitation, NOT that a spoke crashed.
+_CRASH_ACK_MARKERS = (
+    "error", "failed", "fail", "crash", "went wrong", "bug", "exception",
+    "broke", "technical", "internal", "didn't work", "did not work",
+    "ran into", "hit a snag", "something went",
+)
+
 _WEATHER_UNAVAILABLE_MARKERS = (
     "weather unavailable",
     "couldn't fetch weather",
@@ -673,6 +695,66 @@ def audit_plan_completion(
         "caveat_tool": hit_tool,
         "missing_grounding": True,
     }
+
+
+def audit_tool_failures(response: str, tool_results: list[str]) -> dict | None:
+    """Flag a HARD tool/spoke failure this turn that the response hides.
+
+    The honesty gap: a spoke crashed (``"Spoke agent failed: ..."`` / an
+    exception) yet the orchestrator — often a weak model — reported success and
+    never told the user.  Deterministic: if any tool result carries a
+    hard-failure/crash marker AND the response uses NO system-error
+    acknowledgment vocabulary, return the failures so they get surfaced.  A
+    content caveat like "could not verify" does NOT count as owning up to a
+    crash, so a response that discloses a *source* limitation while silently
+    swallowing a *spoke crash* is still flagged.
+    """
+    if not response:
+        return None
+    low = response.lower()
+    if any(m in low for m in _CRASH_ACK_MARKERS):
+        return None  # the response already discloses a technical failure
+    failures = [
+        (r or "")[:200]
+        for r in (tool_results or [])
+        if any(m in (r or "").lower() for m in _HARD_FAILURE_MARKERS)
+    ]
+    return {"failures": failures} if failures else None
+
+
+# Only audit URLs that look like Prax-GENERATED artifact links — the ones the
+# agent creates and could invent or get wrong. External citations are out of scope
+# (they legitimately never appear in tool output).
+_URL_RE = re.compile(r'https?://[^\s)\]}<>"\']+', re.IGNORECASE)
+_ARTIFACT_URL_HINTS = (
+    "/notes/", "/note/", "/courses/", "/course/", "/library/",
+    "/spaces/", "/space/", "/outputs/", ".ts.net/", "ngrok",
+)
+
+
+def audit_fabricated_links(response: str, tool_results: list[str]) -> dict | None:
+    """Flag a Prax-artifact URL asserted in the response that no tool produced.
+
+    A "saved at https://.../notes/…" claim must be GROUNDED in a tool output — a
+    publish/create tool returned that URL. An artifact-looking link present only in
+    the response is a candidate fabrication (the model invented where it saved
+    something). Deterministic; external citations are excluded via the artifact
+    filter. NOTE: a link a tool *did* return but that fails to RESOLVE (a 404) needs
+    a live HTTP check — tracked separately, this catches invented links only.
+    """
+    if not response:
+        return None
+    joined = " ".join(tool_results or [])
+    fabricated: list[str] = []
+    for raw in _URL_RE.findall(response):
+        url = raw.rstrip(".,);:'\"")
+        low = url.lower()
+        if not any(h in low for h in _ARTIFACT_URL_HINTS):
+            continue  # not a Prax artifact link — out of scope
+        if url in joined or url.rstrip("/") in joined:
+            continue  # grounded in a tool result
+        fabricated.append(url)
+    return {"urls": sorted(set(fabricated))} if fabricated else None
 
 
 def format_audit_warning(findings: list[dict]) -> str:
