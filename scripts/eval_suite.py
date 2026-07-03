@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+"""Drive Prax's benchmark suites — built to run overnight on a slow local model.
+
+All three suites are **resumable**: kill the process (or Ctrl-C) and re-run the
+same command to pick up exactly where it stopped.  By default there is **no
+per-task timeout** (``PRAX_EVAL_TASK_TIMEOUT_S=0``), so a model generating at a
+few tokens/second can take as long as it needs.
+
+Point Prax at a local OpenAI-compatible endpoint (ds4 / vLLM / Ollama / llama.cpp)
+in ``.env`` first::
+
+    LLM_PROVIDER=vllm
+    VLLM_BASE_URL=http://<host>:<port>/v1
+    LOW_MODEL=<model-id>
+    MEDIUM_MODEL=<model-id>
+    HIGH_MODEL=<model-id>
+
+Usage::
+
+    # Daily driver — capability checks through the full harness (deterministic)
+    uv run python scripts/eval_suite.py capability --tier medium
+
+    # The headline number — how much does the harness lift THIS model?
+    uv run python scripts/eval_suite.py harness-lift --tier medium
+
+    # External scoreboard — resumable GAIA batch (run it overnight)
+    uv run python scripts/eval_suite.py gaia --level 1 --limit 20 --tier medium
+
+Resume is automatic; pass ``--no-resume`` to start fresh, ``--retry-errors`` to
+re-attempt only the tasks that errored last time.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+
+def _suite_dir(args):
+    return Path(args.suite_dir) if getattr(args, "suite_dir", None) else None
+
+
+def _print_summary(summary: dict) -> None:
+    print(json.dumps(summary, indent=2, default=str))
+    agg = summary.get("aggregate") or {}
+    out = summary.get("out_dir") or summary.get("label")
+    if agg:
+        print("\n--- aggregate ---")
+        for k, v in agg.items():
+            print(f"  {k}: {v}")
+    print(f"\nResults under: {out}")
+
+
+def cmd_capability(args) -> int:
+    from prax.eval.capability import run_capability_suite
+    summary = run_capability_suite(
+        tier=args.tier, model_override=args.model,
+        resume=not args.no_resume, concurrency=args.concurrency,
+        suite_dir=_suite_dir(args),
+    )
+    _print_summary(summary)
+    return 0
+
+
+def cmd_harness_lift(args) -> int:
+    from prax.eval.capability import run_harness_lift
+    summary = run_harness_lift(
+        tier=args.tier, model_override=args.model, resume=not args.no_resume,
+        suite_dir=_suite_dir(args),
+    )
+    _print_summary(summary)
+    agg = summary.get("aggregate") or {}
+    lift = agg.get("avg_harness_lift")
+    if lift is not None:
+        print(f"\n>>> Harness lift (full − bare, content): {lift:+.3f}")
+        print("    Positive = the scaffolding is doing its job on this model.")
+    return 0
+
+
+def cmd_self_regen(args) -> int:
+    from prax.eval.self_regen import run_self_regen
+    summary = run_self_regen(rounds=args.rounds, apply=args.apply, tier=args.tier)
+    print(f"\n>>> Self-regeneration (#29): baseline {summary['baseline']} → "
+          f"best {summary['best']} (+{summary['improvement']}) over {args.rounds} rounds; "
+          f"kept={summary['variants_kept']}, applied={summary['applied']}")
+    print(f"    Reviewable proposal + full lineage: {summary['out_dir']}/PROPOSAL.md")
+    if not args.apply:
+        print("    (propose-only; pass --apply AND set SELF_REGEN_ENABLED to auto-apply)")
+    return 0
+
+
+def cmd_gaia(args) -> int:
+    from prax.eval.gaia_single import run_gaia_suite
+    summary = run_gaia_suite(
+        level=args.level, limit=args.limit, text_only=not args.with_files,
+        tier=args.tier, model_override=args.model, cost_limit_usd=args.cost_limit,
+        resume=not args.no_resume, retry_errors=args.retry_errors,
+        concurrency=args.concurrency, suite_dir=_suite_dir(args),
+    )
+    _print_summary(summary)
+    return 0
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    def _common(sp):
+        sp.add_argument("--tier", default="medium", help="model tier (low/medium/high/pro)")
+        sp.add_argument("--model", default=None, help="explicit model id (overrides --tier)")
+        sp.add_argument("--no-resume", action="store_true", help="start fresh, ignore prior results")
+        sp.add_argument("--concurrency", type=int, default=None,
+                        help="parallel tasks (default PRAX_EVAL_CONCURRENCY, =1)")
+        sp.add_argument("--suite-dir", default=None,
+                        help="explicit run dir (default: stable per-config, so re-running "
+                             "the same command resumes). Pass to keep runs separate.")
+
+    sp_cap = sub.add_parser("capability", help="capability checks through the full harness")
+    _common(sp_cap)
+    sp_cap.set_defaults(func=cmd_capability)
+
+    sp_lift = sub.add_parser("harness-lift", help="full harness vs bare model, same model")
+    _common(sp_lift)
+    sp_lift.set_defaults(func=cmd_harness_lift)
+
+    sp_sr = sub.add_parser("self-regen",
+                           help="self-regeneration loop (#29): propose→verify→keep a system-prompt overlay")
+    sp_sr.add_argument("--tier", default="high", help="model tier for proposer/auditor (default high)")
+    sp_sr.add_argument("--rounds", type=int, default=3, help="candidate patches to try")
+    sp_sr.add_argument("--apply", action="store_true",
+                       help="auto-apply the winner (also needs SELF_REGEN_ENABLED); else propose-only")
+    sp_sr.set_defaults(func=cmd_self_regen)
+
+    sp_gaia = sub.add_parser("gaia", help="resumable GAIA batch (external scoreboard)")
+    _common(sp_gaia)
+    sp_gaia.add_argument("--level", type=int, default=1, help="GAIA level (default 1)")
+    sp_gaia.add_argument("--limit", type=int, default=None, help="cap number of tasks")
+    sp_gaia.add_argument("--with-files", action="store_true",
+                         help="include tasks with attached files (default: text-only)")
+    sp_gaia.add_argument("--retry-errors", action="store_true", help="re-run only errored tasks")
+    sp_gaia.add_argument("--cost-limit", type=float, default=2.0,
+                         help="USD safety rail per task (0 rates = local = free)")
+    sp_gaia.set_defaults(func=cmd_gaia)
+
+    args = p.parse_args()
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

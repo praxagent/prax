@@ -13,6 +13,8 @@
 This is the cloud counterpart to [`local-vision.md`](local-vision.md) (run a local
 LLM / vision model) and the multi-model technique in
 [`../research/two-qwen3-on-one-spark.md`](../research/two-qwen3-on-one-spark.md).
+**No GPU and want to save money?** [`local-cpu-inference.md`](local-cpu-inference.md)
+covers serving a big model on CPU / Mac / DGX Spark for overnight evals.
 
 ## Decision flow — where does the GPU come from?
 

@@ -39,12 +39,14 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
-from prax.eval import PRAX_EVAL_DIR
+from prax.eval import PRAX_EVAL_DIR, resolve_task_timeout
 from prax.eval._guards import (
     EVAL_MODE_TOOL_DENYLIST,
     assert_eval_isolation,
     ensure_eval_dir,
 )
+from prax.eval.batch import _run_with_timeout
+from prax.eval.telemetry import collect_usage
 
 logger = logging.getLogger(__name__)
 
@@ -53,11 +55,19 @@ logger = logging.getLogger(__name__)
 _GAIA_DATASET = "gaia-benchmark/GAIA"
 _GAIA_CONFIG = "2023_level1"  # start with Level 1 for the first runs
 
-# Rough USD rates for Claude Opus 4.6 (adjust if model changes).
-# Used for the cost kill-switch only — the receipt reports exact token
-# counts so the estimate is just a safety rail.
-_OPUS_IN_USD_PER_1M = 15.0
-_OPUS_OUT_USD_PER_1M = 75.0
+# Default USD rates for the cost kill-switch (overridable via
+# PRAX_EVAL_USD_IN/OUT_PER_1M).  Default 0.0 = a local/self-hosted model:
+# there is no per-token dollar cost, so runs are ranked by tokens + wall-time
+# instead.  The receipt always reports exact token counts; USD is just a rail.
+def _usd_rates() -> tuple[float, float]:
+    try:
+        from prax.settings import settings
+        return (
+            float(getattr(settings, "eval_usd_in_per_1m", 0.0) or 0.0),
+            float(getattr(settings, "eval_usd_out_per_1m", 0.0) or 0.0),
+        )
+    except Exception:
+        return (0.0, 0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -304,31 +314,41 @@ def grade_answer(extracted: str, ground_truth: str) -> dict:
 # ---------------------------------------------------------------------------
 
 class CostTracker:
-    """Tracks prompt/completion tokens and estimated USD cost."""
+    """Tracks prompt/completion tokens, LLM-call count, and a USD rail.
+
+    USD rates default to 0 (a local model has no per-token dollar cost); set
+    ``PRAX_EVAL_USD_IN/OUT_PER_1M`` to price an API model.  ``llm_calls`` and the
+    token counts are the primary, always-meaningful axes.
+    """
 
     def __init__(self, limit_usd: float) -> None:
         self.limit_usd = limit_usd
         self.prompt_tokens = 0
         self.completion_tokens = 0
+        self.llm_calls = 0
+        self._in_rate, self._out_rate = _usd_rates()
 
-    def add(self, prompt: int, completion: int) -> None:
+    def add(self, prompt: int, completion: int, llm_calls: int = 0) -> None:
         self.prompt_tokens += prompt
         self.completion_tokens += completion
+        self.llm_calls += llm_calls
 
     def usd_estimate(self) -> float:
         return (
-            self.prompt_tokens / 1_000_000 * _OPUS_IN_USD_PER_1M
-            + self.completion_tokens / 1_000_000 * _OPUS_OUT_USD_PER_1M
+            self.prompt_tokens / 1_000_000 * self._in_rate
+            + self.completion_tokens / 1_000_000 * self._out_rate
         )
 
     def over_limit(self) -> bool:
-        return self.usd_estimate() > self.limit_usd
+        # A 0-rate (local) model can never exceed a USD limit — tokens are free.
+        return self.usd_estimate() > self.limit_usd if (self._in_rate or self._out_rate) else False
 
     def snapshot(self) -> dict:
         return {
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
             "total_tokens": self.prompt_tokens + self.completion_tokens,
+            "llm_calls": self.llm_calls,
             "usd_estimate": round(self.usd_estimate(), 4),
             "limit_usd": self.limit_usd,
         }
@@ -339,7 +359,7 @@ class CostTracker:
 # ---------------------------------------------------------------------------
 
 @contextmanager
-def _isolated_prax_scope(run_workspace: Path, task_id: str):
+def _isolated_prax_scope(run_workspace: Path, task_id: str, user_prefix: str = "gaia-eval"):
     """Context manager that sets up an isolated Prax scope for one run.
 
     - Monkey-patches ``settings.workspace_dir`` to the run-scoped
@@ -348,6 +368,9 @@ def _isolated_prax_scope(run_workspace: Path, task_id: str):
     - Sets ``current_user_id`` to a synthetic eval user.
     - Filters out denylisted tools from the registered set for the
       duration of the context.
+
+    Reused by both the GAIA runner and the capability suite (``user_prefix``
+    distinguishes their synthetic users).
     """
     from prax.agent import tool_registry
     from prax.agent.user_context import current_user_id
@@ -360,7 +383,7 @@ def _isolated_prax_scope(run_workspace: Path, task_id: str):
 
     # Synthetic user — a UUID-like string so workspace_service treats
     # it as a regular user id (no + prefix etc.)
-    eval_user_id = f"gaia-eval-{task_id[:8]}"
+    eval_user_id = f"{user_prefix}-{task_id[:8]}"
 
     try:
         # Point settings at the run-scoped workspace
@@ -397,7 +420,7 @@ def run_gaia_task(
     cost_limit_usd: float = 2.0,
     model_override: str | None = None,
     tier: str = "medium",
-    timeout_s: int = 120,
+    timeout_s: int | None = None,
 ) -> dict:
     """Run one GAIA validation task through Prax's orchestrator.
 
@@ -442,53 +465,54 @@ def run_gaia_task(
     cost = CostTracker(limit_usd=cost_limit_usd)
     start = time.monotonic()
 
+    # Per-task wall-clock cap.  None (the default) = NO kill — a slow local
+    # model on ds4/vLLM may legitimately take minutes-to-hours per task and the
+    # suite runs overnight.  Set PRAX_EVAL_TASK_TIMEOUT_S, or pass timeout_s, to
+    # arm a safety rail against a genuinely hung tool call (browser/research).
+    timeout = resolve_task_timeout(timeout_s)
+
     response: str = ""
     error: str | None = None
 
-    # Run the orchestrator in a thread with a hard wall-clock timeout.
-    # Without this, a hung tool call (browser, research, sandbox) can
-    # burn API spend indefinitely — as happened on the overnight run
-    # where the Scikit-Learn changelog task hung for 8+ hours.
-    import threading
+    def _run_agent() -> str:
+        with _isolated_prax_scope(run_workspace, task_id):
+            from prax.agent.orchestrator import ConversationAgent
 
-    _result_box: list[str] = []
-    _error_box: list[str] = []
+            agent = (
+                ConversationAgent(model=model_override) if model_override
+                else ConversationAgent(tier=tier)
+            )
+            return agent.run(
+                conversation=[],
+                user_input=prompt,
+                workspace_context="",
+                trigger=f"[GAIA eval: {task_id}]",
+            )
 
-    def _run_agent():
+    # Snapshot the GLOBAL isolation state on THIS (controlling) thread.  When an
+    # armed timeout abandons the worker daemon mid-run, the worker's
+    # _isolated_prax_scope restore never executes; without this main-thread
+    # guard, settings.workspace_dir would stay pointed inside PRAX_EVAL_DIR and
+    # trip assert_eval_isolation on EVERY subsequent task (one hang poisons the
+    # whole overnight suite).
+    from prax.agent import tool_registry as _tr
+    _orig_ws = settings.workspace_dir
+    _orig_get = _tr.get_registered_tools
+
+    # collect_usage() instruments every LLM call (orchestrator, spokes, retries)
+    # so we record REAL token counts — not a len()//4 guess.
+    with collect_usage() as usage:
         try:
-            with _isolated_prax_scope(run_workspace, task_id):
-                from prax.agent.orchestrator import ConversationAgent
-
-                if model_override:
-                    agent = ConversationAgent(model=model_override)
-                else:
-                    agent = ConversationAgent(tier=tier)
-                resp = agent.run(
-                    conversation=[],
-                    user_input=prompt,
-                    workspace_context="",
-                    trigger=f"[GAIA eval: {task_id}]",
-                )
-                _result_box.append(resp)
+            response = _run_with_timeout(_run_agent, timeout) or ""
+        except TimeoutError as exc:
+            error = f"TIMEOUT: {exc}"
+            logger.error("GAIA run timed out for task %s: %s", task_id, exc)
         except Exception as exc:
-            _error_box.append(f"{type(exc).__name__}: {exc}")
+            error = f"{type(exc).__name__}: {exc}"
             logger.exception("GAIA run crashed for task %s", task_id)
-
-    thread = threading.Thread(target=_run_agent, daemon=True)
-    thread.start()
-    thread.join(timeout=timeout_s)
-
-    if thread.is_alive():
-        error = f"TIMEOUT: orchestrator did not finish within {timeout_s}s"
-        logger.error("GAIA run timed out for task %s after %ds", task_id, timeout_s)
-        # Thread is a daemon — it'll die when this process exits.
-        # We don't attempt to kill it mid-flight.
-    elif _error_box:
-        error = _error_box[0]
-    elif _result_box:
-        response = _result_box[0]
-    else:
-        error = "No response and no error — agent returned nothing"
+        finally:
+            settings.workspace_dir = _orig_ws
+            _tr.get_registered_tools = _orig_get
 
     duration_s = round(time.monotonic() - start, 2)
 
@@ -501,14 +525,18 @@ def run_gaia_task(
         grade["error"] = error
         grade["pass"] = False
 
-    # -- 6. Best-effort cost snapshot from last-message token usage --------
-    # We can't intercept every LLM call without deeper surgery, so grab
-    # a rough count from the response length.  This is a lower bound —
-    # real runs should wire token_usage callbacks.  Good enough for
-    # first-pass cost tracking.
-    rough_completion_tokens = len(response) // 4 if response else 0
-    rough_prompt_tokens = len(prompt) // 4
-    cost.add(prompt=rough_prompt_tokens, completion=rough_completion_tokens)
+    # -- 6. Real cost snapshot from captured token usage -------------------
+    snap = usage.snapshot()
+    if snap["total_tokens"] > 0:
+        cost.add(
+            prompt=snap["prompt_tokens"],
+            completion=snap["completion_tokens"],
+            llm_calls=snap["llm_calls"],
+        )
+    else:
+        # Provider didn't report usage — coarse length fallback so the row
+        # isn't blank.  Local OpenAI-compatible servers (ds4/vLLM) DO report it.
+        cost.add(prompt=len(prompt) // 4, completion=(len(response) // 4 if response else 0))
 
     # -- 7. Dump receipts ---------------------------------------------------
     (run_dir / "response.txt").write_text(response or "", encoding="utf-8")
@@ -527,6 +555,7 @@ def run_gaia_task(
         "gaia_level": task.get("Level"),
         "gaia_has_file": bool(task.get("file_name", "")),
         "model_override": model_override,
+        "tier": tier,
         "cost_limit_usd": cost_limit_usd,
         "duration_s": duration_s,
         "started_at": datetime.now(UTC).isoformat(),
@@ -557,6 +586,123 @@ def run_gaia_task(
     _append_to_csv(result)
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Suite runner — resumable batch over many GAIA tasks (overnight / multi-day)
+# ---------------------------------------------------------------------------
+
+def run_gaia_suite(
+    task_ids: list[str] | None = None,
+    *,
+    level: int = 1,
+    text_only: bool = True,
+    limit: int | None = None,
+    cost_limit_usd: float = 2.0,
+    tier: str = "medium",
+    model_override: str | None = None,
+    concurrency: int | None = None,
+    resume: bool = True,
+    retry_errors: bool = False,
+    suite_dir: Path | None = None,
+) -> dict:
+    """Run a **resumable** GAIA batch — built for slow local models overnight.
+
+    Picks tasks (default: text-only Level-1), runs each through
+    :func:`run_gaia_task`, and stores a durable per-task result so a killed or
+    Ctrl-C'd run resumes exactly where it stopped instead of restarting.  Each
+    task keeps its own per-task timeout (``PRAX_EVAL_TASK_TIMEOUT_S``; 0 = none),
+    so the batch itself imposes no wall-clock kill.
+
+    Args:
+        task_ids: explicit task ids; ``None`` auto-selects by ``level`` /
+            ``text_only``.
+        level: GAIA level when auto-selecting.
+        text_only: exclude tasks with attached files (no PDF/image/audio).
+        limit: cap the number of tasks (for a quick smoke batch).
+        concurrency: parallel tasks; ``None`` reads ``PRAX_EVAL_CONCURRENCY``
+            (1 — one local server).
+        resume: skip tasks already completed in ``suite_dir``.
+        suite_dir: run directory; defaults to a stable per-config directory like
+            ``$PRAX_EVAL_DIR/suites/gaia-L{level}-{tier_or_model}`` so re-running resumes.
+
+    Returns:
+        The batch summary (also written to ``{suite_dir}/summary.json``), with an
+        ``aggregate`` block carrying pass-rate and token totals.
+    """
+    from prax.eval.batch import run_batch
+
+    ensure_eval_dir(PRAX_EVAL_DIR)
+
+    if task_ids is None:
+        if text_only and level == 1:
+            tasks = list_text_only_level1()
+        else:
+            tasks = _load_gaia_validation()
+            if level:
+                tasks = [t for t in tasks if str(t.get("Level")) == str(level)]
+            # Apply text_only for ANY level, not just level 1 (else a text-only
+            # level-2 batch silently includes file-attached tasks that can't be
+            # answered, burning slow-local compute on guaranteed failures).
+            if text_only:
+                tasks = [t for t in tasks if not (t.get("file_name") or "").strip()]
+        task_ids = [t.get("task_id") for t in tasks if t.get("task_id")]
+    if limit:
+        task_ids = list(task_ids)[:limit]
+
+    # The live runner mutates GLOBAL settings.workspace_dir per task, so parallel
+    # tasks would race each other's workspace. Force serial regardless of request.
+    if concurrency and concurrency > 1:
+        logger.warning("GAIA suite forces concurrency=1 (run_gaia_task mutates "
+                       "global state); requested %d ignored.", concurrency)
+    concurrency = 1
+
+    # Stable, resume-safe suite_dir keyed to the run CONFIG (not wall-clock), so
+    # re-running the same command continues instead of starting a fresh empty dir.
+    cfg_slug = re.sub(r"[^A-Za-z0-9._-]+", "-", str(model_override or tier or "default"))
+    suite_dir = suite_dir or (PRAX_EVAL_DIR / "suites" / f"gaia-L{level}-{cfg_slug}")
+
+    def _run_one(task_id: str) -> dict:
+        r = run_gaia_task(
+            task_id,
+            cost_limit_usd=cost_limit_usd,
+            model_override=model_override,
+            tier=tier,
+        )
+        g, c = r.get("grade", {}), r.get("cost", {})
+        return {
+            "id": task_id,
+            "pass": bool(g.get("pass")),
+            "match_type": g.get("match_type"),
+            "crashed": bool(g.get("crashed")),
+            "total_tokens": c.get("total_tokens"),
+            "llm_calls": c.get("llm_calls"),
+            "duration_s": r.get("duration_s"),
+            "run_dir": r.get("run_dir"),
+        }
+
+    def _summarize(results: list[dict]) -> dict:
+        graded = [r for r in results if not r.get("error")]
+        passed = sum(1 for r in graded if r.get("pass"))
+        n = len(graded)
+        return {
+            "graded": n,
+            "passed": passed,
+            "pass_rate": round(passed / n, 3) if n else 0.0,
+            "total_tokens": sum(int(r.get("total_tokens") or 0) for r in graded),
+        }
+
+    return run_batch(
+        task_ids,
+        _run_one,
+        out_dir=suite_dir,
+        label=f"gaia-L{level}",
+        concurrency=concurrency,
+        resume=resume,
+        retry_errors=retry_errors,
+        per_item_timeout_s=None,  # each run_gaia_task owns its resolved timeout
+        summarize=_summarize,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -606,7 +752,7 @@ def _append_to_csv(result: dict) -> None:
         "task_id": result.get("task_id", ""),
         "run_id": result.get("run_id", ""),
         "level": meta.get("gaia_level", ""),
-        "tier": meta.get("model_override") or "medium",
+        "tier": meta.get("tier", "medium"),
         "model": meta.get("model_override") or "(default)",
         "pass": grade.get("pass", False),
         "match_type": grade.get("match_type", ""),

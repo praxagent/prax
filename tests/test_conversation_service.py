@@ -8,7 +8,7 @@ class StubAgent:
         self.calls = []
 
     def run(self, conversation, user_input, workspace_context="", **kwargs):
-        self.calls.append((conversation, user_input, workspace_context))
+        self.calls.append((conversation, user_input, workspace_context, kwargs))
         return "stub-response"
 
 
@@ -37,6 +37,20 @@ def test_reply_seeds_and_saves_history():
     assert store[10000000000][0]['role'] == 'system'
     assert service.agent.calls[0][1] == "hello"
     assert isinstance(service.agent.calls[0][0][0], SystemMessage)
+
+
+def test_reply_forwards_source_to_agent():
+    module = importlib.reload(importlib.import_module('prax.services.conversation_service'))
+    store = {}
+    service = module.ConversationService(
+        agent=StubAgent(),
+        retriever=lambda db, k: store.get(k),
+        saver=lambda db, k, p: store.setdefault(k, []).append(p),
+        database_name="memory.db",
+    )
+    service.reply("+10000000000", "hi", source="discord")
+    # kwargs captured as the 4th tuple element
+    assert service.agent.calls[0][3].get("source") == "discord"
 
 
 def test_reply_uses_existing_history():

@@ -339,3 +339,45 @@ def run_golden_suite(*, replay: bool = True, kind: str | None = None,
     scored = [r for r in results if isinstance(r.get("total"), (int, float))]
     avg = round(sum(r["total"] for r in scored) / len(scored), 3) if scored else None
     return {"total": len(results), "scored": len(scored), "avg": avg, "results": results}
+
+
+def _collect_disagreements(suite: dict) -> list[dict]:
+    """Extract judge↔auditor disagreements (auditor-vetoed criteria) from a suite
+    result. Pure — so the aggregation is unit-tested with zero API keys."""
+    out: list[dict] = []
+    for row in suite.get("results", []) or []:
+        for key in row.get("vetoed") or []:
+            out.append({
+                "golden": row.get("id"),
+                "title": row.get("title", ""),
+                "criterion": key,
+                "reason": "judge PASSED but auditor VETOed — candidate ambiguous "
+                          "criterion / unreliable judge; re-judge before trusting",
+            })
+    return out
+
+
+def run_golden_curation(*, judge=None, replay_fn=None, tier: str = "low") -> dict:
+    """Disagreement-driven label curation — the Thinking Machines "expert judgment"
+    lesson (docs/research/expert-judgment-finetune.md): *data quality beat model
+    size* because they cleaned the labels where the model disagreed with them.
+
+    Applies the same loop to Prax's own goldens: run the suite with the high-tier
+    supervising AUDITOR on, then surface every criterion where the cheap judge and
+    the auditor DISAGREE (the auditor vetoed a pass). Those are candidate mislabels
+    / ambiguous criteria — queue them for human re-judgment instead of trusting the
+    label. Cleaning the goldens hardens the un-gameable fitness the self-regen loop
+    (#29) stands on.
+
+    Returns ``{reviewed, n_disagreements, disagreements}``. Key-free with injected
+    ``judge``/``replay_fn``; live it calls the auditor model.
+    """
+    suite = run_golden_suite(
+        replay=True, judge=judge, replay_fn=replay_fn, tier=tier, audit=True,
+    )
+    disagreements = _collect_disagreements(suite)
+    return {
+        "reviewed": suite.get("scored", 0),
+        "n_disagreements": len(disagreements),
+        "disagreements": disagreements,
+    }

@@ -164,6 +164,38 @@ class TestIdentityLinking:
         assert link_identity(user.id, "discord", "D1") is True
 
 
+class TestIdentityUnification:
+    """relink_identity / merge_user_identities — channel consolidation."""
+
+    def test_relink_moves_existing_identity(self):
+        a = resolve_user("discord", "DA")          # canonical (will keep)
+        b = resolve_user("sms", "+19998887777")    # split-off duplicate
+        assert b.id != a.id
+        # link_identity refuses to move it...
+        assert link_identity(a.id, "sms", "+19998887777") is False
+        # ...relink_identity moves it.
+        assert ids.relink_identity(a.id, "sms", "+19998887777") is True
+        assert get_user_by_identity("sms", "+19998887777").id == a.id
+
+    def test_relink_is_noop_when_already_linked(self):
+        a = resolve_user("discord", "DB")
+        assert ids.relink_identity(a.id, "discord", "DB") is False
+
+    def test_relink_inserts_when_absent(self):
+        a = resolve_user("discord", "DC")
+        assert ids.relink_identity(a.id, "teamwork", "default") is True
+        assert get_user_by_identity("teamwork", "default").id == a.id
+
+    def test_merge_moves_all_identities(self):
+        canonical = resolve_user("discord", "DCANON")
+        dup = resolve_user("sms", "+15550001111")
+        link_identity(dup.id, "teamwork", "tw-dup")
+        moved = ids.merge_user_identities(canonical.id, dup.id)
+        assert {p for p, _ in moved} == {"sms", "teamwork"}
+        assert get_user_by_identity("sms", "+15550001111").id == canonical.id
+        assert get_user_by_identity("teamwork", "tw-dup").id == canonical.id
+
+
 # ---------------------------------------------------------------------------
 # 4. User profile updates
 # ---------------------------------------------------------------------------
@@ -333,35 +365,47 @@ class TestFullLifecycle:
             f.write("# Fresh Start")
         assert os.path.isfile(os.path.join(root, "active", "new_project.md"))
 
-    def test_wipe_and_recreate_user(self, workspace_dir):
-        """Simulate deleting a user and recreating from scratch."""
+    def test_wipe_and_recreate_user_is_stable(self, workspace_dir):
+        """A wiped + re-resolved identity must come back as the SAME user.
+
+        Regression for the chronic bug where a DB reset re-minted the same
+        person under a fresh random UUID and orphaned their workspace. With
+        deterministic ids, re-resolving recovers the same id + workspace, so
+        the user's content is reachable again.
+        """
         from prax.services.workspace_service import ensure_workspace
 
-        # Create user
         user = resolve_user("sms", "+15558001234", display_name="Frank")
         old_id = user.id
         ensure_workspace(user.id)
 
-        # Manually wipe user from DB (simulate admin wipe)
+        # Manually wipe user from DB (simulate a reset / fresh start)
         conn = ids._connect()
         conn.execute("DELETE FROM user_identities WHERE user_id = ?", (old_id,))
         conn.execute("DELETE FROM users WHERE id = ?", (old_id,))
         conn.commit()
         conn.close()
 
-        # User no longer exists
         assert get_user(old_id) is None
         assert get_user_by_identity("sms", "+15558001234") is None
 
-        # Re-resolve creates a brand new user
+        # Re-resolve returns the SAME stable id + workspace (no orphaning).
         new_user = resolve_user("sms", "+15558001234", display_name="Frank v2")
-        assert new_user.id != old_id
-        assert new_user.display_name == "Frank v2"
-        assert new_user.workspace_dir != user.workspace_dir  # new UUID prefix
+        assert new_user.id == old_id
+        assert new_user.workspace_dir == user.workspace_dir
+        assert os.path.isdir(ensure_workspace(new_user.id))
 
-        # New workspace works
-        root = ensure_workspace(new_user.id)
-        assert os.path.isdir(root)
+    def test_channels_collapse_to_one_person(self, workspace_dir, monkeypatch):
+        """discord + sms + teamwork for the same person → one canonical user."""
+        monkeypatch.setattr(ids.settings, "discord_to_phone_map",
+                            '{"D-PERSON": "+15557770000"}')
+        monkeypatch.setattr(ids.settings, "teamwork_user_phone", "+15557770000")
+        by_sms = resolve_user("sms", "+15557770000")
+        by_discord = resolve_user("discord", "D-PERSON")
+        by_tw = resolve_user("teamwork", "default")
+        assert by_sms.id == by_discord.id == by_tw.id  # all collapse
+        # And it's deterministic — same id without the DB.
+        assert by_sms.id == ids.deterministic_user_id("sms", "+15557770000")
 
 
 # ---------------------------------------------------------------------------
@@ -431,8 +475,9 @@ class TestEntryPointWiring:
 
         captured = {}
 
-        def fake_reply(user_id, text):
+        def fake_reply(user_id, text, **kwargs):
             captured["user_id"] = user_id
+            captured["source"] = kwargs.get("source")
             return "response"
 
         import threading

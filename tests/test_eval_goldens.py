@@ -165,3 +165,30 @@ def test_doc_extract_golden_tracked_but_comparator_scored():
     )
     assert report["total"] == 1 and report["scored"] == 0
     assert report["results"][0]["total"] is None
+
+
+def test_collect_disagreements_surfaces_vetoed_criteria():
+    """Disagreement-driven curation: auditor-vetoed criteria become the review
+    queue (judge↔auditor disagreement = candidate mislabel)."""
+    from prax.eval.goldens import _collect_disagreements
+    suite = {"results": [
+        {"id": "g1", "title": "T1", "vetoed": ["c1", "c2"]},
+        {"id": "g2", "title": "T2", "vetoed": []},
+        {"id": "g3", "title": "T3"},  # no audit key at all
+    ]}
+    d = _collect_disagreements(suite)
+    assert len(d) == 2
+    assert {x["criterion"] for x in d} == {"c1", "c2"}
+    assert all(x["golden"] == "g1" for x in d)
+
+
+def test_run_golden_curation_key_free_with_injected_replay(tmp_path):
+    """End-to-end key-free: injected replay_fn + judge; no auditor veto path fires
+    without a real auditor, so it should simply return an empty review queue."""
+    from prax.eval.goldens import run_golden_curation
+    out = run_golden_curation(
+        judge=lambda prompt, rubric: {c.key: 1.0 for c in rubric},
+        replay_fn=lambda prompt: "a plausible answer",
+    )
+    assert "disagreements" in out and "n_disagreements" in out
+    assert out["n_disagreements"] == len(out["disagreements"])

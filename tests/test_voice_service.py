@@ -51,7 +51,7 @@ def test_handle_response_redirect(monkeypatch):
             captured_args['args'] = self.args
 
     monkeypatch.setattr(module, 'preprocess_input', fake_preprocess)
-    monkeypatch.setattr(module, 'conversation_service', type('FakeCS', (), {'reply': staticmethod(lambda *a: 'ok')})())
+    monkeypatch.setattr(module, 'conversation_service', type('FakeCS', (), {'reply': staticmethod(lambda *a, **k: 'ok')})())
     monkeypatch.setattr(module.threading, 'Thread', ImmediateThread)
     service = module.VoiceService(states=states, base_model='gpt-test')
 

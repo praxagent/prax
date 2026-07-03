@@ -157,7 +157,7 @@ class SmsService:
                 )
 
             current_channel_name.set("sms")
-            response = conversation_service.reply(user.id, prompt)
+            response = conversation_service.reply(user.id, prompt, source="sms")
             send_sms(response, from_number)
 
             # Mirror the agent response to #sms.
@@ -203,7 +203,7 @@ class SmsService:
             if stripped and stripped != pdf_url.strip():
                 prompt += f"\n\nThe user also said: {stripped}"
 
-            response = conversation_service.reply(user.id, prompt)
+            response = conversation_service.reply(user.id, prompt, source="sms")
             send_sms(response, from_number)
         except Exception:
             logger.exception("PDF processing failed for %s", from_number)
@@ -259,7 +259,7 @@ class SmsService:
                 user = resolve_user("sms", from_number)
                 user_text = text_input or "I'm sending you an image."
                 image_msg = f"{user_text}\n[Image attachment: {media_type}, URL: {media_url}]"
-                response = conversation_service.reply(user.id, image_msg)
+                response = conversation_service.reply(user.id, image_msg, source="sms")
                 send_sms(response, from_number)
                 return '', 200
 

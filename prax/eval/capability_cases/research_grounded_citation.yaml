@@ -1,0 +1,21 @@
+# Capability case — a research answer must be GROUNDED (carry a source marker),
+# not asserted from parametric memory.  This is the clearest harness-lift case:
+# a bare model can only assert; the full harness can fetch + cite.
+id: research_grounded_citation
+title: Research answer is grounded with a citation
+prompt: >-
+  What are the main trade-offs between a modular monolith and microservices for a
+  small engineering team? Back your answer with a source.
+checks:
+  - kind: regex          # grounding: a URL, a [n] footnote, or an (Author, 2024) cite
+    value: 'https?://|\[\d+\]|\([^)]*\d{4}[^)]*\)'
+    weight: 2.0
+  - kind: contains       # actually addresses the asked-about axis
+    value: monolith
+    weight: 1.0
+  - kind: spoke          # diagnostic: routed to research
+    value: research
+    weight: 1.0
+notes: >-
+  The grounding regex mirrors the research_multiperspective golden — verifiable
+  beats judgeable. Expect a large harness-lift: bare ≈ ungrounded assertion.

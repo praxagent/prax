@@ -1,0 +1,26 @@
+# Capability case — produce a structured, persisted knowledge note.
+# Probes: does the harness route to a note-writing tool and produce a
+# well-structured artifact?  Content checks (markdown structure + required
+# subtopics) carry the pass bar; the tool check is the diagnostic harness dim.
+id: knowledge_note_structured
+title: Structured knowledge note with required subtopics
+prompt: >-
+  Write a concise note on gradient descent for my notes. Use markdown headers and
+  make sure you cover the learning rate and what convergence means.
+checks:
+  - kind: regex          # has at least one markdown header — structure, not prose blob
+    value: '(?m)^#{1,3}\s+\S'
+    weight: 1.0
+  - kind: contains       # required subtopic 1
+    value: learning rate
+    weight: 1.0
+  - kind: regex          # required subtopic 2 (converge / convergence)
+    value: '(?i)converg'
+    weight: 1.0
+  - kind: tool           # diagnostic: did the harness actually persist a note?
+    value: workspace_save
+    weight: 1.0
+notes: >-
+  Checks test the capability class (structured, grounded note), not a specific
+  wording. Harness-lift here should be positive: a bare model emits prose; the
+  full harness persists a structured artifact.

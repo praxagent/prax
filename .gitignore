@@ -110,3 +110,11 @@ tests/integration/.artifacts/
 # ---- Misc ----
 pip-log.txt
 pip-delete-this-directory.txt
+
+# identity DB + its timestamped backups — runtime data, never commit
+# (the *.db rule above misses names like identity.db.bak2-010511)
+identity.db*
+*.db.bak*
+
+# conversations DB backups/journals (the exact "conversations.db" rule misses these)
+conversations.db*

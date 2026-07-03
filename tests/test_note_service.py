@@ -210,3 +210,33 @@ class TestHugoGeneration:
         content = (site_dir / "content" / "notes" / "linked-note.md").read_text()
         assert "related:" in content
         assert "other-note" in content
+
+
+class TestVerifyPublishedLink:
+    def test_resolves_ok(self, monkeypatch):
+        import requests
+
+        from prax.services.note_service import _verify_url_resolves
+        monkeypatch.setattr(requests, "head",
+                            lambda url, **k: type("R", (), {"status_code": 200})())
+        ok, detail = _verify_url_resolves("http://x/notes/y/")
+        assert ok and "200" in detail
+
+    def test_flags_404(self, monkeypatch):
+        import requests
+
+        from prax.services.note_service import _verify_url_resolves
+        monkeypatch.setattr(requests, "head",
+                            lambda url, **k: type("R", (), {"status_code": 404})())
+        ok, detail = _verify_url_resolves("http://x/notes/missing/")
+        assert not ok and "404" in detail
+
+    def test_network_error_is_unresolved(self, monkeypatch):
+        import requests
+
+        from prax.services.note_service import _verify_url_resolves
+        def boom(url, **k):
+            raise ConnectionError("down")
+        monkeypatch.setattr(requests, "head", boom)
+        ok, detail = _verify_url_resolves("http://x/notes/y/")
+        assert not ok and "ConnectionError" in detail

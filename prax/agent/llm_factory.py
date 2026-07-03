@@ -191,6 +191,16 @@ def build_llm(
             or _ml.startswith(("o1", "o3", "o4"))
             or _ml.startswith("gpt-5.5")
         )
+        # A NARROWER set actually REQUIRES the /v1/responses endpoint (they 404 on
+        # chat-completions): the "-pro" reasoning models and the o-series. Plain
+        # gpt-5.5 (full) works fine on chat-completions — it only rejects logprobs
+        # + a custom temperature. Routing gpt-5.5 through the Responses API made it
+        # return LIST content-blocks, which crashed str-only downstream code (e.g.
+        # the note pipeline: 'list' object has no attribute 'lower'). So only send
+        # the true responses-only models to that endpoint.
+        _needs_responses_endpoint = (
+            ("-pro" in _ml) or _ml.startswith(("o1", "o3", "o4"))
+        )
         # Phase 3: logprobs for entropy analysis — Chat Completions models only.
         # The LogprobCallbackHandler silently no-ops if there's no logprob data.
         if not _responses_api:
@@ -212,6 +222,12 @@ def build_llm(
             # checked AFTER graph.invoke returns).
             timeout=settings.llm_request_timeout,
             model_kwargs=({} if _responses_api else {"logprobs": True, "top_logprobs": 5}),
+            # Reasoning/"pro" models (gpt-5.5-pro, o-series) are served ONLY by the
+            # Responses API — calling them on /v1/chat/completions 404s with "not a
+            # chat model" (this is what failed the professor spoke). Route ONLY
+            # those through /v1/responses; plain gpt-5.5 and chat models keep
+            # chat-completions (string content, no list-block downstream crashes).
+            use_responses_api=_needs_responses_endpoint,
         )
 
     if provider_name == "anthropic":

@@ -1,5 +1,6 @@
 import importlib
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -87,6 +88,17 @@ def configure_test_env(monkeypatch, tmp_path):
                 monkeypatch.setattr(mod, "settings", new_settings)
             except Exception:
                 pass
+
+    # Safety net: guarantee the WORKSPACE_DIR override actually took effect, so
+    # NO test can create workspaces in the real project tree (the leak that used
+    # to leave stray usr_*/ dirs behind).  Any test that bypasses this isolation
+    # — e.g. forgets the reload, or hardcodes a path — fails loudly here.
+    project_root = Path(__file__).resolve().parents[2]  # /…/PRAX (above the repo)
+    active_ws = Path(new_settings.workspace_dir).resolve()
+    assert project_root != active_ws and project_root not in active_ws.parents, (
+        f"Test workspace_dir {active_ws} is inside the project tree {project_root}; "
+        "it must be a temp dir so tests never leak into the real workspaces/."
+    )
 
     # Circuit breakers live in a process-global registry
     # (prax.agent.circuit_breaker._breakers).  Reset them before each test so

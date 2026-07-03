@@ -147,6 +147,12 @@ the thing it documents**, not wherever it's convenient:
 - **Always run `make ci` before considering a change complete.**
   Don't declare work done until it's green.
 - Never modify `.env` — secrets are passed via environment variables
+- **Never commit runtime data or secrets** — databases (`*.db` and backups like
+  `identity.db.bak2-*`, `conversations.db.legacy-backup`), `.env`, logs,
+  `workspaces/`.  Stage explicitly; do **not** `git add -A` (it swept a DB
+  backup into a public commit once).  Ignore backups with globs, not exact names
+  (`identity.db*`, not `identity.db`).  Recovery + `git filter-repo` surgery
+  playbook: [`docs/guides/git-hygiene.md`](docs/guides/git-hygiene.md).
 - Use `uv` for all Python operations, never `pip`
 - Never rename a library function without also updating its callers
   in tests, routes, and agent tools — the codebase has no runtime

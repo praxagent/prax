@@ -1,0 +1,19 @@
+# Capability case — a deterministic computation with a single correct answer.
+# CONTROL case: a capable bare model can already do this, so harness-lift should
+# be ~0. Its job is to prove the harness doesn't *break* what the model can do
+# alone (a real failure mode: over-tooling a trivial query into a wrong answer).
+id: computation_verifiable
+title: Deterministic arithmetic — harness must not regress the base model
+prompt: >-
+  Compute 17 * 23 + 145 and give me just the number.
+checks:
+  - kind: contains
+    value: "536"
+    weight: 1.0
+  - kind: absent          # must not hand back the wrong common slip (17*23=391; +145=536)
+    value: "526"
+    weight: 0.5
+notes: >-
+  Control for harness-lift: lift near zero is the expected, healthy result. A
+  negative lift here means the scaffolding is hurting — exactly what we want to
+  catch with a weak local model before it ships to a strong one.

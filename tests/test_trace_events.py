@@ -2,6 +2,21 @@
 from __future__ import annotations
 
 
+class TestExecutionGraphSource:
+    """The execution graph records the origin channel (discord/sms/teamwork/…)."""
+
+    def test_to_dict_includes_source_when_set(self):
+        from prax.agent.trace import ExecutionGraph
+        g = ExecutionGraph("trace-src-1")
+        g.source = "discord"
+        assert g.to_dict().get("source") == "discord"
+
+    def test_to_dict_omits_source_when_empty(self):
+        from prax.agent.trace import ExecutionGraph
+        g = ExecutionGraph("trace-src-2")
+        assert "source" not in g.to_dict()
+
+
 class TestTraceEventVocabulary:
     def test_all_expected_types_exist(self):
         from prax.trace_events import TraceEvent

@@ -266,7 +266,7 @@ def _run_pickup(user_id: str, pickup: dict) -> None:
     try:
         agent = ConversationAgent(tier="medium")
         svc = ConversationService(agent=agent)
-        response = svc.reply(user_id, prompt)
+        response = svc.reply(user_id, prompt, source="task_runner")
     except Exception as e:
         logger.exception("task_runner: synthetic turn failed for %s", user_id)
         _report_failure(user_id, pickup, str(e))
