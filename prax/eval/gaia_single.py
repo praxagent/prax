@@ -623,8 +623,8 @@ def run_gaia_suite(
         concurrency: parallel tasks; ``None`` reads ``PRAX_EVAL_CONCURRENCY``
             (1 — one local server).
         resume: skip tasks already completed in ``suite_dir``.
-        suite_dir: run directory; defaults to
-            ``$PRAX_EVAL_DIR/suites/gaia-{timestamp}``.
+        suite_dir: run directory; defaults to a stable per-config directory like
+            ``$PRAX_EVAL_DIR/suites/gaia-L{level}-{tier_or_model}`` so re-running resumes.
 
     Returns:
         The batch summary (also written to ``{suite_dir}/summary.json``), with an

@@ -745,3 +745,13 @@ class TestAuditFabricatedLinks:
         from prax.agent.claim_audit import audit_fabricated_links
         resp = "See https://arxiv.org/abs/1234.5678 for the method."
         assert audit_fabricated_links(resp, []) is None  # not an artifact link
+
+
+def test_generic_error_mention_does_not_suppress_a_crash():
+    """Copilot MEDIUM: a generic 'error'/'fail' mention (404 errors, error rate)
+    must NOT count as acknowledging a spoke crash and suppress the finding."""
+    from prax.agent.claim_audit import audit_tool_failures
+    resp = "Done — the fix reduces 404 errors and improves the error rate."
+    out = audit_tool_failures(resp, ["Spoke agent failed: 'list' object has no attribute 'lower'"])
+    assert out is not None
+    assert len(out["failures"]) == 1

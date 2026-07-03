@@ -253,9 +253,12 @@ _HARD_FAILURE_MARKERS = (
 # caveat like "could not verify the login-gated page": that discloses a source
 # limitation, NOT that a spoke crashed.
 _CRASH_ACK_MARKERS = (
-    "error", "failed", "fail", "crash", "went wrong", "bug", "exception",
-    "broke", "technical", "internal", "didn't work", "did not work",
-    "ran into", "hit a snag", "something went",
+    "an error occurred", "ran into an error", "hit an error", "encountered an error",
+    "returned an error", "an exception", "threw an exception", "raised an exception",
+    "a failure", "failed to", "failed while", "was unable to complete",
+    "went wrong", "something went wrong", "didn't work", "did not work",
+    "crashed", "ran into a problem", "hit a snag", "a bug", "it broke",
+    "technical issue", "technical problem", "internal error",
 )
 
 _WEATHER_UNAVAILABLE_MARKERS = (

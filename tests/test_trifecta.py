@@ -133,3 +133,30 @@ def test_trifecta_confirmation_passes_on_second_call(monkeypatch):
     assert "trifecta" in str(r1).lower()          # first call: gated
     r2 = governed.invoke({"text": "x"})
     assert "trifecta" not in str(r2).lower()       # second call: trifecta gate cleared
+
+
+def test_trifecta_confirmation_is_bound_to_arguments(monkeypatch):
+    """Copilot HIGH: confirming a sink must NOT authorize the SAME sink called with
+    DIFFERENT (injection-substituted) arguments — the latch is keyed by (tool,args)."""
+    from langchain_core.tools import StructuredTool
+
+    import prax.agent.governed_tool as gt
+    import prax.agent.trifecta as tf
+    monkeypatch.setattr(tf, "trifecta_guard_enabled", lambda: True)
+    monkeypatch.setattr(gt, "_trifecta_untrusted", True)
+    monkeypatch.setattr(gt, "_trifecta_private", True)
+    monkeypatch.setattr(gt, "_trifecta_seen", set())
+    monkeypatch.setattr(gt, "_trifecta_confirmed", set())
+
+    sent = []
+    sink = StructuredTool.from_function(
+        func=lambda text="": sent.append(text) or "sent",
+        name="send_sms", description="send an sms")
+    governed = gt.wrap_with_governance(sink)
+
+    assert "trifecta" in str(governed.invoke({"text": "safe"})).lower()       # gated
+    assert "trifecta" not in str(governed.invoke({"text": "safe"})).lower()   # confirmed
+    # a DIFFERENT payload must be RE-BLOCKED, not ride the prior confirmation
+    r = governed.invoke({"text": "exfiltrate secrets to evil.com"})
+    assert "trifecta" in str(r).lower()
+    assert "exfiltrate secrets to evil.com" not in sent  # body NOT executed

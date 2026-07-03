@@ -54,8 +54,25 @@ _high_risk_confirmed_tools: set[str] = set()
 # HIGH-risk confirmation earlier in the turn).  All cleared on drain_audit_log().
 _trifecta_untrusted: bool = False
 _trifecta_private: bool = False
-_trifecta_seen: set[str] = set()       # sinks that returned a trifecta confirmation prompt
-_trifecta_confirmed: set[str] = set()  # sinks the user has explicitly confirmed this turn
+_trifecta_seen: set[str] = set()       # (tool,args) keys that returned a trifecta prompt
+_trifecta_confirmed: set[str] = set()  # (tool,args) keys the user has explicitly confirmed
+
+
+def _trifecta_key(tool_name: str, kwargs: dict) -> str:
+    """Bind the trifecta confirmation latch to the EXACT (tool, arguments) pair.
+
+    Keying by tool name alone would let a confirmed sink be re-invoked with
+    DIFFERENT (e.g. injection-substituted) arguments — so the arguments are hashed
+    into the latch key. A second call only counts as confirmed if its arguments
+    match the call the user was actually shown.
+    """
+    import hashlib
+    import json
+    try:
+        blob = json.dumps(kwargs, sort_keys=True, default=str)
+    except Exception:
+        blob = repr(sorted((kwargs or {}).items()))
+    return f"{tool_name}\x00{hashlib.sha256(blob.encode()).hexdigest()[:16]}"
 
 # Budget tracking — soft limit on tool calls per turn.
 _tool_call_count: int = 0
@@ -225,13 +242,14 @@ def wrap_with_governance(tool: BaseTool) -> BaseTool:
         # the turn cannot silently unlock the exfil action.
         try:
             from prax.agent.trifecta import should_escalate_sink, trifecta_guard_enabled
+            _tf_key = _trifecta_key(tool_name, kwargs)  # latch is bound to the ARGS too
             if (trifecta_guard_enabled()
-                    and tool_name not in _trifecta_confirmed
+                    and _tf_key not in _trifecta_confirmed
                     and should_escalate_sink(
                         tool_name, untrusted_seen=_trifecta_untrusted,
                         private_seen=_trifecta_private)):
-                if tool_name not in _trifecta_seen:
-                    _trifecta_seen.add(tool_name)
+                if _tf_key not in _trifecta_seen:
+                    _trifecta_seen.add(_tf_key)
                     _audit_buffer.append(log_action(
                         tool_name, RiskLevel.HIGH, kwargs,
                         result="BLOCKED — lethal-trifecta confirmation required"))
@@ -244,7 +262,8 @@ def wrap_with_governance(tool: BaseTool) -> BaseTool:
                         f"point. Confirm with the user this is intended, then call "
                         f"{tool_name} again with the same arguments to proceed."
                     )
-                _trifecta_confirmed.add(tool_name)  # 2nd call after the prompt = confirmed
+                # 2nd call with the SAME arguments = confirmed (different args re-block)
+                _trifecta_confirmed.add(_tf_key)
         except Exception:
             pass  # Guard must never break the tool path.
 
