@@ -504,6 +504,18 @@ class AppSettings(BaseSettings):
             "default off (needs the serving route reachable + network)."
         ),
     )
+    epistemic_vigilance_enabled: bool = Field(
+        default=False, alias="EPISTEMIC_VIGILANCE_ENABLED",
+        description=(
+            "When true, appends an epistemic-vigilance principle to the system "
+            "prompt: pause and verify a user's factual/health/safety PREMISE before "
+            "accepting it, and correct false/unsafe premises instead of "
+            "accommodating them (anti-sycophancy). Weighted by source reliability, "
+            "with low false-positives (don't over-challenge correct premises). "
+            "Inspired by 'Accommodation and Epistemic Vigilance' (arXiv 2601.04435). "
+            "Default off; grade with the `sycophancy` benchmark adapter."
+        ),
+    )
     intent_clarification_enabled: bool = Field(
         default=False, alias="INTENT_CLARIFICATION_ENABLED",
         description=(
