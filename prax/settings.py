@@ -48,6 +48,11 @@ class AppSettings(BaseSettings):
     # Sign up at https://jina.ai.
     jina_api_key: str | None = Field(default=None, alias="JINA_API_KEY")
 
+    # X / Twitter API v2 bearer token.  When set, x.com/twitter.com STATUS links
+    # are fetched via the API instead of the web reader — X has locked down
+    # unauthenticated scraping, so the Jina/browser path fails on tweets.
+    twitter_api: str | None = Field(default=None, alias="TWITTER_API")
+
     # Models / Agents
     agent_name: str = Field(default="Prax", alias="AGENT_NAME")
     base_model: str = Field(default="gpt-5.4-nano", alias="BASE_MODEL")

@@ -18,6 +18,7 @@ deep-dive note pipeline without the FontAwesome-icon noise that a raw
 from __future__ import annotations
 
 import logging
+import re
 
 import requests
 
@@ -26,6 +27,76 @@ from prax.settings import settings
 logger = logging.getLogger(__name__)
 
 _READER_BASE = "https://r.jina.ai/"
+
+# X / Twitter status URLs → capture the numeric tweet id.
+_X_STATUS_RE = re.compile(
+    r"https?://(?:www\.|mobile\.)?(?:x\.com|twitter\.com)/[^/\s]+/status(?:es)?/(\d+)",
+    re.IGNORECASE,
+)
+
+
+def _twitter_token() -> str:
+    return (getattr(settings, "twitter_api", None) or "").strip()
+
+
+def _format_tweet_markdown(tweet: dict, includes: dict) -> str:
+    users = {u["id"]: u for u in (includes.get("users") or [])}
+    author = users.get(tweet.get("author_id"), {})
+    name, handle = author.get("name", ""), author.get("username", "")
+    # Long ("note") tweets carry the full body under note_tweet.text.
+    text = ((tweet.get("note_tweet") or {}).get("text")) or tweet.get("text", "")
+    created = tweet.get("created_at", "")
+    pm = tweet.get("public_metrics") or {}
+    metrics = ""
+    if pm:
+        metrics = (f"\n\n*{pm.get('like_count', 0)} likes · "
+                   f"{pm.get('retweet_count', 0)} reposts · "
+                   f"{pm.get('reply_count', 0)} replies*")
+    header = f"# Tweet by {name} (@{handle})" if handle else "# Tweet"
+    date_line = f"\n\n*{created}*" if created else ""
+    return f"{header}{date_line}\n\n{text}{metrics}\n"
+
+
+def fetch_tweet_via_api(url: str, *, timeout: int = 15) -> str | None:
+    """Fetch an x.com/twitter.com STATUS link via the X API v2 as markdown.
+
+    Returns ``None`` (so the caller falls back to the web reader) when the URL is
+    not a tweet, ``TWITTER_API`` isn't configured, or the API call fails. X has
+    locked down unauthenticated scraping, so the reader/browser path fails on
+    tweets — the API is the only reliable route.
+    """
+    m = _X_STATUS_RE.search(url or "")
+    if not m:
+        return None
+    token = _twitter_token()
+    if not token:
+        return None
+    tweet_id = m.group(1)
+    try:
+        resp = requests.get(
+            f"https://api.twitter.com/2/tweets/{tweet_id}",
+            params={
+                "tweet.fields": "created_at,public_metrics,note_tweet,lang",
+                "expansions": "author_id",
+                "user.fields": "name,username",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        logger.warning("Twitter API request failed for %s: %s", url, exc)
+        return None
+    if resp.status_code >= 400:
+        logger.warning("Twitter API HTTP %s for tweet %s", resp.status_code, tweet_id)
+        return None
+    try:
+        data = resp.json()
+    except Exception:
+        return None
+    tweet = (data or {}).get("data")
+    if not tweet:
+        return None
+    return _format_tweet_markdown(tweet, data.get("includes", {}))
 
 
 class ReaderError(RuntimeError):
@@ -69,6 +140,12 @@ def fetch_markdown(
         validate_url(url)
     except SSRFError as exc:
         raise ReaderError(f"Refusing to fetch blocked URL: {exc}") from exc
+
+    # X/Twitter locked down scraping — route status links through the API when
+    # TWITTER_API is set; fall through to the reader for everything else.
+    tweet_md = fetch_tweet_via_api(url, timeout=timeout)
+    if tweet_md:
+        return tweet_md[:max_chars]
 
     try:
         resp = requests.get(
