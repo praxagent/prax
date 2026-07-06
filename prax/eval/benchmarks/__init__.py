@@ -190,3 +190,30 @@ def run_benchmark_lift(name: str, *, tier: str = "low", model: str | None = None
         out_dir = PRAX_EVAL_DIR / "suites" / f"bench-lift-{name}-{model or tier}"
     return run_batch(list(by_id), _run_one, out_dir=out_dir, label=f"{name}-lift",
                      resume=resume, summarize=_summarize)
+
+
+def run_all_benchmarks(replay_fn=None, *, tier: str = "low", model: str | None = None,
+                       out_dir=None, resume: bool = True) -> dict:
+    """Run EVERY registered benchmark and return a consolidated report.
+
+    Uses a shared ``replay_fn`` (fake in tests) or the live orchestrator when
+    ``replay_fn is None``. Returns ``{benchmarks: {name: aggregate}, avg_pass_rate,
+    n_benchmarks}`` — a one-command coverage dashboard over the whole seam.
+    """
+    if replay_fn is None:
+        replay_fn = live_orchestrator_replay(tier=tier, model=model)
+    if out_dir is None:
+        from prax.eval import PRAX_EVAL_DIR
+        out_dir = PRAX_EVAL_DIR / "suites" / f"bench-all-{model or tier}"
+    base = Path(out_dir)
+    report: dict[str, dict] = {}
+    for name in ADAPTER_NAMES:
+        summary = run_benchmark(get_adapter(name), replay_fn,
+                                out_dir=base / name, resume=resume)
+        report[name] = summary.get("aggregate") or {}
+    rates = [a.get("pass_rate", 0.0) for a in report.values() if a]
+    return {
+        "benchmarks": report,
+        "n_benchmarks": len(report),
+        "avg_pass_rate": round(sum(rates) / len(rates), 3) if rates else 0.0,
+    }

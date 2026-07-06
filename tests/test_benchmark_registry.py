@@ -47,3 +47,13 @@ def test_run_benchmark_lift_computes_full_minus_bare(tmp_path, monkeypatch):
     assert agg["full_pass_rate"] == 1.0 and agg["bare_pass_rate"] == 0.0
     assert agg["harness_lift"] == 1.0
     assert agg["avg_full_tokens"] == 100 and agg["avg_bare_tokens"] == 50
+
+
+def test_run_all_benchmarks_consolidated(tmp_path):
+    from prax.eval.benchmarks import ADAPTER_NAMES, run_all_benchmarks
+    report = run_all_benchmarks(replay_fn=lambda p: "no", out_dir=tmp_path, resume=False)
+    assert report["n_benchmarks"] == len(ADAPTER_NAMES)
+    assert set(report["benchmarks"]) == set(ADAPTER_NAMES)
+    assert 0.0 <= report["avg_pass_rate"] <= 1.0
+    for agg in report["benchmarks"].values():
+        assert "pass_rate" in agg

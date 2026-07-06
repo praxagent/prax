@@ -103,6 +103,14 @@ def cmd_gaia(args) -> int:
 
 
 def cmd_benchmark(args) -> int:
+    if args.name == "all":
+        from prax.eval.benchmarks import run_all_benchmarks
+        report = run_all_benchmarks(tier=args.tier, model=args.model, resume=not args.no_resume)
+        print(f"\n>>> Benchmark suite: {report['n_benchmarks']} adapters, "
+              f"avg pass-rate {report['avg_pass_rate']}")
+        for name, agg in report["benchmarks"].items():
+            print(f"    {name:12} pass_rate={agg.get('pass_rate')} (graded {agg.get('graded')})")
+        return 0
     if args.lift:
         from prax.eval.benchmarks import run_benchmark_lift
         summary = run_benchmark_lift(
@@ -171,7 +179,7 @@ def main() -> int:
         help="run a standard benchmark adapter through the full harness")
     sp_bench.add_argument(
         "name",
-        choices=["ifeval", "injecagent", "sycophancy", "bfcl", "halueval", "truthfulqa"])
+        choices=["ifeval", "injecagent", "sycophancy", "bfcl", "halueval", "truthfulqa", "all"])
     sp_bench.add_argument("--tier", default="low", help="model tier (default low)")
     sp_bench.add_argument("--model", default=None, help="explicit model id (overrides --tier)")
     sp_bench.add_argument("--no-resume", action="store_true", help="start fresh")
