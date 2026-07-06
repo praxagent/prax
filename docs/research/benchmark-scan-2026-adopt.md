@@ -77,6 +77,29 @@ is proven.
 Everything above is un-gameable + CPU/keyless, so it hardens the same fitness
 function the self-regeneration loop stands on — coverage is the missing multiplier.
 
+## Shipped so far
+
+A generic **`BenchmarkAdapter` seam** (`prax/eval/benchmarks/`) — `cases()` /
+`prompt()` / `score()` → the resumable `run_batch`, deterministic scoring — plus a
+**registry** (`get_adapter`), a **live orchestrator executor**, a **CLI**
+(`eval_suite.py benchmark <name> [--lift]`), `make eval-benchmark BENCH=… [LIFT=1]`,
+and a **per-benchmark harness-lift** (`run_benchmark_lift`: full vs bare, same
+model). Adapters landed, each deterministic + keyless in CI, runnable against real
+Prax:
+
+| Adapter | Category | Grades |
+|---|---|---|
+| **IFEval** | instruction-following | system-prompt / instruction adherence |
+| **BFCL** | tool-calling | function-call AST/structural match |
+| **InjecAgent** | agent-safety | indirect-injection ASR + utility (the lethal-trifecta guard) |
+| **sycophancy** | epistemic vigilance | challenge-rate on false user premises (inbound honesty) |
+| **HaluEval** | grounding | hallucination detection (Yes/No) |
+| **TruthfulQA** | grounding | truthfulness vs common misconceptions (MC) |
+
+Remaining shortlist (same pattern, cheap to add): τ²-bench (pass^k), GSM8K/GPQA
+(reasoning), LoCoMo (memory), WebShop/MiniWoB++ (browser), Aider/EvalPlus (coding),
+and gated full-set loaders for the above.
+
 ## Source
 
 Structured 104-entry scan (grading/CPU/cost/spoke/coverage per entry). Companion:

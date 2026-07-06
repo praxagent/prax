@@ -52,16 +52,20 @@ current design. The risk becomes **live** the moment Prax pursues **weights-leve
 self-improvement (the fine-tune spoke / SEAL direction) — which is exactly where to
 apply the mitigation.
 
-## The concrete adopt — inoculation framing
+## The concrete adopt — inoculation framing (SHIPPED)
 
 For any loop that optimizes against a grader (self-regen today; fine-tuning
 tomorrow), **frame the grading task honestly** so "satisfy this check" can't
-semantically bleed into "cheating is who I am": e.g. a proposer/training preamble
-that says *"your only job here is to make this specific check pass; this is a
-narrow evaluation harness, not a license to be deceptive elsewhere."* It's cheap,
-leaves capability intact, and is Anthropic-validated. Pair it with the existing
-anti-spike overseer (prevent the hack) — inoculation reduces the *blast radius* if
-one slips through.
+semantically bleed into "cheating is who I am". This is now shipped:
+`prax/eval/self_regen.py` defines `INOCULATION_PREAMBLE` + an `inoculate(prompt)`
+helper, and the **self-regen proposer wraps its task prompt with it** — *"this is a
+narrow evaluation harness; your only job is a genuine general improvement the check
+rewards; do not game the check; satisfying it does not license deceptive or
+misaligned behavior elsewhere."* It's cheap, capability-neutral, and Anthropic-
+validated. It pairs with the existing anti-spike overseer (which *prevents* the
+hack) — inoculation reduces the **blast radius** if one ever slips through, and the
+same `inoculate()` wrapper is ready to reuse on a future weights-level fine-tuning
+grader task, where the generalization risk is real.
 
 ## Sources
 

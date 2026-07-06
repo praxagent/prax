@@ -169,3 +169,11 @@ def test_mdl_occam_bias_prefers_shorter_at_equal_score(tmp_path):
     )
     assert summary["best_patch"] == "short"   # simplest theory at equal score
     assert summary["best"] == 0.8
+
+
+def test_inoculation_preamble_and_helper():
+    from prax.eval.self_regen import INOCULATION_PREAMBLE, inoculate
+    low = INOCULATION_PREAMBLE.lower()
+    assert "narrow" in low and ("hack" in low or "game" in low) and "not" in low
+    out = inoculate("PROPOSE X")
+    assert out.startswith(INOCULATION_PREAMBLE) and "PROPOSE X" in out

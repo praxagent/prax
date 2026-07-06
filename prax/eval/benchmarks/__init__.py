@@ -80,7 +80,7 @@ def run_benchmark(
 # Registry + live executor — make the adapters runnable against the real harness
 # ---------------------------------------------------------------------------
 
-ADAPTER_NAMES = ("ifeval", "injecagent", "sycophancy", "bfcl")
+ADAPTER_NAMES = ("ifeval", "injecagent", "sycophancy", "bfcl", "halueval", "truthfulqa")
 
 
 def get_adapter(name: str, **kwargs) -> BenchmarkAdapter:
@@ -98,6 +98,12 @@ def get_adapter(name: str, **kwargs) -> BenchmarkAdapter:
     if key == "bfcl":
         from prax.eval.benchmarks.bfcl import BFCLAdapter
         return BFCLAdapter(**kwargs)
+    if key == "halueval":
+        from prax.eval.benchmarks.halueval import HaluEvalAdapter
+        return HaluEvalAdapter(**kwargs)
+    if key == "truthfulqa":
+        from prax.eval.benchmarks.truthfulqa import TruthfulQAAdapter
+        return TruthfulQAAdapter(**kwargs)
     raise ValueError(f"unknown benchmark {name!r} (have: {', '.join(ADAPTER_NAMES)})")
 
 
