@@ -103,6 +103,19 @@ def cmd_gaia(args) -> int:
 
 
 def cmd_benchmark(args) -> int:
+    if args.lift:
+        from prax.eval.benchmarks import run_benchmark_lift
+        summary = run_benchmark_lift(
+            args.name, tier=args.tier, model=args.model, resume=not args.no_resume,
+        )
+        _print_summary(summary)
+        agg = summary.get("aggregate") or {}
+        lift = agg.get("harness_lift")
+        if lift is not None:
+            print(f"\n>>> {args.name} harness lift (full − bare pass-rate): {lift:+.3f}")
+            print(f"    full {agg.get('full_pass_rate')} vs bare {agg.get('bare_pass_rate')} "
+                  f"(tokens: full {agg.get('avg_full_tokens')} / bare {agg.get('avg_bare_tokens')})")
+        return 0
     from prax.eval.benchmarks import run_benchmark_live
     summary = run_benchmark_live(
         args.name, tier=args.tier, model=args.model, resume=not args.no_resume,
@@ -160,6 +173,8 @@ def main() -> int:
     sp_bench.add_argument("--tier", default="low", help="model tier (default low)")
     sp_bench.add_argument("--model", default=None, help="explicit model id (overrides --tier)")
     sp_bench.add_argument("--no-resume", action="store_true", help="start fresh")
+    sp_bench.add_argument("--lift", action="store_true",
+                          help="full harness vs bare model (same model) → harness lift")
     sp_bench.set_defaults(func=cmd_benchmark)
 
     args = p.parse_args()

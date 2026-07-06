@@ -56,10 +56,13 @@ eval-harness-lift:
 		python scripts/eval_suite.py harness-lift --tier $(EVAL_TIER)
 
 # Standard benchmark adapters through the full harness — deterministic, keyless
-# scoring. BENCH=ifeval|injecagent|sycophancy (default ifeval).
+# scoring. BENCH=ifeval|injecagent|sycophancy|bfcl (default ifeval).
+# LIFT=1 → full harness vs bare model (same model): "does the scaffold help THIS
+# benchmark" as a lift number.
 eval-benchmark:
 	FLASK_SECRET_KEY=$${FLASK_SECRET_KEY:-ci-test-key} uv run --python 3.13 \
-		python scripts/eval_suite.py benchmark $(or $(BENCH),ifeval) --tier $(EVAL_TIER)
+		python scripts/eval_suite.py benchmark $(or $(BENCH),ifeval) --tier $(EVAL_TIER) \
+		$(if $(LIFT),--lift,)
 
 # External scoreboard — resumable GAIA batch (set LIMIT=N for a quick smoke batch)
 eval-gaia:

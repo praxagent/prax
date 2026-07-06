@@ -133,3 +133,54 @@ def run_benchmark_live(name: str, *, tier: str = "low", model: str | None = None
         adapter, live_orchestrator_replay(tier=tier, model=model),
         out_dir=out_dir, resume=resume,
     )
+
+
+def run_benchmark_lift(name: str, *, tier: str = "low", model: str | None = None,
+                       out_dir=None, resume: bool = True, **adapter_kwargs) -> dict:
+    """Run a benchmark through BOTH the full harness and a BARE model (same model),
+    scoring each with the adapter's deterministic scorer → the harness LIFT.
+
+    The headline "does the scaffold help THIS model on THIS benchmark" number:
+    ``harness_lift = full_pass_rate − bare_pass_rate`` (with the token cost of each,
+    per the HAL discipline). Isolated + resumable; needs a model at run time.
+    """
+    from prax.eval.batch import run_batch
+    from prax.eval.capability import bare_executor, orchestrator_executor
+
+    adapter = get_adapter(name, **adapter_kwargs)
+    by_id = {str(c["id"]): c for c in adapter.cases()}
+    counter = {"n": 0}
+
+    def _run_one(cid: str) -> dict:
+        case = by_id[cid]
+        prompt = adapter.prompt(case)
+        counter["n"] += 1
+        full = orchestrator_executor(prompt, tier=tier, model_override=model,
+                                     case_id=f"lift-{name}-{counter['n']}")
+        bare = bare_executor(prompt, tier=tier, model_override=model)
+        gf, gb = adapter.score(case, full.answer or ""), adapter.score(case, bare.answer or "")
+        return {
+            "id": cid,
+            "full_passed": bool(gf.get("passed")), "bare_passed": bool(gb.get("passed")),
+            "full_tokens": full.tokens, "bare_tokens": bare.tokens,
+            "full_error": full.error or None, "bare_error": bare.error or None,
+        }
+
+    def _summarize(results: list[dict]) -> dict:
+        ok = [r for r in results if not r.get("full_error") and not r.get("bare_error")]
+        n = len(ok)
+        fr = round(sum(1 for r in ok if r["full_passed"]) / n, 3) if n else 0.0
+        br = round(sum(1 for r in ok if r["bare_passed"]) / n, 3) if n else 0.0
+        return {
+            "benchmark": name, "cases": n,
+            "full_pass_rate": fr, "bare_pass_rate": br,
+            "harness_lift": round(fr - br, 3),
+            "avg_full_tokens": round(sum(r.get("full_tokens", 0) for r in ok) / n) if n else 0,
+            "avg_bare_tokens": round(sum(r.get("bare_tokens", 0) for r in ok) / n) if n else 0,
+        }
+
+    if out_dir is None:
+        from prax.eval import PRAX_EVAL_DIR
+        out_dir = PRAX_EVAL_DIR / "suites" / f"bench-lift-{name}-{model or tier}"
+    return run_batch(list(by_id), _run_one, out_dir=out_dir, label=f"{name}-lift",
+                     resume=resume, summarize=_summarize)
