@@ -55,6 +55,12 @@ eval-harness-lift:
 	FLASK_SECRET_KEY=$${FLASK_SECRET_KEY:-ci-test-key} uv run --python 3.13 \
 		python scripts/eval_suite.py harness-lift --tier $(EVAL_TIER)
 
+# Standard benchmark adapters through the full harness — deterministic, keyless
+# scoring. BENCH=ifeval|injecagent|sycophancy (default ifeval).
+eval-benchmark:
+	FLASK_SECRET_KEY=$${FLASK_SECRET_KEY:-ci-test-key} uv run --python 3.13 \
+		python scripts/eval_suite.py benchmark $(or $(BENCH),ifeval) --tier $(EVAL_TIER)
+
 # External scoreboard — resumable GAIA batch (set LIMIT=N for a quick smoke batch)
 eval-gaia:
 	FLASK_SECRET_KEY=$${FLASK_SECRET_KEY:-ci-test-key} uv run --python 3.13 \

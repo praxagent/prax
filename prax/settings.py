@@ -53,6 +53,12 @@ class AppSettings(BaseSettings):
     # unauthenticated scraping, so the Jina/browser path fails on tweets.
     twitter_api: str | None = Field(default=None, alias="TWITTER_API")
 
+    # Threads (Meta) Graph API access token.  When set, threads.net post links are
+    # fetched via graph.threads.net.  NOTE: reading third-party public posts needs
+    # an app with Advanced Access for threads_basic; otherwise it falls back to the
+    # web reader.  (Bluesky needs NO token — its public AppView is open.)
+    threads_api: str | None = Field(default=None, alias="THREADS_API")
+
     # Models / Agents
     agent_name: str = Field(default="Prax", alias="AGENT_NAME")
     base_model: str = Field(default="gpt-5.4-nano", alias="BASE_MODEL")

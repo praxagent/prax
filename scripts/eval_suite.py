@@ -102,6 +102,15 @@ def cmd_gaia(args) -> int:
     return 0
 
 
+def cmd_benchmark(args) -> int:
+    from prax.eval.benchmarks import run_benchmark_live
+    summary = run_benchmark_live(
+        args.name, tier=args.tier, model=args.model, resume=not args.no_resume,
+    )
+    _print_summary(summary)
+    return 0
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -143,6 +152,15 @@ def main() -> int:
     sp_gaia.add_argument("--cost-limit", type=float, default=2.0,
                          help="USD safety rail per task (0 rates = local = free)")
     sp_gaia.set_defaults(func=cmd_gaia)
+
+    sp_bench = sub.add_parser(
+        "benchmark",
+        help="run a standard benchmark adapter through the full harness")
+    sp_bench.add_argument("name", choices=["ifeval", "injecagent", "sycophancy"])
+    sp_bench.add_argument("--tier", default="low", help="model tier (default low)")
+    sp_bench.add_argument("--model", default=None, help="explicit model id (overrides --tier)")
+    sp_bench.add_argument("--no-resume", action="store_true", help="start fresh")
+    sp_bench.set_defaults(func=cmd_benchmark)
 
     args = p.parse_args()
     return args.func(args)

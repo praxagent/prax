@@ -99,6 +99,134 @@ def fetch_tweet_via_api(url: str, *, timeout: int = 15) -> str | None:
     return _format_tweet_markdown(tweet, data.get("includes", {}))
 
 
+# ---------------------------------------------------------------------------
+# Bluesky (AT Protocol) — the public AppView needs NO auth for public posts
+# ---------------------------------------------------------------------------
+
+_BSKY_POST_RE = re.compile(
+    r"https?://(?:www\.)?bsky\.app/profile/([^/\s]+)/post/([A-Za-z0-9]+)", re.IGNORECASE)
+_BSKY_APPVIEW = "https://public.api.bsky.app/xrpc"
+
+
+def _format_bsky_markdown(post: dict) -> str:
+    author = post.get("author") or {}
+    name, handle = author.get("displayName") or "", author.get("handle") or ""
+    record = post.get("record") or {}
+    text = record.get("text") or ""
+    when = post.get("indexedAt") or record.get("createdAt") or ""
+    metrics = (f"\n\n*{post.get('likeCount', 0)} likes · "
+               f"{post.get('repostCount', 0)} reposts · "
+               f"{post.get('replyCount', 0)} replies*")
+    header = f"# Bluesky post by {name} (@{handle})" if handle else "# Bluesky post"
+    date_line = f"\n\n*{when}*" if when else ""
+    return f"{header}{date_line}\n\n{text}{metrics}\n"
+
+
+def fetch_bsky_via_api(url: str, *, timeout: int = 15) -> str | None:
+    """Fetch a Bluesky post via the public AT-Protocol AppView (no auth needed).
+
+    Resolves the handle → DID, builds the ``at://`` URI, and calls
+    ``app.bsky.feed.getPosts``. Returns ``None`` (→ reader fallback) for non-post
+    URLs or on any error.
+    """
+    m = _BSKY_POST_RE.search(url or "")
+    if not m:
+        return None
+    actor, rkey = m.group(1), m.group(2)
+    try:
+        did = actor
+        if not actor.startswith("did:"):
+            r = requests.get(f"{_BSKY_APPVIEW}/com.atproto.identity.resolveHandle",
+                             params={"handle": actor}, timeout=timeout)
+            if r.status_code >= 400:
+                return None
+            did = (r.json() or {}).get("did")
+            if not did:
+                return None
+        at_uri = f"at://{did}/app.bsky.feed.post/{rkey}"
+        r = requests.get(f"{_BSKY_APPVIEW}/app.bsky.feed.getPosts",
+                         params={"uris": at_uri}, timeout=timeout)
+        if r.status_code >= 400:
+            return None
+        posts = (r.json() or {}).get("posts") or []
+        return _format_bsky_markdown(posts[0]) if posts else None
+    except requests.RequestException as exc:
+        logger.warning("Bluesky API failed for %s: %s", url, exc)
+        return None
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Threads (Meta) — needs a token AND Advanced Access to read third-party posts;
+# the web URL has a shortcode, not the media id, so we decode it (base64).
+# ---------------------------------------------------------------------------
+
+_THREADS_POST_RE = re.compile(
+    r"https?://(?:www\.)?threads\.(?:net|com)/(?:@[^/\s]+/post|t)/([A-Za-z0-9_-]+)",
+    re.IGNORECASE)
+_IG_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+
+def _threads_token() -> str:
+    return (getattr(settings, "threads_api", None) or "").strip()
+
+
+def _shortcode_to_media_id(shortcode: str) -> int | None:
+    """Threads/Instagram shortcodes are base64 (``_IG_ALPHABET``) big-endian
+    encodings of the numeric media id."""
+    n = 0
+    for ch in shortcode:
+        i = _IG_ALPHABET.find(ch)
+        if i < 0:
+            return None
+        n = n * 64 + i
+    return n or None
+
+
+def fetch_threads_via_api(url: str, *, timeout: int = 15) -> str | None:
+    """Best-effort Threads fetch via the Graph API when ``THREADS_API`` is set.
+
+    NOTE: Meta only returns third-party public posts to apps granted **Advanced
+    Access** for ``threads_basic`` (otherwise just official Meta accounts / your
+    own tester posts). There's no oEmbed and no URL→content endpoint, so we decode
+    the URL shortcode to a media id and query it. Fails safe to the reader on any
+    error / access denial.
+    """
+    m = _THREADS_POST_RE.search(url or "")
+    if not m:
+        return None
+    token = _threads_token()
+    if not token:
+        return None
+    media_id = _shortcode_to_media_id(m.group(1))
+    if not media_id:
+        return None
+    try:
+        r = requests.get(
+            f"https://graph.threads.net/v1.0/{media_id}",
+            params={"fields": "text,username,permalink,timestamp", "access_token": token},
+            timeout=timeout)
+    except requests.RequestException as exc:
+        logger.warning("Threads API failed for %s: %s", url, exc)
+        return None
+    if r.status_code >= 400:
+        logger.warning("Threads API HTTP %s for %s (third-party posts need Advanced Access)",
+                       r.status_code, url)
+        return None
+    try:
+        data = r.json()
+    except Exception:
+        return None
+    text = data.get("text")
+    if not text:
+        return None
+    user, when = data.get("username") or "", data.get("timestamp") or ""
+    header = f"# Threads post by @{user}" if user else "# Threads post"
+    date_line = f"\n\n*{when}*" if when else ""
+    return f"{header}{date_line}\n\n{text}\n"
+
+
 class ReaderError(RuntimeError):
     """Raised when the reader service cannot produce usable content."""
 
@@ -141,11 +269,12 @@ def fetch_markdown(
     except SSRFError as exc:
         raise ReaderError(f"Refusing to fetch blocked URL: {exc}") from exc
 
-    # X/Twitter locked down scraping — route status links through the API when
-    # TWITTER_API is set; fall through to the reader for everything else.
-    tweet_md = fetch_tweet_via_api(url, timeout=timeout)
-    if tweet_md:
-        return tweet_md[:max_chars]
+    # Social posts: platforms that block scraping route through their APIs first,
+    # each fail-safe (returns None → fall through to the web reader).
+    for _social in (fetch_tweet_via_api, fetch_bsky_via_api, fetch_threads_via_api):
+        social_md = _social(url, timeout=timeout)
+        if social_md:
+            return social_md[:max_chars]
 
     try:
         resp = requests.get(
