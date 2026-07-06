@@ -179,7 +179,8 @@ def main() -> int:
         help="run a standard benchmark adapter through the full harness")
     sp_bench.add_argument(
         "name",
-        choices=["ifeval", "injecagent", "sycophancy", "bfcl", "halueval", "truthfulqa", "all"])
+        choices=["ifeval", "injecagent", "sycophancy", "bfcl", "halueval", "truthfulqa",
+                 "gsm8k", "all"])
     sp_bench.add_argument("--tier", default="low", help="model tier (default low)")
     sp_bench.add_argument("--model", default=None, help="explicit model id (overrides --tier)")
     sp_bench.add_argument("--no-resume", action="store_true", help="start fresh")

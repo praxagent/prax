@@ -95,10 +95,12 @@ Prax:
 | **sycophancy** | epistemic vigilance | challenge-rate on false user premises (inbound honesty) |
 | **HaluEval** | grounding | hallucination detection (Yes/No) |
 | **TruthfulQA** | grounding | truthfulness vs common misconceptions (MC) |
+| **GSM8K** | reasoning | multi-step arithmetic, numeric-answer match |
 
-Remaining shortlist (same pattern, cheap to add): τ²-bench (pass^k), GSM8K/GPQA
-(reasoning), LoCoMo (memory), WebShop/MiniWoB++ (browser), Aider/EvalPlus (coding),
-and gated full-set loaders for the above.
+Run one with `eval_suite.py benchmark <name> [--lift]`, or the whole suite with
+`benchmark all`. Remaining shortlist (same pattern, cheap to add): τ²-bench
+(pass^k), GPQA/MMLU-Pro (reasoning), LoCoMo (memory), WebShop/MiniWoB++ (browser),
+Aider/EvalPlus (coding), and gated full-set loaders for the above.
 
 ## Source
 
