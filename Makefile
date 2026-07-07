@@ -191,8 +191,12 @@ TEAMWORK_PATH ?= ../teamwork
 SANDBOX_PATH  ?= ../prax-sandbox
 # Workspace owner for the local stack. Qdrant/Neo4j persist their data under
 # this user's workspace (mirrors the bundled container's .services/ layout),
-# and Prax runs as this user. Override with `make run-local-all PRAX_USER=alice`.
-PRAX_USER     ?= local
+# and Prax runs as this user. Defaults from .env's PRAX_USER_ID (the app-level
+# setting) so a plain `make run-local-all` / `make restart-prax` runs Prax as
+# the configured user instead of silently overriding .env with "local" — the
+# recipes inject PRAX_USER_ID=$(PRAX_USER) as a real env var, which beats .env.
+# An exported PRAX_USER or `make run-local-all PRAX_USER=alice` still wins (?=).
+PRAX_USER     ?= $(or $(shell sed -n 's/^PRAX_USER_ID=//p' .env 2>/dev/null | tail -1 | tr -d '"'),local)
 QDRANT_DATA   := $(CURDIR)/workspaces/$(PRAX_USER)/.services/qdrant
 NEO4J_DATA    := $(CURDIR)/workspaces/$(PRAX_USER)/.services/neo4j
 # Passed through to Prax's app.run(debug=...). `run-local-all-dev` flips
