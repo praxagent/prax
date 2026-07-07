@@ -21,7 +21,45 @@ TWITTER_API=<X API v2 bearer token>
 
 `x.com`/`twitter.com` `…/status/<id>` links → `GET api.twitter.com/2/tweets/{id}`
 (`Authorization: Bearer $TWITTER_API`), returning author, date, full text
-(including long "note" bodies), and like/repost/reply counts.
+(including long "note" bodies), and like/repost/reply counts. With
+`TWITTER_THREAD_FETCH=true`, `t.co` short links are also expanded to their real
+URLs from the tweet's `entities`.
+
+### Full self-thread expansion — `TWITTER_THREAD_FETCH` (opt-in)
+
+```dotenv
+TWITTER_THREAD_FETCH=true
+```
+
+When the linked tweet has replies **and is part of the author's own thread**
+(the root, or a self-reply — a reply into someone else's conversation is never
+expanded, so another author's posts can't be misattributed), Prax runs
+`GET /2/tweets/search/recent?query=conversation_id:<cid> from:<author> to:<author>`
+and returns the author's **entire self-thread** (root + self-replies, in posting
+order) as one numbered markdown document, with `t.co` links expanded to their
+real URLs. Costs 1–2 extra API calls per tweet fetch. (Link expansion is part
+of this flag so flag-off output stays byte-identical to the original render.) Degrades honestly to the single tweet when the API tier
+has no recent-search access (Free tier), the rate limit is hit, or the thread is
+older than the 7-day recent-search window. Works from a mid-thread link too —
+the root is recovered via `conversation_id`.
+
+### Provenance labeling — `URL_FETCH_SOURCE_TAGS` (opt-in)
+
+```dotenv
+URL_FETCH_SOURCE_TAGS=true
+```
+
+`fetch_url_content` results normally carry the INFORMATIONAL epistemic tag
+("don't trust scraped numbers") — which is *wrong* for posts served by a
+platform's own API, and caused the agent to under-trust and misreport its
+sources. With this flag, API-fetched posts return a `SourcedResult` (a code-set
+attribute the fetched content cannot spoof) that the governance layer tags
+`[SOCIAL POST — fetched via X API v2 …]`, and the `Source:` line says which API
+served it. The tag is deliberately precise about what the platform vouches for:
+the **provenance** is exact (text, links, @handles, timestamps, and metrics are
+verbatim — quote them freely as what the author posted), but claims made
+*inside* the post are the author's own and are **not** independently verified —
+the platform API attests authorship, not truth.
 
 ## Bluesky — no token needed ✅
 
@@ -53,9 +91,15 @@ web reader** — which, since Threads is less locked-down than X, often still wo
 
 ## Code
 
-- `prax/services/url_reader.py` — `fetch_tweet_via_api`, `fetch_bsky_via_api`,
-  `fetch_threads_via_api` (+ the routing loop in `fetch_markdown`)
-- `prax/settings.py` — `twitter_api` / `threads_api` (Bluesky needs none)
-- Tests: `tests/test_url_reader_twitter.py`, `tests/test_url_reader_social.py` (keyless — APIs mocked)
+- `prax/services/url_reader.py` — `fetch_tweet_via_api` (+ thread assembly),
+  `fetch_bsky_via_api`, `fetch_threads_via_api`, and the routing loop in
+  `fetch_markdown_with_source` (also reports which path served the content)
+- `prax/agent/tools.py` — `fetch_url_content` provenance suffix;
+  `prax/agent/action_policy.py` — `SourcedResult`;
+  `prax/agent/governed_tool.py` — per-result reliability override
+- `prax/settings.py` — `twitter_api` / `threads_api` / `twitter_thread_fetch` /
+  `url_fetch_source_tags` (Bluesky needs none)
+- Tests: `tests/test_url_reader_twitter.py`, `tests/test_url_reader_social.py`,
+  `tests/test_url_fetch_source_tags.py` (keyless — APIs mocked)
 
 After setting any token in `.env`, restart Prax so it picks up the value.

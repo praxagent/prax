@@ -397,3 +397,31 @@ class TestVncLogin:
         browser_mod.close_all_sessions()
         assert len(browser_mod._sessions) == 0
         assert len(browser_mod._vnc_sessions) == 0
+
+
+class TestSandboxOnlyMode:
+    """BROWSER_SANDBOX_ONLY keeps every Chromium in the sandbox container."""
+
+    def test_start_refuses_local_launch(self, browser_mod, monkeypatch):
+        module = browser_mod
+        import patchright.sync_api as psa
+
+        class _PW:
+            def start(self):
+                return FakePlaywright()
+
+        monkeypatch.setattr(psa, "sync_playwright", lambda: _PW())
+        monkeypatch.setattr(module.settings, "browser_sandbox_only", True)
+        monkeypatch.setattr(module.settings, "browser_cdp_url", None)
+        session = module.BrowserSession("u1")
+        with pytest.raises(RuntimeError, match="Sandbox-only"):
+            session.start()
+        assert session._pw is None  # playwright driver was stopped, not leaked
+
+    def test_interactive_login_redirects_to_teamwork(self, browser_mod, monkeypatch):
+        module = browser_mod
+        monkeypatch.setattr(module.settings, "browser_sandbox_only", True)
+        result = module.start_interactive_login("u1", "https://x.com/login")
+        assert result["status"] == "use_sandbox"
+        assert "TeamWork" in result["instructions"]
+        assert "u1" not in module._vnc_sessions  # no host VNC session spawned

@@ -53,6 +53,25 @@ class AppSettings(BaseSettings):
     # unauthenticated scraping, so the Jina/browser path fails on tweets.
     twitter_api: str | None = Field(default=None, alias="TWITTER_API")
 
+    # Enhanced tweet fetching: expand t.co links to their real URLs, and fetch
+    # the author's full self-thread (root + self-replies, in order) when a
+    # linked tweet is part of one.  Costs 1–2 extra API calls per tweet fetch
+    # and thread search needs an API tier with /2/tweets/search/recent access
+    # (Basic and up); the search window only covers the last 7 days, so older
+    # threads degrade to the single linked tweet.  Only genuine self-threads
+    # are expanded — a reply into someone else's conversation never pulls in
+    # the other author's posts.
+    twitter_thread_fetch: bool = Field(default=False, alias="TWITTER_THREAD_FETCH")
+
+    # Label fetch_url_content results with their true provenance: posts fetched
+    # via a platform's native API (X / Bluesky / Threads) get a SOCIAL POST tag
+    # (text/links/handles/metrics are verbatim from the API; claims inside the
+    # post remain the author's own, NOT verified) and a "(fetched via ...)"
+    # suffix, instead of being mislabeled as scraped web content.  Without this
+    # the agent cannot tell an API fetch from a web scrape and misreports its
+    # own sources.
+    url_fetch_source_tags: bool = Field(default=False, alias="URL_FETCH_SOURCE_TAGS")
+
     # Threads (Meta) Graph API access token.  When set, threads.net post links are
     # fetched via graph.threads.net.  NOTE: reading third-party public posts needs
     # an app with Advanced Access for threads_basic; otherwise it falls back to the
@@ -600,6 +619,13 @@ class AppSettings(BaseSettings):
     # instead of launching its own.  In Docker this points to the sandbox Chrome,
     # unifying the agent's browser with TeamWork's screencast.
     browser_cdp_url: str | None = Field(default=None, alias="BROWSER_CDP_URL")
+    # Sandbox-only browsing: never run a Chromium on the harness host.  When the
+    # sandbox Chrome (BROWSER_CDP_URL) is unreachable, browser tools report the
+    # sandbox as down instead of silently falling back to a locally-launched
+    # browser, and manual logins route to the TeamWork browser panel instead of
+    # a host Xvfb/x11vnc session.  Keeps the harness host dedicated to
+    # orchestration — browser rendering stays in the sandbox container.
+    browser_sandbox_only: bool = Field(default=False, alias="BROWSER_SANDBOX_ONLY")
 
     # Self-improvement (code modification via PRs)
     self_improve_enabled: bool = Field(default=False, alias="SELF_IMPROVE_ENABLED")

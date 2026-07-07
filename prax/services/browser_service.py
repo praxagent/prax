@@ -253,6 +253,26 @@ class BrowserSession:
             self.page.set_default_timeout(settings.browser_timeout)
             return
 
+        # Sandbox-only mode: browser rendering belongs in the sandbox
+        # container — never launch a Chromium on the harness host, even as a
+        # fallback.  Fail loudly so the agent reports the sandbox as down
+        # instead of silently taxing the host.
+        if settings.browser_sandbox_only:
+            try:
+                self._pw.stop()
+            except Exception:
+                pass
+            self._pw = None
+            hint = "" if settings.browser_cdp_url else " (BROWSER_CDP_URL is not set)"
+            raise RuntimeError(
+                "Sandbox-only browsing is on (BROWSER_SANDBOX_ONLY=true) and "
+                f"the sandbox Chrome was not reachable{hint} — refusing to "
+                "launch a browser on the harness host. Check that the sandbox "
+                "is running (make local-status / make restart-sandbox) and "
+                "that BROWSER_CDP_URL points at its CDP port "
+                "(e.g. http://localhost:9223)."
+            )
+
         # Standalone browser (local dev or VNC login flow).
         h = headless if headless is not None else settings.browser_headless
         profile = _get_profile_dir(self.user_id)
@@ -635,6 +655,21 @@ def start_interactive_login(user_id: str, url: str | None = None) -> dict[str, A
     using the user's persistent profile.  The user SSH-tunnels to the VNC
     port and logs in manually.  Once done, call ``finish_interactive_login``.
     """
+    if settings.browser_sandbox_only:
+        # No host Xvfb/x11vnc/Chromium in sandbox-only mode — the sandbox
+        # Chrome is already user-visible and interactive via TeamWork.
+        return {
+            "status": "use_sandbox",
+            "instructions": (
+                "Sandbox-only browsing is enabled — manual logins happen in "
+                "the sandbox browser, not a host VNC session. Open the "
+                "TeamWork Browser panel (or the noVNC desktop), where the "
+                "sandbox Chrome is live and interactive: log in there (MFA, "
+                "CAPTCHAs included), then tell me when you're done. The "
+                "session persists in the sandbox browser profile, so I can "
+                "keep working on that site afterwards."
+            ),
+        }
     if not settings.browser_profile_dir:
         return {"error": "Persistent profiles required (set BROWSER_PROFILE_DIR)"}
     if not settings.browser_vnc_enabled:
