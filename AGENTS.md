@@ -24,6 +24,7 @@ Settings: [`prax/settings.py`](prax/settings.py).
 | If you need... | Start here |
 |---|---|
 | Overall architecture & request flows | [`docs/architecture/`](docs/architecture/) — `hub-and-spoke.md`, `request-flows.md`, `workspace.md` |
+| How Prax uses LangChain/LangGraph (loop seam, middleware, version policy) | [`docs/architecture/lang-stack.md`](docs/architecture/lang-stack.md) |
 | How a specific agent pattern works (planning, delegation, self-improvement) | [`docs/agents/`](docs/agents/) |
 | How to extend Prax (new tools, plugins, spokes) | [`docs/guides/extending.md`](docs/guides/extending.md) |
 | Setup, auth, scheduler, troubleshooting | [`docs/guides/`](docs/guides/) |
@@ -64,6 +65,12 @@ Settings: [`prax/settings.py`](prax/settings.py).
 
 - **All tools route through `prax/agent/governed_tool.py`** for risk
   classification and audit logging. If you add a tool, wrap it.
+- **All agent loops are built through `build_agent_loop()`**
+  (`prax/agent/agent_loop.py`) — never import `langchain.agents` /
+  `langgraph` directly (layer rule 4 fails CI). In-loop middleware
+  lives in `prax/agent/loop_middleware.py` behind
+  `AGENT_MIDDLEWARE_ENABLED`. See
+  [`docs/architecture/lang-stack.md`](docs/architecture/lang-stack.md).
 - **Hub-and-spoke delegation.** The orchestrator holds ~44 tools
   (12 `delegate_*` + kernel + planning/meta + trace introspection)
   and hands domain work off to focused spokes. Target ceiling:

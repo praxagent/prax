@@ -28,6 +28,14 @@ Rules enforced
    must not import `prax.blueprints.*`.  Blueprints (Flask routes)
    import services, not the reverse.
 
+4. **Loop-construction seam.**  Only `prax/agent/agent_loop.py` and
+   `prax/agent/loop_middleware.py` may import `langchain.agents.*`,
+   and only those two plus `prax/agent/checkpoint.py` may import
+   `langgraph*`.  Every agent loop is built through
+   `build_agent_loop()`, so instrumenting or swapping the loop
+   (middleware, an owned loop, a LangChain major upgrade) is a
+   one-module change.  See `docs/architecture/lang-stack.md`.
+
 Existing violations are grandfathered in `ALLOWLIST` below — each
 entry is documented technical debt.  The rule that matters is: **new
 code must not add to the allowlist**.  When you fix a violation,
@@ -54,6 +62,18 @@ PRAX_ROOT = REPO_ROOT / "prax"
 SERVICES_AGENT_CARVE_OUT: set[str] = {
     "prax.agent.llm_factory",
     "prax.agent.user_context",
+}
+
+# Rule 4 — the loop-construction seam.  The ONLY modules allowed to import
+# langchain.agents.* (loop construction + middleware), and additionally
+# langgraph* (checkpointing).  Keeping the seam this narrow is what makes
+# loop-level changes one-module changes.
+LOOP_SEAM_LANGCHAIN_AGENTS: set[str] = {
+    "prax/agent/agent_loop.py",
+    "prax/agent/loop_middleware.py",
+}
+LOOP_SEAM_LANGGRAPH: set[str] = LOOP_SEAM_LANGCHAIN_AGENTS | {
+    "prax/agent/checkpoint.py",
 }
 
 # Grandfathered violations — each entry is documented technical debt.
@@ -121,6 +141,14 @@ def _iter_imports(path: Path) -> list[tuple[str, int]]:
                 out.append((alias.name, node.lineno))
         elif isinstance(node, ast.ImportFrom) and node.module:
             out.append((node.module, node.lineno))
+            # `from langchain import agents` binds the langchain.agents
+            # subpackage while recording only "langchain", which would slip
+            # past rule 4's prefix match.  Expand aliases for the loop-seam
+            # packages ONLY (expanding all ImportFroms would mint new keys for
+            # grandfathered rule-1..3 allowlist entries).
+            if node.module in ("langchain", "langgraph"):
+                for alias in node.names:
+                    out.append((f"{node.module}.{alias.name}", node.lineno))
     return out
 
 
@@ -143,7 +171,16 @@ def scan() -> list[Violation]:
     for path in PRAX_ROOT.rglob("*.py"):
         if "__pycache__" in path.parts:
             continue
+        rel = path.relative_to(REPO_ROOT).as_posix()
         for imported, lineno in _iter_imports(path):
+            if _matches(imported, "langchain.agents") and rel not in LOOP_SEAM_LANGCHAIN_AGENTS:
+                violations.append(Violation(
+                    "loop_seam_langchain_agents", path, lineno, imported,
+                ))
+            if _matches(imported, "langgraph") and rel not in LOOP_SEAM_LANGGRAPH:
+                violations.append(Violation(
+                    "loop_seam_langgraph", path, lineno, imported,
+                ))
             if _is_plugin_tool(path):
                 if _matches(imported, "prax.services"):
                     violations.append(Violation(

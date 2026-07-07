@@ -16,10 +16,10 @@ import contextvars
 import json
 import logging
 
-from langchain.agents import create_agent as create_react_agent
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.tools import tool
 
+from prax.agent.agent_loop import build_agent_loop
 from prax.agent.llm_factory import build_llm
 from prax.settings import settings
 
@@ -195,7 +195,7 @@ def _run_research(question: str, depth: int = 0) -> str:
             temperature=cfg.get("temperature"),
             tier=cfg.get("tier") or "low",
         )
-        graph = create_react_agent(llm, tools)
+        graph = build_agent_loop(llm, tools)
 
         system_msg = _RESEARCH_PROMPT.format(agent_name=settings.agent_name)
 

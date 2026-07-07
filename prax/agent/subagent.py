@@ -6,10 +6,10 @@ import contextvars
 import logging
 from typing import Any
 
-from langchain.agents import create_agent as create_react_agent
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.tools import tool
 
+from prax.agent.agent_loop import build_agent_loop
 from prax.agent.llm_factory import build_llm
 from prax.settings import settings
 
@@ -134,7 +134,7 @@ def _run_subagent(task: str, category: str) -> str:
         temperature=cfg.get("temperature"),
         tier=cfg.get("tier") or "low",
     )
-    subgraph = create_react_agent(llm, tools)
+    subgraph = build_agent_loop(llm, tools)
 
     identity = build_identity_context(category)
 

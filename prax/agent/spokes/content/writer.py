@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import logging
 
-from langchain.agents import create_agent as create_react_agent
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
+from prax.agent.agent_loop import build_agent_loop
 from prax.agent.llm_factory import build_llm
 from prax.agent.spokes.content.prompts import WRITER_PROMPT
 from prax.settings import settings
@@ -42,7 +42,7 @@ def run_writer(
     )
 
     tools = _build_writer_tools()
-    graph = create_react_agent(llm, tools)
+    graph = build_agent_loop(llm, tools)
     prompt = WRITER_PROMPT.format(agent_name=settings.agent_name)
 
     # Build the task message

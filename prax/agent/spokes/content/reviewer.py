@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import logging
 
-from langchain.agents import create_agent as create_react_agent
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
+from prax.agent.agent_loop import build_agent_loop
 from prax.agent.llm_factory import build_llm
 from prax.agent.spokes.content.prompts import REVIEWER_PROMPT
 from prax.settings import settings
@@ -104,7 +104,7 @@ def run_reviewer(
     """
     llm = _pick_reviewer_llm(writer_provider)
     tools = _build_reviewer_tools()
-    graph = create_react_agent(llm, tools)
+    graph = build_agent_loop(llm, tools)
     prompt = REVIEWER_PROMPT.format(agent_name=settings.agent_name)
 
     task_parts = [f"## Draft (pass {pass_number})\n{draft}"]
