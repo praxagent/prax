@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.17.0](https://github.com/praxagent/prax/compare/v0.16.0...v0.17.0) (2026-07-07)
+
+
+### Features
+
+* **url,browser:** X self-thread fetch, honest source provenance, sandbox-only browsing ([#38](https://github.com/praxagent/prax/issues/38)) ([ec8ff49](https://github.com/praxagent/prax/commit/ec8ff499492975d2d99c1732b1c63087b3726783))
+
+
+### Bug Fixes
+
+* **make:** default PRAX_USER from .env's PRAX_USER_ID instead of 'local' ([#39](https://github.com/praxagent/prax/issues/39)) ([efd44d7](https://github.com/praxagent/prax/commit/efd44d7a484fc8638a852066beec986490f1be39))
+
 ## [0.3.0](https://github.com/praxagent/prax/compare/v0.2.0...v0.3.0) (2026-07-07)
 
 
