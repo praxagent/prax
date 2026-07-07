@@ -16,6 +16,11 @@ class AppSettings(BaseSettings):
     root_phone_number: str | None = Field(default=None, alias="ROOT_PHONE_NUMBER")
     debug: bool = Field(default=False, alias="DEBUG")
     log_path: str = Field(default="app.log", alias="LOG_PATH")
+    # Where the metacognitive store persists learned failure patterns at
+    # runtime.  Kept out of the git tree by default (a gitignored ``runtime/``
+    # subdir of the shipped seeds) so live learning never dirties the tracked
+    # seed profiles.  Set to relocate runtime state (e.g. onto a mounted volume).
+    metacognitive_dir: str | None = Field(default=None, alias="METACOGNITIVE_DIR")
     port: int = Field(default=5001, alias="PORT")
     # Interface the Flask app binds. Secure-by-default: 127.0.0.1 (loopback only),
     # so a native/host deployment is NOT reachable from the network — a reverse
