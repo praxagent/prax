@@ -5,9 +5,9 @@ import logging
 import re
 from collections.abc import Iterable
 
-from langchain.agents import create_agent as create_react_agent
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
+from prax.agent.agent_loop import build_agent_loop
 from prax.agent.checkpoint import CheckpointManager
 from prax.agent.llm_factory import build_llm
 from prax.agent.tool_registry import get_registered_tools
@@ -177,7 +177,7 @@ class ConversationAgent:
         self._pending_denylist_notices: list[str] = []
         self.checkpoint_mgr = CheckpointManager()
         self.tools = get_registered_tools()
-        self.graph = create_react_agent(
+        self.graph = build_agent_loop(
             self.llm, self.tools, checkpointer=self.checkpoint_mgr.saver,
         )
         self._plugin_version: int = self._current_plugin_version()
@@ -222,7 +222,7 @@ class ConversationAgent:
         if v != self._plugin_version:
             logger.info("Plugin version changed (%d -> %d), rebuilding agent graph", self._plugin_version, v)
             self.tools = get_registered_tools()
-            self.graph = create_react_agent(
+            self.graph = build_agent_loop(
                 self.llm, self.tools, checkpointer=self.checkpoint_mgr.saver,
             )
             self._plugin_version = v
@@ -238,7 +238,7 @@ class ConversationAgent:
             model=model,
             tier=self._orchestrator_tier if not model else None,
         )
-        self.graph = create_react_agent(
+        self.graph = build_agent_loop(
             self.llm, self.tools, checkpointer=self.checkpoint_mgr.saver,
         )
         self._active_provider = provider.lower()
@@ -858,7 +858,7 @@ class ConversationAgent:
         # LangGraph. Rebuild the graph once the request user/message context is
         # set so governance wrappers bind the correct user into every tool.
         self.tools = get_registered_tools()
-        self.graph = create_react_agent(
+        self.graph = build_agent_loop(
             self.llm, self.tools, checkpointer=self.checkpoint_mgr.saver,
         )
         self._plugin_version = self._current_plugin_version()
@@ -1655,7 +1655,13 @@ class ConversationAgent:
 
         def _worker() -> None:
             try:
-                result_q.put(("ok", self.graph.invoke({"messages": messages}, config=config)))
+                # Bind the heartbeat for the in-loop LoopHeartbeat middleware.
+                # ContextVars don't cross thread boundaries, so the binding
+                # must happen here, inside the worker.  Inert unless
+                # AGENT_MIDDLEWARE_ENABLED installed the middleware.
+                from prax.agent.loop_middleware import use_heartbeat
+                with use_heartbeat(heartbeat):
+                    result_q.put(("ok", self.graph.invoke({"messages": messages}, config=config)))
             except Exception as exc:
                 result_q.put(("error", exc))
 

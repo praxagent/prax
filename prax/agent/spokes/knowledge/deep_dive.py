@@ -13,10 +13,10 @@ from __future__ import annotations
 
 import logging
 
-from langchain.agents import create_agent as create_react_agent
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.tools import tool
 
+from prax.agent.agent_loop import build_agent_loop
 from prax.agent.llm_factory import build_llm
 from prax.agent.pipelines import SynthesisPipeline
 from prax.agent.user_context import current_user_id
@@ -247,7 +247,7 @@ def _note_writer(
     )
 
     # Writer has no tools — it just writes based on the provided material.
-    graph = create_react_agent(llm, [])
+    graph = build_agent_loop(llm, [])
     prompt = _NOTE_WRITER_PROMPT.format(agent_name=settings.agent_name)
 
     related = _collect_related_notes(topic)
@@ -302,7 +302,7 @@ def _note_reviewer(draft: str, published_url: str | None, pass_number: int) -> s
     # Reuse the content spoke's reviewer LLM picker — it already handles
     # cross-provider diversity.
     llm = _pick_reviewer_llm(writer_provider=settings.default_llm_provider)
-    graph = create_react_agent(llm, [])
+    graph = build_agent_loop(llm, [])
     prompt = _NOTE_REVIEWER_PROMPT.format(agent_name=settings.agent_name)
 
     task = (

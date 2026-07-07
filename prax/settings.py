@@ -496,6 +496,19 @@ class AppSettings(BaseSettings):
             "(prior behaviour); opt in for high-security deployments."
         ),
     )
+    agent_middleware_enabled: bool = Field(
+        default=False, alias="AGENT_MIDDLEWARE_ENABLED",
+        description=(
+            "When true, agent loops are built with in-loop LangChain middleware "
+            "(prax/agent/loop_middleware.py): untrusted-source tool results are "
+            "provenance-tainted before re-entering the model's context, and the "
+            "trace heartbeat is touched on every model step — the in-loop "
+            "counterpart to the perimeter governance wrapper. Default off "
+            "(prior behaviour: no middleware, identical compiled graph); flip "
+            "after the eval gate (injecagent/sycophancy + harness-lift) "
+            "blesses it."
+        ),
+    )
     claim_audit_attended_quarantine: bool = Field(
         default=False, alias="CLAIM_AUDIT_ATTENDED_QUARANTINE",
         description=(

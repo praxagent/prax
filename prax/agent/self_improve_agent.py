@@ -15,10 +15,10 @@ from __future__ import annotations
 
 import logging
 
-from langchain.agents import create_agent as create_react_agent
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.tools import tool
 
+from prax.agent.agent_loop import build_agent_loop
 from prax.agent.llm_factory import build_llm
 from prax.settings import settings
 
@@ -140,7 +140,7 @@ def delegate_self_improve(task: str) -> str:
         temperature=cfg.get("temperature"),
         tier=cfg.get("tier") or "medium",
     )
-    graph = create_react_agent(llm, tools)
+    graph = build_agent_loop(llm, tools)
 
     system_msg = _SELF_IMPROVE_PROMPT.format(agent_name=settings.agent_name)
 

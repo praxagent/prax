@@ -18,9 +18,9 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 
-from langchain.agents import create_agent as create_react_agent
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
+from prax.agent.agent_loop import build_agent_loop
 from prax.agent.llm_factory import build_llm
 
 logger = logging.getLogger(__name__)
@@ -141,7 +141,7 @@ def run_spoke(
     from prax.agent.user_context import bind_tools_user_context, current_component
     current_component.set(label)
     tools = bind_tools_user_context(tools)
-    graph = create_react_agent(llm, tools)
+    graph = build_agent_loop(llm, tools)
     effective_limit = get_recursion_limit(recursion_limit)
 
     _graph_cb = GraphCallbackHandler(

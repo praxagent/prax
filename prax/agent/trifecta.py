@@ -28,6 +28,10 @@ _SRC_NAMES = (
     "fetch_url", "url_content", "read_url", "fetch_content", "web_search",
     "background_search", "browser_navigate", "browser_read", "browser_extract",
     "browser_page", "screenshot", "arxiv", "rss",
+    # Content ingestors that return attacker-controllable external text —
+    # transcripts, fetched PDFs, page/feed summaries.  Anything that turns a
+    # URL or external medium into model-visible text belongs here.
+    "youtube", "transcribe", "web_summary", "pdf_summary", "news",
 )
 _PRIVATE_NAMES = (
     "memory_search", "memory_recall", "memory_get", "knowledge_search",
