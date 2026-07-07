@@ -6,9 +6,9 @@ import threading
 import time as _time
 
 from langchain_anthropic import ChatAnthropic
-from langchain_community.chat_models import ChatOllama
 from langchain_core.language_models import BaseLanguageModel
 from langchain_google_vertexai import ChatVertexAI
+from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 
 from prax.settings import settings
@@ -248,7 +248,9 @@ def build_llm(
             project=settings.google_vertex_project,
             location=settings.google_vertex_location,
             callbacks=callbacks,
-            request_timeout=settings.llm_request_timeout,
+            # langchain-google-vertexai 3.x renamed request_timeout -> timeout;
+            # the old kwarg was silently swallowed, so no timeout applied.
+            timeout=settings.llm_request_timeout,
         )
 
     if provider_name in {"ollama", "local"}:
