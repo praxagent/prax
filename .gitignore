@@ -118,3 +118,6 @@ identity.db*
 
 # conversations DB backups/journals (the exact "conversations.db" rule misses these)
 conversations.db*
+
+# Metacognitive learned-state store — runtime-mutated, seeds are committed separately
+prax/data/metacognitive/runtime/
