@@ -61,15 +61,19 @@ def _expand_urls_in_text(text: str, entities: dict | None) -> str:
 
 
 def _tweet_body(tweet: dict) -> str:
-    """Full tweet text with t.co links expanded.
+    """Full tweet text; t.co links expanded when TWITTER_THREAD_FETCH is on.
 
     Long ("note") tweets carry the full body — and its own entity offsets —
-    under ``note_tweet``.
+    under ``note_tweet``.  Link expansion is gated with the thread-fetch flag
+    so that flag-off output stays byte-identical to the original single-tweet
+    render (house rule: behavior changes are opt-in).
     """
     note = tweet.get("note_tweet") or {}
-    if note.get("text"):
-        return _expand_urls_in_text(note["text"], note.get("entities"))
-    return _expand_urls_in_text(tweet.get("text", ""), tweet.get("entities"))
+    text = note.get("text") or tweet.get("text", "")
+    entities = note.get("entities") if note.get("text") else tweet.get("entities")
+    if not _thread_fetch_enabled():
+        return text
+    return _expand_urls_in_text(text, entities)
 
 
 def _tweet_metrics_line(tweet: dict, *, label: str = "") -> str:
@@ -196,6 +200,14 @@ def _maybe_fetch_thread(
     reply_count = (tweet.get("public_metrics") or {}).get("reply_count", 0)
     if not cid or not reply_count:
         return None
+    # Only genuine self-threads: the linked tweet must be the conversation
+    # root, or a reply the author made to themself.  A reply into someone
+    # ELSE's conversation has no self-thread to expand — expanding it would
+    # stitch the other author's root into "thread by <linked author>" and
+    # fabricate authorship.
+    if (str(tweet["id"]) != str(cid)
+            and tweet.get("in_reply_to_user_id") != tweet.get("author_id")):
+        return None
     users = {u["id"]: u for u in (includes.get("users") or [])}
     author = users.get(tweet.get("author_id")) or {}
     username = author.get("username")
@@ -209,11 +221,14 @@ def _maybe_fetch_thread(
     posts[str(tweet["id"])] = tweet  # ensure the linked tweet is included
     if str(cid) not in posts:
         # Linked mid-thread: the root isn't in the search results (it is not
-        # a reply *to* the author), so fetch it directly.  A deleted root is
-        # fine — we render what we have.
+        # a reply *to* the author), so fetch it directly.  Merge it only when
+        # it is by the SAME author — a foreign root must never be rendered as
+        # part of this author's thread.  A deleted/foreign root is fine — we
+        # render what we have.
         root_data = _get_tweet(str(cid), token, timeout=timeout)
-        if root_data:
-            posts[str(cid)] = root_data["data"]
+        root = (root_data or {}).get("data") or {}
+        if root.get("author_id") == tweet.get("author_id"):
+            posts[str(cid)] = root
     if len(posts) < 2:
         return None  # no actual self-thread — use the single-tweet render
     ordered = [posts[k] for k in sorted(posts, key=int)]

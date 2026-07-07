@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import prax.services.url_reader as ur
-from prax.agent.action_policy import SourcedResult, SourceReliability
+from prax.agent.action_policy import SourcedResult
 from prax.agent.tools import fetch_url_content
 
 
@@ -34,8 +34,10 @@ def test_flag_on_labels_api_fetches(monkeypatch):
     _set_flag(monkeypatch, True)
     out = fetch_url_content.func("https://x.com/u/status/1")
     assert isinstance(out, SourcedResult)
-    assert out.reliability is SourceReliability.VERIFIED
-    assert out.source_label == "X API v2"
+    assert out.epistemic_tag.startswith("[SOCIAL POST — fetched via X API v2")
+    # provenance is verbatim, but in-post claims are never blessed as facts
+    assert "NOT" in out.epistemic_tag and "verified" in out.epistemic_tag
+    assert "cited directly" not in out.epistemic_tag
     assert out.endswith("(fetched via X API v2)")
 
 

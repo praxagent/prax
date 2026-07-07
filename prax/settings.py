@@ -53,19 +53,23 @@ class AppSettings(BaseSettings):
     # unauthenticated scraping, so the Jina/browser path fails on tweets.
     twitter_api: str | None = Field(default=None, alias="TWITTER_API")
 
-    # Fetch the author's full self-thread (root + self-replies, in order) when a
-    # linked tweet has replies.  Costs 1–2 extra API calls per tweet fetch and
-    # needs an API tier with /2/tweets/search/recent access (Basic and up); the
-    # search window only covers the last 7 days, so older threads degrade to the
-    # single linked tweet with an honest note.
+    # Enhanced tweet fetching: expand t.co links to their real URLs, and fetch
+    # the author's full self-thread (root + self-replies, in order) when a
+    # linked tweet is part of one.  Costs 1–2 extra API calls per tweet fetch
+    # and thread search needs an API tier with /2/tweets/search/recent access
+    # (Basic and up); the search window only covers the last 7 days, so older
+    # threads degrade to the single linked tweet.  Only genuine self-threads
+    # are expanded — a reply into someone else's conversation never pulls in
+    # the other author's posts.
     twitter_thread_fetch: bool = Field(default=False, alias="TWITTER_THREAD_FETCH")
 
     # Label fetch_url_content results with their true provenance: posts fetched
-    # via a platform's native API (X / Bluesky / Threads) get the VERIFIED
-    # source-reliability tag and a "(fetched via ...)" suffix instead of being
-    # mislabeled as untrusted scraped web content.  Without this the agent
-    # cannot tell an API fetch from a web scrape and under-trusts (or
-    # misreports) its own sources.
+    # via a platform's native API (X / Bluesky / Threads) get a SOCIAL POST tag
+    # (text/links/handles/metrics are verbatim from the API; claims inside the
+    # post remain the author's own, NOT verified) and a "(fetched via ...)"
+    # suffix, instead of being mislabeled as scraped web content.  Without this
+    # the agent cannot tell an API fetch from a web scrape and misreports its
+    # own sources.
     url_fetch_source_tags: bool = Field(default=False, alias="URL_FETCH_SOURCE_TAGS")
 
     # Threads (Meta) Graph API access token.  When set, threads.net post links are

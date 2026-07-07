@@ -118,15 +118,25 @@ def fetch_url_content(url: str) -> str:
 
     label = SOCIAL_SOURCE_LABELS.get(source)
     if label and settings.url_fetch_source_tags:
-        # Posts served by a platform's own API are structured data, not
-        # scraped text — say so, and carry a reliability override so the
-        # governance layer tags this VERIFIED instead of INFORMATIONAL.
-        from prax.agent.action_policy import SourcedResult, SourceReliability
+        # Posts served by a platform's own API have exact PROVENANCE — the
+        # text/links/handles/metrics are verbatim — but the platform vouches
+        # only that the author posted them, not that they are true.  Say
+        # exactly that via a code-set tag (replaces the misleading static
+        # "scraped web content" INFORMATIONAL tag; never blesses in-post
+        # claims as citable facts).
+        from prax.agent.action_policy import SourcedResult
 
+        tag = (
+            f"[SOCIAL POST — fetched via {label}, the platform's official "
+            "API. Text, links, @handles, timestamps, and engagement metrics "
+            "are verbatim: quote them freely as what the author posted. "
+            "Claims made INSIDE the post are the author's own and are NOT "
+            "independently verified — do not restate them as established "
+            "facts.]"
+        )
         return SourcedResult(
             f"{text}\n\nSource: {url} (fetched via {label})",
-            reliability=SourceReliability.VERIFIED,
-            source_label=label,
+            epistemic_tag=tag,
         )
 
     return f"{text}\n\nSource: {url}"

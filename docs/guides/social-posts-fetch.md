@@ -21,8 +21,9 @@ TWITTER_API=<X API v2 bearer token>
 
 `x.com`/`twitter.com` `…/status/<id>` links → `GET api.twitter.com/2/tweets/{id}`
 (`Authorization: Bearer $TWITTER_API`), returning author, date, full text
-(including long "note" bodies), and like/repost/reply counts. `t.co` short
-links are expanded to their real URLs from the tweet's `entities`.
+(including long "note" bodies), and like/repost/reply counts. With
+`TWITTER_THREAD_FETCH=true`, `t.co` short links are also expanded to their real
+URLs from the tweet's `entities`.
 
 ### Full self-thread expansion — `TWITTER_THREAD_FETCH` (opt-in)
 
@@ -30,11 +31,14 @@ links are expanded to their real URLs from the tweet's `entities`.
 TWITTER_THREAD_FETCH=true
 ```
 
-When the linked tweet has replies, Prax additionally runs
+When the linked tweet has replies **and is part of the author's own thread**
+(the root, or a self-reply — a reply into someone else's conversation is never
+expanded, so another author's posts can't be misattributed), Prax runs
 `GET /2/tweets/search/recent?query=conversation_id:<cid> from:<author> to:<author>`
 and returns the author's **entire self-thread** (root + self-replies, in posting
-order, links expanded) as one numbered markdown document. Costs 1–2 extra API
-calls per tweet fetch. Degrades honestly to the single tweet when the API tier
+order) as one numbered markdown document, with `t.co` links expanded to their
+real URLs. Costs 1–2 extra API calls per tweet fetch. (Link expansion is part
+of this flag so flag-off output stays byte-identical to the original render.) Degrades honestly to the single tweet when the API tier
 has no recent-search access (Free tier), the rate limit is hit, or the thread is
 older than the 7-day recent-search window. Works from a mid-thread link too —
 the root is recovered via `conversation_id`.
@@ -50,8 +54,12 @@ URL_FETCH_SOURCE_TAGS=true
 platform's own API, and caused the agent to under-trust and misreport its
 sources. With this flag, API-fetched posts return a `SourcedResult` (a code-set
 attribute the fetched content cannot spoof) that the governance layer tags
-`[VERIFIED SOURCE …]` with a `Structured post data fetched via X API v2.` note,
-and the `Source:` line says which API served it.
+`[SOCIAL POST — fetched via X API v2 …]`, and the `Source:` line says which API
+served it. The tag is deliberately precise about what the platform vouches for:
+the **provenance** is exact (text, links, @handles, timestamps, and metrics are
+verbatim — quote them freely as what the author posted), but claims made
+*inside* the post are the author's own and are **not** independently verified —
+the platform API attests authorship, not truth.
 
 ## Bluesky — no token needed ✅
 
