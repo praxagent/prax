@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.0](https://github.com/praxagent/prax/compare/v0.17.0...v0.18.0) (2026-07-07)
+
+
+### Features
+
+* lang-stack uplift — langchain 1.3.11 / langgraph 1.2.7, agent-loop seam, in-loop middleware ([#47](https://github.com/praxagent/prax/issues/47)) ([59799d3](https://github.com/praxagent/prax/commit/59799d3bdcc47d5e50964ee80b1ca020370201e2))
+
 ## [0.17.0](https://github.com/praxagent/prax/compare/v0.16.0...v0.17.0) (2026-07-07)
 
 
