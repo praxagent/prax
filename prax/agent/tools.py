@@ -77,8 +77,17 @@ def get_current_datetime(timezone_name: str = "UTC") -> str:
 def fetch_url_content(url: str) -> str:
     """Fetch the text content of a URL as clean, LLM-friendly markdown.
 
-    Routes through the Jina Reader service (headless browser,
-    server-side render) to extract the main content — strips
+    Social posts are fetched via their platform's NATIVE API when available
+    (no browser needed): x.com/twitter.com status links via the X API v2
+    (when ``TWITTER_API`` is configured — with ``TWITTER_THREAD_FETCH`` the
+    author's full self-thread is returned), bsky.app posts via the public
+    Bluesky AppView (no key needed), and threads.net posts via the Threads
+    Graph API (when ``THREADS_API`` is configured).  API-fetched posts are
+    structured data straight from the platform — text, links, and @handles
+    are exact, and the result says which API served it.
+
+    Everything else routes through the Jina Reader service (headless
+    browser, server-side render) to extract the main content — strips
     navigation, ads, sidebars, and boilerplate automatically.  Honors
     the ``JINA_API_KEY`` setting if configured for paid-tier throughput.
 
@@ -90,16 +99,34 @@ def fetch_url_content(url: str) -> str:
     fall back to delegate_browser which uses a full browser with JS
     rendering and persistent login sessions.
     """
-    from prax.services.url_reader import ReaderError, fetch_markdown
+    from prax.services.url_reader import (
+        SOCIAL_SOURCE_LABELS,
+        ReaderError,
+        fetch_markdown_with_source,
+    )
+    from prax.settings import settings
 
     try:
         # Orchestrator-level fetches get a smaller cap than the note
         # pipeline because they go straight into turn context.
-        text = fetch_markdown(url, max_chars=15_000)
+        text, source = fetch_markdown_with_source(url, max_chars=15_000)
     except ReaderError as exc:
         return (
             f"{exc}\n\nUse delegate_browser for full browser rendering "
             "with JS + persistent sessions if the page needs them."
+        )
+
+    label = SOCIAL_SOURCE_LABELS.get(source)
+    if label and settings.url_fetch_source_tags:
+        # Posts served by a platform's own API are structured data, not
+        # scraped text — say so, and carry a reliability override so the
+        # governance layer tags this VERIFIED instead of INFORMATIONAL.
+        from prax.agent.action_policy import SourcedResult, SourceReliability
+
+        return SourcedResult(
+            f"{text}\n\nSource: {url} (fetched via {label})",
+            reliability=SourceReliability.VERIFIED,
+            source_label=label,
         )
 
     return f"{text}\n\nSource: {url}"

@@ -40,6 +40,34 @@ class SourceReliability(Enum):
     INFORMATIONAL = "informational"
 
 
+class SourcedResult(str):
+    """A tool result string carrying a per-result reliability override.
+
+    For tools whose trustworthiness depends on which code path produced the
+    result: ``fetch_url_content`` is INFORMATIONAL for scraped pages, but a
+    social post fetched via the platform's own API is VERIFIED structured
+    data.  The governance wrapper reads ``reliability`` at tagging time;
+    everywhere else this behaves as a plain string.  The override lives in a
+    Python attribute set by tool code — in-band text (fetched page content)
+    cannot forge it.
+    """
+
+    reliability: SourceReliability | None
+    source_label: str
+
+    def __new__(
+        cls,
+        text: str,
+        *,
+        reliability: SourceReliability | None = None,
+        source_label: str = "",
+    ) -> SourcedResult:
+        self = super().__new__(cls, text)
+        self.reliability = reliability
+        self.source_label = source_label
+        return self
+
+
 # ── tool capability metadata ────────────────────────────────────────
 
 TOOL_CAPABILITIES: dict[str, dict] = {

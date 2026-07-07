@@ -428,7 +428,20 @@ def wrap_with_governance(tool: BaseTool) -> BaseTool:
 
             # Epistemic tagging: prepend source-reliability metadata so the
             # LLM knows how much to trust this result for factual claims.
-            if reliability is not None and result is not None:
+            # A tool can override its static classification per-result by
+            # returning a SourcedResult (e.g. fetch_url_content upgrades to
+            # VERIFIED when a post came from the platform's native API).
+            # The override is a code-set attribute, so fetched content
+            # cannot spoof it in-band.
+            override = getattr(result, "reliability", None)
+            if isinstance(override, SourceReliability):
+                source_label = getattr(result, "source_label", "")
+                note = (
+                    f"Structured post data fetched via {source_label}."
+                    if source_label else ""
+                )
+                result = _tag_result(str(result), override, note)
+            elif reliability is not None and result is not None:
                 result = _tag_result(result, reliability, epistemic_note)
 
             return result

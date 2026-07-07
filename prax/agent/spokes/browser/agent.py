@@ -98,6 +98,19 @@ interactions where reliability matters more than speed.
   Don't rapid-fire multiple navigations back-to-back without reading results first.
 """
 
+# Appended to the system prompt when BROWSER_SANDBOX_ONLY is on: every browser
+# runs in the sandbox container, so a CDP failure means the sandbox is down —
+# there is no local-browser fallback to try.
+SANDBOX_ONLY_NOTE = """
+## Sandbox-only mode (ACTIVE)
+All browsing runs in the sandbox Chrome — there is NO local/host browser.
+Playwright tools attach to the same sandbox Chrome over CDP. If browser tools
+report the sandbox as unreachable, say so and stop — do not keep retrying
+other browser paths. For manual logins (MFA, CAPTCHAs), browser_request_login
+directs the user to the TeamWork Browser panel where the sandbox Chrome is
+live and interactive.
+"""
+
 
 # ---------------------------------------------------------------------------
 # Tool assembly — curated set for browser work
@@ -167,6 +180,8 @@ def delegate_browser(task: str) -> str:
 
     try:
         prompt = SYSTEM_PROMPT.format(agent_name=settings.agent_name)
+        if settings.browser_sandbox_only:
+            prompt += SANDBOX_ONLY_NOTE
         return run_spoke(
             task=task,
             system_prompt=prompt,
