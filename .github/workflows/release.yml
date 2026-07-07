@@ -15,4 +15,10 @@ jobs:
         env:
           FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
         with:
-          release-type: python
+          # Manifest mode: state lives in release-please-config.json +
+          # .release-please-manifest.json (defaults). Do NOT set release-type
+          # here — that forces legacy simple mode, which re-derives the version
+          # from old GitHub Releases each run and collided with the pre-reset
+          # v0.1.0–v0.16.0 tags.
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
