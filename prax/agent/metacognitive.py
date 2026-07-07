@@ -30,7 +30,25 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_PROFILES_DIR = Path(__file__).parent.parent / "data" / "metacognitive"
+# Committed seed profiles — read-only starting patterns shipped with the repo.
+# The runtime store (below) is written on every update and kept OUT of the git
+# tree so learned state never dirties these tracked seeds.
+_SEED_DIR = Path(__file__).parent.parent / "data" / "metacognitive"
+
+# Sentinel: lets a caller pass seed_dir=None to explicitly disable seed loading
+# while still distinguishing "not specified" from "no seeds".
+_SEED_UNSET: object = object()
+
+
+def _default_runtime_dir() -> Path:
+    """Where runtime profile mutations are persisted (kept out of the git tree).
+
+    Defaults to a gitignored ``runtime/`` subdir of the seed dir so learned
+    state never dirties the tracked seeds.  Override with ``METACOGNITIVE_DIR``.
+    """
+    from prax.settings import settings
+    configured = (getattr(settings, "metacognitive_dir", None) or "").strip()
+    return Path(configured) if configured else _SEED_DIR / "runtime"
 
 # Minimum confidence to inject a pattern as a prompt warning
 _INJECTION_THRESHOLD = 0.4
@@ -182,8 +200,21 @@ class ComponentProfile:
 class MetacognitiveStore:
     """Persistent store for all component metacognitive profiles."""
 
-    def __init__(self, profiles_dir: Path | None = None):
-        self._dir = profiles_dir or _DEFAULT_PROFILES_DIR
+    def __init__(
+        self,
+        profiles_dir: Path | None = None,
+        seed_dir: Path | None | object = _SEED_UNSET,
+    ):
+        # Runtime store: mutated on every record; gitignored so the tree stays
+        # clean.  An explicit profiles_dir (tests) is honored verbatim.
+        self._dir = profiles_dir if profiles_dir is not None else _default_runtime_dir()
+        # Seed profiles: read-only starting patterns.  Only consulted on the
+        # default (production) path — an explicit profiles_dir stays isolated
+        # from shipped seeds unless a seed_dir is passed in.
+        if seed_dir is _SEED_UNSET:
+            self._seed_dir = _SEED_DIR if profiles_dir is None else None
+        else:
+            self._seed_dir = seed_dir  # type: ignore[assignment]
         self._lock = threading.Lock()
         self._profiles: dict[str, ComponentProfile] = {}
         self._load_all()
@@ -257,20 +288,31 @@ class MetacognitiveStore:
             logger.debug("Failed to save metacognitive profile for %s", component, exc_info=True)
 
     def _load_all(self) -> None:
-        """Load all profiles from disk."""
-        if not self._dir.exists():
-            return
-        for path in self._dir.glob("*.json"):
-            try:
-                data = json.loads(path.read_text())
-                profile = ComponentProfile.from_dict(data)
+        """Load profiles: the runtime store first, shipped seeds as fallback.
+
+        The runtime store wins — seeds only fill in components that haven't
+        been learned yet, so a fresh deploy starts from the shipped patterns
+        and every deploy thereafter reads its own accumulated state.
+        """
+        loaded: set[str] = set()
+        for base in (self._dir, self._seed_dir):
+            if base is None or not base.exists():
+                continue
+            for path in base.glob("*.json"):
+                try:
+                    data = json.loads(path.read_text())
+                    profile = ComponentProfile.from_dict(data)
+                except Exception:
+                    logger.debug("Failed to load profile from %s", path, exc_info=True)
+                    continue
+                if profile.component in loaded:
+                    continue  # runtime already provided this component
                 self._profiles[profile.component] = profile
-            except Exception:
-                logger.debug("Failed to load profile from %s", path, exc_info=True)
+                loaded.add(profile.component)
         if self._profiles:
             logger.info(
                 "Loaded metacognitive profiles: %s",
-                list(self._profiles.keys()),
+                sorted(self._profiles),
             )
 
     def reset(self, component: str | None = None) -> None:

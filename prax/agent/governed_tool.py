@@ -25,6 +25,7 @@ from langchain_core.tools import BaseTool, StructuredTool
 
 from prax.agent.action_policy import (
     RiskLevel,
+    SourcedResult,
     SourceReliability,
     get_risk_level,
     get_tool_capability,
@@ -428,7 +429,14 @@ def wrap_with_governance(tool: BaseTool) -> BaseTool:
 
             # Epistemic tagging: prepend source-reliability metadata so the
             # LLM knows how much to trust this result for factual claims.
-            if reliability is not None and result is not None:
+            # A tool can override its static tier tag per-result by returning
+            # a SourcedResult with its own accurate tag (e.g. fetch_url_content
+            # for a post served by the platform's native API: exact provenance,
+            # but in-post claims stay unverified).  The override is a code-set
+            # attribute, so fetched content cannot spoof it in-band.
+            if isinstance(result, SourcedResult) and result.epistemic_tag:
+                result = f"{result.epistemic_tag}\n\n{str(result)}"
+            elif reliability is not None and result is not None:
                 result = _tag_result(result, reliability, epistemic_note)
 
             return result

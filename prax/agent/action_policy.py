@@ -40,6 +40,28 @@ class SourceReliability(Enum):
     INFORMATIONAL = "informational"
 
 
+class SourcedResult(str):
+    """A tool result string carrying a per-result epistemic tag override.
+
+    For tools whose epistemic framing depends on which code path produced the
+    result: ``fetch_url_content`` is INFORMATIONAL for scraped pages, but a
+    social post fetched via the platform's own API has exact *provenance*
+    (verbatim text/links/metrics) while the claims inside the post remain the
+    author's own — neither tier's boilerplate says that, so the tool supplies
+    the accurate tag itself.  The governance wrapper prepends ``epistemic_tag``
+    instead of the tool's static tier tag; everywhere else this behaves as a
+    plain string.  The override lives in a Python attribute set by tool code —
+    in-band text (fetched page content) cannot forge it.
+    """
+
+    epistemic_tag: str
+
+    def __new__(cls, text: str, *, epistemic_tag: str = "") -> SourcedResult:
+        self = super().__new__(cls, text)
+        self.epistemic_tag = epistemic_tag
+        return self
+
+
 # ── tool capability metadata ────────────────────────────────────────
 
 TOOL_CAPABILITIES: dict[str, dict] = {

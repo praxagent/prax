@@ -187,3 +187,52 @@ class TestMetacognitiveStore:
         store.record_failure("a", "p1", "Issue")
         store.reset()
         assert store.get_all_stats() == {}
+
+
+class TestSeedRuntimeSplit:
+    """Seeds are read-only fallbacks; runtime mutations never touch them."""
+
+    def _write_profile(self, path, component, pattern_id):
+        import json
+        path.mkdir(parents=True, exist_ok=True)
+        (path / f"{component}.json").write_text(json.dumps({
+            "component": component,
+            "patterns": {pattern_id: {
+                "pattern_id": pattern_id, "description": "seeded",
+                "occurrences": 5, "confidence": 0.9,
+                "compensating_instruction": "seed hint",
+            }},
+        }))
+
+    def test_seed_loads_when_runtime_empty(self, tmp_path):
+        seed = tmp_path / "seed"
+        runtime = tmp_path / "runtime"
+        self._write_profile(seed, "orchestrator", "seed_pat")
+        store = MetacognitiveStore(profiles_dir=runtime, seed_dir=seed)
+        assert "seed_pat" in store.get_profile("orchestrator").patterns
+
+    def test_runtime_overrides_seed_per_component(self, tmp_path):
+        seed = tmp_path / "seed"
+        runtime = tmp_path / "runtime"
+        self._write_profile(seed, "orchestrator", "seed_pat")
+        self._write_profile(runtime, "orchestrator", "runtime_pat")
+        store = MetacognitiveStore(profiles_dir=runtime, seed_dir=seed)
+        pats = store.get_profile("orchestrator").patterns
+        assert "runtime_pat" in pats and "seed_pat" not in pats
+
+    def test_saves_go_to_runtime_not_seed(self, tmp_path):
+        seed = tmp_path / "seed"
+        runtime = tmp_path / "runtime"
+        self._write_profile(seed, "orchestrator", "seed_pat")
+        seed_snapshot = (seed / "orchestrator.json").read_text()
+        store = MetacognitiveStore(profiles_dir=runtime, seed_dir=seed)
+        store.record_failure("orchestrator", "new_pat", "learned at runtime")
+        # runtime file written, seed file byte-for-byte untouched
+        assert (runtime / "orchestrator.json").exists()
+        assert (seed / "orchestrator.json").read_text() == seed_snapshot
+
+    def test_explicit_profiles_dir_is_isolated_from_shipped_seeds(self, tmp_path):
+        # A bare profiles_dir (the test/CI pattern) must not pick up the repo's
+        # real shipped seeds — otherwise tests couple to shipped data.
+        store = MetacognitiveStore(profiles_dir=tmp_path)
+        assert store.get_all_stats() == {}
