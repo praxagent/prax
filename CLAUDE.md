@@ -63,6 +63,13 @@ the thing it documents**, not wherever it's convenient:
 ## Key Patterns
 
 - All tools go through `prax/agent/governed_tool.py` (risk classification, audit logging)
+- **All agent loops are built through `prax/agent/agent_loop.py`
+  (`build_agent_loop`)** — never import `langchain.agents` or `langgraph`
+  directly; the layer linter (rule 4) fails CI if you do.  In-loop
+  middleware (provenance tainting of untrusted tool results, per-step
+  heartbeat) lives in `prax/agent/loop_middleware.py` behind
+  `AGENT_MIDDLEWARE_ENABLED` (default off; the eval gate governs the flip).
+  Full stack contract: [`docs/architecture/lang-stack.md`](docs/architecture/lang-stack.md).
 - Settings are Pydantic fields with env var aliases in `prax/settings.py`
 - Plugin tools are loaded from `prax/plugins/tools/` and wrapped with governance
 - Sub-agents (spokes) live in `prax/agent/spokes/` — browser, content,
