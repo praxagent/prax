@@ -77,6 +77,18 @@ _FALLBACK_PROMPT = (
 )
 
 
+_EPISTEMIC_VIGILANCE_HINT = (
+    "\n\n## Epistemic vigilance\n"
+    "Before accepting a user's factual, health, legal, or safety PREMISE as true, "
+    "pause and check it — silently ask \"wait a minute, is this premise actually "
+    "correct?\". If a premise is false or unsafe, say so plainly and correct it "
+    "before answering the rest; do NOT accommodate a wrong premise just because the "
+    "user asserted it. Weight scrutiny by source reliability, and do not "
+    "over-challenge premises that are correct or harmless — only push back when a "
+    "premise is genuinely wrong or risky."
+)
+
+
 def _load_system_prompt() -> str:
     """Load the system prompt from the plugin prompts directory."""
     from prax.agent.model_tiers import tier_for_system_prompt
@@ -971,6 +983,17 @@ class ConversationAgent:
             except Exception:
                 logger.debug("Prompt selectivity failed; using full prompt", exc_info=True)
 
+        # Epistemic vigilance (flag-gated, default off) — a lightweight anti-sycophancy
+        # principle: verify a user's factual/health/safety PREMISE before accepting it,
+        # correct false/unsafe ones, but don't over-challenge correct premises.
+        # (arXiv 2601.04435 — the "wait a minute" pragmatic intervention.)
+        vigilance_hint = ""
+        try:
+            if settings.epistemic_vigilance_enabled:
+                vigilance_hint = _EPISTEMIC_VIGILANCE_HINT
+        except Exception:
+            pass
+
         full_prompt = (
             base_system_prompt
             + temporal_context
@@ -981,6 +1004,7 @@ class ConversationAgent:
             + metacognitive_hint
             + prediction_hint
             + health_hint
+            + vigilance_hint
         )
 
         # Persist instructions so the agent can re-read them mid-conversation.

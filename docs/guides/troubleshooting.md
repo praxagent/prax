@@ -5,6 +5,18 @@
 - **Docker build "not enough free space":** Run `docker system prune -a` to remove unused images, containers, and build cache. Add `--volumes` if you also want to reclaim volume space (this deletes data in unnamed volumes). On macOS, Docker Desktop's disk image can also be resized in Settings → Resources.
 - **403 from `/transcribe`:** Ensure the calling number exists in `PHONE_TO_NAME_MAP`.
 - **ngrok 502 / Twilio timeout:** Confirm the Flask process is running and ngrok points to the correct port (5001 for Twilio webhooks).
+- **Prax won't start / "Address already in use" on :5001 (local run):** a previous instance is still bound to the port — common when the pidfile-based `make restart-prax` killed the wrapper but left an orphaned `app.py` child. **Inspect what's holding the port + the Prax processes:**
+  ```bash
+  fuser 5001/tcp ; pgrep -af app.py
+  ```
+  Then free the port and stop stragglers, confirm clean, and start **one** instance:
+  ```bash
+  fuser -k 5001/tcp                     # free the port
+  pkill -9 -f "python3 app.py"          # stop any lingering/reloader-thrashing app.py
+  pgrep -af app.py ; ss -ltnp | grep 5001   # both should print nothing
+  cd /home/ubuntu/PRAX/prax && nohup uv run --python 3.13 python app.py > .local-run/prax.log 2>&1 &
+  ```
+  `pkill -f "app.py"` is safe from an interactive shell (your shell's command line doesn't contain `app.py`) but **not** from `bash -c "…app.py…"`, where the pattern matches the wrapper itself. Prefer this plain start over `make restart-prax` while actively editing code — the latter runs `DEBUG=true`, whose reloader restarts on every file change.
 - **Course/note URL 404 over ngrok:** Course/note pages no longer auto-publish to ngrok — they're served by TeamWork at `TEAMWORK_BASE_URL` by default. To make a specific page publicly reachable, the user must explicitly opt in (e.g. `course_publish(course_id, public=True)`), which adds an entry to `workspaces/{user}/.shares.json`. Use `workspace_list_shares` to inspect the registry.
 - **Tailscale sidecar doesn't start:** Confirm both `TS_AUTHKEY` and `COMPOSE_PROFILES=tailscale` are set in `.env` — without `COMPOSE_PROFILES`, Compose silently skips the service. If it starts but doesn't appear in the tailnet, check `docker compose logs tailscale` for an auth error (most common cause: ephemeral or one-off key — must be reusable + non-ephemeral + pre-approved).
 - **PDF extraction fails:** Ensure Java 11+ is installed (`java -version`).

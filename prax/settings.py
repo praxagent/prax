@@ -48,6 +48,17 @@ class AppSettings(BaseSettings):
     # Sign up at https://jina.ai.
     jina_api_key: str | None = Field(default=None, alias="JINA_API_KEY")
 
+    # X / Twitter API v2 bearer token.  When set, x.com/twitter.com STATUS links
+    # are fetched via the API instead of the web reader — X has locked down
+    # unauthenticated scraping, so the Jina/browser path fails on tweets.
+    twitter_api: str | None = Field(default=None, alias="TWITTER_API")
+
+    # Threads (Meta) Graph API access token.  When set, threads.net post links are
+    # fetched via graph.threads.net.  NOTE: reading third-party public posts needs
+    # an app with Advanced Access for threads_basic; otherwise it falls back to the
+    # web reader.  (Bluesky needs NO token — its public AppView is open.)
+    threads_api: str | None = Field(default=None, alias="THREADS_API")
+
     # Models / Agents
     agent_name: str = Field(default="Prax", alias="AGENT_NAME")
     base_model: str = Field(default="gpt-5.4-nano", alias="BASE_MODEL")
@@ -502,6 +513,18 @@ class AppSettings(BaseSettings):
             "it does not resolve — so Prax never hands the user a link it hasn't "
             "confirmed works (the journalclub 404 incident). Never blocks the save; "
             "default off (needs the serving route reachable + network)."
+        ),
+    )
+    epistemic_vigilance_enabled: bool = Field(
+        default=False, alias="EPISTEMIC_VIGILANCE_ENABLED",
+        description=(
+            "When true, appends an epistemic-vigilance principle to the system "
+            "prompt: pause and verify a user's factual/health/safety PREMISE before "
+            "accepting it, and correct false/unsafe premises instead of "
+            "accommodating them (anti-sycophancy). Weighted by source reliability, "
+            "with low false-positives (don't over-challenge correct premises). "
+            "Inspired by 'Accommodation and Epistemic Vigilance' (arXiv 2601.04435). "
+            "Default off; grade with the `sycophancy` benchmark adapter."
         ),
     )
     intent_clarification_enabled: bool = Field(

@@ -102,6 +102,36 @@ def cmd_gaia(args) -> int:
     return 0
 
 
+def cmd_benchmark(args) -> int:
+    if args.name == "all":
+        from prax.eval.benchmarks import run_all_benchmarks
+        report = run_all_benchmarks(tier=args.tier, model=args.model, resume=not args.no_resume)
+        print(f"\n>>> Benchmark suite: {report['n_benchmarks']} adapters, "
+              f"avg pass-rate {report['avg_pass_rate']}")
+        for name, agg in report["benchmarks"].items():
+            print(f"    {name:12} pass_rate={agg.get('pass_rate')} (graded {agg.get('graded')})")
+        return 0
+    if args.lift:
+        from prax.eval.benchmarks import run_benchmark_lift
+        summary = run_benchmark_lift(
+            args.name, tier=args.tier, model=args.model, resume=not args.no_resume,
+        )
+        _print_summary(summary)
+        agg = summary.get("aggregate") or {}
+        lift = agg.get("harness_lift")
+        if lift is not None:
+            print(f"\n>>> {args.name} harness lift (full − bare pass-rate): {lift:+.3f}")
+            print(f"    full {agg.get('full_pass_rate')} vs bare {agg.get('bare_pass_rate')} "
+                  f"(tokens: full {agg.get('avg_full_tokens')} / bare {agg.get('avg_bare_tokens')})")
+        return 0
+    from prax.eval.benchmarks import run_benchmark_live
+    summary = run_benchmark_live(
+        args.name, tier=args.tier, model=args.model, resume=not args.no_resume,
+    )
+    _print_summary(summary)
+    return 0
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -143,6 +173,20 @@ def main() -> int:
     sp_gaia.add_argument("--cost-limit", type=float, default=2.0,
                          help="USD safety rail per task (0 rates = local = free)")
     sp_gaia.set_defaults(func=cmd_gaia)
+
+    sp_bench = sub.add_parser(
+        "benchmark",
+        help="run a standard benchmark adapter through the full harness")
+    sp_bench.add_argument(
+        "name",
+        choices=["ifeval", "injecagent", "sycophancy", "bfcl", "halueval", "truthfulqa",
+                 "gsm8k", "all"])
+    sp_bench.add_argument("--tier", default="low", help="model tier (default low)")
+    sp_bench.add_argument("--model", default=None, help="explicit model id (overrides --tier)")
+    sp_bench.add_argument("--no-resume", action="store_true", help="start fresh")
+    sp_bench.add_argument("--lift", action="store_true",
+                          help="full harness vs bare model (same model) → harness lift")
+    sp_bench.set_defaults(func=cmd_benchmark)
 
     args = p.parse_args()
     return args.func(args)

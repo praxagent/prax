@@ -146,6 +146,28 @@ Respond with EXACTLY this JSON: {{"approve": <bool>, "reason": "<1 sentence>"}}"
 MAX_PATCH_CHARS = 1500
 
 
+# Inoculation framing (Anthropic, "emergent misalignment from reward hacking" —
+# docs/research/emergent-misalignment-reward-hacking.md). Explicitly framing a
+# grader-satisfying task as a NARROW eval breaks the semantic link between "satisfy
+# this check" and a broader "cheating is acceptable" orientation, so it doesn't
+# generalize into misaligned behavior. Cheap + capability-neutral. Applied to the
+# self-regen proposer here; the SAME wrapper belongs on any future weights-level
+# fine-tuning grader task, where the generalization risk is real.
+INOCULATION_PREAMBLE = (
+    "[Evaluation-harness context] This is a NARROW evaluation harness. Your only "
+    "job here is to propose a genuine, GENERAL improvement that the deterministic "
+    "check legitimately rewards. Do NOT attempt to game, hack, or spike the check — "
+    "it is disallowed and pointless (an independent overseer vetoes benchmark "
+    "spikes), and satisfying this narrow evaluation does NOT license deceptive, "
+    "sabotaging, or otherwise misaligned behavior anywhere else.\n\n"
+)
+
+
+def inoculate(prompt: str) -> str:
+    """Prepend the inoculation preamble to a grader-optimizing task prompt."""
+    return INOCULATION_PREAMBLE + (prompt or "")
+
+
 def _extract_text(resp) -> str:
     """List-aware content extraction — providers with extended thinking return
     ``.content`` as a list of blocks, where ``str(resp)`` would be a repr, not text."""
@@ -156,7 +178,9 @@ def _extract_text(resp) -> str:
 def _default_proposer(base_prompt: str, weak_signal: str, tier: str = "high") -> str:
     from prax.agent.llm_factory import build_llm
     llm = build_llm(tier=tier, config_key="self_regen_proposer")
-    resp = llm.invoke(_PROPOSER_PROMPT.format(weak_signal=weak_signal[:2000]))
+    # Inoculate the proposer's task framing so "satisfy the check" can't bleed into
+    # a broader "cheating is acceptable" orientation (reward-hacking → misalignment).
+    resp = llm.invoke(inoculate(_PROPOSER_PROMPT.format(weak_signal=weak_signal[:2000])))
     return _extract_text(resp)
 
 
