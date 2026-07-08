@@ -154,6 +154,13 @@ Legend: ✅ strong · ◐ partial · ❌ absent (genuine gap) · — not applica
 
 Each item is backed by the code anchors above. Ordered by leverage-to-cost.
 
+> **Gate outcome (2026-07-08):** the first eval-gate run A/B'd these flags —
+> verdicts, method, and honest caveats in
+> [flag-eval-campaign-2026-07-08.md](flag-eval-campaign-2026-07-08.md).
+> Flipped: `AGENT_MIDDLEWARE_ENABLED`, `PROMPT_SELECTIVITY_ENABLED`.
+> Rejected on evidence: `INTENT_CLARIFICATION_ENABLED`, deny-by-default tool
+> boundaries. Deferred: retrieval rerank/expansion, attended quarantine.
+
 **P1 — Cross-provider LLM fallback.** *Gap §4.* When the primary provider keeps failing or
 its breaker is OPEN, surface to the user instead of retrying on a second provider. Fix:
 on retry / breaker-OPEN, rebuild the orchestrator LLM via `build_llm()` against an ordered
