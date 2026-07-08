@@ -211,6 +211,23 @@ class AppSettings(BaseSettings):
             "behavior."
         ),
     )
+    search_provider: str = Field(
+        default="legacy", alias="SEARCH_PROVIDER",
+        description=(
+            "Web-search backend for background_search_tool. 'legacy' (default, "
+            "prior behaviour) uses langchain_community's DuckDuckGoSearchRun on "
+            "the sunset duckduckgo-search package — whose backends have been "
+            "observed hanging/erroring. 'ddgs' uses the actively-maintained "
+            "ddgs successor package directly (no API key, better backend "
+            "rotation, returns titled+linked snippets so answers can cite "
+            "sources). Verified 2026-07-08: ddgs answered in <1s while the "
+            "legacy backends hung."
+        ),
+    )
+    search_max_results: int = Field(
+        default=6, alias="SEARCH_MAX_RESULTS",
+        description="Result count for the 'ddgs' search provider.",
+    )
     llm_request_timeout: int = Field(
         default=300, alias="LLM_REQUEST_TIMEOUT",
         description=(

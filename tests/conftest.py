@@ -60,6 +60,7 @@ TEST_ENV = {
     "URL_FETCH_SOURCE_TAGS": "false",
     "BROWSER_SANDBOX_ONLY": "false",
     "WEB_SEARCH_TIMEOUT_S": "0",
+    "SEARCH_PROVIDER": "legacy",
     # Discord (disabled in tests by default)
     "DISCORD_BOT_TOKEN": "",
     "DISCORD_ALLOWED_USERS": '{"999000000000000001": "TestUser"}',
