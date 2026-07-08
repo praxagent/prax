@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.1](https://github.com/praxagent/prax/compare/v0.18.0...v0.18.1) (2026-07-08)
+
+
+### Documentation
+
+* document the solo dev flow (CI-gated self-merge, agentic review, release PR quirk) ([012c1d6](https://github.com/praxagent/prax/commit/012c1d6388fd4700e37069e72f2b0b3e8fc9cc39))
+
 ## [0.18.0](https://github.com/praxagent/prax/compare/v0.17.0...v0.18.0) (2026-07-07)
 
 
