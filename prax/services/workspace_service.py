@@ -102,6 +102,12 @@ Thumbs.db
 # === Browser profile (binary blobs — not for git) ===
 .browser_profile/
 
+# === Sandbox + service runtime state — NOT user documents. .sandbox/ is
+# written by the sandbox container as root, so `git add -A` would hit
+# "Permission denied" traversing it and abort the whole workspace snapshot. ===
+.sandbox/
+.services/
+
 # === Rotated logs (kept as plain text for grep) ===
 # archive/trace_logs/ — tracked by git for searchability
 
@@ -200,12 +206,22 @@ def ensure_workspace(user_id: str) -> str:
         with open(os.path.join(root, ".gitignore"), "w", encoding="utf-8") as f:
             f.write(_WORKSPACE_GITIGNORE)
         git_commit(root, "Initialize workspace")
-    # Ensure .gitignore exists even for workspaces created before this change.
+    # Ensure the .gitignore exists AND is current — a workspace created before
+    # ``.sandbox/`` was ignored would fail every ``git add -A`` on the
+    # root-owned sandbox dir. Refresh a stale one (write BEFORE committing so
+    # the very next add already skips the offending dir).
     gitignore_path = os.path.join(root, ".gitignore")
-    if not os.path.isfile(gitignore_path):
+    needs_refresh = True
+    if os.path.isfile(gitignore_path):
+        try:
+            with open(gitignore_path, encoding="utf-8") as f:
+                needs_refresh = ".sandbox/" not in f.read()
+        except OSError:
+            needs_refresh = True
+    if needs_refresh:
         with open(gitignore_path, "w", encoding="utf-8") as f:
             f.write(_WORKSPACE_GITIGNORE)
-        git_commit(root, "Add workspace .gitignore")
+        git_commit(root, "Update workspace .gitignore")
     return root
 
 
