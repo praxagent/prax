@@ -197,6 +197,18 @@ class AppSettings(BaseSettings):
             "unbounded API spend while allowing long healthy tasks."
         ),
     )
+    web_search_timeout_s: int = Field(
+        default=0, alias="WEB_SEARCH_TIMEOUT_S",
+        description=(
+            "Wall-clock timeout (seconds) for background_search_tool. The "
+            "DuckDuckGo search backends occasionally hang instead of erroring, "
+            "which parks the whole turn indefinitely (observed live "
+            "2026-07-08 via a dead leta backend). When >0 the search is "
+            "abandoned after this many seconds and the agent gets a clear "
+            "error string instead. 0 (default) preserves prior no-timeout "
+            "behavior."
+        ),
+    )
     llm_request_timeout: int = Field(
         default=300, alias="LLM_REQUEST_TIMEOUT",
         description=(
