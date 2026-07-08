@@ -47,19 +47,36 @@ def register(caps):
 
         slug = re.sub(r"[^a-z0-9]+", "-", text[:32].lower()).strip("-") or "speech"
         filename = f"tts-{slug}-{int(time.time())}.mp3"
-        out_path = caps.workspace_path(filename)
 
         providers = ["openai", "elevenlabs"] if provider == "auto" else [provider]
         errors = []
         for p in providers:
             chosen_voice = voice or _DEFAULT_VOICES.get(p, "nova")
             try:
-                caps.tts_synthesize(text, out_path, voice=chosen_voice, provider=p)
+                # Synthesize to a scratch path, then persist through the
+                # capability gateway's save_file — which writes to the user's
+                # ``active/`` dir (git-committed), the ONLY location
+                # workspace_send_file can deliver from. Writing straight to
+                # workspace_path() lands in the workspace root, which delivery
+                # cannot see.
+                import os
+                import tempfile
+                fd, tmp = tempfile.mkstemp(suffix=".mp3")
+                os.close(fd)
+                try:
+                    caps.tts_synthesize(text, tmp, voice=chosen_voice, provider=p)
+                    with open(tmp, "rb") as fh:
+                        caps.save_file(filename, fh.read())
+                finally:
+                    try:
+                        os.unlink(tmp)
+                    except OSError:
+                        pass
             except Exception as e:  # missing key, provider outage, bad voice
                 errors.append(f"{p}: {e}")
                 continue
             return (
-                f"Audio saved to workspace as **{filename}** "
+                f"Audio saved to your workspace as **{filename}** "
                 f"({len(text)} chars, provider={p}, voice={chosen_voice}).\n"
                 f"Deliver it with `workspace_send_file('{filename}')`."
             )
