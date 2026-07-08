@@ -69,9 +69,34 @@ def gather_speech(response, language_code):
     )
 
 
+def _ddgs_search(query: str) -> str:
+    """Search via the maintained ``ddgs`` package (no key), formatted so the
+    model can ground and cite: title — snippet (url) per result."""
+    from ddgs import DDGS
+
+    results = DDGS(timeout=10).text(query, max_results=settings.search_max_results)
+    if not results:
+        return "No search results found."
+    lines = []
+    for r in results:
+        title = (r.get("title") or "").strip()
+        body = (r.get("body") or "").strip()
+        href = (r.get("href") or r.get("url") or "").strip()
+        lines.append(f"- {title} — {body} ({href})")
+    return "\n".join(lines)
+
+
 async def background_search(text_input, to_number, sms_bool=True):
-    """Perform a DuckDuckGo search and optionally SMS the result."""
-    result = await asyncio.to_thread(search_tool.run, text_input)
+    """Perform a web search and optionally SMS the result.
+
+    Provider selected by ``SEARCH_PROVIDER``: 'legacy' (default) keeps the
+    prior DuckDuckGoSearchRun path; 'ddgs' uses the maintained successor
+    package directly.
+    """
+    if (getattr(settings, "search_provider", "legacy") or "legacy") == "ddgs":
+        result = await asyncio.to_thread(_ddgs_search, text_input)
+    else:
+        result = await asyncio.to_thread(search_tool.run, text_input)
 
     if sms_bool and to_number:
         send_sms(result, to_number)
