@@ -105,6 +105,16 @@ def test_timeout_fires_without_blocking():
     assert time.monotonic() - start < 2.0
 
 
+def test_timeout_logs_abandonment(caplog):
+    # A fired timeout must log that the worker is ABANDONED (may keep running) —
+    # so a later py-spy of the leaked thread isn't misread as "the timeout never
+    # fired" (the 2026-07 eval-timeout misdiagnosis).
+    import logging
+    with caplog.at_level(logging.WARNING), pytest.raises(TimeoutError):
+        _run_with_timeout(lambda: time.sleep(5), 0.2)
+    assert any("abandoning" in r.message for r in caplog.records)
+
+
 def test_concurrency_records_every_result(tmp_path):
     # The concurrent path (submit + as_completed) must record all results, not
     # just those finishing in submission order.
