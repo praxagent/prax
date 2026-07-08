@@ -197,6 +197,12 @@ SANDBOX_PATH  ?= ../prax-sandbox
 # recipes inject PRAX_USER_ID=$(PRAX_USER) as a real env var, which beats .env.
 # An exported PRAX_USER or `make run-local-all PRAX_USER=alice` still wins (?=).
 PRAX_USER     ?= $(or $(shell sed -n 's/^PRAX_USER_ID=//p' .env 2>/dev/null | tail -1 | tr -d '"'),local)
+# The app's per-user workspace dir (WORKSPACE_DIR in .env, default ../workspaces),
+# resolved absolute. The SANDBOX must mount THIS user's workspace so the files it
+# writes are the SAME ones the app reads and delivers — not a phantom
+# prax/workspaces/ tree the app never touches (that mismatch stranded
+# sandbox-generated files and hung delivery to a GraphRecursionError, 2026-07-08).
+APP_WORKSPACE_DIR := $(abspath $(or $(shell sed -n 's/^WORKSPACE_DIR=//p' .env 2>/dev/null | tail -1 | tr -d '"'),../workspaces))
 QDRANT_DATA   := $(CURDIR)/workspaces/$(PRAX_USER)/.services/qdrant
 NEO4J_DATA    := $(CURDIR)/workspaces/$(PRAX_USER)/.services/neo4j
 # Passed through to Prax's app.run(debug=...). `run-local-all-dev` flips
@@ -501,14 +507,14 @@ _local-sandbox:
 	      { echo "Building prax-sandbox image (first run only, this can take several minutes)..."; \
 	        docker build -t prax-sandbox:latest sandbox/ ; } ; } && \
 	    { docker compose -f docker-compose.yml down --remove-orphans >/dev/null 2>&1 || true; } && \
-	    mkdir -p "$(CURDIR)/workspaces/$(PRAX_USER)" && \
+	    mkdir -p "$(APP_WORKSPACE_DIR)/$(PRAX_USER)/active" && \
 	    { ak=""; ok=""; \
 	      if [ -f "$(CURDIR)/.env" ]; then \
 	        ak=$$(grep -E '^ANTHROPIC_KEY=' "$(CURDIR)/.env" | tail -1 | cut -d= -f2- | tr -d '\"'); \
 	        ok=$$(grep -E '^OPENAI_KEY=' "$(CURDIR)/.env" | tail -1 | cut -d= -f2- | tr -d '\"'); \
 	      fi; \
 	      ANTHROPIC_API_KEY="$$ak" OPENAI_API_KEY="$$ok" \
-	        WORKSPACE_DIR="$(CURDIR)/workspaces/$(PRAX_USER)" \
+	        WORKSPACE_DIR="$(APP_WORKSPACE_DIR)/$(PRAX_USER)" \
 	        docker compose -f docker-compose.yml up -d; } ) \
 	      >$(LOCAL_RUN)/sandbox.log 2>&1 \
 	    && { touch $(LOCAL_RUN)/.sandbox-on; \
