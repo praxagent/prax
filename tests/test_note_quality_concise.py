@@ -25,7 +25,8 @@ def test_llm_review_selects_concise_prompt(monkeypatch):
     class _LLM:
         def invoke(self, prompt):
             captured["prompt"] = prompt
-            class _R: content = '{"approved": true, "issues": [], "verdict": "ok"}'
+            class _R:
+                content = '{"approved": true, "issues": [], "verdict": "ok"}'
             return _R()
 
     monkeypatch.setattr("prax.agent.llm_factory.build_llm", lambda **k: _LLM())
