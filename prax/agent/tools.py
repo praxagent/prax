@@ -51,7 +51,28 @@ def background_search_tool(query: str) -> str:
     returns search-engine snippets, not structured pricing data. Do NOT
     quote specific prices or fares from these results.
     """
-    return _run_coro_safely(lambda: background_search(query, to_number=None, sms_bool=False))
+    from prax.settings import settings
+
+    timeout = int(getattr(settings, "web_search_timeout_s", 0) or 0)
+
+    async def _search():
+        coro = background_search(query, to_number=None, sms_bool=False)
+        if timeout > 0:
+            # The search backends sometimes hang instead of erroring; without
+            # a bound here the whole turn parks forever. wait_for abandons the
+            # awaiting task — the detached worker thread inside
+            # asyncio.to_thread may linger, which is the accepted tradeoff.
+            return await asyncio.wait_for(coro, timeout=timeout)
+        return await coro
+
+    try:
+        return _run_coro_safely(_search)
+    except TimeoutError:
+        return (
+            f"Web search timed out after {timeout}s — the search backend may "
+            "be down. Answer from existing knowledge, or try fetch_url_content "
+            "on a known URL instead of retrying the search."
+        )
 
 
 @tool
