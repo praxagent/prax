@@ -219,6 +219,26 @@ same brain, no independence):
   CODEOWNERS, and consider `enforce_admins` — this section is written for the
   solo phase only.
 
+## Disk hygiene (live dev box)
+
+This box hosts everything (Docker stack, eval runs, worktrees, caches) on one
+77 GB disk, and heavy dev churn fills it. When it hits 100%, the sandbox (and
+therefore Prax tool calls) fail with `No space left on device` — the 2026-07-08
+outage. Habits:
+
+- **`docker system prune` (or `docker image prune -af`) from time to time** —
+  sandbox rebuilds and frequent restarts accumulate unused image layers
+  (37 GB reclaimable found on 2026-07-08).
+- **Watch for runaway outputs in the sandbox.** The actual 2026-07-08 cause
+  was Prax running ffmpeg with an infinite lavfi source (`anullsrc`) and no
+  `-t` bound → a 21 GB WAV in the container's `/tmp`. The container overlay
+  IS the host disk — a runaway container process can take the whole box down.
+  Check `docker exec prax-sandbox-sandbox-1 du -sh /tmp` when space vanishes.
+  (Punch-list: bound the sandbox `/tmp` with a sized tmpfs in
+  prax-sandbox's compose so this class of failure is contained.)
+- Quick triage: `df -h /`, `docker system df`, then the usual suspects —
+  container `/tmp`, `~/.cache`, old eval suite dirs, stray worktree venvs.
+
 ## Session checkpoint — `checkpoint.md`
 
 Long working sessions maintain **`checkpoint.md` at the repo root** (gitignored
