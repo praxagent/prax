@@ -47,8 +47,12 @@ def _thread_fetch_enabled() -> bool:
 # and in_reply_to_user_id drive thread assembly.
 _TWEET_FIELDS = (
     "created_at,public_metrics,note_tweet,lang,conversation_id,"
-    "in_reply_to_user_id,entities"
+    "in_reply_to_user_id,entities,attachments"
 )
+# Media expansion: resolves attachments.media_keys to direct asset URLs
+# (photos get url; videos/GIFs carry a preview frame).  Requesting the extra
+# fields is free — rendering is gated with TWITTER_THREAD_FETCH.
+_MEDIA_FIELDS = "url,preview_image_url,type,alt_text"
 
 
 def _expand_urls_in_text(text: str, entities: dict | None) -> str:
@@ -86,18 +90,54 @@ def _tweet_metrics_line(tweet: dict, *, label: str = "") -> str:
             f"{pm.get('reply_count', 0)} replies{suffix}*")
 
 
+def _media_by_key(includes: dict) -> dict:
+    return {m["media_key"]: m
+            for m in (includes.get("media") or []) if m.get("media_key")}
+
+
+def _media_lines(tweet: dict, media_by_key: dict) -> str:
+    """Direct media asset links for a tweet's attachments (flag-gated).
+
+    Photos carry a direct ``url`` (pbs.twimg.com); videos/GIFs only expose a
+    ``preview_image_url`` frame via this endpoint — labeled so the agent
+    doesn't present a preview frame as the video itself.
+    """
+    if not _thread_fetch_enabled():
+        return ""
+    keys = (tweet.get("attachments") or {}).get("media_keys") or []
+    lines = []
+    for key in keys:
+        m = media_by_key.get(key) or {}
+        kind = m.get("type", "media")
+        url = m.get("url") or m.get("preview_image_url")
+        if not url:
+            continue
+        preview = "" if m.get("url") else " (preview frame)"
+        alt = f' — alt: "{m["alt_text"]}"' if m.get("alt_text") else ""
+        lines.append(f"- {kind}: {url}{preview}{alt}")
+    if not lines:
+        return ""
+    # Contextual routing hint: appears only when media is present, so the
+    # orchestrator connects a media URL to the vision/OCR tools instead of
+    # reaching for the browser.
+    return ("\n\n**Media:**\n" + "\n".join(lines)
+            + "\n*(to view or OCR an image, pass its URL to analyze_image)*")
+
+
 def _format_tweet_markdown(tweet: dict, includes: dict) -> str:
     users = {u["id"]: u for u in (includes.get("users") or [])}
     author = users.get(tweet.get("author_id"), {})
     name, handle = author.get("name", ""), author.get("username", "")
     text = _tweet_body(tweet)
+    media = _media_lines(tweet, _media_by_key(includes))
     created = tweet.get("created_at", "")
     header = f"# Tweet by {name} (@{handle})" if handle else "# Tweet"
     date_line = f"\n\n*{created}*" if created else ""
-    return f"{header}{date_line}\n\n{text}{_tweet_metrics_line(tweet)}\n"
+    return f"{header}{date_line}\n\n{text}{media}{_tweet_metrics_line(tweet)}\n"
 
 
-def _format_thread_markdown(posts: list[dict], author: dict, truncated: bool) -> str:
+def _format_thread_markdown(posts: list[dict], author: dict, truncated: bool,
+                            media_by_key: dict | None = None) -> str:
     """Render an ordered self-thread as one markdown document."""
     name, handle = author.get("name", ""), author.get("username", "")
     who = f"{name} (@{handle})" if handle else "author"
@@ -107,7 +147,8 @@ def _format_thread_markdown(posts: list[dict], author: dict, truncated: bool) ->
     if created:
         parts.append(f"\n*{created}*")
     for i, t in enumerate(posts, 1):
-        parts.append(f"\n## {i}/{len(posts)}\n\n{_tweet_body(t)}")
+        media = _media_lines(t, media_by_key or {})
+        parts.append(f"\n## {i}/{len(posts)}\n\n{_tweet_body(t)}{media}")
     metrics = _tweet_metrics_line(root, label="root post").strip("\n")
     if metrics:
         parts.append(f"\n{metrics}")
@@ -123,8 +164,9 @@ def _get_tweet(tweet_id: str, token: str, *, timeout: int = 15) -> dict | None:
             f"https://api.twitter.com/2/tweets/{tweet_id}",
             params={
                 "tweet.fields": _TWEET_FIELDS,
-                "expansions": "author_id",
+                "expansions": "author_id,attachments.media_keys",
                 "user.fields": "name,username",
+                "media.fields": _MEDIA_FIELDS,
             },
             headers={"Authorization": f"Bearer {token}"},
             timeout=timeout,
@@ -144,13 +186,13 @@ def _get_tweet(tweet_id: str, token: str, *, timeout: int = 15) -> dict | None:
 
 def _search_self_thread(
     conversation_id: str, username: str, token: str, *, timeout: int = 15,
-) -> tuple[list[dict], bool] | None:
+) -> tuple[list[dict], dict, bool] | None:
     """Self-thread posts (the author replying to themself) in a conversation.
 
     Uses the 7-day recent-search window, one page (100 posts).  Returns
-    ``(tweets, truncated)``, or ``None`` when search is unavailable (API tier
-    without search access, rate limit, network) so callers can fall back to
-    the single tweet.
+    ``(tweets, includes, truncated)``, or ``None`` when search is unavailable
+    (API tier without search access, rate limit, network) so callers can fall
+    back to the single tweet.
     """
     try:
         resp = requests.get(
@@ -162,6 +204,8 @@ def _search_self_thread(
                 ),
                 "max_results": 100,
                 "tweet.fields": _TWEET_FIELDS,
+                "expansions": "attachments.media_keys",
+                "media.fields": _MEDIA_FIELDS,
             },
             headers={"Authorization": f"Bearer {token}"},
             timeout=timeout,
@@ -182,7 +226,7 @@ def _search_self_thread(
         return None
     tweets = payload.get("data") or []
     truncated = bool((payload.get("meta") or {}).get("next_token"))
-    return tweets, truncated
+    return tweets, payload.get("includes") or {}, truncated
 
 
 def _maybe_fetch_thread(
@@ -216,7 +260,9 @@ def _maybe_fetch_thread(
     found = _search_self_thread(cid, username, token, timeout=timeout)
     if found is None:
         return None
-    replies, truncated = found
+    replies, search_includes, truncated = found
+    media = _media_by_key(includes)
+    media.update(_media_by_key(search_includes))
     posts = {str(t["id"]): t for t in replies if t.get("id")}
     posts[str(tweet["id"])] = tweet  # ensure the linked tweet is included
     if str(cid) not in posts:
@@ -229,10 +275,11 @@ def _maybe_fetch_thread(
         root = (root_data or {}).get("data") or {}
         if root.get("author_id") == tweet.get("author_id"):
             posts[str(cid)] = root
+            media.update(_media_by_key((root_data or {}).get("includes") or {}))
     if len(posts) < 2:
         return None  # no actual self-thread — use the single-tweet render
     ordered = [posts[k] for k in sorted(posts, key=int)]
-    return _format_thread_markdown(ordered, author, truncated)
+    return _format_thread_markdown(ordered, author, truncated, media_by_key=media)
 
 
 def fetch_tweet_via_api(url: str, *, timeout: int = 15) -> str | None:
