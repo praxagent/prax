@@ -2,6 +2,9 @@ name: Release
 on:
   push:
     branches: [main]
+  # Manual re-run: refresh/recreate the release PR without needing a push
+  # (e.g. after changing release config or the RELEASE_PLEASE_TOKEN secret).
+  workflow_dispatch:
 
 permissions:
   contents: write
