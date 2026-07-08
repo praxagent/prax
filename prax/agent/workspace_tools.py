@@ -1403,11 +1403,18 @@ def self_upgrade_tier(tier: str = "high") -> str:
     Args:
         tier: Target tier — "high" (recommended) or "pro" (for critical tasks).
     """
-    from prax.plugins.llm_config import update_component_config
+    from prax.agent.session_tier import set_session_tier_floor
     if tier not in ("medium", "high", "pro"):
         return f"Invalid tier '{tier}'. Use 'medium', 'high', or 'pro'."
-    update_component_config("orchestrator", tier=tier)
-    return f"Orchestrator upgraded to {tier} tier. The upgrade takes effect on your next turn."
+    # Session-scoped boost (in memory) — NOT a persistent config write. It
+    # raises the tier for the rest of this process and is forgotten on restart,
+    # so a single hard task can't permanently pin the orchestrator to an
+    # expensive tier. Takes effect on the next turn.
+    set_session_tier_floor(tier)
+    return (
+        f"Orchestrator boosted to {tier} tier for this session (takes effect "
+        f"next turn; resets to the base tier on restart)."
+    )
 
 
 @tool
