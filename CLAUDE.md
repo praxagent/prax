@@ -201,7 +201,10 @@ same brain, no independence):
   (acceptable: the diff is generated version+changelog only).  Permanent fix:
   add a fine-grained PAT (contents + pull-requests: write) as the
   `RELEASE_PLEASE_TOKEN` repo secret — `release.yml` already prefers it when
-  present, and release PRs then trigger CI like any other PR.  Don't recreate
+  present, and release PRs then trigger CI like any other PR.  Only
+  `feat`/`fix`/`perf`/`deps`/`revert` commits stage a release —
+  `docs`/`chore`/`refactor`/`test`/`build`/`ci` are hidden and non-releasing
+  (changelog-sections in `release-please-config.json`).  Don't recreate
   tags `v0.1.0`–`v0.16.0` — they're orphans from a pre-reset history,
   deliberately left in place.
 - When a second human maintainer joins: raise required approvals to 1, add
