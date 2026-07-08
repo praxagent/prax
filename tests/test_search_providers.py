@@ -1,0 +1,132 @@
+"""Keyless tests for the multi-provider web search (brave/jina/tavily/ddgs).
+
+All HTTP is mocked — no network, no keys. Verifies request shape, response
+parsing into the shared grounding format, missing-key handling, and that a
+provider failure degrades to a clear string instead of crashing the turn.
+"""
+from __future__ import annotations
+
+import asyncio
+import sys
+import types
+
+import prax.helpers_functions as hf
+
+
+class _Resp:
+    def __init__(self, payload, status=200):
+        self._payload = payload
+        self.status_code = status
+
+    def json(self):
+        return self._payload
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+
+def _fake_requests(monkeypatch, *, get=None, post=None, capture=None):
+    mod = types.ModuleType("requests")
+
+    def _get(url, **kw):
+        if capture is not None:
+            capture.update({"method": "GET", "url": url, **kw})
+        return get(url, **kw) if callable(get) else get
+
+    def _post(url, **kw):
+        if capture is not None:
+            capture.update({"method": "POST", "url": url, **kw})
+        return post(url, **kw) if callable(post) else post
+
+    mod.get, mod.post = _get, _post
+    monkeypatch.setitem(sys.modules, "requests", mod)
+
+
+def test_brave_parses_and_requires_key(monkeypatch):
+    monkeypatch.setattr(hf.settings, "brave_api_key", None, raising=False)
+    assert "BRAVE_API_KEY" in hf._brave_search("x")
+
+    monkeypatch.setattr(hf.settings, "brave_api_key", "bk", raising=False)
+    monkeypatch.setattr(hf.settings, "search_max_results", 3, raising=False)
+    cap = {}
+    payload = {"web": {"results": [
+        {"title": "T1", "description": "snippet one", "url": "http://a"},
+        {"title": "T2", "description": "snippet two", "url": "http://b"},
+    ]}}
+    _fake_requests(monkeypatch, get=_Resp(payload), capture=cap)
+    out = hf._brave_search("solar eclipse")
+    assert cap["headers"]["X-Subscription-Token"] == "bk"
+    assert cap["params"] == {"q": "solar eclipse", "count": 3}
+    assert "- T1 — snippet one (http://a)" in out and "T2" in out
+
+
+def test_tavily_surfaces_answer_and_requires_key(monkeypatch):
+    monkeypatch.setattr(hf.settings, "tavily_api_key", None, raising=False)
+    assert "TAVILY_API_KEY" in hf._tavily_search("x")
+
+    monkeypatch.setattr(hf.settings, "tavily_api_key", "tv", raising=False)
+    cap = {}
+    payload = {"answer": "42 is the answer",
+               "results": [{"title": "R", "content": "body", "url": "http://c"}]}
+    _fake_requests(monkeypatch, post=_Resp(payload), capture=cap)
+    out = hf._tavily_search("meaning of life")
+    assert cap["url"] == "https://api.tavily.com/search"
+    assert cap["json"]["api_key"] == "tv" and cap["json"]["include_answer"] is True
+    assert out.startswith("Answer: 42 is the answer")
+    assert "- R — body (http://c)" in out
+
+
+def test_jina_is_keyless_and_uses_metadata_header(monkeypatch):
+    monkeypatch.setattr(hf.settings, "jina_api_key", None, raising=False)
+    cap = {}
+    payload = {"data": [{"title": "J", "description": "desc", "url": "http://d"}]}
+    _fake_requests(monkeypatch, get=_Resp(payload), capture=cap)
+    out = hf._jina_search("query")
+    assert cap["url"] == "https://s.jina.ai/"
+    assert cap["headers"]["X-Respond-With"] == "no-content"
+    assert "Authorization" not in cap["headers"]  # keyless free tier
+    assert "- J — desc (http://d)" in out
+
+    # With a key, it's sent as a bearer token.
+    monkeypatch.setattr(hf.settings, "jina_api_key", "jk", raising=False)
+    cap2 = {}
+    _fake_requests(monkeypatch, get=_Resp(payload), capture=cap2)
+    hf._jina_search("query")
+    assert cap2["headers"]["Authorization"] == "Bearer jk"
+
+
+def test_empty_results_message(monkeypatch):
+    monkeypatch.setattr(hf.settings, "brave_api_key", "bk", raising=False)
+    _fake_requests(monkeypatch, get=_Resp({"web": {"results": []}}))
+    assert hf._brave_search("nothing") == "No search results found."
+
+
+def test_dispatch_routes_to_provider(monkeypatch):
+    monkeypatch.setattr(hf.settings, "search_provider", "tavily", raising=False)
+    monkeypatch.setattr(hf, "_tavily_search", lambda q: f"tavily::{q}")
+    out = asyncio.run(hf.background_search("q1", to_number=None, sms_bool=False))
+    assert out == "tavily::q1"
+
+
+def test_dispatch_failure_degrades_gracefully(monkeypatch):
+    monkeypatch.setattr(hf.settings, "search_provider", "brave", raising=False)
+
+    def _boom(q):
+        raise RuntimeError("connection reset")
+
+    monkeypatch.setattr(hf, "_brave_search", _boom)
+    out = asyncio.run(hf.background_search("q", to_number=None, sms_bool=False))
+    assert "Search via 'brave' failed" in out and "connection reset" in out
+
+
+def test_legacy_provider_uses_search_tool(monkeypatch):
+    monkeypatch.setattr(hf.settings, "search_provider", "legacy", raising=False)
+
+    class _FakeTool:
+        def run(self, q):
+            return f"legacy::{q}"
+
+    monkeypatch.setattr(hf, "search_tool", _FakeTool())  # Pydantic model — replace whole
+    out = asyncio.run(hf.background_search("q2", to_number=None, sms_bool=False))
+    assert out == "legacy::q2"
