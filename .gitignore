@@ -121,3 +121,6 @@ conversations.db*
 
 # Metacognitive learned-state store — runtime-mutated, seeds are committed separately
 prax/data/metacognitive/runtime/
+
+# Session checkpoint — frequently-updated working state, never committed
+checkpoint.md
