@@ -291,7 +291,10 @@ class AppSettings(BaseSettings):
             "When true, hybrid memory retrieval generates a few paraphrase / "
             "HyDE query variants (cheap LOW-tier LLM), embeds each, and unions "
             "their dense hits before RRF fusion — a recall win for queries "
-            "whose phrasing differs from how the memory was stored."
+            "whose phrasing differs from how the memory was stored. "
+            "Eval gate 2026-07-08 (docs/research/flag-eval-campaign-2026-07-08.md): DEFERRED — the capability "
+            "suite has no retrieval coverage to measure lift, and this "
+            "adds an LLM call per query; needs a retrieval-specific eval."
         ),
     )
     retrieval_query_expansion_n: int = Field(
@@ -304,7 +307,9 @@ class AppSettings(BaseSettings):
             "When true, a relevance-rerank pass (LLM-judge) re-scores the "
             "fused candidate set against the query before truncating to "
             "top_k, so low-relevance-but-recent/important memories can't "
-            "outrank on-topic ones."
+            "outrank on-topic ones. "
+            "Eval gate 2026-07-08 (docs/research/flag-eval-campaign-2026-07-08.md): DEFERRED — no suite coverage "
+            "to measure lift; adds an LLM call per query."
         ),
     )
     retrieval_rerank_candidates: int = Field(
@@ -511,7 +516,11 @@ class AppSettings(BaseSettings):
         description=(
             "Deny-by-default: when true, a tool with no static risk "
             "classification (and not an imported plugin) defaults to HIGH risk "
-            "— requiring confirmation — instead of MEDIUM-and-run."
+            "— requiring confirmation — instead of MEDIUM-and-run. "
+            "Eval gate 2026-07-08 (docs/research/flag-eval-campaign-2026-07-08.md): REJECTED — measured "
+            "correctness regression (blocked a needed tool; a capability "
+            "case failed). Keep off until tuned; don't flip without new "
+            "evidence."
         ),
     )
     high_risk_scoped_confirm: bool = Field(
@@ -519,7 +528,10 @@ class AppSettings(BaseSettings):
         description=(
             "When true, confirming a HIGH-risk tool unlocks ONLY that tool for "
             "the turn, instead of unlocking every HIGH-risk tool after the "
-            "first confirmation."
+            "first confirmation. "
+            "Eval gate 2026-07-08 (docs/research/flag-eval-campaign-2026-07-08.md): REJECTED alongside "
+            "UNKNOWN_TOOL_HIGH_RISK (measured as a pair) — correctness "
+            "regression. Keep off until tuned."
         ),
     )
     lethal_trifecta_guard: bool = Field(
@@ -542,9 +554,12 @@ class AppSettings(BaseSettings):
             "provenance-tainted before re-entering the model's context, and the "
             "trace heartbeat is touched on every model step — the in-loop "
             "counterpart to the perimeter governance wrapper. Default off "
-            "(prior behaviour: no middleware, identical compiled graph); flip "
-            "after the eval gate (injecagent/sycophancy + harness-lift) "
-            "blesses it."
+            "(prior behaviour: no middleware, identical compiled graph). "
+            "Eval gate 2026-07-08 (docs/research/flag-eval-campaign-2026-07-08.md): "
+            "FLIPPED ON in the recommended config (.env-example) — no capability "
+            "regression, ~7% fewer tokens; measured injection lift was within "
+            "noise at the sample size, so the flip rests on no-regression + "
+            "cost + defense-in-depth design."
         ),
     )
     claim_audit_attended_quarantine: bool = Field(
@@ -553,7 +568,10 @@ class AppSettings(BaseSettings):
             "When true, ungrounded-claim warnings are appended to the "
             "user-facing reply on attended (interactive) turns too — not only "
             "posted to the internal Auditor channel. Scheduled turns always "
-            "quarantine regardless of this flag."
+            "quarantine regardless of this flag. "
+            "Eval gate 2026-07-08 (docs/research/flag-eval-campaign-2026-07-08.md): DEFERRED — capability-clean "
+            "but the sycophancy A/B was inconclusive (run aborted on a "
+            "dead search backend); rerun before flipping."
         ),
     )
     verify_published_links: bool = Field(
@@ -584,7 +602,10 @@ class AppSettings(BaseSettings):
             "When true, a cheap LOW-tier pre-flight gate runs before the main "
             "agent loop: if a request is BOTH ambiguous AND potentially "
             "irreversible/costly, it returns a single clarifying question "
-            "instead of guessing. Biased strongly toward proceeding."
+            "instead of guessing. Biased strongly toward proceeding. "
+            "Eval gate 2026-07-08 (docs/research/flag-eval-campaign-2026-07-08.md): REJECTED — +11% tokens with "
+            "no pass-rate gain. Leave off unless traffic is "
+            "ambiguity-heavy; don't flip without new evidence."
         ),
     )
     prompt_selectivity_enabled: bool = Field(
@@ -594,7 +615,9 @@ class AppSettings(BaseSettings):
             "system prompt (e.g. document pipelines, math/LaTeX, teaching) are "
             "dropped when the request shows no signal of needing them — "
             "shrinking the base prompt on simple turns. Off by default ships "
-            "the full prompt unchanged."
+            "the full prompt unchanged. "
+            "Eval gate 2026-07-08 (docs/research/flag-eval-campaign-2026-07-08.md): FLIPPED ON in the recommended "
+            "config (.env-example) — no regression, ~2% fewer tokens."
         ),
     )
 

@@ -138,19 +138,20 @@ Legend: ✅ strong · ◐ partial · ❌ absent (genuine gap) · — not applica
 > defaults to today's behaviour (so the eval gate — not a silent regression — governs when
 > behaviour actually changes). Flags are documented in `.env-example`. Summary:
 >
-> | Item | Flag(s) | Default |
-> |---|---|---|
-> | P1 cross-provider fallback | `LLM_FALLBACK_ENABLED` (+`LLM_FALLBACK_CHAIN`) | off |
-> | P2 continuous/decomposed evals | `EVAL_NIGHTLY_ENABLED`, `make eval` | off / manual |
-> | P3 durable checkpoint + resume | `CHECKPOINT_BACKEND=sqlite`, `CHECKPOINT_RESUME_ENABLED` (persisted pointer survives restart; reset via the state file / flag) | off |
-> | P4 within-turn recovery injection | `RECOVERY_CONTEXT_INJECTION` | **on** |
-> | P5 orchestrator-prompt selectivity | `PROMPT_SELECTIVITY_ENABLED` | off |
-> | P6 intent-clarification gate | `INTENT_CLARIFICATION_ENABLED` | off |
-> | P7 reranking + query expansion | `RETRIEVAL_RERANK`, `RETRIEVAL_QUERY_EXPANSION` | off |
-> | P7 hybrid knowledge search | `KNOWLEDGE_HYBRID_ENABLED` (degrades to substring when Qdrant down) | **on** |
-> | circuit-breaker attribution fix | — (always on) | fixed |
-> | deny-by-default tools / scoped HIGH unlock | `UNKNOWN_TOOL_HIGH_RISK`, `HIGH_RISK_SCOPED_CONFIRM` | off |
-> | hallucination-guard counter / attended quarantine / retrieval TraceEvent | `prax_hallucination_guard_total`, `CLAIM_AUDIT_ATTENDED_QUARANTINE` | on / off / on |
+> | Item | Flag(s) | Default | [Eval-gate verdict 2026-07-08](flag-eval-campaign-2026-07-08.md) |
+> |---|---|---|---|
+> | P1 cross-provider fallback | `LLM_FALLBACK_ENABLED` (+`LLM_FALLBACK_CHAIN`) | off | not benchmark-measurable (fault injection); needs 2nd provider key |
+> | P2 continuous/decomposed evals | `EVAL_NIGHTLY_ENABLED`, `make eval` | off / manual | (is the gate itself) |
+> | P3 durable checkpoint + resume | `CHECKPOINT_BACKEND=sqlite`, `CHECKPOINT_RESUME_ENABLED` (persisted pointer survives restart; reset via the state file / flag) | off | judgment item — unit-tested, low-risk |
+> | P4 within-turn recovery injection | `RECOVERY_CONTEXT_INJECTION` | **on** | shipped on pre-gate |
+> | P5 orchestrator-prompt selectivity | `PROMPT_SELECTIVITY_ENABLED` | off | **FLIPPED** — no regression, −2% tokens |
+> | P6 intent-clarification gate | `INTENT_CLARIFICATION_ENABLED` | off | **REJECTED** — +11% tokens, no pass-rate gain |
+> | P7 reranking + query expansion | `RETRIEVAL_RERANK`, `RETRIEVAL_QUERY_EXPANSION` | off | **DEFERRED** — no suite coverage; adds LLM calls |
+> | P7 hybrid knowledge search | `KNOWLEDGE_HYBRID_ENABLED` (degrades to substring when Qdrant down) | **on** | shipped on pre-gate |
+> | circuit-breaker attribution fix | — (always on) | fixed | — |
+> | deny-by-default tools / scoped HIGH unlock | `UNKNOWN_TOOL_HIGH_RISK`, `HIGH_RISK_SCOPED_CONFIRM` | off | **REJECTED** — correctness regression (blocked a needed tool) |
+> | hallucination-guard counter / attended quarantine / retrieval TraceEvent | `prax_hallucination_guard_total`, `CLAIM_AUDIT_ATTENDED_QUARANTINE` | on / off / on | quarantine **DEFERRED** — A/B inconclusive (dead search backend) |
+> | in-loop middleware (langstack) | `AGENT_MIDDLEWARE_ENABLED` | off | **FLIPPED** — no regression, −7% tokens; security lift within noise at n=6 |
 
 Each item is backed by the code anchors above. Ordered by leverage-to-cost.
 
