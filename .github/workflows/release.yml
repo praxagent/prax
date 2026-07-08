@@ -15,6 +15,14 @@ jobs:
         env:
           FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
         with:
+          # Prefer a PAT when configured: PRs opened with the default
+          # GITHUB_TOKEN don't trigger workflows (anti-recursion), so the
+          # required `test` check never runs on release PRs and they sit
+          # unmergeable until nudged (close/reopen). With a fine-grained PAT
+          # (contents + pull-requests: write) release PRs run CI like any
+          # other PR. Falls back to the default token when the secret is
+          # absent — identical to prior behavior.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
           # Manifest mode: state lives in release-please-config.json +
           # .release-please-manifest.json (defaults). Do NOT set release-type
           # here — that forces legacy simple mode, which re-derives the version

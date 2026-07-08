@@ -191,13 +191,19 @@ same brain, no independence):
   changes, and never force-push `main`.
 - **Releases**: release-please runs in manifest mode
   (`release-please-config.json` + `.release-please-manifest.json`); merging
-  the auto-opened `chore(main): release X` PR creates the tag.  Those PRs are
-  opened by the workflow's `GITHUB_TOKEN`, which does **not** trigger the CI
-  workflow — so the required `test` check never reports.  Close and reopen
-  the release PR (`gh pr close N && gh pr reopen N`) to fire CI, then
-  auto-merge; or `gh pr merge N --squash --admin` (acceptable: the diff is
-  generated version+changelog only).  Don't recreate tags `v0.1.0`–`v0.16.0`
-  — they're orphans from a pre-reset history, deliberately left in place.
+  the auto-opened `chore(main): release X` PR creates the tag.  **Expect that
+  PR to appear/update a minute or two after any releasable merge to `main`**
+  — and unless a `RELEASE_PLEASE_TOKEN` secret is configured, it arrives with
+  NO CI checks (PRs opened by the workflow's `GITHUB_TOKEN` don't trigger
+  workflows), so the required `test` check never reports and it sits
+  unmergeable.  Nudge it: close and reopen (`gh pr close N && gh pr reopen N`)
+  to fire CI, then auto-merge; or `gh pr merge N --squash --admin`
+  (acceptable: the diff is generated version+changelog only).  Permanent fix:
+  add a fine-grained PAT (contents + pull-requests: write) as the
+  `RELEASE_PLEASE_TOKEN` repo secret — `release.yml` already prefers it when
+  present, and release PRs then trigger CI like any other PR.  Don't recreate
+  tags `v0.1.0`–`v0.16.0` — they're orphans from a pre-reset history,
+  deliberately left in place.
 - When a second human maintainer joins: raise required approvals to 1, add
   CODEOWNERS, and consider `enforce_admins` — this section is written for the
   solo phase only.
