@@ -292,17 +292,32 @@ class ConversationAgent:
             pass
         return True
 
+    def _effective_base_tier(self) -> str:
+        """Base tier for a fresh turn: the shipped base, raised to the session
+        floor if ``self_upgrade_tier`` boosted it (in-memory, non-persistent).
+        Turn-local auto-escalation can still climb above this."""
+        from prax.agent.session_tier import get_session_tier_floor
+        base = self._base_orchestrator_tier
+        floor = get_session_tier_floor()
+        ladder = self._TIER_LADDER
+        if floor in ladder and base in ladder and ladder.index(floor) > ladder.index(base):
+            return floor
+        return base
+
     def _reset_tier_to_base(self) -> None:
-        """Return to the base tier at the start of a turn (escalation is
-        turn-local, so a hard previous turn doesn't keep every later turn
-        expensive). Rebuilds only if the tier actually drifted."""
-        if self._orchestrator_tier != self._base_orchestrator_tier:
+        """Set the tier for the start of a turn to the effective base (shipped
+        base, or the session boost floor if higher). Turn-local escalation means
+        a hard previous turn doesn't keep every later turn expensive; the
+        session floor lets a deliberate self_upgrade persist across the session
+        without a permanent config write. Rebuilds only if the tier changed."""
+        target = self._effective_base_tier()
+        if self._orchestrator_tier != target:
             logger.info(
-                "Resetting orchestrator tier %s -> %s (base) for new turn",
-                self._orchestrator_tier, self._base_orchestrator_tier,
+                "Setting orchestrator tier %s -> %s for new turn",
+                self._orchestrator_tier, target,
             )
-            self._orchestrator_tier = self._base_orchestrator_tier
-            self.llm = build_llm(provider=self._active_provider, tier=self._base_orchestrator_tier)
+            self._orchestrator_tier = target
+            self.llm = build_llm(provider=self._active_provider, tier=target)
             self.graph = build_agent_loop(
                 self.llm, self.tools, checkpointer=self.checkpoint_mgr.saver,
             )
