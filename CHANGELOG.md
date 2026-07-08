@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.20.0](https://github.com/praxagent/prax/compare/v0.19.0...v0.20.0) (2026-07-08)
+
+
+### Features
+
+* **orchestrator:** auto-escalate model tier on recursion thrash (up to high) ([#62](https://github.com/praxagent/prax/issues/62)) ([c61099c](https://github.com/praxagent/prax/commit/c61099ca4e981573119da20bb82da2bd5384f813))
+* **plugins:** builtin text_to_speech tool — multi-provider, workspace-deliverable ([#58](https://github.com/praxagent/prax/issues/58)) ([d76e188](https://github.com/praxagent/prax/commit/d76e18898dc469846ca4a138f15033556fe19f2d))
+* **search:** SEARCH_PROVIDER flag — modern ddgs backend for web search ([#55](https://github.com/praxagent/prax/issues/55)) ([4d873c2](https://github.com/praxagent/prax/commit/4d873c26c131136ec9e1308b2bca2511a64ee861))
+
+
+### Bug Fixes
+
+* **orchestrator:** fail gracefully on the recursion limit instead of a raw crash ([#61](https://github.com/praxagent/prax/issues/61)) ([b4544c5](https://github.com/praxagent/prax/commit/b4544c5ee00e38814c2b109b6aa16536a76f12db))
+* **sandbox:** mount the user's REAL workspace, not a phantom prax/workspaces/ tree ([#60](https://github.com/praxagent/prax/issues/60)) ([6ca8a59](https://github.com/praxagent/prax/commit/6ca8a59de8adcc56cdede7678b23f235dc7bf8aa))
+* **tts:** persist audio to active/ via caps.save_file so it's deliverable ([#59](https://github.com/praxagent/prax/issues/59)) ([670cc39](https://github.com/praxagent/prax/commit/670cc3917e8e05f1cd0579749fc651b9cab61163))
+* **vision,routing:** analyze_image resolves workspace filenames; social posts route to the API ([#57](https://github.com/praxagent/prax/issues/57)) ([d654c0e](https://github.com/praxagent/prax/commit/d654c0e351e6c064dc5debd26b6411b79b0a306a))
+
 ## [0.19.0](https://github.com/praxagent/prax/compare/v0.18.0...v0.19.0) (2026-07-08)
 
 
