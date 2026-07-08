@@ -851,9 +851,9 @@ def generate_space_cover(
     try:
         from openai import OpenAI
         client = OpenAI(api_key=_settings.openai_key)
-        # Prefer gpt-image-1.5 (if the setting points at an image
-        # model), else fall back to dall-e-3.
-        model = _settings.vision_model or "dall-e-3"
+        # Use the image-GENERATION model (not vision_model, which is the
+        # analysis chat model); fall back to dall-e-3 for non-image names.
+        model = _settings.image_model or "dall-e-3"
         if "image" not in model and "dall" not in model:
             model = "dall-e-3"
         response = client.images.generate(
