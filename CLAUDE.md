@@ -211,6 +211,24 @@ same brain, no independence):
   CODEOWNERS, and consider `enforce_admins` — this section is written for the
   solo phase only.
 
+## Session checkpoint — `checkpoint.md`
+
+Long working sessions maintain **`checkpoint.md` at the repo root** (gitignored
+— never commit it). It is the resume point if the session is disrupted or the
+connection drops: TJ reads it to know exactly where things stand and what to
+pick up.
+
+- **Write it early and update it frequently** — after every milestone (merge,
+  campaign result, live-ops change, decision made or pending), not just at the
+  end. A stale checkpoint is worse than none: state what changed and *when*.
+- Contents: current live-server state (branch/commit, flags, health), work in
+  flight (background tasks, PRs awaiting CI), results/decisions so far,
+  **decisions pending from TJ**, bugs found-but-not-fixed, and concrete
+  "if disrupted, resume by…" steps.
+- It complements `~/PRAX/remaining_punchdown.md` (the cross-session handoff):
+  the punchdown carries durable project state; `checkpoint.md` carries *this
+  session's* fast-moving state.
+
 ## To-do systems — the wall
 
 Prax has **two separate** to-do mechanisms. They are kept apart on
