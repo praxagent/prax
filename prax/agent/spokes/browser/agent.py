@@ -146,10 +146,15 @@ def delegate_browser(task: str) -> str:
     want to SEE something in the browser panel.  Do NOT use fetch_url_content
     or text responses when the user expects browser interaction.
 
+    Do NOT use this to extract content/links/media from x.com, bsky.app, or
+    threads.net post URLs — fetch_url_content gets those via the platform's
+    native API (full text, thread, direct media URLs; no login wall).  The
+    browser only sees a logged-out wall for X. Use the browser on social
+    sites only for logged-in INTERACTIONS (posting, liking, DMs).
+
     Use this for:
     - "Open this URL and tell me what it says"
     - "Find me an interesting article on Hacker News" (when via TeamWork)
-    - "Log into x.com and read this tweet"
     - "Fill out this form with these values"
     - "Take a screenshot of the current page"
     - "Send me a screenshot of the NYT front page" / "grab a screenshot

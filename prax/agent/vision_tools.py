@@ -45,6 +45,20 @@ def _fetch_image_base64(url: str) -> tuple[str, str]:
     if not url.startswith(("http://", "https://")):
         from pathlib import Path
         p = Path(url).expanduser()
+        if not p.is_file() and not p.is_absolute():
+            # Harness tools (browser_screenshot etc.) save into the user's
+            # workspace and hand back a bare filename — resolve it there the
+            # same way workspace_send_file does, so tool outputs compose.
+            try:
+                from prax.agent.user_context import current_user_id
+                from prax.services.workspace_service import workspace_root
+                uid = current_user_id.get()
+                if uid:
+                    candidate = Path(workspace_root(uid)) / url
+                    if candidate.is_file():
+                        p = candidate
+            except Exception:
+                logger.debug("workspace path resolution failed for %s", url, exc_info=True)
         data = p.read_bytes()[:_MAX_IMAGE_BYTES]
         return base64.standard_b64encode(data).decode("ascii"), _media_type_for_suffix(p.suffix)
     headers = {
