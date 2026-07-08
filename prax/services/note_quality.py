@@ -48,27 +48,36 @@ _RAW_DUMP_PATTERNS = [
 ]
 
 
-def heuristic_check(title: str, content: str) -> list[str]:
+def heuristic_check(title: str, content: str, *, deep_dive: bool = True) -> list[str]:
     """Return a list of quality issues found via heuristics.
 
     Empty list means no issues found. Non-empty list is grounds for rejection.
+
+    ``deep_dive=False`` is for notes the user explicitly asked to be *concise*:
+    raw-dump and fragmentation checks still apply (a concise note must still be
+    clean), but the "must read like a synthesized deep dive" checks (headings on
+    long notes, explanatory transitions) are skipped — a short, tidy note isn't
+    a failed deep dive.
     """
     issues: list[str] = []
 
-    # Pattern matches.
+    # Pattern matches — raw dumps are wrong at any length.
     for pattern, reason in _RAW_DUMP_PATTERNS:
         matches = pattern.findall(content)
         if matches:
             count = len(matches)
             issues.append(f"{reason} ({count} occurrence{'s' if count > 1 else ''})")
 
-    # Line-based checks.
+    # Line-based checks — fragmentation is wrong at any length.
     lines = content.split("\n")
     orphan_lines = sum(1 for line in lines if len(line.strip()) <= 2 and line.strip())
     if orphan_lines > 8:
         issues.append(
             f"{orphan_lines} near-empty lines (content looks fragmented)"
         )
+
+    if not deep_dive:
+        return issues  # concise notes are exempt from deep-dive structure checks
 
     # Heading check — a deep dive should have section headings.
     headings = [line for line in lines if line.strip().startswith("#")]
@@ -139,8 +148,39 @@ Approve (approved=true) only if the note:
 Return ONLY the JSON object, no other text.
 """
 
+# Concise-note variant — for notes the user explicitly asked to keep short.
+# Judges clean, correct, well-organized brevity; does NOT demand deep-dive
+# depth, toy examples, or exhaustive walkthroughs (a concise note is not a
+# failed deep dive).
+_REVIEW_PROMPT_CONCISE = """\
+You are a quality reviewer for a CONCISE knowledge note. The user asked for a
+SHORT, to-the-point note — do NOT penalize it for being brief or lacking a
+deep dive, toy examples, or exhaustive walkthroughs. Judge only whether it is
+clean, correct, and well-organized for its length.
 
-def llm_review(title: str, content: str) -> dict | None:
+Title: {title}
+
+Content:
+{content}
+
+Return a JSON object: {{"approved": bool, "issues": [actionable strings],
+"verdict": "one sentence"}}.
+
+Reject (approved=false) ONLY if:
+1. Content is a raw copy/dump from a source (not the author's own prose)
+2. It has obvious formatting artifacts (orphan commas, [Image] placeholders,
+   duplicated variables, raw HTML entities)
+3. Any math present is broken or shown as plain text where LaTeX is needed
+4. It fails to cover the topic named in the title at all
+
+Approve (approved=true) if it is a clean, coherent, correctly-formatted note
+that covers its topic — even if short. Brevity is NOT a defect here.
+
+Return ONLY the JSON object, no other text.
+"""
+
+
+def llm_review(title: str, content: str, *, deep_dive: bool = True) -> dict | None:
     """Run an LLM-based quality review. Returns dict or None on failure.
 
     Dict shape: ``{"approved": bool, "issues": list[str], "verdict": str}``
@@ -162,7 +202,8 @@ def llm_review(title: str, content: str) -> dict | None:
         review_content = content[:8000]
         if len(content) > 8000:
             review_content += "\n\n[...truncated for review...]"
-        prompt = _REVIEW_PROMPT.format(title=title, content=review_content)
+        template = _REVIEW_PROMPT if deep_dive else _REVIEW_PROMPT_CONCISE
+        prompt = template.format(title=title, content=review_content)
         result = llm.invoke(prompt)
         text = result.content if hasattr(result, "content") else str(result)
 
@@ -227,7 +268,7 @@ def clear_revision(title: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def review_note(title: str, content: str) -> dict:
+def review_note(title: str, content: str, *, deep_dive: bool = True) -> dict:
     """Run the full quality review. Returns a dict with the outcome.
 
     Output shape::
@@ -243,14 +284,14 @@ def review_note(title: str, content: str) -> dict:
         }
     """
     revision = get_revision_count(title)
-    heuristic_issues = heuristic_check(title, content)
+    heuristic_issues = heuristic_check(title, content, deep_dive=deep_dive)
 
     # Only run the LLM review if heuristics pass OR we have budget — no need
     # to double-fail. Skip the LLM call when heuristics already caught issues.
     llm_issues: list[str] = []
     verdict = ""
     if not heuristic_issues:
-        llm_result = llm_review(title, content)
+        llm_result = llm_review(title, content, deep_dive=deep_dive)
         if llm_result is not None:
             if not llm_result["approved"]:
                 llm_issues = llm_result["issues"]

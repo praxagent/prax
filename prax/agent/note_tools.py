@@ -115,7 +115,7 @@ def _escalation_message(url: str) -> str:
 
 
 @tool
-def note_create(title: str, content: str, tags: str = "") -> str:
+def note_create(title: str, content: str, tags: str = "", deep_dive: bool = True) -> str:
     """Create a note from the current conversation and publish it as a web page.
 
     Use this when the user asks you to "make this a note", "save this as a note",
@@ -130,6 +130,11 @@ def note_create(title: str, content: str, tags: str = "") -> str:
         title: A descriptive title for the note.
         content: Full markdown content for the note.
         tags: Comma-separated tags for search (e.g. "math, linear-algebra").
+        deep_dive: Whether this is a full deep-dive note (default) or a
+            CONCISE one. Set False when the user asked for a "concise",
+            "brief", "short", or "quick" note — the quality gate then judges
+            it as a clean short note instead of rejecting it for lacking a
+            deep dive's depth/examples.
     """
     # Runtime guard: block fabricated notes even if the prompt rules were
     # ignored. If the source couldn't be read, no note should be created.
@@ -149,7 +154,7 @@ def note_create(title: str, content: str, tags: str = "") -> str:
     # MAX_REVISIONS times before allowing the save through.
     try:
         from prax.services import note_quality
-        review = note_quality.review_note(title, content)
+        review = note_quality.review_note(title, content, deep_dive=deep_dive)
         if not review["approved"] and not review["force_save"]:
             note_quality.increment_revision(title)
             return f"REVIEW REJECTED — {note_quality.format_feedback(review)}"
