@@ -540,7 +540,8 @@ def llm_config_update(component: str, provider: str | None = None,
                        temperature: float | None = None) -> str:
     """Update the LLM routing config for a component.
 
-    Changes are persisted to llm_routing.yaml and take effect on the next
+    Changes persist to a gitignored runtime overlay (never the committed
+    seed) and take effect on the next
     agent initialization (or next conversation turn for subagents).
 
     Supported providers: openai, anthropic, google, ollama, vllm.
@@ -577,7 +578,7 @@ def llm_config_update(component: str, provider: str | None = None,
         f"- Model: {result.get('model', '(unchanged)')}\n"
         f"- Tier: {result.get('tier', '(unchanged)')}\n"
         f"- Temperature: {result.get('temperature', '(unchanged)')}\n"
-        f"Changes saved to llm_routing.yaml."
+        f"Changes saved to the runtime LLM-config overlay."
     )
 
 

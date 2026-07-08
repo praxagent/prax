@@ -124,3 +124,6 @@ prax/data/metacognitive/runtime/
 
 # Session checkpoint — frequently-updated working state, never committed
 checkpoint.md
+
+# LLM routing runtime overrides — agent-driven (self_upgrade_tier etc.), seed is committed
+prax/plugins/configs/llm_routing.runtime.yaml
