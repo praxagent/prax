@@ -61,6 +61,10 @@ TEST_ENV = {
     "BROWSER_SANDBOX_ONLY": "false",
     "WEB_SEARCH_TIMEOUT_S": "0",
     "SEARCH_PROVIDER": "legacy",
+    # Eval-gated flags flipped ON in the live .env — pin to shipped defaults so
+    # local `make ci` matches keyless GitHub CI regardless of the dev's .env.
+    "AGENT_MIDDLEWARE_ENABLED": "false",
+    "PROMPT_SELECTIVITY_ENABLED": "false",
     # Discord (disabled in tests by default)
     "DISCORD_BOT_TOKEN": "",
     "DISCORD_ALLOWED_USERS": '{"999000000000000001": "TestUser"}',

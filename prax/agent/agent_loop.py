@@ -24,7 +24,14 @@ from typing import Any
 
 from langchain.agents import create_agent
 
+# Re-exported through the seam so callers (e.g. the orchestrator's retry loop)
+# can catch the loop's recursion-limit error without importing langgraph
+# directly — keeping the loop-construction seam the only langgraph importer.
+from langgraph.errors import GraphRecursionError
+
 from prax.agent.loop_middleware import default_middleware
+
+__all__ = ["build_agent_loop", "GraphRecursionError"]
 
 
 def build_agent_loop(
