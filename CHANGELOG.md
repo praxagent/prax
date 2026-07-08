@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.19.0](https://github.com/praxagent/prax/compare/v0.18.0...v0.19.0) (2026-07-08)
+
+
+### Features
+
+* **url,vision:** X media asset URLs + working image analysis ([#52](https://github.com/praxagent/prax/issues/52)) ([5a0053f](https://github.com/praxagent/prax/commit/5a0053f37255ac60ebae4a4519f2b43e1938e4a1))
+
+
+### Bug Fixes
+
+* **eval:** --skip case filter for the capability suite ([#53](https://github.com/praxagent/prax/issues/53)) ([f8ec59a](https://github.com/praxagent/prax/commit/f8ec59aef0b658464cab93176fd57509bf7642ca))
+* **search:** flag-gated wall-clock timeout for background_search_tool ([#50](https://github.com/praxagent/prax/issues/50)) ([b647c21](https://github.com/praxagent/prax/commit/b647c21a84c450f7fbf1f838938732de8d6b2fe3))
+
 ## [0.18.0](https://github.com/praxagent/prax/compare/v0.17.0...v0.18.0) (2026-07-07)
 
 
