@@ -77,23 +77,23 @@ def test_tavily_surfaces_answer_and_requires_key(monkeypatch):
     assert "- R — body (http://c)" in out
 
 
-def test_jina_is_keyless_and_uses_metadata_header(monkeypatch):
+def test_jina_requires_key_and_uses_bearer(monkeypatch):
+    # Unlike the Jina reader, the search endpoint rejects keyless requests
+    # (401, verified live 2026-07-08) — so no key returns an actionable message
+    # instead of a doomed call.
     monkeypatch.setattr(hf.settings, "jina_api_key", None, raising=False)
+    assert "JINA_API_KEY" in hf._jina_search("query")
+
+    # With a key: bearer token + metadata-only header + parse.
+    monkeypatch.setattr(hf.settings, "jina_api_key", "jk", raising=False)
     cap = {}
     payload = {"data": [{"title": "J", "description": "desc", "url": "http://d"}]}
     _fake_requests(monkeypatch, get=_Resp(payload), capture=cap)
     out = hf._jina_search("query")
     assert cap["url"] == "https://s.jina.ai/"
     assert cap["headers"]["X-Respond-With"] == "no-content"
-    assert "Authorization" not in cap["headers"]  # keyless free tier
+    assert cap["headers"]["Authorization"] == "Bearer jk"
     assert "- J — desc (http://d)" in out
-
-    # With a key, it's sent as a bearer token.
-    monkeypatch.setattr(hf.settings, "jina_api_key", "jk", raising=False)
-    cap2 = {}
-    _fake_requests(monkeypatch, get=_Resp(payload), capture=cap2)
-    hf._jina_search("query")
-    assert cap2["headers"]["Authorization"] == "Bearer jk"
 
 
 def test_empty_results_message(monkeypatch):

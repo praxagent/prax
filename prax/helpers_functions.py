@@ -133,15 +133,20 @@ def _brave_search(query: str) -> str:
 
 
 def _jina_search(query: str) -> str:
-    """Jina Search (``s.jina.ai``) — reuses JINA_API_KEY (keyless free tier).
-    ``X-Respond-With: no-content`` returns SERP metadata only (title/snippet/url),
-    not full page bodies, keeping the grounding payload small."""
+    """Jina Search (``s.jina.ai``). Requires JINA_API_KEY — unlike the Jina
+    *Reader* (r.jina.ai, keyless free tier), the search endpoint rejects
+    keyless requests with 401 (verified live 2026-07-08). ``X-Respond-With:
+    no-content`` returns SERP metadata only (title/snippet/url), not full page
+    bodies, keeping the grounding payload small."""
+    key = getattr(settings, "jina_api_key", None)
+    if not key:
+        return _missing_key_msg("jina", "JINA_API_KEY")
     import requests
 
-    headers = {"Accept": "application/json", "X-Respond-With": "no-content"}
-    key = getattr(settings, "jina_api_key", None)
-    if key:
-        headers["Authorization"] = f"Bearer {key}"
+    headers = {
+        "Accept": "application/json", "X-Respond-With": "no-content",
+        "Authorization": f"Bearer {key}",
+    }
     resp = requests.get(
         "https://s.jina.ai/", params={"q": query},
         headers=headers, timeout=_SEARCH_HTTP_TIMEOUT,

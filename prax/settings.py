@@ -57,7 +57,9 @@ class AppSettings(BaseSettings):
     # DuckDuckGo's frontend and hang when it rate-limits. Brave: an independent
     # index (https://brave.com/search/api). Tavily: LLM/agent-optimised, returns
     # extracted content + an optional synthesised answer (https://tavily.com).
-    # Jina search reuses JINA_API_KEY above (works keyless on the free tier).
+    # Jina search (SEARCH_PROVIDER=jina) uses JINA_API_KEY above. NOTE: unlike
+    # the keyless Jina *reader*, the *search* endpoint requires the key (401
+    # otherwise — verified live 2026-07-08).
     brave_api_key: str | None = Field(default=None, alias="BRAVE_API_KEY")
     tavily_api_key: str | None = Field(default=None, alias="TAVILY_API_KEY")
 
@@ -251,9 +253,10 @@ class AppSettings(BaseSettings):
             "(recommended for reliability — predictable rate limits + timeouts "
             "instead of silent hangs): 'brave' (BRAVE_API_KEY, independent "
             "index), 'tavily' (TAVILY_API_KEY, LLM/agent-optimised, includes a "
-            "synthesised answer), 'jina' (JINA_API_KEY, reuses the existing "
-            "reader key; works keyless on the free tier). A keyed provider with "
-            "no key returns an actionable message rather than failing silently."
+            "synthesised answer), 'jina' (JINA_API_KEY — the search endpoint, "
+            "unlike the keyless Jina reader, rejects keyless requests with 401). "
+            "A keyed provider with no key returns an actionable message rather "
+            "than failing silently."
         ),
     )
     search_max_results: int = Field(
