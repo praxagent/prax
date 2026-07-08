@@ -172,6 +172,36 @@ the thing it documents**, not wherever it's convenient:
   improve Prax on all queries in the class, not just the ones in
   the eval set.
 
+## Solo dev flow (GitHub)
+
+One human maintainer, so review is **CI + agentic review, not human
+approvals** (deliberate — a second sock-puppet account was tried and dropped;
+same brain, no independence):
+
+- `main` is protected on all public praxagent repos: changes go through a PR
+  with the **`test` check required** and **0 required approvals** — self-merge
+  the moment CI is green.  Auto-merge is enabled; the normal flow is
+  `gh pr create` → `gh pr merge --auto --squash`.
+- Before merging anything non-trivial, run **`/code-review`** on the diff
+  (`/code-review ultra` for substantive changes) — the PR template's checklist
+  reminds you.  This is the review; treat its confirmed findings like a
+  reviewer's blocking comments.
+- Admins bypass protection (`enforce_admins` off), so a **direct push to
+  `main` is allowed for small docs/infra one-offs** — never for behavior
+  changes, and never force-push `main`.
+- **Releases**: release-please runs in manifest mode
+  (`release-please-config.json` + `.release-please-manifest.json`); merging
+  the auto-opened `chore(main): release X` PR creates the tag.  Those PRs are
+  opened by the workflow's `GITHUB_TOKEN`, which does **not** trigger the CI
+  workflow — so the required `test` check never reports.  Close and reopen
+  the release PR (`gh pr close N && gh pr reopen N`) to fire CI, then
+  auto-merge; or `gh pr merge N --squash --admin` (acceptable: the diff is
+  generated version+changelog only).  Don't recreate tags `v0.1.0`–`v0.16.0`
+  — they're orphans from a pre-reset history, deliberately left in place.
+- When a second human maintainer joins: raise required approvals to 1, add
+  CODEOWNERS, and consider `enforce_admins` — this section is written for the
+  solo phase only.
+
 ## To-do systems — the wall
 
 Prax has **two separate** to-do mechanisms. They are kept apart on
