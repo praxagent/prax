@@ -107,7 +107,9 @@ class AppSettings(BaseSettings):
     # set ``VISION_BASE_URL`` to point at the local server.  When a base URL
     # is set, ``VISION_API_KEY`` is optional (most local servers ignore it,
     # but we still pass a placeholder because the OpenAI SDK requires one).
-    vision_model: str = Field(default="gpt-image-1.5", alias="VISION_MODEL")
+    # Must be a vision-capable CHAT model. The old default gpt-image-1.5 is an
+    # image-GENERATION model - every analysis call 500ed at OpenAI.
+    vision_model: str = Field(default="gpt-5.4-mini", alias="VISION_MODEL")
     vision_provider: str = Field(default="openai", alias="VISION_PROVIDER")
     vision_base_url: str | None = Field(default=None, alias="VISION_BASE_URL")
     vision_api_key: str | None = Field(default=None, alias="VISION_API_KEY")

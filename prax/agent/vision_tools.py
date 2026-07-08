@@ -111,7 +111,9 @@ def _analyze_openai(image_url: str, prompt: str) -> str:
                 ],
             }
         ],
-        max_tokens=2000,
+        # Modern OpenAI chat models reject the legacy `max_tokens` param
+        # ("use 'max_completion_tokens'"), which broke every vision call.
+        max_completion_tokens=2000,
     )
     return response.choices[0].message.content
 

@@ -37,7 +37,9 @@ expanded, so another author's posts can't be misattributed), Prax runs
 `GET /2/tweets/search/recent?query=conversation_id:<cid> from:<author> to:<author>`
 and returns the author's **entire self-thread** (root + self-replies, in posting
 order) as one numbered markdown document, with `t.co` links expanded to their
-real URLs. Costs 1–2 extra API calls per tweet fetch. (Link expansion is part
+real URLs. Attached **media** is resolved to direct asset URLs (photos:
+`pbs.twimg.com` links; videos/GIFs: a labeled preview frame) with a hint to
+pass them to `analyze_image` for viewing/OCR — no browser needed for images. Costs 1–2 extra API calls per tweet fetch. (Link expansion is part
 of this flag so flag-off output stays byte-identical to the original render.) Degrades honestly to the single tweet when the API tier
 has no recent-search access (Free tier), the rate limit is hit, or the thread is
 older than the 7-day recent-search window. Works from a mid-thread link too —

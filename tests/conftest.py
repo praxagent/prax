@@ -53,6 +53,13 @@ TEST_ENV = {
     "BROWSER_VNC_BASE_PORT": "5900",
     # Self-improvement (disabled in tests by default)
     "SELF_IMPROVE_ENABLED": "false",
+    # Social-fetch / browser flags — pin to the shipped defaults so tests stay
+    # hermetic even when the developer's .env opts in (flag-on behavior is
+    # tested explicitly via monkeypatch, never ambiently).
+    "TWITTER_THREAD_FETCH": "false",
+    "URL_FETCH_SOURCE_TAGS": "false",
+    "BROWSER_SANDBOX_ONLY": "false",
+    "WEB_SEARCH_TIMEOUT_S": "0",
     # Discord (disabled in tests by default)
     "DISCORD_BOT_TOKEN": "",
     "DISCORD_ALLOWED_USERS": '{"999000000000000001": "TestUser"}',

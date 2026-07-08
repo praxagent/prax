@@ -280,3 +280,88 @@ def test_foreign_root_never_merged_into_thread(monkeypatch):
     md = ur.fetch_tweet_via_api("https://x.com/alice/status/205")
     assert "# X thread by Alice (@alice) — 2 posts" in md
     assert "bob's original hot take" not in md and "5000" not in md
+
+
+# --- media attachments (under TWITTER_THREAD_FETCH) --------------------------
+
+def _media_payload():
+    tweet = {
+        "id": "300", "author_id": "9", "conversation_id": "300",
+        "text": "look at this chart https://t.co/pic",
+        "attachments": {"media_keys": ["3_111", "13_222"]},
+        "entities": {"urls": [{"url": "https://t.co/pic",
+                               "expanded_url": "https://x.com/u/status/300/photo/1"}]},
+        "public_metrics": {"like_count": 720, "retweet_count": 54, "reply_count": 0},
+    }
+    includes = {
+        "users": [{"id": "9", "name": "Justin", "username": "justin"}],
+        "media": [
+            {"media_key": "3_111", "type": "photo",
+             "url": "https://pbs.twimg.com/media/abc123.jpg",
+             "alt_text": "a knowledge graph"},
+            {"media_key": "13_222", "type": "video",
+             "preview_image_url": "https://pbs.twimg.com/ext_tw_video_thumb/xyz.jpg"},
+        ],
+    }
+    return tweet, includes
+
+
+def test_media_urls_rendered_with_flag(monkeypatch):
+    monkeypatch.setattr(ur, "_twitter_token", lambda: "tok")
+    monkeypatch.setattr(ur, "_thread_fetch_enabled", lambda: True)
+    tweet, includes = _media_payload()
+
+    def fake_get(url, params=None, headers=None, timeout=None, **k):
+        if "search/recent" in url:
+            return _Resp(200, {"data": [], "meta": {}})
+        assert "attachments.media_keys" in params["expansions"]
+        assert params["media.fields"]  # media expansion requested
+        return _Resp(200, {"data": tweet, "includes": includes})
+
+    monkeypatch.setattr(ur.requests, "get", fake_get)
+    md = ur.fetch_tweet_via_api("https://x.com/justin/status/300")
+    assert "**Media:**" in md
+    assert "- photo: https://pbs.twimg.com/media/abc123.jpg" in md
+    assert 'alt: "a knowledge graph"' in md
+    # videos only expose a preview frame via this endpoint — must be labeled
+    assert "- video: https://pbs.twimg.com/ext_tw_video_thumb/xyz.jpg (preview frame)" in md
+    assert "pass its URL to analyze_image" in md  # vision-routing hint rides along
+
+
+def test_media_hidden_when_flag_off(monkeypatch):
+    monkeypatch.setattr(ur, "_twitter_token", lambda: "tok")
+    tweet, includes = _media_payload()
+    monkeypatch.setattr(
+        ur.requests, "get",
+        lambda url, params=None, headers=None, timeout=None, **k:
+            _Resp(200, {"data": tweet, "includes": includes}),
+    )
+    md = ur.fetch_tweet_via_api("https://x.com/justin/status/300")
+    # flag off: byte-compatible with the original render — no media section,
+    # no t.co expansion
+    assert "**Media:**" not in md and "pbs.twimg.com" not in md
+    assert "https://t.co/pic" in md
+
+
+def test_thread_posts_carry_their_media(monkeypatch):
+    monkeypatch.setattr(ur, "_twitter_token", lambda: "tok")
+    monkeypatch.setattr(ur, "_thread_fetch_enabled", lambda: True)
+    root, includes = _media_payload()
+    root["public_metrics"]["reply_count"] = 1
+    reply = {"id": "301", "conversation_id": "300", "in_reply_to_user_id": "9",
+             "author_id": "9", "text": "and the follow-up",
+             "attachments": {"media_keys": ["3_333"]}}
+    search_includes = {"media": [{"media_key": "3_333", "type": "photo",
+                                  "url": "https://pbs.twimg.com/media/def456.jpg"}]}
+
+    def fake_get(url, params=None, headers=None, timeout=None, **k):
+        if "search/recent" in url:
+            return _Resp(200, {"data": [reply], "includes": search_includes,
+                               "meta": {}})
+        return _Resp(200, {"data": root, "includes": includes})
+
+    monkeypatch.setattr(ur.requests, "get", fake_get)
+    md = ur.fetch_tweet_via_api("https://x.com/justin/status/300")
+    assert "2 posts" in md
+    assert "abc123.jpg" in md      # root's photo, from lookup includes
+    assert "def456.jpg" in md      # reply's photo, from search includes
