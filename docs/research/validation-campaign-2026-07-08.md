@@ -183,4 +183,7 @@ changed the document.
 
 Related: [flag-eval-campaign-2026-07-08.md](flag-eval-campaign-2026-07-08.md)
 (the day-before flag A/B), [reliable-agentic-systems-bayer.md](reliable-agentic-systems-bayer.md)
-(the eval-gate contract these campaigns implement).
+(the eval-gate contract these campaigns implement), and — the honest
+complement to this "what's proven" report — the
+[Verification Ledger](../VERIFICATION_LEDGER.md), which tracks what's
+implemented but **not** yet verified against the real external service.

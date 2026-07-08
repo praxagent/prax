@@ -179,6 +179,13 @@ the thing it documents**, not wherever it's convenient:
   NOT be able to tell which tasks failed.  The instruction should
   improve Prax on all queries in the class, not just the ones in
   the eval set.
+- **Be honest about what's verified.**  Unit tests prove logic, not
+  that a real third-party API/credential path works.  When you ship a
+  feature that talks to an external service you did **not** exercise
+  live, add a row to [`docs/VERIFICATION_LEDGER.md`](docs/VERIFICATION_LEDGER.md)
+  in the same PR (status: unit-tested-only / unverified).  Shipping
+  unverified is fine; *implying* it's verified is not.  Update the row
+  when it's later run for real.
 
 ## Solo dev flow (GitHub)
 
