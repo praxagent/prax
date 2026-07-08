@@ -590,6 +590,10 @@ If Prax keeps asking "should I proceed?" or "do you want me to...?" when the ans
 - [x] Agent task planning (multi-step decomposition) + instruction persistence
 
 **Reliability & resilience**
+_(flag-gated; recommended settings are pre-flipped in `.env-example` per the
+[2026-07-08 eval-gate run](docs/research/flag-eval-campaign-2026-07-08.md) —
+every flag A/B'd against baseline, including the ones that measured WORSE and
+stay off)_
 - [x] Cross-provider LLM failover (rate-limit / overload / breaker-aware)
 - [x] Per-dependency circuit breakers for external services
 - [x] Durable checkpoints (in-memory / SQLite) with automatic retry-from-last-good-state

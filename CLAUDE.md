@@ -138,7 +138,15 @@ the thing it documents**, not wherever it's convenient:
   anchors are in
   [`docs/research/reliable-agentic-systems-bayer.md`](docs/research/reliable-agentic-systems-bayer.md).
   When extending these, preserve the default-off contract and gate
-  behaviour changes so the eval gate governs rollout.
+  behaviour changes so the eval gate governs rollout.  **First eval-gate
+  run (2026-07-08)** A/B'd every measurable flag — full verdicts in
+  [`docs/research/flag-eval-campaign-2026-07-08.md`](docs/research/flag-eval-campaign-2026-07-08.md):
+  `AGENT_MIDDLEWARE_ENABLED` and `PROMPT_SELECTIVITY_ENABLED` are now the
+  recommended configuration (flipped in `.env-example`); intent
+  clarification and deny-by-default tool boundaries were REJECTED on
+  measured evidence (cost/correctness regressions) — don't flip them
+  without new data; retrieval rerank/expansion and attended quarantine
+  are deferred pending better eval coverage.  Code defaults stay off.
 - **MCP server** (`prax/mcp/`, default-off) — exposes a curated,
   bearer-gated subset of Prax tools to *other* agents over the Model
   Context Protocol (`POST /mcp`, JSON-RPC, no SDK dep). Fail-closed
