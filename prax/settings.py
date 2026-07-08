@@ -111,6 +111,10 @@ class AppSettings(BaseSettings):
     # image-GENERATION model - every analysis call 500ed at OpenAI.
     vision_model: str = Field(default="gpt-5.4-mini", alias="VISION_MODEL")
     vision_provider: str = Field(default="openai", alias="VISION_PROVIDER")
+    # Image GENERATION model (distinct from vision_model, which is analysis-only).
+    # Used by the builtin generate_image tool and Library cover generation.
+    # Non-image names fall back to dall-e-3 at the call site.
+    image_model: str = Field(default="gpt-image-1", alias="IMAGE_MODEL")
     vision_base_url: str | None = Field(default=None, alias="VISION_BASE_URL")
     vision_api_key: str | None = Field(default=None, alias="VISION_API_KEY")
 
