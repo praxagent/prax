@@ -52,6 +52,14 @@ class AppSettings(BaseSettings):
     # use your paid quota for higher throughput and better reliability.
     # Sign up at https://jina.ai.
     jina_api_key: str | None = Field(default=None, alias="JINA_API_KEY")
+    # Web-search provider API keys (see SEARCH_PROVIDER). Each is a real,
+    # supported Search API — unlike the keyless ddgs/legacy paths which scrape
+    # DuckDuckGo's frontend and hang when it rate-limits. Brave: an independent
+    # index (https://brave.com/search/api). Tavily: LLM/agent-optimised, returns
+    # extracted content + an optional synthesised answer (https://tavily.com).
+    # Jina search reuses JINA_API_KEY above (works keyless on the free tier).
+    brave_api_key: str | None = Field(default=None, alias="BRAVE_API_KEY")
+    tavily_api_key: str | None = Field(default=None, alias="TAVILY_API_KEY")
 
     # X / Twitter API v2 bearer token.  When set, x.com/twitter.com STATUS links
     # are fetched via the API instead of the web reader — X has locked down
@@ -234,19 +242,23 @@ class AppSettings(BaseSettings):
     search_provider: str = Field(
         default="legacy", alias="SEARCH_PROVIDER",
         description=(
-            "Web-search backend for background_search_tool. 'legacy' (default, "
-            "prior behaviour) uses langchain_community's DuckDuckGoSearchRun on "
-            "the sunset duckduckgo-search package — whose backends have been "
-            "observed hanging/erroring. 'ddgs' uses the actively-maintained "
-            "ddgs successor package directly (no API key, better backend "
-            "rotation, returns titled+linked snippets so answers can cite "
-            "sources). Verified 2026-07-08: ddgs answered in <1s while the "
-            "legacy backends hung."
+            "Web-search backend for background_search_tool. Keyless: 'legacy' "
+            "(default, prior behaviour) uses langchain_community's "
+            "DuckDuckGoSearchRun on the sunset duckduckgo-search package — "
+            "backends observed hanging/erroring; 'ddgs' uses the maintained "
+            "ddgs successor directly (better rotation, still a scraper of "
+            "DuckDuckGo's frontend, so still fragile). Keyed, real Search APIs "
+            "(recommended for reliability — predictable rate limits + timeouts "
+            "instead of silent hangs): 'brave' (BRAVE_API_KEY, independent "
+            "index), 'tavily' (TAVILY_API_KEY, LLM/agent-optimised, includes a "
+            "synthesised answer), 'jina' (JINA_API_KEY, reuses the existing "
+            "reader key; works keyless on the free tier). A keyed provider with "
+            "no key returns an actionable message rather than failing silently."
         ),
     )
     search_max_results: int = Field(
         default=6, alias="SEARCH_MAX_RESULTS",
-        description="Result count for the 'ddgs' search provider.",
+        description="Result count for the keyed/ddgs search providers.",
     )
     llm_request_timeout: int = Field(
         default=300, alias="LLM_REQUEST_TIMEOUT",
