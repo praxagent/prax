@@ -31,6 +31,16 @@ def sandbox_shell(command: str, timeout: int = 60) -> str:
     Do NOT delegate to sandbox_start/delegate_sandbox when in terminal mode.
     Just call this tool directly with the command.
 
+    FILES FOR THE USER: the container's /tmp is internal — the user can NEVER
+    receive a file from there, and "sandbox:/tmp/..." links do not work.
+    Write any artifact the user should get under /workspace (the shared
+    mount), then deliver it with workspace_send_file.
+
+    BOUND YOUR OUTPUT: the container's disk IS the host disk. Never run
+    generators without a size/duration limit (e.g. ffmpeg with a lavfi
+    source needs -t; a runaway command once filled the entire disk with a
+    21 GB file and took the whole system down).
+
     Args:
         command: The shell command to run.
         timeout: Max seconds to wait (default 60).
