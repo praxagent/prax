@@ -1461,6 +1461,55 @@ class ConversationAgent:
                 if isinstance(exc, TimeoutError):
                     raise
 
+                # --- Recursion limit: fail gracefully, do NOT retry ---
+                # Retrying resumes the same stuck state and re-hits the limit,
+                # burning more tool calls before surfacing a raw traceback to
+                # the user (observed: a 5-minute, 59-call death spiral). Stop
+                # immediately with an honest message and record it so the
+                # metacognitive layer learns.  Imported through the loop seam
+                # (agent_loop) so orchestrator never imports langgraph directly.
+                from prax.agent.agent_loop import GraphRecursionError
+                if isinstance(exc, GraphRecursionError):
+                    logger.warning(
+                        "Recursion limit hit for user %s — abandoning turn gracefully",
+                        user_id,
+                    )
+                    try:
+                        from prax.agent.metacognitive import get_metacognitive_store
+                        get_metacognitive_store().record_failure(
+                            component="orchestrator",
+                            pattern_id="graph_GraphRecursionError",
+                            description="Turn hit the tool-call recursion limit without finishing.",
+                            compensating_instruction=(
+                                "If a step keeps failing the same way, STOP retrying "
+                                "it — report what you accomplished and what blocked you, "
+                                "rather than looping."
+                            ),
+                        )
+                    except Exception:
+                        pass
+                    try:
+                        from prax.services.health_telemetry import (
+                            EventCategory,
+                            Severity,
+                            record_event,
+                        )
+                        record_event(
+                            EventCategory.TOOL_ERROR, Severity.WARNING,
+                            component="orchestrator",
+                            details=f"Recursion limit reached for user {user_id}",
+                        )
+                    except Exception:
+                        pass
+                    return (
+                        "I wasn't able to finish that — I got stuck repeating the "
+                        "same steps and stopped rather than keep going in circles. "
+                        "This usually means one part of the task kept failing the "
+                        "same way. Could you rephrase it, or break it into smaller "
+                        "pieces? If you tell me which part matters most, I'll focus "
+                        "there."
+                    ) + self._drain_denylist_notice()
+
                 # --- Context overflow recovery ---
                 # If the LLM rejects the payload for being too large,
                 # compact 20% more aggressively and retry (up to 3 times).
