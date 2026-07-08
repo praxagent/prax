@@ -65,6 +65,7 @@ TEST_ENV = {
     # local `make ci` matches keyless GitHub CI regardless of the dev's .env.
     "AGENT_MIDDLEWARE_ENABLED": "false",
     "PROMPT_SELECTIVITY_ENABLED": "false",
+    "AUTO_TIER_ESCALATION": "false",
     # Discord (disabled in tests by default)
     "DISCORD_BOT_TOKEN": "",
     "DISCORD_ALLOWED_USERS": '{"999000000000000001": "TestUser"}',

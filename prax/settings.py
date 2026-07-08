@@ -173,6 +173,22 @@ class AppSettings(BaseSettings):
             "spokes have their own separate limits."
         ),
     )
+    auto_tier_escalation: bool = Field(
+        default=False, alias="AUTO_TIER_ESCALATION",
+        description=(
+            "When a turn thrashes into the tool-call recursion limit — the "
+            "signal that the current model is too weak for this task — "
+            "automatically rebuild the orchestrator one tier up (low→medium→"
+            "high) and retry the turn, instead of failing. Escalation is "
+            "turn-local (each turn starts back at the base tier, keeping simple "
+            "turns cheap) and capped by AUTO_TIER_ESCALATION_CEILING. Default "
+            "off preserves prior behaviour (fail gracefully at the base tier)."
+        ),
+    )
+    auto_tier_escalation_ceiling: str = Field(
+        default="high", alias="AUTO_TIER_ESCALATION_CEILING",
+        description="Top tier auto-escalation may climb to (low|medium|high|pro).",
+    )
     agent_max_delegation_depth: int = Field(
         default=4, alias="AGENT_MAX_DELEGATION_DEPTH",
         description=(
