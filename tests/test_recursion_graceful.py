@@ -8,6 +8,12 @@ def test_recursion_returns_graceful_message(monkeypatch):
     from prax.agent import orchestrator as orch_mod
 
     orch = orch_mod.ConversationAgent.__new__(orch_mod.ConversationAgent)
+    orch._orchestrator_tier = "low"
+    orch._base_orchestrator_tier = "low"
+    orch._active_provider = "openai"
+    # auto-escalation OFF here: assert the pure graceful-fail path.
+    import prax.settings as _s
+    monkeypatch.setattr(_s.settings, "auto_tier_escalation", False, raising=False)
 
     calls = {"n": 0}
 

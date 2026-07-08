@@ -153,6 +153,10 @@ class ConversationAgent:
         # session classification, entity extraction, note quality) stay
         # on low — they don't call tools.
         self._orchestrator_tier = tier or cfg.get("tier") or "medium"
+        # The base tier a fresh turn starts at.  Auto-escalation may raise
+        # _orchestrator_tier mid-turn; run() resets it to the base each turn so
+        # simple turns stay cheap.
+        self._base_orchestrator_tier = self._orchestrator_tier
         self.llm = build_llm(
             provider=provider or cfg.get("provider"),
             model=effective_model,
@@ -242,6 +246,66 @@ class ConversationAgent:
             self.llm, self.tools, checkpointer=self.checkpoint_mgr.saver,
         )
         self._active_provider = provider.lower()
+
+    # ------------------------------------------------------------------
+    # Auto tier escalation (engaged only when settings.auto_tier_escalation)
+    # ------------------------------------------------------------------
+
+    _TIER_LADDER = ("low", "medium", "high", "pro")
+
+    def _escalate_tier(self, user_id: str) -> bool:
+        """Bump the orchestrator one tier up for the rest of this turn's retry.
+
+        Triggered when a turn thrashes into the recursion limit — i.e. the
+        current model is too weak for the task. Rebuilds self.llm + self.graph
+        at the higher tier (same provider). Returns True if escalated, False if
+        disabled, already at the ceiling, or the tier is off-ladder.
+        """
+        if not getattr(settings, "auto_tier_escalation", False):
+            return False
+        ladder = self._TIER_LADDER
+        cur = self._orchestrator_tier
+        ceiling = (getattr(settings, "auto_tier_escalation_ceiling", "high") or "high").lower()
+        try:
+            cur_i, ceil_i = ladder.index(cur), ladder.index(ceiling)
+        except ValueError:
+            return False  # non-standard tier — don't touch it
+        if cur_i >= ceil_i or cur_i >= len(ladder) - 1:
+            return False  # already at (or above) the ceiling
+        new_tier = ladder[cur_i + 1]
+        self._orchestrator_tier = new_tier
+        self.llm = build_llm(provider=self._active_provider, tier=new_tier)
+        self.graph = build_agent_loop(
+            self.llm, self.tools, checkpointer=self.checkpoint_mgr.saver,
+        )
+        logger.warning(
+            "Auto-escalating orchestrator tier %s -> %s for user %s (recursion thrash)",
+            cur, new_tier, user_id,
+        )
+        try:
+            from prax.services.health_telemetry import EventCategory, Severity, record_event
+            record_event(
+                EventCategory.RETRY, Severity.WARNING, component="orchestrator",
+                details=f"Auto tier escalation {cur} -> {new_tier} for user {user_id}",
+            )
+        except Exception:
+            pass
+        return True
+
+    def _reset_tier_to_base(self) -> None:
+        """Return to the base tier at the start of a turn (escalation is
+        turn-local, so a hard previous turn doesn't keep every later turn
+        expensive). Rebuilds only if the tier actually drifted."""
+        if self._orchestrator_tier != self._base_orchestrator_tier:
+            logger.info(
+                "Resetting orchestrator tier %s -> %s (base) for new turn",
+                self._orchestrator_tier, self._base_orchestrator_tier,
+            )
+            self._orchestrator_tier = self._base_orchestrator_tier
+            self.llm = build_llm(provider=self._active_provider, tier=self._base_orchestrator_tier)
+            self.graph = build_agent_loop(
+                self.llm, self.tools, checkpointer=self.checkpoint_mgr.saver,
+            )
 
     def _is_denylisted(self, provider: str) -> bool:
         """True if *provider* is currently denylisted (auto-expires after the cooldown)."""
@@ -779,6 +843,10 @@ class ConversationAgent:
         _run_start = _time.monotonic()
         _run_max_timeout = max(settings.agent_run_timeout, settings.agent_run_max_timeout)
         _run_max_deadline = _run_start + _run_max_timeout
+
+        # Auto tier escalation is turn-local: start every turn back at the base
+        # tier so a hard previous turn doesn't keep all later turns expensive.
+        self._reset_tier_to_base()
 
         # Start a root span that wraps the entire orchestrator invocation.
         # This sets last_root_trace_id so callers can attach it to responses.
@@ -1461,18 +1529,35 @@ class ConversationAgent:
                 if isinstance(exc, TimeoutError):
                     raise
 
-                # --- Recursion limit: fail gracefully, do NOT retry ---
-                # Retrying resumes the same stuck state and re-hits the limit,
-                # burning more tool calls before surfacing a raw traceback to
-                # the user (observed: a 5-minute, 59-call death spiral). Stop
-                # immediately with an honest message and record it so the
-                # metacognitive layer learns.  Imported through the loop seam
-                # (agent_loop) so orchestrator never imports langgraph directly.
+                # --- Recursion limit: escalate the model tier, else fail ---
+                # A recursion loop means the current model is too weak for this
+                # task. When auto-escalation is on, rebuild one tier up (low→
+                # medium→high) and retry the turn on a fresh thread — a stronger
+                # model usually breaks the loop. Only once we've climbed to the
+                # ceiling and STILL can't finish do we fail gracefully. Plain
+                # retry at the SAME tier is never done: it just re-enters the
+                # loop and burns tool calls (observed: a 5-min, 59-call spiral).
+                # GraphRecursionError comes through the loop seam so the
+                # orchestrator never imports langgraph directly.
                 from prax.agent.agent_loop import GraphRecursionError
                 if isinstance(exc, GraphRecursionError):
+                    if self._escalate_tier(user_id):
+                        # Fresh thread so the stronger model re-runs cleanly
+                        # rather than resuming the stuck 50-message state.
+                        turn = self.checkpoint_mgr.get_turn(user_id)
+                        if turn is not None:
+                            import uuid
+                            turn.thread_id = f"{user_id}:{uuid.uuid4().hex[:12]}"
+                            config = {
+                                **self.checkpoint_mgr.graph_config(turn),
+                                "recursion_limit": settings.agent_max_tool_calls,
+                                "callbacks": _callbacks,
+                            }
+                        continue
                     logger.warning(
-                        "Recursion limit hit for user %s — abandoning turn gracefully",
-                        user_id,
+                        "Recursion limit hit for user %s at ceiling tier %s — "
+                        "abandoning turn gracefully",
+                        user_id, self._orchestrator_tier,
                     )
                     try:
                         from prax.agent.metacognitive import get_metacognitive_store
