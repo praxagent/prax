@@ -13,16 +13,23 @@ _spec.loader.exec_module(tts_plugin)
 class FakeCaps:
     def __init__(self, fail=()):
         self.calls = []
+        self.saved = []
         self._fail = set(fail)
-
-    def workspace_path(self, *parts):
-        return "/ws/" + "/".join(parts)
 
     def tts_synthesize(self, text, output_path, voice="nova", provider="openai"):
         if provider in self._fail:
             raise RuntimeError(f"{provider} unavailable")
         self.calls.append({"provider": provider, "voice": voice, "path": output_path})
+        # Real backends write bytes to output_path; mimic that so the plugin's
+        # read-back + save_file path is exercised.
+        with open(output_path, "wb") as f:
+            f.write(b"ID3fake-mp3-bytes")
         return output_path
+
+    def save_file(self, filename, content):
+        assert isinstance(content, bytes) and content  # bytes reach active/
+        self.saved.append(filename)
+        return f"/ws/active/{filename}"
 
 
 def _tool(caps):
@@ -35,6 +42,7 @@ def test_auto_uses_openai_first():
     out = _tool(caps).func("Hello there, this is a test.")
     assert caps.calls[0]["provider"] == "openai"
     assert caps.calls[0]["voice"] == "nova"
+    assert len(caps.saved) == 1 and caps.saved[0].startswith("tts-hello-there")
     assert "workspace_send_file" in out and "tts-hello-there" in out
 
 
@@ -49,8 +57,9 @@ def test_auto_falls_back_to_elevenlabs():
 def test_explicit_provider_and_voice():
     caps = FakeCaps()
     out = _tool(caps).func("Specific voice.", provider="elevenlabs", voice="xyz123")
-    assert caps.calls[0] == {"provider": "elevenlabs", "voice": "xyz123",
-                             "path": caps.calls[0]["path"]}
+    assert caps.calls[0]["provider"] == "elevenlabs"
+    assert caps.calls[0]["voice"] == "xyz123"
+    assert caps.saved == [out.split("**")[1]]  # persisted via save_file
     assert "voice=xyz123" in out
 
 
