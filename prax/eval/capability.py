@@ -364,7 +364,8 @@ def _resolve_concurrency(concurrency: int | None) -> int:
 def run_capability_suite(cases: list[CapabilityCase] | None = None, *,
                          tier: str = "medium", model_override: str | None = None,
                          executor=None, suite_dir: Path | None = None,
-                         resume: bool = True, concurrency: int | None = None) -> dict:
+                         resume: bool = True, concurrency: int | None = None,
+                         skip: list[str] | None = None) -> dict:
     """Run the capability suite through the full harness, deterministically graded.
 
     *executor* is ``callable(CapabilityCase) -> CaseRun`` (default: the live
@@ -374,6 +375,10 @@ def run_capability_suite(cases: list[CapabilityCase] | None = None, *,
     from prax.eval.batch import run_batch
 
     cases = cases if cases is not None else load_capability_cases()
+    if skip:
+        # Excluding a case (e.g. one that depends on a currently-dead external
+        # service) keeps A/B arms comparable; the summary still names it.
+        cases = [c for c in cases if c.id not in set(skip)]
     by_id = {c.id: c for c in cases}
     live = executor is None
     ex = executor or (lambda c: orchestrator_executor(

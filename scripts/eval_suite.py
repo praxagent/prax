@@ -57,7 +57,7 @@ def cmd_capability(args) -> int:
     summary = run_capability_suite(
         tier=args.tier, model_override=args.model,
         resume=not args.no_resume, concurrency=args.concurrency,
-        suite_dir=_suite_dir(args),
+        suite_dir=_suite_dir(args), skip=getattr(args, "skip", None),
     )
     _print_summary(summary)
     return 0
@@ -149,6 +149,9 @@ def main() -> int:
 
     sp_cap = sub.add_parser("capability", help="capability checks through the full harness")
     _common(sp_cap)
+    sp_cap.add_argument("--skip", action="append", default=[],
+                        help="case id to exclude (repeatable) — e.g. a case whose "
+                             "external dependency is down, so A/B arms stay comparable")
     sp_cap.set_defaults(func=cmd_capability)
 
     sp_lift = sub.add_parser("harness-lift", help="full harness vs bare model, same model")

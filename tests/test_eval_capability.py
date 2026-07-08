@@ -143,3 +143,23 @@ def test_grade_case_flags_gamed_empty_pass_on_absent_check():
     assert gamed["passed"] is True and gamed["gaming_suspect"] is True
     real = grade_case(case, CaseRun(answer="Here is a real substantive summary."))
     assert real["passed"] is True and real["gaming_suspect"] is False
+
+
+def test_suite_skip_excludes_case(tmp_path):
+    ran = []
+
+    def _exec(case):
+        ran.append(case.id)
+        return CaseRun(answer="yes!")
+
+    cases = [
+        CapabilityCase(id="keep", prompt="p", checks=[CapCheck("contains", "yes", 1.0)]),
+        CapabilityCase(id="drop", prompt="p", checks=[CapCheck("contains", "yes", 1.0)]),
+    ]
+    summary = run_capability_suite(
+        cases=cases, executor=_exec, suite_dir=tmp_path, resume=False,
+        skip=["drop"],
+    )
+    assert ran == ["keep"]
+    assert summary["aggregate"]["graded"] == 1
+    assert summary["aggregate"]["passed"] == 1
