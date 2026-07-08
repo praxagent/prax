@@ -61,19 +61,49 @@ def clear_experiment_overrides(token: contextvars.Token) -> None:
     _experiment_overrides.reset(token)
     logger.info("Experiment overrides cleared")
 
+# The committed SEED — shipped defaults, read-only. Agent-driven changes
+# (self_upgrade_tier, llm_config_write) persist to the gitignored runtime file
+# derived from this path, so runtime tweaks never dirty the tracked seed or
+# permanently rewrite it in git.
 _CONFIG_PATH = Path(__file__).parent / "configs" / "llm_routing.yaml"
 
 
-def _load_config() -> dict:
-    """Load the YAML config (re-reads on every call for hot-reload)."""
-    if not _CONFIG_PATH.exists():
+def _runtime_path() -> Path:
+    """Gitignored sibling where runtime config overrides are persisted.
+
+    Derived from ``_CONFIG_PATH`` so tests that patch the seed path also
+    relocate the runtime file into their tmp dir.
+    """
+    return _CONFIG_PATH.with_name("llm_routing.runtime.yaml")
+
+
+def _read_yaml(path: Path) -> dict:
+    if not path.exists():
         return {}
     try:
-        with open(_CONFIG_PATH) as f:
+        with open(path) as f:
             return yaml.safe_load(f) or {}
     except Exception:
-        logger.exception("Failed to load LLM routing config")
+        logger.exception("Failed to load LLM routing config from %s", path)
         return {}
+
+
+def _merge_config(base: dict, override: dict) -> dict:
+    """Deep-merge *override* onto *base* (defaults + per-component keys)."""
+    merged = {"defaults": {**(base.get("defaults") or {}), **(override.get("defaults") or {})}}
+    comps = {name: dict(vals or {}) for name, vals in (base.get("components") or {}).items()}
+    for name, ov in (override.get("components") or {}).items():
+        comps.setdefault(name, {}).update(ov or {})
+    merged["components"] = comps
+    return merged
+
+
+def _load_config() -> dict:
+    """Effective config: committed seed merged with gitignored runtime overrides.
+
+    Re-reads both on every call for hot-reload.
+    """
+    return _merge_config(_read_yaml(_CONFIG_PATH), _read_yaml(_runtime_path()))
 
 
 def _env_override(component: str, key: str) -> str | None:
@@ -153,19 +183,19 @@ def update_component_config(component: str, **kwargs) -> dict:
     Returns:
         The updated component config.
     """
-    config = _load_config()
-    if "components" not in config:
-        config["components"] = {}
-    if component not in config["components"]:
-        config["components"][component] = {}
-
+    # Persist to the gitignored RUNTIME overlay only — never the committed seed.
+    runtime = _read_yaml(_runtime_path())
+    runtime.setdefault("components", {}).setdefault(component, {})
     for key in ("provider", "model", "tier", "temperature"):
         if key in kwargs:
-            config["components"][component][key] = kwargs[key]
+            runtime["components"][component][key] = kwargs[key]
 
-    _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(_CONFIG_PATH, "w") as f:
-        yaml.dump(config, f, default_flow_style=False)
+    path = _runtime_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        yaml.dump(runtime, f, default_flow_style=False)
 
-    logger.info("Updated LLM config for %s: %s", component, kwargs)
-    return config["components"][component]
+    logger.info("Updated runtime LLM config for %s: %s", component, kwargs)
+    # Return the EFFECTIVE (seed+runtime) component config so callers see the
+    # resolved values, not just the runtime delta.
+    return _load_config().get("components", {}).get(component, {})
