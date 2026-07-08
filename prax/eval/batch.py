@@ -92,6 +92,16 @@ def _run_with_timeout(fn: Callable[[], Any], timeout_s: float | None) -> Any:
     thread.start()
     thread.join(timeout_s)
     if thread.is_alive():
+        # The task IS abandoned here (we return control to the caller), but the
+        # daemon worker keeps running until whatever it's blocked on returns —
+        # Python can't force-kill a thread. So a py-spy taken later may still
+        # show this worker deep in a blocking call; that is a LEAKED-but-
+        # abandoned thread, NOT evidence the timeout failed to fire. Bound the
+        # blocking op itself (e.g. WEB_SEARCH_TIMEOUT_S) to cap the leak.
+        logger.warning(
+            "task exceeded %ss wall-clock limit — abandoning; the worker thread "
+            "may keep running until its current blocking call returns", timeout_s,
+        )
         raise TimeoutError(f"task exceeded {timeout_s}s wall-clock limit")
     if "error" in box:
         raise box["error"]

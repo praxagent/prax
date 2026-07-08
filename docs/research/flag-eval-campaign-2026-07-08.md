@@ -53,9 +53,17 @@ security lift at this sample size.
    backend parks the call with no timeout anywhere in the stack. Fixed
    (flag-gated `WEB_SEARCH_TIMEOUT_S`, PR #50) after py-spy caught an eval case
    16+ minutes inside the search `select()` loop.
-2. **`PRAX_EVAL_TASK_TIMEOUT_S` does not abandon a wedged capability case**
-   even though `resolve_task_timeout()` returns the configured value — the
-   batch runner's `_run_with_timeout` join never fires. Open bug.
+2. ~~**`PRAX_EVAL_TASK_TIMEOUT_S` does not abandon a wedged capability case**~~
+   **MISDIAGNOSIS (resolved 2026-07-08).** `_run_with_timeout` abandons a hung
+   task correctly at the timeout (proven by `test_timeout_fires_without_blocking`
+   / `test_timeout_logs_abandonment`). What the py-spy actually showed was the
+   *abandoned daemon worker* — still stuck in the un-bounded search `select()`
+   after the case had already been failed at the timeout — which looks like a
+   hang but isn't (Python can't force-kill a thread). Root cause was the
+   un-bounded search (finding #1, fixed by `WEB_SEARCH_TIMEOUT_S` / PR #50), so
+   abandoned workers now die within `WEB_SEARCH_TIMEOUT_S` instead of leaking to
+   process exit. `_run_with_timeout` now logs the abandonment explicitly to
+   prevent this misread recurring.
 3. **`knowledge_note_structured` fails at nano in every arm** — a standing
    model-tier capability gap, not flag-related.
 4. `--skip` case filter added to the capability CLI (PR #53) so a case with a
