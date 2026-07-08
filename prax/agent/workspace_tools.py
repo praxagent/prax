@@ -327,18 +327,40 @@ def workspace_send_file(filename: str, message: str = "") -> str:
 
     uid = _get_user_id()
     root = workspace_service._workspace_root(uid)
-    file_path = os.path.join(root, "active", filename)
-    if not os.path.isfile(file_path):
+
+    # The sandbox mounts the user's workspace ROOT at /workspace, so the agent
+    # may pass a sandbox-absolute path (/workspace/foo.mp3) or a root-level name.
+    # Normalize, then resolve from active/ (the app's own save location) OR the
+    # workspace root (where the sandbox writes) — so sandbox-generated files are
+    # deliverable regardless of which the agent used.
+    name = filename
+    for prefix in ("/workspace/", "workspace/"):
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+            break
+    name = name.lstrip("/")
+
+    file_path = None
+    for rel in (os.path.join("active", name), name):
+        try:
+            candidate = workspace_service.safe_join(root, rel)
+        except Exception:
+            continue  # path traversal — skip this candidate
+        if os.path.isfile(candidate):
+            file_path = candidate
+            break
+    if file_path is None:
         # Search plugin_data directories — IMPORTED plugins save output here.
         # The agent has full access; plugins stay sandboxed in their own dirs.
+        base = os.path.basename(name)
         plugin_data = os.path.join(root, "plugin_data")
         if os.path.isdir(plugin_data):
             for dirpath, _, filenames in os.walk(plugin_data):
-                if filename in filenames:
-                    file_path = os.path.join(dirpath, filename)
+                if base in filenames:
+                    file_path = os.path.join(dirpath, base)
                     break
-        if not os.path.isfile(file_path):
-            return f"File {filename} not found in active workspace."
+        if not file_path or not os.path.isfile(file_path):
+            return f"File {filename} not found in workspace (checked active/ and workspace root)."
 
     size_mb = os.path.getsize(file_path) / (1024 * 1024)
 
