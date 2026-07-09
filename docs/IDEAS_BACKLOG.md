@@ -1063,6 +1063,22 @@ Distilled from reading these customer stories + cookbook recipes against the bug
   Composes with #19 (notice), #22 (governor), #23 (the loop engine), #26 (un-gameable
   gate), #17 (record/compound).
 
+### 30. Voice / realtime evals — the yardstick for the day Prax goes to live voice chat
+
+- **Source**: OpenAI's realtime-voice launch coverage (2026) — `introducing-gpt-live` / `introducing-gpt-realtime` / `advancing-voice-intelligence` / dev-blog `updates-audio-models` — plus the academic full-duplex benchmarks. Enumerated 2026-07-09 at TJ's request.
+- **Why it matters**: Prax's voice today is one-way and turn-based (Twilio voice/SMS + the `text_to_speech` plugin). "Voice **chat** with Prax" means realtime bidirectional speech-to-speech, and the text capability suite measures **none** of what makes or breaks that: latency, turn-taking/interruption, ASR robustness, and instruction-following over *spoken* multi-turn. This is the standing list of evals the field uses, so the yardstick exists before we build the capability.
+- **The evals** (grouped; ★ = most agent-relevant for a *task-doing* voice agent, not a TTS product):
+  - **★ Multi-turn spoken conversation** — *Audio MultiChallenge* (instruction following, context integration, self-consistency, handling spoken self-corrections; gpt-realtime ≈30.5%). The closest audio analog to what Prax's orchestrator does.
+  - **★ Voice tool use under disfluency** — *Full-Duplex-Bench v3* (tool/function calling for full-duplex voice agents amid real-world disfluency). Maps directly to Prax's governed tools driven by voice.
+  - **★ Spoken reasoning** — *Big Bench Audio* (audio-in reasoning; gpt-realtime ≈82.8% vs 65.6% Dec-2024).
+  - **Turn-taking / interruption** — *Full-Duplex-Bench v1.5* (overlap/barge-in handling).
+  - **ASR accuracy (WER)** — *Common Voice*, *FLEURS* (multilingual, no language hint), *Multilingual LibriSpeech*.
+  - **Noise/hallucination robustness** — OpenAI's *internal hallucination-with-noise eval* (silence + background noise; ~90% fewer hallucinations vs Whisper v2). We'd need our own analog.
+  - **Audio understanding/captioning** — *AudioCapBench* (sound/music/speech).
+  - **Real-time metrics** — **p95 latency** (the headline realtime number), interruption behavior, alphanumeric recognition (qualitative in the launch notes).
+- **Prax mapping**: a live-voice path (e.g. gpt-realtime via the Realtime API, through the sandbox or a new `voice` spoke) is the real project; these become adapters in `prax/eval/benchmarks/` alongside the text ones, keyless inline seed sets like the existing seven. The harness-lift question restates as "does the Prax scaffold help a realtime voice model?" Start with the three ★ (multi-turn IF, voice tool use, spoken reasoning) + p95 latency.
+- **Effort**: enumeration/planning done (this entry). Each ★ adapter ~1–2 days **once a voice path exists to run it through** — don't build adapters before there's a model to score. Composes with #3 (tool routing) and the existing benchmark harness.
+
 ---
 
 ## Recommended ordering — "what I'd ship this week"
