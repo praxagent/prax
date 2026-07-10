@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.21.0](https://github.com/praxagent/prax/compare/v0.20.0...v0.21.0) (2026-07-09)
+
+
+### Features
+
+* **image:** builtin generate_image tool + dedicated IMAGE_MODEL setting ([#67](https://github.com/praxagent/prax/issues/67)) ([2fd6faa](https://github.com/praxagent/prax/commit/2fd6faaae5172cd8fb1c714675f572fc7ea091d8))
+* **search:** add Brave, Tavily, and Jina search providers behind SEARCH_PROVIDER ([#71](https://github.com/praxagent/prax/issues/71)) ([eb87a67](https://github.com/praxagent/prax/commit/eb87a67210f3a7b79d0036e56aa50a58a878141f))
+
+
+### Bug Fixes
+
+* **eval:** log timeout-abandonment; correct the 'join never fires' misdiagnosis ([#69](https://github.com/praxagent/prax/issues/69)) ([f16a903](https://github.com/praxagent/prax/commit/f16a903d9ff1ac4112c10f42c1cf5aa3f2a5d947))
+* **llm-config:** runtime tier changes → gitignored overlay, not the committed seed ([#63](https://github.com/praxagent/prax/issues/63)) ([7158c62](https://github.com/praxagent/prax/commit/7158c62b5e2b5f26eb594ccbceb6812ea981f5ca))
+* **notes:** don't reject a concise note for not being a deep dive ([#65](https://github.com/praxagent/prax/issues/65)) ([7166ab3](https://github.com/praxagent/prax/commit/7166ab358d6931e2b00c6dc996f27831af39f6f4))
+* **orchestrator:** make self_upgrade_tier a transient session boost, not a config write ([#68](https://github.com/praxagent/prax/issues/68)) ([f69a07f](https://github.com/praxagent/prax/commit/f69a07fb959b3045c1ad7cbef2b2a7df72e1869a))
+* **search:** Jina search requires JINA_API_KEY (smoke test caught keyless 401) ([#73](https://github.com/praxagent/prax/issues/73)) ([04a7756](https://github.com/praxagent/prax/commit/04a77569d204140e46033c270f88714fd4a6bbbe))
+* **workspace:** gitignore .sandbox/ and .services/ so git add -A stops failing ([#66](https://github.com/praxagent/prax/issues/66)) ([60523c4](https://github.com/praxagent/prax/commit/60523c415f5df38944f0f2ebb22227e5816fab4f))
+
 ## [0.20.0](https://github.com/praxagent/prax/compare/v0.19.0...v0.20.0) (2026-07-08)
 
 
