@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.21.1](https://github.com/praxagent/prax/compare/v0.21.0...v0.21.1) (2026-07-12)
+
+
+### Bug Fixes
+
+* **smoke:** Prometheus scrape check is shape-aware — documented loopback bind is WARN, not FAIL ([#75](https://github.com/praxagent/prax/issues/75)) ([330a11c](https://github.com/praxagent/prax/commit/330a11cc6a30e8ea42858d742f024fd6d3e4632a))
+
 ## [0.21.0](https://github.com/praxagent/prax/compare/v0.20.0...v0.21.0) (2026-07-09)
 
 
