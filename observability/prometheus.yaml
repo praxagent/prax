@@ -11,6 +11,17 @@ scrape_configs:
     #                                 host-gateway extra_hosts mapping on the
     #                                 prometheus service in docker-compose.yml.
     # Whichever shape isn't in use simply reports its target DOWN — harmless.
+    #
+    # CAVEAT (native shape): the host-gateway target only works if Prax binds a
+    # non-loopback interface, but the documented secure default is
+    # PRAX_HOST=127.0.0.1 (docs/security/network-exposure.md — leave it). Under
+    # that default BOTH targets are down and Prax metrics are simply not
+    # scraped; `make smoke` reports it as a WARN, not a failure. Opting in via
+    # PRAX_HOST=0.0.0.0 is a dev-only tradeoff — never on an exposed box. (If
+    # you did bind 0.0.0.0 and the target is still refused, check host-firewall
+    # rules on the docker bridge — the smoke WARN can't tell those apart.)
+    # The real fix is push-based export (Prometheus 3.x OTLP receiver) —
+    # tracked in docs/IDEAS_BACKLOG.md #31.
     static_configs:
       - targets: ["prax:5001", "host.docker.internal:5001"]
     metrics_path: /metrics
