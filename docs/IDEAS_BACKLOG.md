@@ -1081,6 +1081,15 @@ Distilled from reading these customer stories + cookbook recipes against the bug
 
 ---
 
+### 31. Push-based Prax metrics (OTLP → Prometheus) — observability without opening a port
+
+- **Source**: 2026-07-12 post-crash recovery. `make smoke` flagged "Prometheus scraping Prax /metrics: no healthy prax target" — diagnosis showed a design inconsistency, not crash damage: the scrape path (`observability/prometheus.yaml` host-gateway target) requires Prax to bind a non-loopback interface, but `docs/security/network-exposure.md` mandates `PRAX_HOST=127.0.0.1`. Under the documented posture, native-shape Prax metrics are simply never scraped. (The smoke check is now shape-aware — WARN, not FAIL — but that's honesty, not a fix.)
+- **The idea**: invert the direction. Prometheus 3.x ships a native OTLP receiver (`--web.enable-otlp-receiver`, `/api/v1/otlp/v1/metrics`); Prax already speaks OTLP for traces (Tempo :4318). Add OTLP **metric** export pushing to Prometheus's published localhost port — host process pushes out, nothing new listens, loopback posture intact in both shapes.
+- **Shape**: flag-gated (`OTLP_METRICS_PUSH_ENABLED`, default off, prior behavior = scrape-only), wired wherever the OTLP trace exporter is configured; enable the receiver flag on the Prometheus service in docker-compose; smoke check learns to PASS on either path (scrape target up OR pushed `prax_*` series present via the query API).
+- **Effort**: ~half a day incl. smoke + docs. No new deps if the OTLP metrics exporter is already in the opentelemetry distribution we pin.
+
+---
+
 ## Recommended ordering — "what I'd ship this week"
 
 Ranked by impact-per-hour against the specific problem of *"don't SMS the user fabricated news at 9am."*

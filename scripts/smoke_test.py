@@ -151,6 +151,39 @@ def _ws_upgrade(host: str, port: int, path: str, origin: str, hosthdr: str,
         return (False, f"{type(e).__name__}: {str(e)[:50]}")
 
 
+def _prax_scrape_status(targets: list[dict], prax_healthy: bool) -> tuple[bool, bool, str]:
+    """Classify the Prometheus 'prax' scrape job → (ok, critical, detail).
+
+    The native `make run-local-all` shape binds Prax to 127.0.0.1 (the
+    documented default — docs/security/network-exposure.md says leave it), and
+    a loopback bind is unreachable from the Prometheus container over the
+    docker bridge: its host-gateway target is refused BY DESIGN, not by
+    miswiring. That shape is a WARN (metrics scrape unavailable), not a
+    failure — but only when Prax itself answered its /health check
+    (`prax_healthy`), so a dead app is never excused as "by design".
+    Everything else — no prax job configured, targets down while Prax itself
+    is down, non-refused scrape errors — stays CRITICAL, so the all-Docker
+    shape (in-network prax:5001 target) is still guarded.
+    """
+    prax_tgts = [t for t in targets if t.get("labels", {}).get("job") == "prax"]
+    up = next((t for t in prax_tgts if t.get("health") == "up"), None)
+    if up:
+        return True, True, f"{up.get('scrapeUrl', '?')} up"
+    if not prax_tgts:
+        return False, True, "no prax scrape job configured"
+    if all(t.get("health") == "unknown" for t in prax_tgts):
+        # Pre-first-scrape window (Prometheus just started) — indeterminate,
+        # not evidence of miswiring.
+        return False, False, "no scrape attempt yet (Prometheus just started) — rerun in ~15s"
+    refused = any("connection refused" in (t.get("lastError") or "").lower()
+                  for t in prax_tgts)
+    if prax_healthy and refused:
+        return (False, False,
+                "refused from the Prometheus container — consistent with the documented "
+                "loopback default (PRAX_HOST=127.0.0.1); see observability/prometheus.yaml")
+    return False, True, "no healthy prax target"
+
+
 def check(name: str, ok: bool, detail: str = "", *, critical: bool = True) -> bool:
     status = "PASS" if ok else ("FAIL" if critical else "WARN")
     _results.append((status, name, detail))
@@ -263,15 +296,13 @@ def main() -> int:  # noqa: C901 — a flat list of independent checks reads cle
                   f"services={','.join(vals[:6])}" if vals else "no service labels yet")
         except Exception as e:
             check("Loki receiving native logs (service=prax)", False, str(e)[:60])
-        # Prometheus — the Prax metrics scrape target is UP (host-gateway bridge).
+        # Prometheus — the Prax metrics scrape target: critical unless this is
+        # the documented native-loopback shape (see _prax_scrape_status).
+        # `prax_up` is the /health result computed at the top of main().
         try:
             tgts = _json(f"http://{H}:{PROM}/api/v1/targets").get("data", {}).get("activeTargets", [])
-            prax_up = any(t.get("labels", {}).get("job") == "prax" and t.get("health") == "up"
-                          for t in tgts)
-            detail = next((f"{t['scrapeUrl']} {t['health']}" for t in tgts
-                           if t.get("labels", {}).get("job") == "prax" and t.get("health") == "up"),
-                          "no healthy prax target")
-            check("Prometheus scraping Prax /metrics (target up)", prax_up, detail)
+            ok, crit, detail = _prax_scrape_status(tgts, prax_up)
+            check("Prometheus scraping Prax /metrics (target up)", ok, detail, critical=crit)
         except Exception as e:
             check("Prometheus scraping Prax /metrics (target up)", False, str(e)[:60])
         # Tempo — full trace pipe: OTLP ingest → store → query round-trip.
