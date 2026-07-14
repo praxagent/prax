@@ -18,6 +18,12 @@ id: proactive_signal_management
 title: Turn a recurring observation into a deduplicated, prioritizable signal (outer-loop discipline)
 kind: self_improvement
 status: baseline-gap
+# HELD-OUT selection signal (AIDE² public/private split — see
+# docs/research/aide2-recursive-self-improvement.md). Its sibling
+# proactive_initiative_judgment stays PUBLIC (optimization-visible); this one is
+# private so a change that games the visible proactivity golden is caught by a
+# regression here.
+visibility: private
 source: "Jason Zhou, 'loop engineering' (X, 2026-06) + IDEAS_BACKLOG.md #23"
 
 prompt: >-

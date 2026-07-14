@@ -57,6 +57,12 @@ class Golden:
     source: str = ""
     status: str = ""
     notes: str = ""
+    # Public/private split (AIDE² selection rule — see
+    # docs/research/aide2-recursive-self-improvement.md). A "public" golden is the
+    # optimization-visible signal a tuner / the #29 self-improvement loop may look
+    # at; a "private" golden is HELD OUT and used only to *decide* whether a change
+    # actually generalized. Default public so existing goldens are unchanged.
+    visibility: str = "public"
 
     def weight_total(self) -> float:
         return sum(c.weight for c in self.rubric)
@@ -90,6 +96,13 @@ def load_goldens(directory: Path | None = None) -> list[Golden]:
                 )
                 for c in (data.get("rubric") or [])
             ]
+            vis = str(data.get("visibility", "public")).strip().lower()
+            if vis not in ("public", "private"):
+                # Fail SAFE toward public: an unknown/typo'd visibility must never
+                # silently promote a golden into the held-out selection set.
+                logger.warning("Golden %s: unknown visibility %r — treating as public",
+                               path.stem, vis)
+                vis = "public"
             out.append(Golden(
                 id=str(data.get("id") or path.stem),
                 title=str(data.get("title", "")),
@@ -99,6 +112,7 @@ def load_goldens(directory: Path | None = None) -> list[Golden]:
                 source=str(data.get("source", "")),
                 status=str(data.get("status", "")),
                 notes=str(data.get("notes", "")),
+                visibility=vis,
             ))
         except Exception:
             logger.warning("Skipping malformed golden %s", path, exc_info=True)
@@ -321,7 +335,8 @@ def run_golden_suite(*, replay: bool = True, kind: str | None = None,
 
     results: list[dict] = []
     for g in goldens:
-        row = {"id": g.id, "title": g.title, "kind": g.kind, "status": g.status, "source": g.source}
+        row = {"id": g.id, "title": g.title, "kind": g.kind, "status": g.status,
+               "source": g.source, "visibility": g.visibility}
         if not replay:
             row.update(total=None, skipped="replay disabled")
         elif not g.rubric:
@@ -338,7 +353,84 @@ def run_golden_suite(*, replay: bool = True, kind: str | None = None,
 
     scored = [r for r in results if isinstance(r.get("total"), (int, float))]
     avg = round(sum(r["total"] for r in scored) / len(scored), 3) if scored else None
-    return {"total": len(results), "scored": len(scored), "avg": avg, "results": results}
+    return {"total": len(results), "scored": len(scored), "avg": avg,
+            **summarize_split(results), "results": results}
+
+
+# ---------------------------------------------------------------------------
+# Public/private split + selection gate (AIDE² — see
+# docs/research/aide2-recursive-self-improvement.md)
+# ---------------------------------------------------------------------------
+
+def summarize_split(results: list[dict]) -> dict:
+    """Average the scored rows separately by ``visibility`` → public vs private.
+
+    Pure (no I/O), so it's unit-tested with zero keys. Rows missing a
+    ``visibility`` are counted as public (the loader's fail-safe default).
+    """
+    def _avg(vis: str) -> tuple[float | None, int]:
+        vals = [r["total"] for r in results
+                if r.get("visibility", "public") == vis
+                and isinstance(r.get("total"), (int, float))]
+        return (round(sum(vals) / len(vals), 3) if vals else None), len(vals)
+
+    pub, n_pub = _avg("public")
+    priv, n_priv = _avg("private")
+    return {"avg_public": pub, "avg_private": priv, "n_public": n_pub, "n_private": n_priv}
+
+
+def accept_change(baseline: dict, candidate: dict, *, min_private_delta: float = 0.0,
+                  baseline_cost: float | None = None, candidate_cost: float | None = None,
+                  max_cost_ratio: float = 1.0) -> dict:
+    """Decide whether a proposed self-modification should be ADOPTED — the AIDE²
+    selection rule (docs/research/aide2-recursive-self-improvement.md).
+
+    Select on the **held-out private** score, never the public score the change was
+    optimized against, and only at equal-or-lower cost. *baseline* / *candidate* are
+    ``run_golden_suite`` results (each carrying ``avg_private`` / ``avg_public``).
+
+    **Fail-closed**: with no private holdout on either side there is no trustworthy
+    accept signal, so the change is REJECTED — this is the whole point of the split,
+    and the reason a self-improvement loop must not run without one. Also flags the
+    **reward-hacking signature**: public up while private down.
+
+    Pure and keyless. No loop consumes it yet — it's the gate #29 will call; cost
+    metering (``*_cost`` as tokens/dollars) is wired by the caller when available.
+    Returns ``{accept, reason, private_delta, gamed_public, cost_ratio}``.
+    """
+    b_priv, c_priv = baseline.get("avg_private"), candidate.get("avg_private")
+    b_pub, c_pub = baseline.get("avg_public"), candidate.get("avg_public")
+
+    if b_priv is None or c_priv is None:
+        return {"accept": False, "reason": "no private holdout — cannot decide (fail-closed)",
+                "private_delta": None, "gamed_public": False, "cost_ratio": None}
+
+    private_delta = round(c_priv - b_priv, 3)
+    gamed_public = (
+        b_pub is not None and c_pub is not None and c_pub > b_pub and c_priv < b_priv
+    )
+
+    cost_ratio: float | None = None
+    cost_ok = True
+    if baseline_cost is not None and candidate_cost is not None and baseline_cost > 0:
+        cost_ratio = round(candidate_cost / baseline_cost, 3)
+        cost_ok = cost_ratio <= max_cost_ratio
+
+    # A reward-hacking signature (public up, private down) is a HARD reject
+    # regardless of the threshold — never adopt a change that gamed the visible
+    # metric, even under a noise-absorbing negative min_private_delta.
+    accept = private_delta > min_private_delta and cost_ok and not gamed_public
+    if accept:
+        reason = (f"private +{private_delta} at cost×{cost_ratio}"
+                  if cost_ratio is not None else f"private +{private_delta}")
+    elif gamed_public:
+        reason = "REJECT: public improved but private regressed — reward-hacking signature"
+    elif private_delta <= min_private_delta:
+        reason = f"REJECT: private not improved ({private_delta:+})"
+    else:
+        reason = f"REJECT: cost×{cost_ratio} exceeds budget ×{max_cost_ratio}"
+    return {"accept": accept, "reason": reason, "private_delta": private_delta,
+            "gamed_public": gamed_public, "cost_ratio": cost_ratio}
 
 
 def _collect_disagreements(suite: dict) -> list[dict]:

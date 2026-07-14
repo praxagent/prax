@@ -192,3 +192,122 @@ def test_run_golden_curation_key_free_with_injected_replay(tmp_path):
     )
     assert "disagreements" in out and "n_disagreements" in out
     assert out["n_disagreements"] == len(out["disagreements"])
+
+
+# --------------------------------------------------------------------------- #
+# Public/private split + AIDE² selection gate (docs/research/aide2-...)
+# --------------------------------------------------------------------------- #
+
+def test_visibility_defaults_public_and_loads_private():
+    by_id = {gd.id: gd for gd in g.load_goldens()}
+    # Existing goldens are unchanged (default public)...
+    assert by_id["research_multiperspective"].visibility == "public"
+    # ...and the two designated held-out goldens are private.
+    assert by_id["skill_capture_reuse"].visibility == "private"
+    assert by_id["proactive_signal_management"].visibility == "private"
+
+
+def test_unknown_visibility_fails_safe_to_public(tmp_path):
+    (tmp_path / "typo.yaml").write_text(
+        "id: t\ntitle: t\nkind: k\nprompt: p\nvisibility: privat\n"  # typo
+        "rubric:\n  - key: a\n    weight: 1\n    description: d\n"
+    )
+    gd = g.load_goldens(tmp_path)[0]
+    assert gd.visibility == "public"  # never silently promoted into the holdout
+
+
+def test_summarize_split_averages_by_visibility():
+    results = [
+        {"visibility": "public", "total": 1.0},
+        {"visibility": "public", "total": 0.0},
+        {"visibility": "private", "total": 0.5},
+        {"visibility": "private", "total": None},     # unscored — ignored
+        {"total": 1.0},                                # missing → counted public
+    ]
+    s = g.summarize_split(results)
+    assert s["avg_public"] == round((1.0 + 0.0 + 1.0) / 3, 3)
+    assert s["n_public"] == 3
+    assert s["avg_private"] == 0.5
+    assert s["n_private"] == 1
+
+
+def test_suite_reports_public_and_private_split():
+    # Listing-only run still carries the split keys (both empty — nothing scored).
+    listing = g.run_golden_suite(replay=False)
+    for key in ("avg_public", "avg_private", "n_public", "n_private"):
+        assert key in listing
+    assert listing["n_private"] == 0 and listing["n_public"] == 0
+
+    # A scored run (injected replay + judge, no keys) populates both sides; the two
+    # held-out goldens put the private set at >= 2.
+    scored = g.run_golden_suite(
+        replay=True,
+        replay_fn=lambda prompt: "grounded answer https://example.com [1]",
+        judge=lambda prompt: json.dumps({"scores": {}}),  # rows scored (total float), no keys matched
+    )
+    assert scored["n_private"] >= 2
+    assert scored["n_public"] >= 1
+
+
+def test_accept_change_selects_on_private_score():
+    base = {"avg_public": 0.5, "avg_private": 0.5}
+    better = {"avg_public": 0.6, "avg_private": 0.7}
+    d = g.accept_change(base, better)
+    assert d["accept"] is True
+    assert d["private_delta"] == 0.2 and d["gamed_public"] is False
+
+
+def test_accept_change_flags_reward_hacking_signature():
+    # Public went UP, private went DOWN — the classic gamed-the-visible-metric shape.
+    base = {"avg_public": 0.5, "avg_private": 0.6}
+    gamed = {"avg_public": 0.9, "avg_private": 0.4}
+    d = g.accept_change(base, gamed)
+    assert d["accept"] is False
+    assert d["gamed_public"] is True
+    assert "reward-hacking" in d["reason"]
+
+
+def test_accept_change_fails_closed_without_private_holdout():
+    d = g.accept_change({"avg_public": 0.5, "avg_private": None},
+                        {"avg_public": 0.9, "avg_private": None})
+    assert d["accept"] is False
+    assert "fail-closed" in d["reason"]
+
+
+def test_accept_change_boundary_and_threshold():
+    # Exactly at the threshold is NOT an improvement — guards `>` vs `>=`.
+    tie = g.accept_change({"avg_private": 0.5, "avg_public": 0.5},
+                          {"avg_private": 0.5, "avg_public": 0.5})
+    assert tie["accept"] is False and tie["private_delta"] == 0.0
+    # A non-zero min_private_delta must actually gate: +0.02 < required +0.05.
+    small = g.accept_change({"avg_private": 0.5, "avg_public": 0.5},
+                            {"avg_private": 0.52, "avg_public": 0.5},
+                            min_private_delta=0.05)
+    assert small["accept"] is False
+    # Clearing the bar accepts.
+    big = g.accept_change({"avg_private": 0.5, "avg_public": 0.5},
+                          {"avg_private": 0.6, "avg_public": 0.5},
+                          min_private_delta=0.05)
+    assert big["accept"] is True
+
+
+def test_accept_change_never_accepts_reward_hack_even_with_negative_threshold():
+    # A negative threshold absorbs noise, but a public-up/private-down change is
+    # still a HARD reject — the reward-hacking signature is never adopted.
+    base = {"avg_public": 0.5, "avg_private": 0.6}
+    gamed = {"avg_public": 0.9, "avg_private": 0.58}  # private down 0.02, within -0.1 noise band
+    d = g.accept_change(base, gamed, min_private_delta=-0.1)
+    assert d["accept"] is False
+    assert d["gamed_public"] is True and "reward-hacking" in d["reason"]
+
+
+def test_accept_change_enforces_cost_budget():
+    base = {"avg_public": 0.5, "avg_private": 0.5}
+    better = {"avg_public": 0.6, "avg_private": 0.7}
+    # Same private win, but 50% more expensive at the default max_cost_ratio=1.0.
+    d = g.accept_change(base, better, baseline_cost=1000, candidate_cost=1500)
+    assert d["accept"] is False
+    assert d["cost_ratio"] == 1.5 and "cost" in d["reason"]
+    # Cheaper-or-equal passes.
+    ok = g.accept_change(base, better, baseline_cost=1000, candidate_cost=900)
+    assert ok["accept"] is True and ok["cost_ratio"] == 0.9
