@@ -2,6 +2,8 @@
 
 This section summarizes empirically validated findings from academic research and production systems that inform Prax's architecture. These aren't theoretical — each finding has been demonstrated to improve agent performance on real benchmarks.
 
+> **➡️ [Adopt Tracker](adopt-tracker.md)** — the single living index of concrete "adopt X" candidates distilled from every assessment below, each with a status (shipped / in-PR / queued / parked) so nothing gets lost. Start here to see *what we're actually bringing in and where it stands*; the per-assessment docs below argue *why*.
+
 ## Contents
 
 - [Planning & Reflexion](planning-reflexion.md) — §1-§2: Explicit planning, self-verification
