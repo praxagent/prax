@@ -62,6 +62,12 @@ This ledger is the honest complement to
 | `text_to_speech` | 🧪 | OpenAI path + ElevenLabs fallback, deliverable-file flow, actionable failures all unit-tested (mocked) | No real audio synthesised live (ironic given it was born from an audio-file failure). Both the OpenAI and `ELEVENLABS_API_KEY` paths want one live run each. |
 | `analyze_image` (vision/OCR) | 🧪 | Bug fixes applied from the live failure trace (`max_tokens`→`max_completion_tokens`; model default off the image-gen model) | The corrected path has not been re-confirmed against a real image end-to-end this session. |
 
+## Lean proof-check tool (`lean_check`, `LEAN_TOOLS_ENABLED`)
+
+| Surface | Status | Verified | Not verified / needs |
+|---|---|---|---|
+| **`lean_check`** (compile + axiom-audit trust gate, in the sandbox) | ✅ | **Verified live 2026-07-14** against Lean 4.31.0 installed in the running sandbox container, driving the real tool through the sandbox client on 5 known-result theorems: `1+1=2` and `p∧q→q∧p` verify clean (no axioms); `1+1=3` fails with the correct type-mismatch diagnostic; a `sorry` hole compiles but the trust gate + axiom audit both catch it (`sorryAx`); an injected `axiom cheat` is flagged non-standard. | mathlib-dependent proofs (need a lake project + `lake exe cache get`) are out of scope — toolchain-only. The durable toolchain lives in the prax-sandbox image (Dockerfile `ENV ELAN_HOME=/opt/elan`); a from-clean **image rebuild** installing Lean has not been run yet (the live container was provisioned in place) — verify on the next sandbox rebuild. |
+
 ## Tier system (orchestrator)
 
 | Mechanism | Status | Verified | Not verified / needs |
