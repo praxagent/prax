@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.23.0](https://github.com/praxagent/prax/compare/v0.22.0...v0.23.0) (2026-07-14)
+
+
+### Features
+
+* **lean:** lean_check — sandbox Lean 4 proof-check tool + axiom-audit trust gate ([#83](https://github.com/praxagent/prax/issues/83)) ([cdf7cb5](https://github.com/praxagent/prax/commit/cdf7cb5d4d8fc6a6d4c087b3556b23c7d2cf2c92))
+
 ## [0.22.0](https://github.com/praxagent/prax/compare/v0.21.1...v0.22.0) (2026-07-14)
 
 
