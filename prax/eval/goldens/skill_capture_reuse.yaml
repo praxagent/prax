@@ -15,6 +15,12 @@ id: skill_capture_reuse
 title: Success-side procedural capture from a hard-won solution (+ how it's recalled)
 kind: self_improvement
 status: baseline-gap
+# HELD-OUT selection signal (AIDE² public/private split — see
+# docs/research/aide2-recursive-self-improvement.md). A self-improvement change is
+# ACCEPTED on the private avg, not the public one it was tuned against; holding out
+# a self_improvement golden tests that a harness change GENERALIZES rather than
+# overfitting the visible self_improvement goldens.
+visibility: private
 source: "docs/research/agent-skills-discipline.md + IDEAS_BACKLOG.md #17 (Anson Biggs, 'You're Probably Using Agent Skills Wrong')"
 
 prompt: >-

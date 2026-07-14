@@ -32,13 +32,20 @@ def _report_goldens() -> None:
     print("\n--- Golden quality targets ---")
     if not score:
         for r in report["results"]:
-            print(f"  • {r['id']} [{r.get('status') or 'tracked'}] — {r['title']}")
+            vis = "" if r.get("visibility", "public") == "public" else " (private/held-out)"
+            print(f"  • {r['id']} [{r.get('status') or 'tracked'}]{vis} — {r['title']}")
         print("  (set PRAX_EVAL_GOLDENS=1 to replay + score these)")
     else:
         for r in report["results"]:
             total = r.get("total")
-            print(f"  • {r['id']}: {total if total is not None else 'n/a'} — {r['title']}")
+            vis = "" if r.get("visibility", "public") == "public" else " (private)"
+            print(f"  • {r['id']}{vis}: {total if total is not None else 'n/a'} — {r['title']}")
         print(f"  goldens avg: {report['avg']} ({report['scored']}/{report['total']} scored)")
+        # Public/private split (AIDE² selection rule) — a self-improvement change is
+        # judged on the PRIVATE (held-out) average, not the public one it was tuned on.
+        pub, priv = report.get("avg_public"), report.get("avg_private")
+        print(f"  split: public {pub} ({report.get('n_public', 0)}) | "
+              f"private/held-out {priv} ({report.get('n_private', 0)})")
 
 
 def main() -> int:
