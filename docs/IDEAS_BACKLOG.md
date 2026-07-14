@@ -1062,6 +1062,32 @@ Distilled from reading these customer stories + cookbook recipes against the bug
   [`prax/eval/goldens/self_regeneration_judgment.yaml`](../prax/eval/goldens/self_regeneration_judgment.yaml).
   Composes with #19 (notice), #22 (governor), #23 (the loop engine), #26 (un-gameable
   gate), #17 (record/compound).
+- **What AIDE² (Weco) hands this (2026-07-13, [assessment](research/aide2-recursive-self-improvement.md))**:
+  real-world evidence the design works (their outer loop rewrote its inner agent's code
+  and beat 2 years of hand-tuning in 8 days on held-out benchmarks), plus the concrete
+  fitness-function mechanisms this entry was hand-waving:
+  1. **Public/private score split** — optimize a *visible* golden subset; **select on a
+     held-out private subset**. This is the concrete form of the "un-gameable eval"
+     precondition above, and Prax's eval engine doesn't have it yet. **Adopt into the
+     eval engine first** (independently valuable — hardens manual flag-eval campaigns).
+  2. **Cost-budgeted selection** — "improve private score at equal-or-lower token
+     budget," reusing the existing `pass_per_1k_tokens` HAL axis. Forces algorithmic
+     gains over brute-force spend.
+  3. **Heterogeneous golden gate** — gate a proposed change against *many* goldens, never
+     one; a single-golden gate *rewards* a spike (= "never spike benchmarks" as selection
+     pressure). Tightens the P1 design (was "against a golden" → "against a heterogeneous set").
+  4. **Model asymmetry** — proposer/auditor high-tier, the agent-being-improved cheap-tier
+     (keeps the loop affordable).
+  5. **Complexity/dead-code gate (net-new safety)** — their evolved agent passed the score
+     gate while carrying dead code + a *broken-but-passing* defense layer. Score-up is
+     necessary, not sufficient: run `/simplify` + the syntax/layer linters as part of the
+     accept gate.
+  6. **Eval-harness edits are HIGH-risk (net-new)** — the loop can reach its own scorer
+     (AIDE² *repaired* its eval; it could as easily weaken it). Self-mods touching goldens
+     or `make eval` are human-PR-gated, never auto-adopted.
+  - **Framing**: adopt the falsifiable **RSI ladder** (delegation → net-positive → ignition
+    → inflection) as roadmap language, replacing binary "did we achieve RSI." AIDE² reached
+    net-positive, explicitly **not** ignition.
 
 ### 30. Voice / realtime evals — the yardstick for the day Prax goes to live voice chat
 
