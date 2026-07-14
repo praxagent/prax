@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.0](https://github.com/praxagent/prax/compare/v0.21.1...v0.22.0) (2026-07-14)
+
+
+### Features
+
+* **eval:** public/private golden split + AIDE² selection gate ([#80](https://github.com/praxagent/prax/issues/80)) ([158968a](https://github.com/praxagent/prax/commit/158968ac80aeb7a3fbd41ef230345e8c2caf7afd))
+
 ## [0.21.1](https://github.com/praxagent/prax/compare/v0.21.0...v0.21.1) (2026-07-12)
 
 
