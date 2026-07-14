@@ -5,6 +5,8 @@
 
 **Verdict: document + adopt the *pattern*, not the repo.** cdc-lean is a verification *artifact* (and unlicensed), not a library — there is nothing in its code for Prax to import. What Prax should take: (1) its **axiom-audit trust gate** as the template for a governed proof-checking tool, (2) a **sandbox Lean toolchain + `lean_check` tool** (flag-gated, spoke-internal), and (3) a **Lean eval adapter sliver** later. The finetune reading of "teach Prax Lean" is explicitly unrealistic today — say so plainly. Answer to TJ's question: **yes — as a capability (verify-and-iterate loop), buildable in ~1-2 days on existing rails; no — as "make Prax a competitive prover" (that's a specialized-RL-model game, not a harness game).**
 
+> **UPDATE 2026-07-14 — Shape 1 SHIPPED.** The `lean_check` tool is built and **verified live** on known-result theorems (see the Verification Ledger). Lean 4.31.0 toolchain in the sandbox image (`ELAN_HOME=/opt/elan`, toolchain-only, no mathlib), the tool in `prax/agent/lean_tools.py` behind `LEAN_TOOLS_ENABLED` (default off), shipping the axiom-audit trust gate — a `sorry`-holed proof compiles but is correctly flagged, and an injected non-standard axiom is caught. Shapes 2 (eval adapter) and the mathlib extension remain the open follow-ups.
+
 ---
 
 ## What cdc-lean actually is

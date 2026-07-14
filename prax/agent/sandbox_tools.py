@@ -584,7 +584,7 @@ def build_sandbox_tools() -> list:
     from prax.settings import settings
     if not settings.sandbox_available:
         return []
-    return [
+    tools = [
         sandbox_shell, terminal_history,
         sandbox_start, sandbox_message, sandbox_review,
         sandbox_finish, sandbox_abort, sandbox_search, sandbox_execute,
@@ -593,3 +593,8 @@ def build_sandbox_tools() -> list:
         desktop_screenshot, desktop_click, desktop_type, desktop_key,
         desktop_list_windows, desktop_open,
     ]
+    # Lean 4 proof-check tool (opt-in, LEAN_TOOLS_ENABLED) — needs the Lean
+    # toolchain in the sandbox image. See docs/research/cdc-lean-teach-prax-lean.md.
+    from prax.agent.lean_tools import build_lean_tools
+    tools.extend(build_lean_tools())
+    return tools

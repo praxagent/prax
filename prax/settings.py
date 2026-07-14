@@ -692,6 +692,13 @@ class AppSettings(BaseSettings):
         """True when the sandbox is driven via a remote control daemon."""
         return bool(self.sandbox_daemon_url.strip())
 
+    # Lean 4 proof-checking tool (lean_check in the sandbox spoke). Compiles Lean
+    # source in the sandbox container and runs cdc-lean's axiom-audit trust gate.
+    # Needs the Lean toolchain in the sandbox image (elan at /opt/elan); the tool
+    # degrades with a clear message when the toolchain or sandbox is absent.
+    # Assessment: docs/research/cdc-lean-teach-prax-lean.md
+    lean_tools_enabled: bool = Field(default=False, alias="LEAN_TOOLS_ENABLED")
+
     # Fine-tuning / Local Models (optional — GPU required)
     finetune_enabled: bool = Field(default=False, alias="FINETUNE_ENABLED")
     vllm_base_url: str = Field(default="http://localhost:8000/v1", alias="VLLM_BASE_URL")

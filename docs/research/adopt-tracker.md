@@ -32,7 +32,7 @@ Everything here feeds [IDEAS_BACKLOG #29](../IDEAS_BACKLOG.md) (close the recurs
 
 | Item | From | Status | Notes |
 |---|---|---|---|
-| **Lean toolchain in sandbox + governed `lean_check`** (+ axiom-audit trust gate) | [cdc-lean](cdc-lean-teach-prax-lean.md) | ⏸ TJ | branch `feat/lean-check-tool` exists (empty); toolchain-only ~1–2 GB, flag `LEAN_TOOLS_ENABLED`. **Decision pending: build now vs doc-only** |
+| **Lean toolchain in sandbox + governed `lean_check`** (+ axiom-audit trust gate) | [cdc-lean](cdc-lean-teach-prax-lean.md) | ✅ | Shipped + **verified live** on known theorems (`prax/agent/lean_tools.py`, `LEAN_TOOLS_ENABLED`; Lean 4.31.0 in the sandbox image, toolchain-only). The `sorry`/axiom trust gate works. |
 | **Lean eval adapter** (miniF2F/PutnamBench; keyless seed + sandbox-scored halves) | [cdc-lean](cdc-lean-teach-prax-lean.md) | ⏸ | after `lean_check`; datasets stay in `PRAX_EVAL_DIR` |
 | **Persona/user-simulator multi-turn evals, deterministic Pass@k** (τ-bench/τ²-bench) | [sierra](sierra-agent-platform.md) | 📋 | the biggest gap vs the single-turn capability suite; CPU-cheap (deterministic state grading) |
 | **Reproducibility-artifact bundling** (output + code + env + message history) | [claude-science](claude-science-workbench.md) | 📋 | extends trace records |
