@@ -27,6 +27,7 @@ Everything here feeds [IDEAS_BACKLOG #29](../IDEAS_BACKLOG.md) (close the recurs
 | **Binary per-criterion judging (not Likert)** | [edge-bench](edge-bench-learning-curves.md) | ✅ | `_binarize` in `score_golden` |
 | **"Verifiable beats judgeable"** (deterministic regex criteria) | [edge-bench](edge-bench-learning-curves.md) | ✅ | `RubricCriterion.verify` |
 | **P1 plugin micro-loop** (notice→propose→isolate→verify→canary→rollback) | [autoresearch](autoresearch-labless.md) + [aide2](aide2-recursive-self-improvement.md) | ⏸ TJ | #29 P1 — de-risked by aide2 evidence; ~3–5 days; **gate ready after the split lands** |
+| **Failure-provenance diagnosis** (classify bad-plan vs bad-execution before retry → replan vs retry) | [arts](arts-agentic-tree-search.md) | 📋 | flag-gated orchestrator/#29 heuristic (more surgical than auto-tier-escalation) + an eval-scoring lens ("don't punish a correct plan for flaky execution") |
 
 ## Capability candidates
 
