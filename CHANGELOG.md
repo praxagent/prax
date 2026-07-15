@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.26.0](https://github.com/praxagent/prax/compare/v0.25.0...v0.26.0) (2026-07-15)
+
+
+### Features
+
+* **eval:** add MMLU-Pro, GPQA, MATH, SimpleQA benchmark adapters ([#93](https://github.com/praxagent/prax/issues/93)) ([14e5f7d](https://github.com/praxagent/prax/commit/14e5f7d7b92729be1bcfd084ca3b98cbad7475b9))
+* **eval:** HumanEval adapter — execution-based coding benchmark (sandbox-scored) ([#95](https://github.com/praxagent/prax/issues/95)) ([10100d9](https://github.com/praxagent/prax/commit/10100d9274234bb77228cff97acc7ee9bb8ad7b3))
+
 ## [0.25.0](https://github.com/praxagent/prax/compare/v0.24.0...v0.25.0) (2026-07-15)
 
 
