@@ -85,6 +85,11 @@ Regardless of provider, these are what prevent a loop from spending real money:
   tier already.
 - **Cost is measured**, not guessed — the HAL axis (`pass_per_1k_tokens`,
   `avg_full_tokens`) is reported so you see spend per run.
+- **Per-benchmark cost**: `make eval-benchmark BENCH=all` reports real token counts
+  and a **USD estimate per benchmark** plus a suite total. Estimates use the price
+  table in `prax/eval/pricing.py` (approximate 2026 rates); for exact figures on
+  any model, set `EVAL_COST_INPUT_PER_M` / `EVAL_COST_OUTPUT_PER_M`. An unknown
+  model reports `n/a` (never a fabricated zero).
 
 ## Recommendation
 

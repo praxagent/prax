@@ -36,38 +36,58 @@ def run_benchmark(
     out_dir: str | Path,
     concurrency: int = 1,
     resume: bool = True,
+    cost_model: str | None = None,
 ) -> dict:
     """Run every case of *adapter* through *replay_fn* and score deterministically.
 
     ``replay_fn(prompt) -> response`` is the executor (the live orchestrator, a bare
     model, or a fake in tests). Resumable + summarized via ``run_batch``.
+
+    Captures real per-case token usage (via ``collect_usage``) and, when
+    *cost_model* is known, an estimated USD cost (``prax.eval.pricing``) — so the
+    summary carries ``prompt_tokens``/``completion_tokens``/``total_tokens`` and
+    ``estimated_cost_usd`` (None when the model's price is unknown). A fake
+    ``replay_fn`` (keyless CI) simply reports zero tokens / zero cost.
     """
     from prax.eval.batch import run_batch
+    from prax.eval.telemetry import collect_usage
 
     by_id = {str(c["id"]): c for c in adapter.cases()}
 
     def _run_one(case_id: str) -> dict:
         case = by_id[case_id]
-        response = replay_fn(adapter.prompt(case))
+        with collect_usage() as usage:
+            response = replay_fn(adapter.prompt(case))
+        snap = usage.snapshot()
         graded = adapter.score(case, response) or {}
         return {
             "id": case_id,
             "passed": bool(graded.get("passed")),
             "score": float(graded.get("score", 0.0)),
             "checks": graded.get("checks"),
+            "prompt_tokens": int(snap.get("prompt_tokens", 0)),
+            "completion_tokens": int(snap.get("completion_tokens", 0)),
             "answer_preview": (response or "")[:300],
         }
 
     def _summarize(results: list[dict]) -> dict:
+        from prax.eval.pricing import estimate_cost
         graded = [r for r in results if not r.get("error")]
         n = len(graded)
         passed = sum(1 for r in graded if r.get("passed"))
+        pt = sum(int(r.get("prompt_tokens", 0)) for r in graded)
+        ct = sum(int(r.get("completion_tokens", 0)) for r in graded)
         return {
             "benchmark": adapter.name,
             "graded": n,
             "passed": passed,
             "pass_rate": round(passed / n, 3) if n else 0.0,
             "avg_score": round(sum(r.get("score", 0.0) for r in graded) / n, 3) if n else 0.0,
+            "prompt_tokens": pt,
+            "completion_tokens": ct,
+            "total_tokens": pt + ct,
+            "cost_model": cost_model,
+            "estimated_cost_usd": estimate_cost(cost_model, pt, ct),
         }
 
     return run_batch(
@@ -145,6 +165,17 @@ def live_orchestrator_replay(*, tier: str = "low", model: str | None = None):
     return _replay
 
 
+def _cost_model(tier: str, model: str | None) -> str | None:
+    """The concrete model the run will actually use — for cost attribution."""
+    if model:
+        return model
+    try:
+        from prax.agent.model_tiers import resolve_model
+        return resolve_model(tier)
+    except Exception:
+        return None
+
+
 def run_benchmark_live(name: str, *, tier: str = "low", model: str | None = None,
                        out_dir=None, resume: bool = True, **adapter_kwargs) -> dict:
     """Run a named benchmark through the full Prax harness (isolated). Convenience
@@ -156,7 +187,7 @@ def run_benchmark_live(name: str, *, tier: str = "low", model: str | None = None
         out_dir = PRAX_EVAL_DIR / "suites" / f"bench-{adapter.name}-{slug}"
     return run_benchmark(
         adapter, live_orchestrator_replay(tier=tier, model=model),
-        out_dir=out_dir, resume=resume,
+        out_dir=out_dir, resume=resume, cost_model=_cost_model(tier, model),
     )
 
 
@@ -225,14 +256,22 @@ def run_all_benchmarks(replay_fn=None, *, tier: str = "low", model: str | None =
         from prax.eval import PRAX_EVAL_DIR
         out_dir = PRAX_EVAL_DIR / "suites" / f"bench-all-{model or tier}"
     base = Path(out_dir)
+    cost_model = _cost_model(tier, model)
     report: dict[str, dict] = {}
     for name in ADAPTER_NAMES:
         summary = run_benchmark(get_adapter(name), replay_fn,
-                                out_dir=base / name, resume=resume)
+                                out_dir=base / name, resume=resume, cost_model=cost_model)
         report[name] = summary.get("aggregate") or {}
     rates = [a.get("pass_rate", 0.0) for a in report.values() if a]
+    total_tokens = sum(int(a.get("total_tokens", 0)) for a in report.values() if a)
+    costs = [a.get("estimated_cost_usd") for a in report.values() if a]
+    known = [c for c in costs if isinstance(c, (int, float))]
     return {
         "benchmarks": report,
         "n_benchmarks": len(report),
         "avg_pass_rate": round(sum(rates) / len(rates), 3) if rates else 0.0,
+        "cost_model": cost_model,
+        "total_tokens": total_tokens,
+        # None if NO benchmark had a known price; else the sum of the known ones.
+        "estimated_cost_usd": round(sum(known), 4) if known else None,
     }
