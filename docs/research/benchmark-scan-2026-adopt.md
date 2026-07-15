@@ -7,6 +7,26 @@ for **grading determinism**, **CPU-feasibility**, **cost**, the **Prax spoke** i
 exercises, and **current coverage**. This is the prioritized *adoption* view;
 [prax-benchmarks.md](prax-benchmarks.md) is the reference catalog.
 
+> **Coverage update — 2026-07-15.** The "1 covered" finding below is the *original*
+> state. Prax now ships **11 deterministic, keyless benchmark adapters**
+> (`prax/eval/benchmarks/`, runnable via `make eval-benchmark BENCH=<name>`):
+> **IFEval** (instruction-following), **BFCL** (function-calling), **InjecAgent**
+> (prompt-injection safety), **HaluEval** + **TruthfulQA** (hallucination /
+> misconception), **SimpleQA** (short-fact factuality), **GSM8K** (grade-school
+> math), **MATH** (competition math), **MMLU-Pro** (broad multitask knowledge),
+> **GPQA** (graduate science reasoning), **sycophancy** (inbound-falsehood
+> resistance) — plus **GAIA** as the general-assistant scoreboard. That's honest
+> coverage across instruction-following, tool use, injection safety, truthfulness,
+> factuality, math (two levels), broad knowledge, and hard reasoning.
+>
+> **Still open (need more than a single-turn adapter — tracked, not faked):**
+> **coding** (HumanEval/MBPP need sandbox code-execution scoring; SWE-bench needs
+> a repo harness), **multi-turn agentic tool use** (τ-bench/τ²-bench need a user
+> simulator + tool env — the biggest gap), **web agents** (WebArena/BrowseComp
+> need a browser env), and **long-term memory** (LoCoMo). Each adapter ships an
+> inline hand-verified seed set for keyless CI; the full gated test splits load
+> from `PRAX_EVAL_DIR` (never committed — contamination firewall).
+
 ## The one finding that matters
 
 **Prax has the eval *engine*, not the eval *coverage*.** The resumable batch

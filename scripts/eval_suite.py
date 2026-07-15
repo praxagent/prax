@@ -180,10 +180,10 @@ def main() -> int:
     sp_bench = sub.add_parser(
         "benchmark",
         help="run a standard benchmark adapter through the full harness")
+    from prax.eval.benchmarks import ADAPTER_NAMES
     sp_bench.add_argument(
         "name",
-        choices=["ifeval", "injecagent", "sycophancy", "bfcl", "halueval", "truthfulqa",
-                 "gsm8k", "all"])
+        choices=[*ADAPTER_NAMES, "all"])  # kept in sync with the registry
     sp_bench.add_argument("--tier", default="low", help="model tier (default low)")
     sp_bench.add_argument("--model", default=None, help="explicit model id (overrides --tier)")
     sp_bench.add_argument("--no-resume", action="store_true", help="start fresh")
