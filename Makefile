@@ -71,9 +71,10 @@ eval-harness-lift:
 	FLASK_SECRET_KEY=$${FLASK_SECRET_KEY:-ci-test-key} uv run --python 3.13 \
 		python scripts/eval_suite.py harness-lift --tier $(EVAL_TIER)
 
-# Standard benchmark adapters through the full harness — deterministic, keyless
-# scoring. BENCH=ifeval|injecagent|sycophancy|bfcl|halueval|truthfulqa|gsm8k|
-#          mmlu_pro|gpqa|math|simpleqa   (default ifeval).
+# Standard benchmark adapters through the full harness — deterministic scoring.
+# BENCH=ifeval|injecagent|sycophancy|bfcl|halueval|truthfulqa|gsm8k|mmlu_pro|
+#       gpqa|math|simpleqa|humaneval   (default ifeval). Most are keyless;
+# humaneval EXECUTES code in the sandbox, so it needs the container up.
 # LIFT=1 → full harness vs bare model (same model): "does the scaffold help THIS
 # benchmark" as a lift number. Add CHEAP=1 to run on a cheap OpenRouter model.
 eval-benchmark:

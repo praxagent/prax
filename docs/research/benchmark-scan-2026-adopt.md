@@ -8,24 +8,29 @@ exercises, and **current coverage**. This is the prioritized *adoption* view;
 [prax-benchmarks.md](prax-benchmarks.md) is the reference catalog.
 
 > **Coverage update — 2026-07-15.** The "1 covered" finding below is the *original*
-> state. Prax now ships **11 deterministic, keyless benchmark adapters**
+> state. Prax now ships **12 deterministic benchmark adapters**
 > (`prax/eval/benchmarks/`, runnable via `make eval-benchmark BENCH=<name>`):
 > **IFEval** (instruction-following), **BFCL** (function-calling), **InjecAgent**
 > (prompt-injection safety), **HaluEval** + **TruthfulQA** (hallucination /
 > misconception), **SimpleQA** (short-fact factuality), **GSM8K** (grade-school
 > math), **MATH** (competition math), **MMLU-Pro** (broad multitask knowledge),
 > **GPQA** (graduate science reasoning), **sycophancy** (inbound-falsehood
-> resistance) — plus **GAIA** as the general-assistant scoreboard. That's honest
+> resistance), and **HumanEval** (code generation, **execution-scored in the
+> sandbox**) — plus **GAIA** as the general-assistant scoreboard. That's honest
 > coverage across instruction-following, tool use, injection safety, truthfulness,
-> factuality, math (two levels), broad knowledge, and hard reasoning.
+> factuality, math (two levels), broad knowledge, hard reasoning, and coding.
 >
-> **Still open (need more than a single-turn adapter — tracked, not faked):**
-> **coding** (HumanEval/MBPP need sandbox code-execution scoring; SWE-bench needs
-> a repo harness), **multi-turn agentic tool use** (τ-bench/τ²-bench need a user
-> simulator + tool env — the biggest gap), **web agents** (WebArena/BrowseComp
-> need a browser env), and **long-term memory** (LoCoMo). Each adapter ships an
-> inline hand-verified seed set for keyless CI; the full gated test splits load
-> from `PRAX_EVAL_DIR` (never committed — contamination firewall).
+> HumanEval is the first **execution-based** adapter: it runs the model's code
+> against unit tests in a fresh sandbox (injected executor; keyless CI uses a fake,
+> the real path is sandbox-verified). This is the pattern SWE-bench extends.
+>
+> **Still open (need more harness/env work — tracked, not faked):**
+> **real-repo coding** (SWE-bench → repo-clone + patch + test harness),
+> **multi-turn agentic tool use** (τ-bench/τ²-bench → user simulator + tool env —
+> the biggest gap), **web agents** (WebArena/BrowseComp → browser env), and
+> **long-term memory** (LoCoMo). Each adapter ships an inline hand-verified seed
+> set; the full gated test splits load from `PRAX_EVAL_DIR` (never committed —
+> contamination firewall).
 
 ## The one finding that matters
 
