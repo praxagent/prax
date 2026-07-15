@@ -33,15 +33,22 @@ SEED_CASES: list[dict] = [
      "question": "What is the largest planet in our solar system?",
      "answers": ["Jupiter"]},
     {"id": "sqa_speed",
-     "question": "What is the speed of light in a vacuum, to three significant "
-                 "figures, in metres per second?",
-     "answers": ["299,000,000", "299000000", "2.99e8", "2.99 x 10^8", "3.00e8"]},
+     # The exact defined value is 299,792,458 m/s; the common 3-sig-fig form is
+     # 3.00e8 (= 300,000,000), NOT 299,000,000. Accept the exact value and the
+     # standard approximations; the question no longer hinges on a rounding step.
+     "question": "What is the speed of light in a vacuum, in metres per second "
+                 "(the exact defined value, or its standard approximation)?",
+     "answers": ["299792458", "2.99792458e8", "300000000", "3.00e8",
+                 "3e8", "3x10^8"]},
 ]
 
 
 def _normalize(s: str) -> str:
     s = (s or "").lower()
-    s = re.sub(r"[^\w\s]", " ", s)          # drop punctuation
+    # Join grouped numbers so "299,792,458" and "299792458" compare equal — a
+    # numeric-format mismatch is not a wrong answer (found by the first live run).
+    s = re.sub(r"(?<=\d)[,\s](?=\d)", "", s)
+    s = re.sub(r"[^\w\s]", " ", s)          # drop remaining punctuation
     s = re.sub(r"\b(the|a|an)\b", " ", s)   # drop articles
     return re.sub(r"\s+", " ", s).strip()
 
