@@ -21,25 +21,48 @@ Two good OpenAI-compatible prepaid options:
   (V3-class ≈ $0.14/$0.28 per 1M in/out), also prepaid. Base URL:
   `https://api.deepseek.com`.
 
-## Wiring it (the `OPENAI_BASE_URL` passthrough)
+## The easy path: OpenRouter + `make eval CHEAP=1`
 
-Prax talks to these through its existing OpenAI-compatible client — set two env
-vars in `.env`:
+Put your OpenRouter key in `.env`:
 
 ```dotenv
-OPENAI_BASE_URL=https://openrouter.ai/api/v1   # or https://api.deepseek.com
-OPENAI_KEY=<your provider key>                  # the OpenRouter/DeepSeek key
+OPENROUTER_API_KEY=sk-or-xxxx
 ```
 
-That's it — `LLM_PROVIDER` stays `openai`. When `OPENAI_BASE_URL` is set, Prax
-automatically **disables OpenAI-proprietary features** (the Responses API and
-`logprobs`) that third-party endpoints don't implement, so plain chat-completions
-models "just work." Leave `OPENAI_BASE_URL` unset to use OpenAI directly (the
-default — nothing changes).
+Then run **any** eval target with `CHEAP=1`:
 
-Model names differ per provider — set the eval tiers/models accordingly (e.g. a
-cheap `deepseek-chat` or an OpenRouter model slug) via `llm_routing.yaml` or the
-tier config. The eval **judge** already runs on the cheap low tier.
+```bash
+make eval CHEAP=1              # regression replay + goldens
+make eval-capability CHEAP=1  # the 7-case capability suite
+make eval-benchmark BENCH=ifeval CHEAP=1
+```
+
+`CHEAP=1` switches the provider to `openrouter` and points **every tier** at one
+cheap model — `deepseek/deepseek-v4-flash` by default — **for that make invocation
+only.** Production (`make run-local-*`, `restart-prax`) is untouched: the key's
+mere presence never redirects the live server. Pick a different model with
+`OPENROUTER_EVAL_MODEL=<slug>` (browse slugs at
+[openrouter.ai/models](https://openrouter.ai/models)).
+
+A full pass is **~$0.20–0.35**; a prepaid balance is your hard ceiling.
+
+**Caveat:** vision cases (`analyze_image`, some GAIA tasks) still use
+`VISION_PROVIDER`/`VISION_MODEL` — point those at OpenRouter too, or run
+text-only suites, if you want a pure-OpenRouter run.
+
+## Manual passthrough (any provider)
+
+For a provider without the `CHEAP=1` shortcut, set the OpenAI-compatible client
+directly:
+
+```dotenv
+OPENAI_BASE_URL=https://api.deepseek.com   # or another OpenAI-compatible endpoint
+OPENAI_KEY=<your provider key>
+```
+
+`LLM_PROVIDER` stays `openai`; Prax auto-disables OpenAI-proprietary features
+(Responses API + `logprobs`) that third parties don't implement. Set the tier
+models to that provider's slugs. Leave `OPENAI_BASE_URL` unset for OpenAI (default).
 
 ## The zero-code alternative: OpenAI nano + a hard cap
 

@@ -41,6 +41,10 @@ class AppSettings(BaseSettings):
     # bill-shock. Default None = OpenAI. Set OPENAI_KEY to that provider's key.
     # See docs/guides/cheap-evals.md.
     openai_base_url: str | None = Field(default=None, alias="OPENAI_BASE_URL")
+    # OpenRouter key for the dedicated `openrouter` provider (LLM_PROVIDER=openrouter,
+    # or `make eval CHEAP=1`). Presence alone does NOT redirect traffic — you must
+    # select the provider — so production stays on OpenAI even with this set.
+    openrouter_api_key: str | None = Field(default=None, alias="OPENROUTER_API_KEY")
     anthropic_key: str | None = Field(default=None, alias="ANTHROPIC_KEY")
     google_api_key: str | None = Field(default=None, alias="GOOGLE_API_KEY")
     google_cse_id: str | None = Field(default=None, alias="GOOGLE_CSE_ID")

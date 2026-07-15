@@ -68,6 +68,39 @@ def test_build_llm_openai_base_url_passthrough(monkeypatch):
     assert kw['use_responses_api'] is False
 
 
+def test_build_llm_openrouter_provider(monkeypatch):
+    """The dedicated openrouter provider uses OpenRouter's base_url + key and
+    no OpenAI-proprietary features."""
+    llm_module = importlib.reload(importlib.import_module('prax.agent.llm_factory'))
+    dummy_settings = SimpleNamespace(
+        default_llm_provider='openai', base_model='deepseek/deepseek-v4-flash',
+        agent_temperature=0.2, llm_request_timeout=300,
+        openrouter_api_key='or-secret',
+    )
+    monkeypatch.setattr(llm_module, 'settings', dummy_settings, raising=False)
+    monkeypatch.setattr(llm_module, 'ChatOpenAI', lambda **kwargs: ('openai', kwargs))
+
+    tag, kw = llm_module.build_llm(provider='openrouter')
+    assert tag == 'openai'  # OpenRouter is served via the OpenAI-compatible client
+    assert kw['base_url'] == 'https://openrouter.ai/api/v1'
+    assert kw['api_key'] == 'or-secret'
+    assert kw['model'] == 'deepseek/deepseek-v4-flash'
+    # No Responses API / logprobs on OpenRouter.
+    assert 'model_kwargs' not in kw or kw.get('model_kwargs') in ({}, None)
+    assert 'use_responses_api' not in kw
+
+
+def test_build_llm_openrouter_requires_key(monkeypatch):
+    llm_module = importlib.reload(importlib.import_module('prax.agent.llm_factory'))
+    dummy_settings = SimpleNamespace(
+        default_llm_provider='openai', base_model='m', agent_temperature=0.2,
+        llm_request_timeout=300, openrouter_api_key=None,
+    )
+    monkeypatch.setattr(llm_module, 'settings', dummy_settings, raising=False)
+    with pytest.raises(ValueError):
+        llm_module.build_llm(provider='openrouter')
+
+
 def test_build_llm_missing_openai_base_url_attr_defaults_none(monkeypatch):
     """getattr fallback: settings without the attribute must not crash."""
     llm_module = importlib.reload(importlib.import_module('prax.agent.llm_factory'))

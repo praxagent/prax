@@ -237,6 +237,28 @@ def build_llm(
             use_responses_api=(_needs_responses_endpoint and not _base_url),
         )
 
+    if provider_name == "openrouter":
+        # Dedicated provider for OpenRouter (the cheap/prepaid eval path). It is
+        # OpenAI-compatible but does NOT implement the Responses API or logprobs,
+        # so we use plain chat-completions. Opt-in only (LLM_PROVIDER=openrouter
+        # or `make eval CHEAP=1`) — production on `openai` is never redirected by
+        # the key merely being present. See docs/guides/cheap-evals.md.
+        if not settings.openrouter_api_key:
+            raise ValueError("OPENROUTER_API_KEY is required for the openrouter provider")
+        return ChatOpenAI(
+            model=model_name,
+            api_key=settings.openrouter_api_key,
+            base_url="https://openrouter.ai/api/v1",
+            temperature=temp,
+            callbacks=callbacks,
+            timeout=settings.llm_request_timeout,
+            # OpenRouter's attribution convention (optional, harmless).
+            default_headers={
+                "HTTP-Referer": "https://github.com/praxagent/prax",
+                "X-Title": "Prax",
+            },
+        )
+
     if provider_name == "anthropic":
         if not settings.anthropic_key:
             raise ValueError("ANTHROPIC_KEY is required for Anthropic provider")
