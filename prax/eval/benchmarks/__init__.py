@@ -80,7 +80,8 @@ def run_benchmark(
 # Registry + live executor — make the adapters runnable against the real harness
 # ---------------------------------------------------------------------------
 
-ADAPTER_NAMES = ("ifeval", "injecagent", "sycophancy", "bfcl", "halueval", "truthfulqa", "gsm8k")
+ADAPTER_NAMES = ("ifeval", "injecagent", "sycophancy", "bfcl", "halueval", "truthfulqa",
+                 "gsm8k", "mmlu_pro", "gpqa", "math", "simpleqa")
 
 
 def get_adapter(name: str, **kwargs) -> BenchmarkAdapter:
@@ -107,6 +108,18 @@ def get_adapter(name: str, **kwargs) -> BenchmarkAdapter:
     if key == "gsm8k":
         from prax.eval.benchmarks.gsm8k import GSM8KAdapter
         return GSM8KAdapter(**kwargs)
+    if key == "mmlu_pro":
+        from prax.eval.benchmarks.mmlu_pro import MMLUProAdapter
+        return MMLUProAdapter(**kwargs)
+    if key == "gpqa":
+        from prax.eval.benchmarks.gpqa import GPQAAdapter
+        return GPQAAdapter(**kwargs)
+    if key == "math":
+        from prax.eval.benchmarks.math_bench import MATHAdapter
+        return MATHAdapter(**kwargs)
+    if key == "simpleqa":
+        from prax.eval.benchmarks.simpleqa import SimpleQAAdapter
+        return SimpleQAAdapter(**kwargs)
     raise ValueError(f"unknown benchmark {name!r} (have: {', '.join(ADAPTER_NAMES)})")
 
 
