@@ -159,6 +159,7 @@ def live_orchestrator_replay(*, tier: str = "low", model: str | None = None):
         counter["n"] += 1
         run = orchestrator_executor(
             prompt, tier=tier, model_override=model, case_id=f"bench-{counter['n']}",
+            fold_artifacts=False,  # benchmarks score the direct answer, not workspace files
         )
         return run.answer or ""
 
@@ -212,7 +213,8 @@ def run_benchmark_lift(name: str, *, tier: str = "low", model: str | None = None
         prompt = adapter.prompt(case)
         counter["n"] += 1
         full = orchestrator_executor(prompt, tier=tier, model_override=model,
-                                     case_id=f"lift-{name}-{counter['n']}")
+                                     case_id=f"lift-{name}-{counter['n']}",
+                                     fold_artifacts=False)  # score the direct answer
         bare = bare_executor(prompt, tier=tier, model_override=model)
         gf, gb = adapter.score(case, full.answer or ""), adapter.score(case, bare.answer or "")
         return {

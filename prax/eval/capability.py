@@ -237,11 +237,18 @@ def _content_text(resp) -> str:
 
 def orchestrator_executor(prompt: str, *, tier: str = "medium",
                           model_override: str | None = None,
-                          case_id: str = "cap") -> CaseRun:
+                          case_id: str = "cap", fold_artifacts: bool = True) -> CaseRun:
     """Full Prax harness — the orchestrator with all tools and spokes.
 
     Runs in an isolated workspace under ``$PRAX_EVAL_DIR`` and captures the tool
     / spoke stream via the shared telemetry collector.
+
+    ``fold_artifacts`` (default True) appends text files the run persisted to the
+    answer — correct for capability *persistence* cases whose real output is a
+    saved file. **Benchmarks must pass False**: they answer inline, and folding
+    the workspace (which can contain Prax's own instructions/soul/plan files)
+    corrupts answer extraction — it made GSM8K score 0/5 on correct answers by
+    extracting a number out of the appended system-prompt text.
     """
     from prax.agent import tool_registry as _tr
     from prax.eval import PRAX_EVAL_DIR, resolve_task_timeout
@@ -290,7 +297,8 @@ def orchestrator_executor(prompt: str, *, tier: str = "medium",
     # Credit persisted artifacts: a persistence case's real output is the saved
     # file, not the chat confirmation. Fold any text the harness wrote into the
     # answer so CONTENT checks (and harness-lift) see the harness's actual work.
-    artifacts = _read_workspace_artifacts(workspace)
+    # Benchmarks disable this (fold_artifacts=False) — they score the direct answer.
+    artifacts = _read_workspace_artifacts(workspace) if fold_artifacts else ""
     full_answer = answer + (f"\n\n{artifacts}" if artifacts else "") if answer else artifacts
     return CaseRun(answer=full_answer, tools=list(usage.tools), spokes=usage.spokes(),
                    error=err, tokens=int(usage.snapshot().get("total_tokens", 0)))
