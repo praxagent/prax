@@ -54,6 +54,22 @@ def test_broken_regex_fails_closed():
     assert grade_case(case, CaseRun(answer="anything"))["total"] == 0.0
 
 
+def test_tool_and_spoke_checks_accept_any_of():
+    # A `|`-separated tool/spoke check passes if the run used ANY listed name —
+    # e.g. "for my notes" correctly routes to note_create, not workspace_save.
+    case = CapabilityCase(
+        id="t", prompt="p",
+        checks=[CapCheck("tool", "note_create|workspace_save", 1.0),
+                CapCheck("spoke", "knowledge|memory", 1.0)],
+    )
+    run = CaseRun(answer="done", tools=["delegate_knowledge", "note_create"],
+                  spokes=["knowledge"])
+    assert grade_case(case, run)["total"] == 1.0
+    # Neither alternative used → fails.
+    run2 = CaseRun(answer="done", tools=["sandbox_shell"], spokes=["sandbox"])
+    assert grade_case(case, run2)["total"] == 0.0
+
+
 def test_seed_cases_load_and_are_wellformed():
     cases = load_capability_cases()
     assert len(cases) >= 5

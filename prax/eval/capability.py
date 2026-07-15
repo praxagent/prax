@@ -147,10 +147,13 @@ def _check_pass(check: CapCheck, run: CaseRun) -> bool:
             return bool(re.search(check.value, answer, re.IGNORECASE | re.DOTALL))
         except re.error:
             return False  # a broken pattern fails closed, never crashes
+    # spoke/tool checks accept a `|`-separated set of acceptable names (any-of):
+    # the diagnostic is "did the harness take a valid route", and several tools
+    # can be the right one (e.g. note_create OR workspace_save both persist a note).
     if k == "spoke":
-        return check.value in (run.spokes or [])
+        return any(v in (run.spokes or []) for v in check.value.split("|"))
     if k == "tool":
-        return check.value in (run.tools or [])
+        return any(v in (run.tools or []) for v in check.value.split("|"))
     return False
 
 
