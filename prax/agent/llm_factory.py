@@ -172,6 +172,12 @@ def build_llm(
     if provider_name == "openai":
         if not settings.openai_key:
             raise ValueError("OPENAI_KEY is required for OpenAI provider")
+        # OPENAI_BASE_URL points the OpenAI-compatible client at a THIRD-PARTY
+        # provider (OpenRouter, DeepSeek, Groq, …) — the cheap/prepaid path for
+        # evals (docs/guides/cheap-evals.md). Those endpoints do NOT implement
+        # OpenAI's proprietary Responses API or `logprobs`, so when a custom base
+        # URL is set we force plain chat-completions and skip the logprob machinery.
+        _base_url = getattr(settings, "openai_base_url", None) or None
         # The "pro"/reasoning models route through OpenAI's **Responses API**,
         # which (a) rejects `logprobs`/`top_logprobs` — raising
         # `Responses.create() got an unexpected keyword argument 'logprobs'` and
@@ -203,7 +209,7 @@ def build_llm(
         )
         # Phase 3: logprobs for entropy analysis — Chat Completions models only.
         # The LogprobCallbackHandler silently no-ops if there's no logprob data.
-        if not _responses_api:
+        if not _responses_api and not _base_url:
             try:
                 from prax.agent.logprob_analyzer import get_logprob_callback
                 callbacks = list(callbacks) + [get_logprob_callback()]
@@ -212,6 +218,7 @@ def build_llm(
         return ChatOpenAI(
             model=model_name,
             api_key=settings.openai_key,
+            base_url=_base_url,  # None → OpenAI default; set → third-party provider
             temperature=(1.0 if _responses_api else temp),
             callbacks=callbacks,
             # Per-request HTTP timeout — prevents a stalled OpenAI
@@ -221,13 +228,13 @@ def build_llm(
             # though agent_run_timeout exists (that timeout is only
             # checked AFTER graph.invoke returns).
             timeout=settings.llm_request_timeout,
-            model_kwargs=({} if _responses_api else {"logprobs": True, "top_logprobs": 5}),
+            model_kwargs=({} if (_responses_api or _base_url) else {"logprobs": True, "top_logprobs": 5}),
             # Reasoning/"pro" models (gpt-5.5-pro, o-series) are served ONLY by the
             # Responses API — calling them on /v1/chat/completions 404s with "not a
             # chat model" (this is what failed the professor spoke). Route ONLY
             # those through /v1/responses; plain gpt-5.5 and chat models keep
             # chat-completions (string content, no list-block downstream crashes).
-            use_responses_api=_needs_responses_endpoint,
+            use_responses_api=(_needs_responses_endpoint and not _base_url),
         )
 
     if provider_name == "anthropic":

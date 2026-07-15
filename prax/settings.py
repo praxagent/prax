@@ -36,6 +36,11 @@ class AppSettings(BaseSettings):
 
     # Providers / API Keys
     openai_key: str | None = Field(default=None, alias="OPENAI_KEY")
+    # Point the OpenAI-compatible client at a THIRD-PARTY provider (OpenRouter,
+    # DeepSeek, Groq, …) — the cheap/prepaid path for running evals without
+    # bill-shock. Default None = OpenAI. Set OPENAI_KEY to that provider's key.
+    # See docs/guides/cheap-evals.md.
+    openai_base_url: str | None = Field(default=None, alias="OPENAI_BASE_URL")
     anthropic_key: str | None = Field(default=None, alias="ANTHROPIC_KEY")
     google_api_key: str | None = Field(default=None, alias="GOOGLE_API_KEY")
     google_cse_id: str | None = Field(default=None, alias="GOOGLE_CSE_ID")

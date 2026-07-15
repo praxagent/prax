@@ -13,6 +13,7 @@ def test_build_llm_for_each_provider(monkeypatch):
         agent_temperature=0.2,
         llm_request_timeout=300,
         openai_key='sk-test',
+        openai_base_url=None,
         anthropic_key='ant-test',
         google_vertex_project='proj',
         google_vertex_location='loc'
@@ -29,6 +30,9 @@ def test_build_llm_for_each_provider(monkeypatch):
     assert openai_kw['api_key'] == 'sk-test'
     assert openai_kw['temperature'] == 0.2
     assert 'callbacks' in openai_kw
+    # Default: OpenAI, so base_url is None and native logprobs are requested.
+    assert openai_kw['base_url'] is None
+    assert openai_kw['model_kwargs'] == {"logprobs": True, "top_logprobs": 5}
 
     _, anthro_kw = llm_module.build_llm(provider='anthropic')
     assert anthro_kw['model'] == 'gpt-test'
@@ -42,6 +46,39 @@ def test_build_llm_for_each_provider(monkeypatch):
     _, ollama_kw = llm_module.build_llm(provider='ollama')
     assert ollama_kw['model'] == 'gpt-test'
     assert ollama_kw['temperature'] == 0.2
+
+
+def test_build_llm_openai_base_url_passthrough(monkeypatch):
+    """OPENAI_BASE_URL routes to a third-party OpenAI-compatible provider and
+    suppresses OpenAI-proprietary features (Responses API + logprobs)."""
+    llm_module = importlib.reload(importlib.import_module('prax.agent.llm_factory'))
+    dummy_settings = SimpleNamespace(
+        default_llm_provider='openai', base_model='gpt-test', agent_temperature=0.2,
+        llm_request_timeout=300, openai_key='or-key',
+        openai_base_url='https://openrouter.ai/api/v1',
+    )
+    monkeypatch.setattr(llm_module, 'settings', dummy_settings, raising=False)
+    monkeypatch.setattr(llm_module, 'ChatOpenAI', lambda **kwargs: ('openai', kwargs))
+
+    _, kw = llm_module.build_llm()
+    assert kw['base_url'] == 'https://openrouter.ai/api/v1'
+    assert kw['api_key'] == 'or-key'
+    # Third-party endpoints don't support logprobs or the Responses API.
+    assert kw['model_kwargs'] == {}
+    assert kw['use_responses_api'] is False
+
+
+def test_build_llm_missing_openai_base_url_attr_defaults_none(monkeypatch):
+    """getattr fallback: settings without the attribute must not crash."""
+    llm_module = importlib.reload(importlib.import_module('prax.agent.llm_factory'))
+    dummy_settings = SimpleNamespace(
+        default_llm_provider='openai', base_model='gpt-test', agent_temperature=0.2,
+        llm_request_timeout=300, openai_key='sk-test',  # no openai_base_url attr
+    )
+    monkeypatch.setattr(llm_module, 'settings', dummy_settings, raising=False)
+    monkeypatch.setattr(llm_module, 'ChatOpenAI', lambda **kwargs: ('openai', kwargs))
+    _, kw = llm_module.build_llm()
+    assert kw['base_url'] is None
 
 
 def test_build_llm_with_tier(monkeypatch):
