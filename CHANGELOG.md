@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.0](https://github.com/praxagent/prax/compare/v0.24.0...v0.25.0) (2026-07-15)
+
+
+### Features
+
+* **llm:** native OpenRouter provider + 'make eval CHEAP=1' for cheap evals ([#91](https://github.com/praxagent/prax/issues/91)) ([e2e972c](https://github.com/praxagent/prax/commit/e2e972c1d984d8fa2744ad4d3cd4b4b294fa6c86))
+
 ## [0.24.0](https://github.com/praxagent/prax/compare/v0.23.0...v0.24.0) (2026-07-15)
 
 
