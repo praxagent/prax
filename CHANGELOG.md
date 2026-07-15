@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.24.0](https://github.com/praxagent/prax/compare/v0.23.0...v0.24.0) (2026-07-15)
+
+
+### Features
+
+* **eval:** bank the MORPHEUS 'coverage != adaptation' lesson as a golden ([#90](https://github.com/praxagent/prax/issues/90)) ([51122d2](https://github.com/praxagent/prax/commit/51122d286956d6a719d7cd5020595bb2785c17ce))
+* **llm:** OPENAI_BASE_URL passthrough — run evals on a cheap prepaid provider ([#88](https://github.com/praxagent/prax/issues/88)) ([7bfe538](https://github.com/praxagent/prax/commit/7bfe538db51c70054810f5d12282d220bc181676))
+
 ## [0.23.0](https://github.com/praxagent/prax/compare/v0.22.0...v0.23.0) (2026-07-14)
 
 
