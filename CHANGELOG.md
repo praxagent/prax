@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.27.1](https://github.com/praxagent/prax/compare/v0.27.0...v0.27.1) (2026-07-15)
+
+
+### Bug Fixes
+
+* **eval:** benchmarks score the direct answer, not workspace artifacts ([#99](https://github.com/praxagent/prax/issues/99)) ([f3fb755](https://github.com/praxagent/prax/commit/f3fb755c80ebdfc6cbd0b12799a072e67d9d7aa6))
+* **eval:** knowledge_note check accepts the correct note-persist route (any-of) ([#101](https://github.com/praxagent/prax/issues/101)) ([b31b306](https://github.com/praxagent/prax/commit/b31b3068961486bca4fa0cf33fa92093b08dfd18))
+
 ## [0.27.0](https://github.com/praxagent/prax/compare/v0.26.0...v0.27.0) (2026-07-15)
 
 
