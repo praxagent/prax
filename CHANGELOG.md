@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.27.0](https://github.com/praxagent/prax/compare/v0.26.0...v0.27.0) (2026-07-15)
+
+
+### Features
+
+* **eval:** per-benchmark cost tracking (tokens → USD estimate) ([#96](https://github.com/praxagent/prax/issues/96)) ([abc1b22](https://github.com/praxagent/prax/commit/abc1b228d4c03032c0dd6dbfee4d8a98b95277f1))
+
+
+### Bug Fixes
+
+* **eval:** correct SimpleQA speed-of-light answer + comma-number grading ([#98](https://github.com/praxagent/prax/issues/98)) ([d10679c](https://github.com/praxagent/prax/commit/d10679c252781018e4ffe7ffc8ab54965470252c))
+
 ## [0.26.0](https://github.com/praxagent/prax/compare/v0.25.0...v0.26.0) (2026-07-15)
 
 
