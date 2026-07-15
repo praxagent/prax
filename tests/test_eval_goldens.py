@@ -34,6 +34,20 @@ def test_storm_research_golden_present_and_wellformed():
     assert "STORM" in golden.source
 
 
+def test_memory_adaptation_golden_present_and_wellformed():
+    # Banks the MORPHEUS "coverage != adaptation" lesson as a tracked target
+    # (docs/research/skyfall-morpheus-continual-learning.md) — must not be lost.
+    by_id = {gd.id: gd for gd in g.load_goldens()}
+    assert "memory_adaptation_under_drift" in by_id, "MORPHEUS adaptation golden is missing"
+    golden = by_id["memory_adaptation_under_drift"]
+    assert golden.kind == "self_improvement"
+    assert golden.prompt.strip()
+    assert abs(golden.weight_total() - 1.0) < 1e-6
+    keys = {c.key for c in golden.rubric}
+    assert {"detects_drift", "adapts_not_repeats",
+            "measures_adaptation_not_confidence"} <= keys
+
+
 def test_malformed_golden_is_skipped_not_raised(tmp_path):
     (tmp_path / "bad.yaml").write_text("id: x\nrubric: [oops")  # invalid YAML
     (tmp_path / "ok.yaml").write_text(

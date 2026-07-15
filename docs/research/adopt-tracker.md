@@ -48,7 +48,7 @@ Everything here feeds [IDEAS_BACKLOG #29](../IDEAS_BACKLOG.md) (close the recurs
 | **Scheduled "sleep phase"** (offline replay → re-distill/prune memories) | [lm-sleep](lm-sleep-consolidation.md) | 💤 | task_runner-shaped; **gated on held-out retrieval-probe evals** (don't build the maximizer before the un-gameable metric) |
 | **SEAL → Sleep recipe** for the local-model finetune lane | [lm-sleep](lm-sleep-consolidation.md) + [expert-judgment](expert-judgment-finetune.md) | 💤 | GPU-gated; the recipe to reach for when the finetune lane opens |
 | **Learning-curve harness-lift + experience-reuse ablation** | [edge-bench](edge-bench-learning-curves.md) | 📋 | an eval *method*, not the gated task set |
-| **Non-stationary / no-reset "does memory actually adapt?" eval** (adaptation/recovery/forgetting, curve-not-point) | [morpheus](skyfall-morpheus-continual-learning.md) | 📋 | the honest test that a flat score isn't "coverage, not adaptation"; same bucket as learning-curves + τ-bench; build the metric before any memory maximizer |
+| **Non-stationary / no-reset "does memory actually adapt?" eval** (adaptation/recovery/forgetting, curve-not-point) | [morpheus](skyfall-morpheus-continual-learning.md) | 🔨 | **Banked as a tracked golden** (`memory_adaptation_under_drift.yaml` — single-turn, measures the adaptation *reasoning*); the full multi-config curve-not-point *harness* is still 📋 (same bucket as learning-curves + τ-bench; build the metric before any memory maximizer) |
 
 ## The standing structural gaps (tracked in depth elsewhere — pointer, not a re-list)
 

@@ -1,0 +1,88 @@
+# Golden eval — does Prax's memory ACTUALLY adapt under drift, or just coast on
+# coverage?
+#
+# Banks the one transferable lesson from Skyfall's MORPHEUS benchmark
+# (docs/research/skyfall-morpheus-continual-learning.md): a stable/good result
+# under CHANGED conditions can be a fixed heuristic operating inside its coverage
+# boundary — "pre-training coverage masquerading as adaptation" — NOT evidence of
+# learning. MORPHEUS's insight is that adaptation must be measured (adaptation
+# speed / recovery / forgetting) on a non-stationary, no-reset horizon; a flat
+# score is not proof.
+#
+# Prax's rebuttal to MORPHEUS is that it keeps adaptation in HARNESS-CONTROLLED
+# state (Qdrant/Neo4j memory, progress files, trace reuse) around a frozen model,
+# rather than in the frozen policy's weights. But that rebuttal only holds if Prax
+# can DEMONSTRATE the memory adapts. This golden is the honest test of that claim.
+#
+# RUBRIC-scored, single-turn. It measures the BASELINE GAP today — a single-turn
+# prompt can elicit the adaptation *reasoning*, but the real proof is a
+# multi-config, no-reset, curve-not-point eval harness (tracked in the adopt-tracker
+# and IDEAS_BACKLOG as future eval-methodology work). When that harness ships, the
+# same criteria — detect drift, adapt vs. repeat, measure recovery not confidence —
+# become its scoring axes. Guarded by tests/test_eval_goldens.py so it isn't lost.
+id: memory_adaptation_under_drift
+title: Detect environment drift with no reset, adapt rather than repeat a fixed heuristic, and prove the adaptation (not coverage)
+kind: self_improvement
+status: baseline-gap
+source: "docs/research/skyfall-morpheus-continual-learning.md (Skyfall MORPHEUS, 'LLMs are not continual learners', 2026-07) + IDEAS_BACKLOG.md #29"
+
+prompt: >-
+  Weeks ago you set up a way of handling a recurring task, and it worked well. Since
+  then the conditions have shifted — a data source you relied on now fails
+  intermittently, and the demand pattern has changed shape — but nothing reset: the
+  prior state, history, and your notes all persist. You are now handed a fresh
+  instance of the same task. Explain how you decide what to do. Then answer the harder
+  question directly: how would you know whether you have GENUINELY adapted to the
+  change, versus merely producing a good-looking result because current conditions
+  still happen to fall within what already worked? Be concrete about what you would
+  measure and what would make you distrust a stable score.
+
+rubric:
+  - key: detects_drift
+    weight: 0.25
+    description: >-
+      Actively checks whether conditions have CHANGED since the approach was set up —
+      inspecting recent history / signals for the intermittent-failure and
+      demand-shift — instead of assuming the prior approach still applies. The failure
+      mode this guards against is MORPHEUS's "no detection": running an increasingly
+      inappropriate policy because the change was never noticed.
+  - key: adapts_not_repeats
+    weight: 0.25
+    description: >-
+      Changes the strategy in response to the SPECIFIC shift (e.g. reduces reliance on
+      the now-flaky source, re-weights for the new demand shape), rather than
+      re-applying the previous fixed heuristic unchanged. Re-running the old policy and
+      hoping is the exact "fixed policy operating within its coverage boundary" failure.
+  - key: grounds_in_persistent_memory
+    weight: 0.20
+    description: >-
+      Uses the PERSISTENT harness state — prior progress notes, past traces/outcomes,
+      stored context (progress_read, trace_search) — to inform the adaptation, since
+      nothing reset. This is the harness-memory adaptation Prax's design claims; a cold
+      restart that ignores accumulated experience forfeits the whole point.
+  - key: measures_adaptation_not_confidence
+    weight: 0.20
+    description: >-
+      States HOW it would know adaptation actually happened — a recovery/adaptation
+      measurement over time (did performance dip at the shift and recover? how fast?),
+      NOT a one-shot confidence or a single absolute score. This is MORPHEUS's
+      curve-not-point discipline: adaptation speed / recovery / forgetting are the
+      signal.
+  - key: flags_coverage_masquerade
+    weight: 0.10
+    description: >-
+      Explicitly warns that a stable or good result under changed conditions could be
+      COVERAGE, not adaptation — and names how to tell the two apart (e.g. probe with a
+      condition outside the old regime, check whether behaviour actually changed). The
+      core MORPHEUS caution turned into a self-check.
+
+notes: >-
+  Baseline gap: Prax asserts cross-session improvement via its non-parametric memory,
+  but has no eval that DEMONSTRATES adaptation under structured, no-reset drift — so a
+  flat golden score today cannot distinguish "the memory adapted" from "the frozen
+  model coasted on pre-training coverage." This single-turn golden measures the
+  adaptation *reasoning*; the full test is a non-stationary, multi-config, curve-not-
+  point harness that measures recovery/forgetting of the harness-controlled state
+  (adopt-tracker: "Non-stationary / no-reset 'does memory actually adapt?' eval").
+  Build the honest metric before any memory maximizer (the self-regen safety rule).
+  Composes with edge-bench learning-curves and the sierra tau-bench multi-turn item.
