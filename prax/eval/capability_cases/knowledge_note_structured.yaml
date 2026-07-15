@@ -17,8 +17,11 @@ checks:
   - kind: regex          # required subtopic 2 (converge / convergence)
     value: '(?i)converg'
     weight: 1.0
-  - kind: tool           # diagnostic: did the harness actually persist a note?
-    value: workspace_save
+  - kind: tool           # diagnostic: did the harness persist the note by a valid route?
+    # "for my notes" correctly routes to the Library (note_create); a raw
+    # workspace_save is also acceptable persistence. Accept either (any-of) —
+    # the earlier check hardcoded workspace_save and failed the CORRECT route.
+    value: note_create|workspace_save
     weight: 1.0
 notes: >-
   Checks test the capability class (structured, grounded note), not a specific
