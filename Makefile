@@ -45,6 +45,22 @@ eval:
 # Override the tier with EVAL_TIER=low|medium|high (default medium).
 EVAL_TIER ?= medium
 
+# CHEAP=1 — run ANY eval target on ONE cheap OpenRouter model (prepaid balance =
+# structurally can't overspend; a full pass is ~$0.30). Needs OPENROUTER_API_KEY
+# in .env. Points every tier at the model below and switches the provider FOR
+# THIS make invocation only — production config (run-local-*, restart-prax) is
+# untouched. Usage: `make eval CHEAP=1`, `make eval-capability CHEAP=1`, etc.
+# Pick a different model with OPENROUTER_EVAL_MODEL=<slug>. See docs/guides/cheap-evals.md.
+OPENROUTER_EVAL_MODEL ?= deepseek/deepseek-v4-flash
+ifdef CHEAP
+export LLM_PROVIDER   := openrouter
+export BASE_MODEL     := $(OPENROUTER_EVAL_MODEL)
+export LOW_MODEL      := $(OPENROUTER_EVAL_MODEL)
+export MEDIUM_MODEL   := $(OPENROUTER_EVAL_MODEL)
+export HIGH_MODEL     := $(OPENROUTER_EVAL_MODEL)
+export PRO_MODEL      := $(OPENROUTER_EVAL_MODEL)
+endif
+
 # Daily driver — capability checks through the full harness (deterministic grade)
 eval-capability:
 	FLASK_SECRET_KEY=$${FLASK_SECRET_KEY:-ci-test-key} uv run --python 3.13 \
