@@ -103,13 +103,17 @@ def cmd_gaia(args) -> int:
 
 
 def cmd_benchmark(args) -> int:
+    from prax.eval.pricing import format_cost
     if args.name == "all":
         from prax.eval.benchmarks import run_all_benchmarks
         report = run_all_benchmarks(tier=args.tier, model=args.model, resume=not args.no_resume)
         print(f"\n>>> Benchmark suite: {report['n_benchmarks']} adapters, "
-              f"avg pass-rate {report['avg_pass_rate']}")
+              f"avg pass-rate {report['avg_pass_rate']}  (model: {report.get('cost_model') or 'n/a'})")
         for name, agg in report["benchmarks"].items():
-            print(f"    {name:12} pass_rate={agg.get('pass_rate')} (graded {agg.get('graded')})")
+            print(f"    {name:12} pass_rate={agg.get('pass_rate')} (graded {agg.get('graded')})"
+                  f"  {agg.get('total_tokens', 0):>8} tok  {format_cost(agg.get('estimated_cost_usd'))}")
+        print(f"    {'TOTAL':12} {'':>25} {report.get('total_tokens', 0):>8} tok  "
+              f"{format_cost(report.get('estimated_cost_usd'))} (estimate)")
         return 0
     if args.lift:
         from prax.eval.benchmarks import run_benchmark_lift
