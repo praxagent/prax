@@ -28,6 +28,28 @@ def test_live_replay_factory_is_callable_without_running():
     assert callable(fn)
 
 
+def test_benchmark_replay_disables_artifact_folding(monkeypatch):
+    """Regression: benchmarks must score the DIRECT answer, not the workspace-
+    augmented one. Folding artifacts made GSM8K score 0/5 on correct answers by
+    extracting a number out of the appended instructions/soul file. The benchmark
+    replay must call the executor with fold_artifacts=False."""
+    import prax.eval.capability as cap
+
+    captured: dict = {}
+
+    class _FakeRun:
+        answer = "the answer is 42"
+
+    def _fake_exec(prompt, **kw):
+        captured.update(kw)
+        return _FakeRun()
+
+    monkeypatch.setattr(cap, "orchestrator_executor", _fake_exec)
+    replay = live_orchestrator_replay(tier="low")
+    assert replay("what is 6*7?") == "the answer is 42"
+    assert captured.get("fold_artifacts") is False
+
+
 def test_run_benchmark_lift_computes_full_minus_bare(tmp_path, monkeypatch):
     import prax.eval.capability as cap
     from prax.eval.benchmarks import run_benchmark_lift
