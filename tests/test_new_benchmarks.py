@@ -83,3 +83,17 @@ def test_simpleqa_abstention_does_not_pass():
     ad = get_adapter("simpleqa")
     case = ad.cases()[0]
     assert not ad.score(case, "I don't know.")["passed"]
+
+
+def test_simpleqa_numeric_format_robustness():
+    # Regression (found by the first live run): a comma-grouped number must match
+    # its comma-free reference — a format mismatch is not a wrong answer.
+    ad = get_adapter("simpleqa")
+    speed = next(c for c in ad.cases() if c["id"] == "sqa_speed")
+    # The reference must be the correct value, not the old wrong 299,000,000.
+    assert "299792458" in speed["answers"]
+    assert "299000000" not in speed["answers"]
+    for resp in ("The speed of light is 299,792,458 m/s.",
+                 "about 299792458 metres per second",
+                 "roughly 3.00e8 m/s"):
+        assert ad.score(speed, resp)["passed"], resp
