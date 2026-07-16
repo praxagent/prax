@@ -88,6 +88,23 @@ _EPISTEMIC_VIGILANCE_HINT = (
     "premise is genuinely wrong or risky."
 )
 
+_TOOL_ECONOMY_HINT = (
+    "\n\n## Tool economy — answer from knowledge when you can\n"
+    "Before calling a search, fetch, or browser tool, ask: do I actually need "
+    "EXTERNAL information for this? Many questions — factual recall, definitions, "
+    "reasoning, arithmetic, \"what is / who was / explain / which of these\" — you "
+    "can answer directly and correctly from what you already know. For those, answer "
+    "directly; do NOT spend turns searching or fetching for something already in your "
+    "knowledge. Reserve external tools for what you genuinely lack: current or "
+    "time-sensitive facts (prices, news, \"latest\"), user- or system-specific data, a "
+    "specific document or URL you were given, or a claim you are genuinely uncertain "
+    "about and must verify. The persistence rules elsewhere (\"when one source fails, "
+    "try another\") apply ONCE you have decided a task needs external information — "
+    "they are not a reason to reach for a tool on a question you could answer from "
+    "what you already know. Over-fetching costs latency and tokens and can talk you "
+    "out of a correct answer you already had."
+)
+
 
 def _load_system_prompt() -> str:
     """Load the system prompt from the plugin prompts directory."""
@@ -1077,6 +1094,17 @@ class ConversationAgent:
         except Exception:
             pass
 
+        # Tool economy (flag-gated, default off) — a counterweight to the
+        # persistence/"try another source" persona: answer from knowledge when the
+        # question doesn't need external info, instead of ballooning a closed-book
+        # turn with unnecessary search/fetch calls until it times out.
+        tool_economy_hint = ""
+        try:
+            if settings.tool_economy_enabled:
+                tool_economy_hint = _TOOL_ECONOMY_HINT
+        except Exception:
+            pass
+
         full_prompt = (
             base_system_prompt
             + temporal_context
@@ -1088,6 +1116,7 @@ class ConversationAgent:
             + prediction_hint
             + health_hint
             + vigilance_hint
+            + tool_economy_hint
         )
 
         # Persist instructions so the agent can re-read them mid-conversation.

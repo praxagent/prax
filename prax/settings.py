@@ -664,6 +664,21 @@ class AppSettings(BaseSettings):
             "Default off; grade with the `sycophancy` benchmark adapter."
         ),
     )
+    tool_economy_enabled: bool = Field(
+        default=False, alias="TOOL_ECONOMY_ENABLED",
+        description=(
+            "When true, appends a 'tool economy' principle to the system prompt: "
+            "answer from your own knowledge when a question doesn't need external "
+            "information, and reserve search/fetch/browser tools for what you "
+            "genuinely lack (current facts, user/system data, given documents, "
+            "genuinely-uncertain claims). A deliberate counterweight to the "
+            "persistence/'try another source' persona, which otherwise leads the "
+            "agent to over-fetch on closed-book questions until the turn balloons "
+            "and times out. Default off; grade with the closed-book benchmark "
+            "adapters (gsm8k/mmlu_pro/gpqa/truthfulqa) + the capability suite to "
+            "confirm it doesn't suppress genuinely-needed tool use."
+        ),
+    )
     intent_clarification_enabled: bool = Field(
         default=False, alias="INTENT_CLARIFICATION_ENABLED",
         description=(
