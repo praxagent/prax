@@ -186,6 +186,19 @@ the thing it documents**, not wherever it's convenient:
   in the same PR (status: unit-tested-only / unverified).  Shipping
   unverified is fine; *implying* it's verified is not.  Update the row
   when it's later run for real.
+- **The eval matrix & historical record.**  `make eval-matrix` runs
+  every benchmark on its **real** dataset through the full harness
+  (`MATRIX_LIMIT` cases each, cheap OpenRouter model) — the reproducible
+  public scorecard.  Real datasets cache under `$PRAX_EVAL_DIR/datasets/`
+  (data-only, never committed).  Full how-to + prereqs:
+  [`docs/guides/eval-matrix.md`](docs/guides/eval-matrix.md).  The
+  **historical results record** (`docs/eval-results/`, a committed,
+  trend-tracking scorecard for public accountability) is **planned, not
+  yet started** — held until the matrix is shaken down and the last
+  benchmark is added.  When it lands, its hard rule is **aggregates only
+  (pass-rate/tokens/cost/config/commit) — NEVER benchmark questions or
+  answers in the public repo** (contamination firewall); raw per-case
+  runs stay in `$PRAX_EVAL_DIR`.
 
 ## Solo dev flow (GitHub)
 

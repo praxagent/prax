@@ -1,4 +1,4 @@
-.PHONY: lint layers test actions ci eval eval-capability eval-harness-lift eval-gaia eval-self-regen tailscale-up tailscale-down tailscale-status sandbox-gpu sandbox-gpu-check \
+.PHONY: lint layers test actions ci eval eval-capability eval-harness-lift eval-benchmark eval-matrix eval-gaia eval-self-regen tailscale-up tailscale-down tailscale-status sandbox-gpu sandbox-gpu-check \
         run-local-min run-local-all run-local-all-dev run-local-all-tail-dev shutdown restart-prax restart-teamwork restart-sandbox local-status local-logs smoke integration \
         _local-qdrant _local-neo4j _local-observability _local-teamwork _local-teamwork-prod _local-teamwork-dev _local-sandbox _local-prax _tailscale-local
 
@@ -86,6 +86,24 @@ eval-benchmark:
 	FLASK_SECRET_KEY=$${FLASK_SECRET_KEY:-ci-test-key} uv run --python 3.13 \
 		python scripts/eval_suite.py benchmark $(or $(BENCH),ifeval) --tier $(EVAL_TIER) \
 		$(if $(LIFT),--lift,)
+
+# ── The full accountability MATRIX — every benchmark on its REAL dataset ──
+# One command to reproduce the public scorecard: runs all benchmark adapters
+# through the full harness on the real HuggingFace test sets (a MATRIX_LIMIT-case
+# subset each, default 40) on the cheap OpenRouter model. Bump the subset for a
+# definitive run:  make eval-matrix MATRIX_LIMIT=200
+# Prereqs (see docs/guides/eval-matrix.md):
+#   1. OPENROUTER_API_KEY + Ollama embeddings configured in .env
+#   2. datasets fetched once:  uv run python scripts/fetch_eval_datasets.py
+#      (GPQA-Diamond is gated — needs HF_TOKEN_RO + accepted terms)
+#   3. sandbox up for the humaneval leg:  make restart-sandbox
+# Resumable — re-run after a kill to continue. Results land under
+# $PRAX_EVAL_DIR/suites/ (data-only, never committed).
+MATRIX_LIMIT ?= 40
+eval-matrix:
+	SANDBOX_ENABLED=true PRAX_EVAL_FULL_DATASETS=1 \
+	PRAX_EVAL_DATASET_LIMIT=$(MATRIX_LIMIT) PRAX_EVAL_TASK_TIMEOUT_S=120 \
+	$(MAKE) eval-benchmark BENCH=all CHEAP=1 EVAL_TIER=low
 
 # External scoreboard — resumable GAIA batch (set LIMIT=N for a quick smoke batch)
 eval-gaia:
