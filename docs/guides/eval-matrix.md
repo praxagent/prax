@@ -26,6 +26,25 @@ prepaid OpenRouter model, deterministically graded (no LLM judge). It's
 it stopped. Results land under `$PRAX_EVAL_DIR/suites/` (data-only, never
 committed — the contamination firewall).
 
+### Reproducibility — every run pins its own config
+
+Every `summary.json` embeds a `config` block captured at run time:
+
+- **`git_commit`** — the exact harness code the run executed.
+- **`flags`** — *every* boolean feature flag, keyed by its `SCREAMING_CASE` env
+  alias (e.g. `TOOL_ECONOMY_ENABLED`, `AGENT_MIDDLEWARE_ENABLED`,
+  `PROMPT_SELECTIVITY_ENABLED`), so the behaviour is fully specified.
+- **`run`** — non-secret models/providers (per-tier model, LLM provider,
+  embedding provider/model, search provider).
+- **`env`** — the dataset/execution knobs (`PRAX_EVAL_FULL_DATASETS`,
+  `PRAX_EVAL_DATASET_LIMIT`, `PRAX_EVAL_TASK_TIMEOUT_S`, tier).
+
+It is **secret-free by construction** — only booleans and whitelisted non-secret
+names are captured; API keys never are. This is the answer to "you cheated": a
+reproduction that gets a different number under a different config is visibly
+running a different config, and the flags to match are published *with* the
+result. When the historical record lands, its per-run row derives from this block.
+
 ### What "real data" means here
 
 Adapters ship a tiny **inline seed set** so keyless `make ci` never touches the
