@@ -2,6 +2,8 @@
 
 **Sources.** ARC-AGI-3 benchmark ([arcprize.org/arc-agi/3](https://arcprize.org/arc-agi/3),
 technical report [arXiv 2603.24621](https://arxiv.org/abs/2603.24621)); the
+**[ARC Prize 2026 competition](https://arcprize.org/competitions/2026/arc-agi-3)**
+($850K pool, $700K for 100%, Kaggle, offline eval); the
 **Schema** harness ([schema-harness.github.io](https://schema-harness.github.io/),
 [Haven Feng announcement](https://x.com/HavenFeng/status/2077770348876247502)); the
 published traces ([hf.co/datasets/schema-harness/arc-agi-3-schema-traces](https://huggingface.co/datasets/schema-harness/arc-agi-3-schema-traces)).
@@ -164,7 +166,46 @@ on-brand for Prax's whole thesis.
   the in-repo record stays **aggregates-only** per the contamination firewall
   (see [`docs/guides/eval-matrix.md`](../guides/eval-matrix.md)).
 
-## 6. Why this is the right "big" eval — and the sequencing
+## 6. The 2026 competition — and the constraint that changes everything
+
+[ARC Prize 2026](https://arcprize.org/competitions/2026/arc-agi-3) makes the
+stakes and the rules concrete:
+
+- **$850K pool. Grand Prize: $700K for the first eligible agent scoring 100%.**
+  That is the literal answer to "how does Prax get 100%" — it's a $700K target.
+  Plus $75K Top-Score (5 places) and $75K in milestone prizes.
+- **Milestones:** #1 was **June 30, 2026** (passed); **#2 is Sept 30, 2026**.
+- **Submit via Kaggle. All code/methods must be open-sourced to be eligible** —
+  no conflict for Prax (Apache-2.0); it's a *requirement* we already meet.
+- **⚠️ NO internet access during evaluation.** This is the load-bearing rule.
+
+**What "no internet" does to the plan.** The submitted agent runs **offline** in
+Kaggle's sandbox under (TBD) compute limits. So:
+
+1. **It rules out API frontier models during the scored run.** The Schema
+   harness's self-reported 99% used Opus 4.8 + Fable 5 *via API on the public
+   set* — a **different, easier regime** than the offline competition eval. Be
+   honest about this gap: reproducing 99% on public with API models ≠ winning the
+   offline grand prize. The grand prize needs a model that runs **locally on
+   Kaggle hardware**.
+2. **It makes the executable-schema approach the *only* viable one** — and it
+   makes Prax's web/search tools worthless here (they'd be blocked). The score
+   comes entirely from **offline reasoning + sandbox simulation**, which is
+   exactly the self-contained loop Prax's sandbox+codegen provide. (It also means
+   the [tool-economy](#) instinct — don't reach for tools you don't need — is
+   *enforced by the rules*, not just good hygiene.)
+3. **It splits Prax's attack into two honest targets:**
+   - **(a) Public-set reproduction, API models** — validate the schema loop works
+     at all; matches the schema-harness regime; the near-term, cheaper goal.
+   - **(b) Competition grand-prize, offline model on Kaggle** — the $700K; needs
+     Prax's schema loop driven by a **local/open model within compute limits**.
+     This is where Prax's [local-inference](../guides/local-cpu-inference.md) and
+     someday-finetune lanes stop being optional and become the whole game.
+
+The build order below serves (a) first (it's how we learn the loop); (b) is the
+moonshot that (a) de-risks.
+
+## 7. Why this is the right "big" eval — and the sequencing
 
 ARC-AGI-3 measures the thesis (explore/model/plan/act + continuous learning) that
 GSM8K/MMLU/GPQA can't touch. It's also where Prax's least-exercised strengths —
