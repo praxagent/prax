@@ -59,6 +59,11 @@ export LOW_MODEL      := $(OPENROUTER_EVAL_MODEL)
 export MEDIUM_MODEL   := $(OPENROUTER_EVAL_MODEL)
 export HIGH_MODEL     := $(OPENROUTER_EVAL_MODEL)
 export PRO_MODEL      := $(OPENROUTER_EVAL_MODEL)
+# Local Ollama embeddings (no API) so eval memory/knowledge/research paths don't
+# leak to OpenAI — that dead key was causing 429 insufficient_quota retry storms.
+# Needs `ollama` running with the model pulled (ollama pull nomic-embed-text).
+export EMBEDDING_PROVIDER := ollama
+export EMBEDDING_MODEL    := nomic-embed-text
 endif
 
 # Daily driver — capability checks through the full harness (deterministic grade)

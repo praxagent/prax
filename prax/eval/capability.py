@@ -214,9 +214,14 @@ def bare_executor(prompt: str, *, tier: str = "medium",
     """
     try:
         from prax.agent.llm_factory import build_llm
+        from prax.eval.telemetry import collect_usage
         llm = build_llm(model=model_override, tier=(None if model_override else tier))
-        resp = llm.invoke(prompt)
-        return CaseRun(answer=_content_text(resp))
+        # Capture bare-side tokens so harness-lift's cost comparison is real —
+        # without this the bare column was always 0 (the lift cost ratio was junk).
+        with collect_usage() as usage:
+            resp = llm.invoke(prompt)
+        return CaseRun(answer=_content_text(resp),
+                       tokens=int(usage.snapshot().get("total_tokens", 0)))
     except Exception as exc:
         logger.warning("bare_executor failed: %s", exc)
         return CaseRun(error=f"{type(exc).__name__}: {exc}")
@@ -269,6 +274,17 @@ def orchestrator_executor(prompt: str, *, tier: str = "medium",
     shutil.rmtree(workspace, ignore_errors=True)
     timeout = resolve_task_timeout(None)
 
+    # Cap the ORCHESTRATOR's own self-timeout to the eval per-task budget. Without
+    # this, when the eval abandons a timed-out case, its graph-invoke daemon thread
+    # keeps running up to agent_run_max_timeout (default 1800s) — a web-research
+    # case's abandoned sub-agents then hog the GIL and STARVE the rest of the suite
+    # (this wedged harness-lift on the research case). Bounding the agent's own
+    # runtime to `timeout` makes an abandoned worker self-terminate promptly.
+    orig_run_to, orig_run_max = settings.agent_run_timeout, settings.agent_run_max_timeout
+    if timeout:
+        settings.agent_run_timeout = min(int(orig_run_to), int(timeout))
+        settings.agent_run_max_timeout = min(int(orig_run_max), int(timeout))
+
     def _go() -> str:
         with _isolated_prax_scope(workspace, case_id, user_prefix="cap-eval"):
             from prax.agent.orchestrator import ConversationAgent
@@ -296,6 +312,7 @@ def orchestrator_executor(prompt: str, *, tier: str = "medium",
             logger.warning("orchestrator_executor failed for %s: %s", case_id, exc)
         finally:
             settings.workspace_dir, _tr.get_registered_tools = orig_ws, orig_get
+            settings.agent_run_timeout, settings.agent_run_max_timeout = orig_run_to, orig_run_max
 
     # Credit persisted artifacts: a persistence case's real output is the saved
     # file, not the chat confirmation. Fold any text the harness wrote into the
