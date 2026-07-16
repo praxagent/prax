@@ -248,8 +248,13 @@ Shared rules that shape the design:
   - **ARC-AGI-2:** internal computation is unbounded (within the runtime/compute
     limit) — you may write, run, verify-against-the-given-train-pairs, and *evolve*
     candidate solution programs as much as you like; only the **2 final grid
-    attempts** (pass@2) are submitted. The public SOTA does exactly this (Imbue's
-    "code evolution" keeps a *population* of Python candidate programs).
+    attempts** (pass@2) are submitted. The public SOTA does exactly this —
+    [Imbue's "code evolution"](https://imbue.com/blog/2026-02-27-arc-agi-2-evolution)
+    keeps a *population* of Python candidate programs and mutates them until one
+    reproduces the train pairs. (Prax already has a **self-fixing / self-improvement**
+    precursor — the `Self-Fixing` prompt section, `review_my_traces`, the codegen
+    `self_improve` path — so this is sharpening an existing instinct into a tight,
+    verifier-driven loop, not a new one.)
   - **ARC-AGI-3:** iteration is built into the action space — **`RESET` restarts a
     level and `ACTION7`/Undo reverses a step**, and critically **a RESET clears the
     level's action sequence, so resets don't count against your RHAE**. You can
@@ -286,14 +291,95 @@ Kaggle's sandbox under (TBD) compute limits. So:
 The build order below serves (a) first (it's how we learn the loop); (b) is the
 moonshot that (a) de-risks.
 
-## 7. Why this is the right "big" eval — and the sequencing
+## 7. How to prep — public data, our own generators, and the recursive loop
+
+**Yes, there is public data to practice against — and the *right* use of it is the
+key to not spiking.**
+
+- **ARC-AGI-2** ships **public *training* and public *evaluation* task sets**
+  (hundreds of input→output grid tasks, JSON, in the
+  [arcprize/ARC-AGI](https://github.com/arcprize/ARC-AGI) repo) alongside the
+  hidden semi-private/private sets used for prizes.
+- **ARC-AGI-3** exposes a **public game set** (the ~25 games, playable/queryable
+  via the ARC-AGI-3 API — [docs](https://docs.arcprize.org/),
+  [arc3.games](https://arc3.games/)); the scored competition games are hidden.
+
+Cache both under `PRAX_EVAL_DIR` (data-only, never committed — contamination
+firewall).
+
+### The contamination line — the whole game
+
+The trap: **training/tuning Prax on the public *evaluation* tasks is spiking** —
+the model memorizes answers and generalizes nothing (and it may overlap the hidden
+set). So the discipline:
+
+- **Develop** on the public *training* half.
+- **Hold out** the public *evaluation* half as an untouched generalization check.
+- **Never** put eval-half tasks (or the hidden sets) into training, prompts, or
+  committed docs.
+- The **real Kaggle leaderboard** is the final external check we never train against.
+
+### Generate our own parallel tasks — the unlock TJ is pointing at
+
+This is the correct, non-spiking way to get unlimited training/eval signal, and
+ARC is *designed* for it — the whole ARC philosophy is "a handful of core-knowledge
+priors → infinitely many novel tasks." So we build **our own generators**:
+
+- **ARC-2 task generator** — synthesize novel input→output grid tasks from
+  parameterized transformation rules (symmetry, gravity, object-counting,
+  flood-fill, recolor-by-rule…), each with a *known* program so scoring is
+  deterministic and we control difficulty.
+- **ARC-3 mini-games** — build small interactive environments in the same
+  64×64/7-action spirit with *known* mechanics, so we can score RHAE against our
+  own "human" (optimal-path) baseline.
+
+Our own tasks are **novel, unlimited, and contamination-free** — they train the
+*general* "executable world-models" capability rather than memorized answers, and
+they let us dial difficulty and measure generalization to shapes the public set
+never showed.
+
+### The recursive loop — this closes #29 with an un-gameable verifier
+
+The reason this is exciting beyond ARC: a self-authored task generator + a
+**deterministic verifier** (exact-grid-match for ARC-2, game-win/RHAE for ARC-3) is
+exactly the **un-gameable fitness function** that self-regeneration
+([#29](../IDEAS_BACKLOG.md), [aide2](aide2-recursive-self-improvement.md)) has been
+missing. The loop:
+
+1. **Generate** a batch of novel tasks (ours) + sample the public *training* half.
+2. **Attempt** — Prax runs the executable-world-model loop (induce→verify→refine).
+3. **Verify deterministically** — no LLM judge, no reward to hack; it either
+   reproduces the grids / wins the game or it doesn't ([edge-bench](edge-bench-learning-curves.md)'s
+   "verifiable beats judgeable").
+4. **Select on held-out generalization** — keep a prompt/harness/capability change
+   only if it improves the **held-out** score at equal-or-lower cost (aide2's
+   public/private split), never the tasks it trained on.
+5. **Improve and repeat** — this is #29's recursive loop, made safe precisely
+   because the metric is deterministic and the selection is on unseen tasks.
+
+That is the same self-improvement Prax already gestures at (`Self-Fixing`,
+`review_my_traces`, self-regen) — but pointed at a domain where success is
+*exactly checkable*, which is what makes closing the loop safe here first.
+
+### Prep order (once the standard-benchmark shakedown is clean)
+
+1. Build the **executable-world-models** capability (§5) with a **non-ARC** demo.
+2. `arc_agi_2.py` adapter + cache the public sets → first real ARC number
+   (train-half dev, eval-half held out).
+3. **ARC-2 task generator** → start the recursive loop on self-generated tasks.
+4. `arc_agi_3.py` adapter + the interactive loop; **ARC-3 mini-games** generator.
+5. Reproduce on public → submit to the real leaderboard.
+
+## 8. Why this is the right "big" eval — and the sequencing
 
 ARC-AGI-3 measures the thesis (explore/model/plan/act + continuous learning) that
 GSM8K/MMLU/GPQA can't touch. It's also where Prax's least-exercised strengths —
 **sandbox-as-world-model-simulator, codegen, persistent memory** — become the
 *whole game*. It connects directly to the self-improvement through-line
 ([aide2](aide2-recursive-self-improvement.md), IDEAS_BACKLOG #29): the schema loop
-*is* a verify-refine-persist loop over an executable artifact.
+*is* a verify-refine-persist loop over an executable artifact, and the
+self-generated-task recursive loop (§7) is the un-gameable fitness function #29
+needs.
 
 **Earn it first.** This depends on the exact harness plumbing (isolation,
 timeouts, config-snapshot reproducibility, real-dataset caching) that the
