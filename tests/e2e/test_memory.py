@@ -58,12 +58,26 @@ def _check_ollama() -> bool:
         return False
 
 
+def _embed_provider_ok() -> bool:
+    # Every test here embeds via Ollama (nomic-embed-text, 768-dim) and the live
+    # prax_memories collection is sized to the CONFIGURED provider. If the config
+    # isn't ollama, `_embed` would hit whatever provider is set (e.g. a dead
+    # OpenAI key) and/or mismatch the collection dimension — so this suite is only
+    # meaningful when EMBEDDING_PROVIDER=ollama, per the module docstring.
+    try:
+        from prax.settings import settings
+        return getattr(settings, "embedding_provider", "openai") == "ollama"
+    except Exception:
+        return False
+
+
 _INFRA_OK = _check_qdrant() and _check_neo4j()
 _OLLAMA_OK = _check_ollama()
+_EMBED_OK = _embed_provider_ok()
 
 pytestmark = pytest.mark.skipif(
-    not _INFRA_OK,
-    reason="Memory infrastructure (Qdrant + Neo4j) not available",
+    not (_INFRA_OK and _OLLAMA_OK and _EMBED_OK),
+    reason="Memory e2e needs Qdrant + Neo4j + Ollama + EMBEDDING_PROVIDER=ollama",
 )
 
 
