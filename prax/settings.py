@@ -75,6 +75,7 @@ class AppSettings(BaseSettings):
     # otherwise — verified live 2026-07-08).
     brave_api_key: str | None = Field(default=None, alias="BRAVE_API_KEY")
     tavily_api_key: str | None = Field(default=None, alias="TAVILY_API_KEY")
+    serper_dev_api_key: str | None = Field(default=None, alias="SERPER_DEV_API_KEY")
 
     # X / Twitter API v2 bearer token.  When set, x.com/twitter.com STATUS links
     # are fetched via the API instead of the web reader — X has locked down
@@ -267,9 +268,11 @@ class AppSettings(BaseSettings):
             "instead of silent hangs): 'brave' (BRAVE_API_KEY, independent "
             "index), 'tavily' (TAVILY_API_KEY, LLM/agent-optimised, includes a "
             "synthesised answer), 'jina' (JINA_API_KEY — the search endpoint, "
-            "unlike the keyless Jina reader, rejects keyless requests with 401). "
-            "A keyed provider with no key returns an actionable message rather "
-            "than failing silently."
+            "unlike the keyless Jina reader, rejects keyless requests with 401), "
+            "'serper' (SERPER_DEV_API_KEY — Google results via serper.dev, "
+            "prepaid so it can't overspend; surfaces an answer/knowledge box "
+            "when present). A keyed provider with no key returns an actionable "
+            "message rather than failing silently."
         ),
     )
     search_max_results: int = Field(

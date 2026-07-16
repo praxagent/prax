@@ -77,6 +77,35 @@ def test_tavily_surfaces_answer_and_requires_key(monkeypatch):
     assert "- R — body (http://c)" in out
 
 
+def test_serper_surfaces_answer_box_and_requires_key(monkeypatch):
+    monkeypatch.setattr(hf.settings, "serper_dev_api_key", None, raising=False)
+    assert "SERPER_DEV_API_KEY" in hf._serper_search("x")
+
+    monkeypatch.setattr(hf.settings, "serper_dev_api_key", "sk", raising=False)
+    monkeypatch.setattr(hf.settings, "search_max_results", 2, raising=False)
+    cap = {}
+    payload = {"answerBox": {"answer": "Argentina"},
+               "organic": [{"title": "O1", "snippet": "body one", "link": "http://a"},
+                           {"title": "O2", "snippet": "body two", "link": "http://b"}]}
+    _fake_requests(monkeypatch, post=_Resp(payload), capture=cap)
+    out = hf._serper_search("2022 world cup winner")
+    assert cap["url"] == "https://google.serper.dev/search"
+    assert cap["headers"]["X-API-KEY"] == "sk"
+    assert cap["json"] == {"q": "2022 world cup winner", "num": 2}
+    assert out.startswith("Answer: Argentina")
+    assert "- O1 — body one (http://a)" in out and "O2" in out
+
+
+def test_serper_falls_back_to_knowledge_graph_answer(monkeypatch):
+    # No answerBox → knowledge-graph description becomes the synthesised answer.
+    monkeypatch.setattr(hf.settings, "serper_dev_api_key", "sk", raising=False)
+    payload = {"knowledgeGraph": {"description": "A country in South America"},
+               "organic": [{"title": "O", "snippet": "b", "link": "http://c"}]}
+    _fake_requests(monkeypatch, post=_Resp(payload))
+    out = hf._serper_search("argentina")
+    assert out.startswith("Answer: A country in South America")
+
+
 def test_jina_requires_key_and_uses_bearer(monkeypatch):
     # Unlike the Jina reader, the search endpoint rejects keyless requests
     # (401, verified live 2026-07-08) — so no key returns an actionable message
