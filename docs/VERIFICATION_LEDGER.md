@@ -53,6 +53,7 @@ This ledger is the honest complement to
 | `jina` | 🟡 | **Smoke-tested live 2026-07-08:** dispatch (`SEARCH_PROVIDER=jina` → `background_search`), bearer-auth wiring, and graceful degradation all confirmed against `s.jina.ai`. The test **caught a real bug**, now fixed: unlike the keyless Jina *reader*, the *search* endpoint **requires** `JINA_API_KEY` (401 keyless) — earlier code/docs wrongly said "keyless free tier works." | The 200 success path (real results parsing) is still unverified — no *valid* `JINA_API_KEY` is held (the maintainer runs the Jina reader keyless). Set a valid key and run one query to finish → ✅. |
 | `brave` | ⚪ | Request shape + response parsing unit-tested against Brave's **documented** contract (mocked HTTP) | No `BRAVE_API_KEY` held — never called live. If a field name drifted from the docs it's a one-line fix in `_brave_search`. |
 | `tavily` | ⚪ | Request/parse + answer-first behaviour unit-tested against the **documented** contract (mocked HTTP) | No `TAVILY_API_KEY` held — never called live. Same one-line-fix risk as Brave. |
+| `serper` | ✅ | **Verified live 2026-07-16:** real `SERPER_DEV_API_KEY` set; `_serper_search` returned correct Google results + answer-box parsing over `google.serper.dev/search`. Request shape, key header, answer-box/knowledge-graph fallback also unit-tested (mocked HTTP). | — |
 
 ## Media generation (builtin tools)
 

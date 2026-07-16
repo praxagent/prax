@@ -187,6 +187,36 @@ def _tavily_search(query: str) -> str:
     return _format_search_results(items, answer=data.get("answer") or "")
 
 
+def _serper_search(query: str) -> str:
+    """Serper.dev — Google Search results behind a prepaid, keyed API (reliable
+    rate limits, no scraping). Surfaces an answer box / knowledge-graph summary
+    first when Google returns one, then the organic results."""
+    key = getattr(settings, "serper_dev_api_key", None)
+    if not key:
+        return _missing_key_msg("serper", "SERPER_DEV_API_KEY")
+    import requests
+
+    resp = requests.post(
+        "https://google.serper.dev/search",
+        json={"q": query, "num": settings.search_max_results},
+        headers={"X-API-KEY": key, "Content-Type": "application/json"},
+        timeout=_SEARCH_HTTP_TIMEOUT,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    items = [
+        {"title": r.get("title"), "body": r.get("snippet"), "url": r.get("link")}
+        for r in (data.get("organic") or [])[: settings.search_max_results]
+    ]
+    # Prefer Google's answer box, then a knowledge-graph description, as the
+    # synthesised answer the model can ground on directly (mirrors tavily).
+    box = data.get("answerBox") or {}
+    kg = data.get("knowledgeGraph") or {}
+    answer = (box.get("answer") or box.get("snippet")
+              or kg.get("description") or "")
+    return _format_search_results(items, answer=answer)
+
+
 # SEARCH_PROVIDER -> handler function NAME. Resolved through module globals at
 # call time (not bound here) so the reloader — and tests — see the current
 # function. 'legacy' (and any unknown value) falls through to the
@@ -196,6 +226,7 @@ _SEARCH_PROVIDERS = {
     "brave": "_brave_search",
     "jina": "_jina_search",
     "tavily": "_tavily_search",
+    "serper": "_serper_search",
 }
 
 
