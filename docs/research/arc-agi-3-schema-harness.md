@@ -76,9 +76,21 @@ world model it operates over. Once the missing object / state variable /
 transition is represented, the existing verifier and planner are often enough."*
 i.e. the hard part is **representation** (getting the schema right), not search.
 
-**Honesty caveat (important):** the 99% is **self-reported and NOT verified by
-ARC Prize**. Any Prax claim must be reproduced on the public set *and* submitted
-to ARC Prize's verified leaderboard before we state a number.
+**Honesty caveat (important, and stronger than first written).** The 99% is a
+**self-reported website number**, and a 2026-07-16 deep-research pass
+([executable-world-models.md](executable-world-models.md) §4) sharpens the doubt:
+the closest *primary* source, the arXiv paper the site relates to
+([2605.05138](https://arxiv.org/abs/2605.05138), released `arc-3-agents-baseline1`),
+reports **~58% RHAE** on the public games (GPT-5.5), not 99% — and the review could
+not verify the "Schema" name in that paper's text. Meanwhile ARC Prize's
+**verified** ARC-AGI-3 frontier is **7.78% semi-private** (GPT-5.6 Sol). So the
+real field is single-digit-% and **wide open**; treat 99% as unverified and likely
+not reproducible on the private set. Any Prax claim gets reproduced on public *and*
+submitted to the verified leaderboard before we state a number. **See
+[executable-world-models.md](executable-world-models.md) for the full field
+foundation** (paradigm map, the verifier-centric build stack, the offline
+small-model playbook + model shortlist, `re-arc` generators, and the FunSearch/
+AlphaEvolve recursive-loop template).
 
 ## 3. What their published traces show (and the data cost)
 
