@@ -113,7 +113,7 @@ foundational tooling to do amazing") is correct:
 | Write the game mechanism **as an executable program** | **Sandbox + codegen** (`run_python`, `sandbox_shell`, the codegen tools) — Prax writes and runs code as a matter of course |
 | **Verify** the program against reality (predicted vs observed frame) | The same sandbox + Prax's verify-refine discipline; deterministic diff of two 64×64 arrays |
 | Keep the theory **persistent & searchable** | **Two-layer memory** (persist the induced schema per game) + the world-model *is* a file in the workspace |
-| **Explore → model → goal → plan → execute** loop | **Orchestrator + a dedicated spoke** running the loop; plan by simulating the verified world model |
+| **Explore → model → goal → plan → execute** loop | **Orchestrator + a general model-induction capability** (§5) running the loop; plan by simulating the verified world model |
 | **Refine** on feedback | Prax's self-improvement / failure-driven retry machinery |
 | Read the 64×64×16 frame | Structured integer grid — parse directly (no vision needed; `analyze_image` is a fallback) |
 
@@ -126,29 +126,80 @@ a build, not a research bet.
 the real eval games are **novel and hidden**, and **RHAE punishes brute force
 quadratically** — so *the only path to a high score is a general schema-induction
 loop that actually learns each game*. You cannot hardcode 25 solutions; a
-benchmark-knower reading Prax's code must see a general game-learner, not answers.
-The anti-spike incentive is baked into the metric.
+benchmark-knower reading Prax's code must see a **general model-induction
+capability** (next), not an ARC solver. The anti-spike incentive is baked into the
+metric *and* into how we build the feature.
 
-The build, in order:
+### The feature must be general — ARC is a *benchmark of it*, not its purpose
 
-1. **ARC-AGI-3 client + a benchmark adapter** (`prax/eval/benchmarks/arc_agi_3.py`)
-   — talk to the game API (reset / step / observe), deterministic RHAE scoring,
-   real games cached under `PRAX_EVAL_DIR` (never committed). Flag-gated
-   (`ARC_AGI3_ENABLED`), keyless-CI-safe with a tiny local mock game.
-2. **A `game`/`arc` spoke** that runs the schema loop: perceive → induce schema
-   *as a sandbox program* → verify prediction vs reality → plan inside the
-   verified model → act → refine. Reuses the sandbox, codegen, and memory spokes
-   we already have.
-3. **Plan by simulation, not by acting** — search the verified world-model in the
-   sandbox for the minimal action path *before* touching the real game. This is
-   what turns a passing agent into an *efficient* (high-RHAE) one; it's also where
-   Prax's "simulate in the sandbox" strength directly buys score.
-4. **Persist schemas across levels/runs** — a game's early-level schema seeds
-   later levels; memory makes Prax *continuously learn*, which is the exact
-   capability ARC-AGI-3 rewards.
-5. **Reproduce, then verify externally** — hit the public set first (target:
-   match/beat the reported 99%), then **submit to ARC Prize's real leaderboard**.
-   We never quote a self-reported number as verified.
+A "game spoke" built to play ARC-AGI-3 would be the spiking anti-pattern in
+architecture form: special-case code that only earns its keep on one eval. The
+never-spike rule applies to *features*, not just prompts — **a reader of Prax's
+code must see a general capability that ARC happens to exercise, not an ARC
+solver.** Fortunately the general capability is real, obvious, and broadly useful:
+
+> **Executable world-models** (working name — a general `modeling`/`simulate`
+> capability, naturally an extension of the **sandbox**): *given an unknown system
+> Prax can observe or interact with, induce an executable model of its rules,
+> verify the model against evidence, and use it to plan or answer.* The scientific
+> method as an agent loop — hypotheses expressed as **runnable, falsifiable code**,
+> kept only when they survive verification.
+
+Its daily, non-ARC uses are exactly Prax's real work:
+- **Onboarding an unknown API / tool / CLI** — probe it, build an executable model
+  of its contract and behavior, verify, then use it reliably (huge for the plugin
+  and tool ecosystem).
+- **Empirical debugging** — express the suspected fault as code, verify it
+  reproduces the bug, then fix against a confirmed model.
+- **Simulation-based planning** — build a runnable model of a task environment and
+  test a plan in it *before* acting on the costly/irreversible real system.
+- **Rule/mechanism discovery from data or examples** — induce the generating rule
+  as code, verify it reproduces the observations.
+- **Any abstract-reasoning task** — induce rule → verify → apply.
+
+**The two ARC competitions are two benchmarks of this one capability** — which is
+exactly why doing both is coherent, not two projects:
+
+| | ARC-AGI-2 (static) | ARC-AGI-3 (interactive) |
+|---|---|---|
+| Evidence | input→output example pairs | interaction with a live game |
+| Induce | the **transformation** as code | the **world model** as code |
+| Verify | reproduces all training pairs | predicts the next frame after an action |
+| Use | apply to the test grid | plan a minimal action path, act |
+| Score | exact-grid match, 2 attempts | RHAE (action efficiency) |
+
+Same loop — *induce an executable rule from evidence, verify, apply* — pointed at
+static evidence vs interactive evidence. Build the **capability** once; the two
+adapters are thin.
+
+### The build, in order
+
+1. **The capability first, ARC-agnostic** — the `modeling`/`simulate` capability
+   (induce-as-code → verify → plan/apply), reusing the existing sandbox, codegen,
+   and memory spokes. Land it with a **non-ARC** demo (e.g. reverse-engineer a
+   mock API's behavior) so its generality is visible in the codebase, not implied.
+2. **ARC-AGI-2 adapter** (`prax/eval/benchmarks/arc_agi_2.py`) — the *easier first*
+   integration: static, deterministic **exact-grid-match** scoring (2 attempts),
+   fits the existing benchmark-adapter mold (like GSM8K/MMLU). Validates the
+   capability cheaply and keyless-safely before anything interactive.
+3. **ARC-AGI-3 adapter + client** (`prax/eval/benchmarks/arc_agi_3.py`) — the game
+   API (reset/step/observe), deterministic RHAE scoring, real games cached under
+   `PRAX_EVAL_DIR`, flag-gated, keyless-safe with a tiny mock game. It's the *same*
+   capability driving an interactive loop.
+4. **Plan by simulation, not by acting** — search the verified world-model in the
+   sandbox for the minimal action path *before* touching the real game. This turns
+   a passing agent into an *efficient* (high-RHAE) one — where Prax's
+   "simulate in the sandbox" strength directly buys score.
+5. **Persist models across runs** — memory makes Prax *continuously learn*, the
+   exact capability ARC-AGI-3 rewards (and useful everywhere else the capability
+   is used).
+6. **Reproduce, then verify externally** — public set first, then **submit to ARC
+   Prize's real leaderboard / Kaggle**; never quote a self-reported number as
+   verified.
+
+Adapters live in the **eval engine** (where every benchmark's adapter lives —
+that's measurement, not special-casing); the **capability** lives as a general
+Prax feature with its non-ARC uses front and center.
 
 **Transparency, done better than theirs (§3).** Prax already records execution
 traces internally (`prax/agent/trace.py`, JSONL per run, Qdrant summaries). For
@@ -168,15 +219,28 @@ on-brand for Prax's whole thesis.
 
 ## 6. The 2026 competition — and the constraint that changes everything
 
-[ARC Prize 2026](https://arcprize.org/competitions/2026/arc-agi-3) makes the
-stakes and the rules concrete:
+[ARC Prize 2026](https://arcprize.org/competitions/2026) runs **two** competitions
+on two benchmarks, **$2M total**, both offline on Kaggle, both open-source-required:
 
-- **$850K pool. Grand Prize: $700K for the first eligible agent scoring 100%.**
-  That is the literal answer to "how does Prax get 100%" — it's a $700K target.
-  Plus $75K Top-Score (5 places) and $75K in milestone prizes.
-- **Milestones:** #1 was **June 30, 2026** (passed); **#2 is Sept 30, 2026**.
-- **Submit via Kaggle. All code/methods must be open-sourced to be eligible** —
-  no conflict for Prax (Apache-2.0); it's a *requirement* we already meet.
+**[ARC-AGI-3](https://arcprize.org/competitions/2026/arc-agi-3) (interactive):**
+- **$850K. Grand Prize: $700K for the first eligible agent scoring 100%.** That is
+  the literal answer to "how does Prax get 100%." Plus $75K Top-Score (5 places)
+  and $75K milestones. Milestone #2 is **Sept 30, 2026**.
+
+**[ARC-AGI-2](https://arcprize.org/competitions/2026/arc-agi-2) (static — the
+classic format):**
+- Grid input→output puzzles unseen in training; output **2 attempts, exact-grid
+  match** = 1/0. **Grand Prize guaranteed to the best open-source solution that
+  reaches 85%** on the private set within Kaggle efficiency limits. 85% is
+  *brutal* (frontier models sit far below human ~60%+), so expect a low Prax score
+  — but it's a legitimate hard benchmark and the **easier first integration**
+  (deterministic, keyless-CI-friendly, fits the existing adapter mold).
+
+Shared rules that shape the design:
+- **Submit via Kaggle; all submitter code must be open-sourced** — ARC-AGI-2
+  demands a **permissive public-domain licence (CC0 or MIT-0)** for the
+  *submission*, so a prize entry is released under MIT-0/CC0 even though Prax core
+  is Apache-2.0 (a licensing note, not a blocker).
 - **⚠️ NO internet access during evaluation.** This is the load-bearing rule.
 
 **What "no internet" does to the plan.** The submitted agent runs **offline** in
