@@ -42,3 +42,15 @@ def test_epistemic_vigilance_flag_defaults_off_and_hint_shape():
     assert settings.epistemic_vigilance_enabled is False  # flag-gated, default off
     low = _EPISTEMIC_VIGILANCE_HINT.lower()
     assert "wait a minute" in low and "premise" in low
+
+
+def test_tool_economy_flag_defaults_off_and_hint_shape():
+    from prax.agent.orchestrator import _TOOL_ECONOMY_HINT
+    from prax.settings import settings
+    assert settings.tool_economy_enabled is False  # flag-gated, default off
+    low = _TOOL_ECONOMY_HINT.lower()
+    # The counterweight: answer from knowledge; tools only for external info.
+    assert "answer" in low and "knowledge" in low
+    assert "external" in low
+    # Must reconcile with the persistence persona, not just negate it.
+    assert "once you have decided" in low
