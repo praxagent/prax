@@ -130,8 +130,9 @@ def _sandbox_executor(program: str, timeout: int = 30) -> dict:
 class HumanEvalAdapter:
     name = "humaneval"
 
-    def __init__(self, cases: list[dict] | None = None, executor=None):
-        self._cases = cases if cases is not None else SEED_CASES
+    def __init__(self, cases: list[dict] | None = None, executor=None, full: bool = False):
+        from prax.eval.benchmarks.datasets import cases_for
+        self._cases = cases if cases is not None else cases_for("humaneval", SEED_CASES, full=full)
         # executor(program:str, timeout:int) -> {"passed": bool, "output": str}
         self._executor = executor or _sandbox_executor
 

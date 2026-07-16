@@ -61,6 +61,10 @@ class AppSettings(BaseSettings):
     # use your paid quota for higher throughput and better reliability.
     # Sign up at https://jina.ai.
     jina_api_key: str | None = Field(default=None, alias="JINA_API_KEY")
+    # HuggingFace read-only token — for downloading GATED eval datasets
+    # (e.g. GPQA-Diamond) via scripts/fetch_eval_datasets.py. Read-only + used
+    # only at dataset-fetch time; never at agent runtime.
+    hf_token_ro: str | None = Field(default=None, alias="HF_TOKEN_RO")
     # Web-search provider API keys (see SEARCH_PROVIDER). Each is a real,
     # supported Search API — unlike the keyless ddgs/legacy paths which scrape
     # DuckDuckGo's frontend and hang when it rate-limits. Brave: an independent
