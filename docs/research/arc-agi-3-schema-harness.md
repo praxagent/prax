@@ -242,6 +242,23 @@ Shared rules that shape the design:
   *submission*, so a prize entry is released under MIT-0/CC0 even though Prax core
   is Apache-2.0 (a licensing note, not a blocker).
 - **⚠️ NO internet access during evaluation.** This is the load-bearing rule.
+- **✅ Iteration and test-time code generation are allowed and expected — it is
+  NOT one-shot.** This is the rule that makes Prax's whole verify-refine loop
+  *legal and rewarded*, not forbidden:
+  - **ARC-AGI-2:** internal computation is unbounded (within the runtime/compute
+    limit) — you may write, run, verify-against-the-given-train-pairs, and *evolve*
+    candidate solution programs as much as you like; only the **2 final grid
+    attempts** (pass@2) are submitted. The public SOTA does exactly this (Imbue's
+    "code evolution" keeps a *population* of Python candidate programs).
+  - **ARC-AGI-3:** iteration is built into the action space — **`RESET` restarts a
+    level and `ACTION7`/Undo reverses a step**, and critically **a RESET clears the
+    level's action sequence, so resets don't count against your RHAE**. You can
+    explore, hit a wall, reset, and retry for free; only the efficiency of your
+    *final successful traversal* is scored.
+  - The limit is **compute/runtime + no internet**, not iteration. "Modify its own
+    code on the fly and redo" = generate/run/refine solution code at test time =
+    the *winning* strategy; what you can't do is fetch external code or models
+    mid-eval. Prax's codegen + sandbox + verify-loop is built for exactly this.
 
 **What "no internet" does to the plan.** The submitted agent runs **offline** in
 Kaggle's sandbox under (TBD) compute limits. So:
