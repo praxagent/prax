@@ -56,8 +56,9 @@ def score(case: dict, response: str) -> dict:
 class GSM8KAdapter:
     name = "gsm8k"
 
-    def __init__(self, cases: list[dict] | None = None):
-        self._cases = cases if cases is not None else SEED_CASES
+    def __init__(self, cases: list[dict] | None = None, full: bool = False):
+        from prax.eval.benchmarks.datasets import cases_for
+        self._cases = cases if cases is not None else cases_for("gsm8k", SEED_CASES, full=full)
 
     def cases(self) -> list[dict]:
         return self._cases
