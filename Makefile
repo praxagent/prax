@@ -78,7 +78,8 @@ eval-harness-lift:
 
 # Standard benchmark adapters through the full harness — deterministic scoring.
 # BENCH=ifeval|injecagent|sycophancy|bfcl|halueval|truthfulqa|gsm8k|mmlu_pro|
-#       gpqa|math|simpleqa|humaneval   (default ifeval). Most are keyless;
+#       gpqa|math|simpleqa|humaneval|arc_agi_2|longcontext|agentsafety
+#       (default ifeval). Most are keyless;
 # humaneval EXECUTES code in the sandbox, so it needs the container up.
 # LIFT=1 → full harness vs bare model (same model): "does the scaffold help THIS
 # benchmark" as a lift number. Add CHEAP=1 to run on a cheap OpenRouter model.
