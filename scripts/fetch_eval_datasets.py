@@ -94,6 +94,51 @@ SOURCES = {
 }
 
 
+def _fetch_arc_agi_2(split: str = "evaluation", limit: int | None = None) -> int:
+    """Fetch ARC-AGI-2 public tasks from GitHub (not HuggingFace) → JSONL cache.
+
+    Each task JSON is ``{"train": [{input,output}...], "test": [{input,output}...]}``;
+    we cache one case per task using the FIRST test pair. ``split`` is
+    ``training`` (dev) or ``evaluation`` (held-out check). Never train on either
+    the evaluation split or the hidden competition sets — contamination firewall.
+    """
+    import glob
+    import json
+    import subprocess
+    import tempfile
+
+    from prax.eval.benchmarks.datasets import _cache_path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        subprocess.run(
+            ["git", "clone", "--depth", "1",
+             "https://github.com/arcprize/ARC-AGI-2", tmp],
+            check=True, capture_output=True, timeout=180,
+        )
+        files = sorted(glob.glob(f"{tmp}/data/{split}/*.json"))
+        path = _cache_path("arc_agi_2")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        n = 0
+        with path.open("w") as out:
+            for f in files:
+                task = json.load(open(f))
+                tests = task.get("test") or []
+                if not task.get("train") or not tests:
+                    continue
+                t0 = tests[0]
+                case = {
+                    "id": f"arc2_{split[:4]}_{f.split('/')[-1].replace('.json', '')}",
+                    "train": task["train"],
+                    "test_input": t0["input"],
+                    "test_output": t0["output"],
+                }
+                out.write(json.dumps(case) + "\n")
+                n += 1
+                if limit and n >= limit:
+                    break
+    return n
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -106,8 +151,20 @@ def main() -> int:
     names = args.names or [n for n, v in SOURCES.items() if v[3] is not None]
     rc = 0
     for name in names:
+        if name == "arc_agi_2":
+            # ARC-AGI-2 is git-hosted, not on HuggingFace. Default to the
+            # held-out EVALUATION split (the standard reported number); pass
+            # 'arc_agi_2:training' for the dev split.
+            split = "evaluation"
+            try:
+                n = _fetch_arc_agi_2(split=split, limit=args.limit)
+                print(f"  arc_agi_2: cached {n} tasks (arcprize/ARC-AGI-2/{split})")
+            except Exception as exc:  # noqa: BLE001
+                print(f"  arc_agi_2: FETCH FAILED — {type(exc).__name__}: {exc}")
+                rc = 1
+            continue
         if name not in SOURCES:
-            print(f"  {name}: unknown (have: {', '.join(SOURCES)})")
+            print(f"  {name}: unknown (have: {', '.join(SOURCES)}, arc_agi_2)")
             rc = 1
             continue
         hf_id, config, split, mapper = SOURCES[name]
