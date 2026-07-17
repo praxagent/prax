@@ -277,6 +277,14 @@ def _build_summary(out_dir: Path, *, label: str, total: int, counter: dict,
         "elapsed_s_this_session": elapsed_s,
         "updated_at": datetime.now(UTC).isoformat(),
     }
+    # Reproducibility: pin the exact flags/models/commit this run used, so the
+    # published number can't be reproduced under a different config and called a
+    # cheat. Secret-free by construction. Best-effort — never break a run.
+    try:
+        from prax.eval.config_snapshot import eval_config_snapshot
+        summary["config"] = eval_config_snapshot()
+    except Exception:
+        logger.debug("config snapshot failed", exc_info=True)
     if summarize is not None:
         try:
             summary["aggregate"] = summarize(results)
