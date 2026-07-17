@@ -101,7 +101,7 @@ def run_benchmark(
 # ---------------------------------------------------------------------------
 
 ADAPTER_NAMES = ("ifeval", "injecagent", "sycophancy", "bfcl", "halueval", "truthfulqa",
-                 "gsm8k", "mmlu_pro", "gpqa", "math", "simpleqa", "humaneval")
+                 "gsm8k", "mmlu_pro", "gpqa", "math", "simpleqa", "humaneval", "arc_agi_2")
 
 
 def get_adapter(name: str, **kwargs) -> BenchmarkAdapter:
@@ -143,6 +143,9 @@ def get_adapter(name: str, **kwargs) -> BenchmarkAdapter:
     if key == "humaneval":
         from prax.eval.benchmarks.humaneval import HumanEvalAdapter
         return HumanEvalAdapter(**kwargs)
+    if key == "arc_agi_2":
+        from prax.eval.benchmarks.arc_agi_2 import ARCAGI2Adapter
+        return ARCAGI2Adapter(**kwargs)
     raise ValueError(f"unknown benchmark {name!r} (have: {', '.join(ADAPTER_NAMES)})")
 
 
