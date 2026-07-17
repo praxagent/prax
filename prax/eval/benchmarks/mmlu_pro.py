@@ -91,6 +91,7 @@ def score(case: dict, response: str) -> dict:
 
 class MMLUProAdapter:
     name = "mmlu_pro"
+    variant = "test split, 10-option letter exact-match"
 
     def __init__(self, cases: list[dict] | None = None, full: bool = False):
         from prax.eval.benchmarks.datasets import cases_for

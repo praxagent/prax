@@ -55,6 +55,7 @@ def score(case: dict, response: str) -> dict:
 
 class GSM8KAdapter:
     name = "gsm8k"
+    variant = "test split, exact final-answer match"
 
     def __init__(self, cases: list[dict] | None = None, full: bool = False):
         from prax.eval.benchmarks.datasets import cases_for

@@ -129,6 +129,7 @@ def _sandbox_executor(program: str, timeout: int = 30) -> dict:
 
 class HumanEvalAdapter:
     name = "humaneval"
+    variant = "hidden-unit-test execution in sandbox"
 
     def __init__(self, cases: list[dict] | None = None, executor=None, full: bool = False):
         from prax.eval.benchmarks.datasets import cases_for

@@ -77,6 +77,7 @@ def run_benchmark(
         passed = sum(1 for r in graded if r.get("passed"))
         pt = sum(int(r.get("prompt_tokens", 0)) for r in graded)
         ct = sum(int(r.get("completion_tokens", 0)) for r in graded)
+        from prax.eval.benchmarks.datasets import full_datasets_enabled, sample_seed
         return {
             "benchmark": adapter.name,
             "graded": n,
@@ -88,6 +89,15 @@ def run_benchmark(
             "total_tokens": pt + ct,
             "cost_model": cost_model,
             "estimated_cost_usd": estimate_cost(cost_model, pt, ct),
+            # Reporting checklist (external review 2026-07-17): the protocol a
+            # reader needs to interpret the number — task variant + scoring rule,
+            # attempt semantics, and how the subset was drawn.
+            "protocol": {
+                "variant": getattr(adapter, "variant", None),
+                "attempts": getattr(adapter, "attempts", "pass@1"),
+                "dataset": ("real" if full_datasets_enabled() else "seed"),
+                "sampling": f"seeded-random(seed={sample_seed()})",
+            },
         }
 
     return run_batch(
