@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.28.0](https://github.com/praxagent/prax/compare/v0.27.1...v0.28.0) (2026-07-17)
+
+
+### Features
+
+* **agent:** tool-economy prompt principle (flag-gated) — answer from knowledge, don't over-fetch ([#108](https://github.com/praxagent/prax/issues/108)) ([463ae45](https://github.com/praxagent/prax/commit/463ae45e99c3e20420babd44b73aa7d9b4978f72))
+* **eval:** ARC-AGI-2 benchmark adapter (deterministic exact-grid pass@2) ([#112](https://github.com/praxagent/prax/issues/112)) ([7f18691](https://github.com/praxagent/prax/commit/7f18691619892aaae75586a6f5cf8ae4856b8b9c))
+* **eval:** load REAL benchmark datasets (subsets) — the honest accountability sets ([#105](https://github.com/praxagent/prax/issues/105)) ([c0b0b9d](https://github.com/praxagent/prax/commit/c0b0b9d6336e99030ea7ffb80b0d74a1c780e0e0))
+* **memory:** bidirectional embedding-provider migration + switch to Ollama ([#104](https://github.com/praxagent/prax/issues/104)) ([00c1cc5](https://github.com/praxagent/prax/commit/00c1cc5f460dcd64859838d77054c92bd242f34d))
+* **search:** add Serper (serper.dev) as a keyed web-search provider ([#107](https://github.com/praxagent/prax/issues/107)) ([39488a1](https://github.com/praxagent/prax/commit/39488a1dd5d7c5120bb4f241a14b6e647e159478))
+
+
+### Bug Fixes
+
+* **eval:** harden the eval harness — bound agent runtime, capture bare tokens, local embeddings ([#102](https://github.com/praxagent/prax/issues/102)) ([23a1199](https://github.com/praxagent/prax/commit/23a11992da9d623f8487a11086fcfe046b00cf96))
+
 ## [0.27.1](https://github.com/praxagent/prax/compare/v0.27.0...v0.27.1) (2026-07-15)
 
 
