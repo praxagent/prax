@@ -280,6 +280,11 @@ def _build_summary(out_dir: Path, *, label: str, total: int, counter: dict,
     if summarize is not None:
         try:
             summary["aggregate"] = summarize(results)
+            # Statistical honesty: every pass-rate carries its 95% CI so
+            # small-subset numbers can't be over-read (see prax/eval/stats.py).
+            from prax.eval.stats import attach_ci
+            if isinstance(summary["aggregate"], dict):
+                attach_ci(summary["aggregate"])
         except Exception as exc:
             summary["aggregate_error"] = str(exc)
     return summary
