@@ -130,6 +130,8 @@ def _render_grid(g: Grid) -> str:
 
 class ARCAGI2Adapter:
     name = "arc_agi_2"
+    variant = "public evaluation split, exact grid match"
+    attempts = "pass@2"
 
     def __init__(self, cases: list[dict] | None = None, full: bool = False):
         from prax.eval.benchmarks.datasets import cases_for

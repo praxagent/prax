@@ -26,6 +26,34 @@ prepaid OpenRouter model, deterministically graded (no LLM judge). It's
 it stopped. Results land under `$PRAX_EVAL_DIR/suites/` (data-only, never
 committed — the contamination firewall).
 
+### Reproducibility — every run pins its own config
+
+Every `summary.json` embeds a `config` block captured at run time:
+
+- **`git_commit`** — the exact harness code the run executed.
+- **`flags`** — *every* boolean feature flag, keyed by its `SCREAMING_CASE` env
+  alias (e.g. `TOOL_ECONOMY_ENABLED`, `AGENT_MIDDLEWARE_ENABLED`,
+  `PROMPT_SELECTIVITY_ENABLED`), so the behaviour is fully specified.
+- **`run`** — non-secret models/providers (per-tier model, LLM provider,
+  embedding provider/model, search provider).
+- **`env`** — the dataset/execution knobs (`PRAX_EVAL_FULL_DATASETS`,
+  `PRAX_EVAL_DATASET_LIMIT`, `PRAX_EVAL_TASK_TIMEOUT_S`, tier).
+
+It is **secret-free by construction** — only booleans and whitelisted non-secret
+names are captured; API keys never are. This is the answer to "you cheated": a
+reproduction that gets a different number under a different config is visibly
+running a different config, and the flags to match are published *with* the
+result. When the historical record lands, its per-run row derives from this block.
+
+**Statistical honesty (added after the July-2026 external review, see
+[`docs/research/eval-rigor-review-2026-07.md`](../research/eval-rigor-review-2026-07.md)):**
+every aggregate carries a **Wilson 95% CI** (`pass_rate_ci95`, `pass_rate_str`,
+e.g. `80.0% (n=40, 95% CI 65.2–89.5%)`) so small-subset numbers aren't over-read,
+and a **`protocol`** block (task variant + scoring rule, attempts pass@1/pass@2,
+real-vs-seed dataset, sampling seed). Subsets are a **seeded random sample**
+(`PRAX_EVAL_SAMPLE_SEED`, default 0) — *not* first-N, which biases an ordered
+dataset. Report intervals, not bare points, for anything you cite.
+
 ### What "real data" means here
 
 Adapters ship a tiny **inline seed set** so keyless `make ci` never touches the

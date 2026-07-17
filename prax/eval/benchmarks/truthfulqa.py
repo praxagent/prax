@@ -52,6 +52,7 @@ def score(case: dict, response: str) -> dict:
 
 class TruthfulQAAdapter:
     name = "truthfulqa"
+    variant = "MC1 (single-correct multiple-choice; NOT generation/MC2)"
 
     def __init__(self, cases: list[dict] | None = None, full: bool = False):
         from prax.eval.benchmarks.datasets import cases_for

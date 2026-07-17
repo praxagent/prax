@@ -77,6 +77,7 @@ def run_benchmark(
         passed = sum(1 for r in graded if r.get("passed"))
         pt = sum(int(r.get("prompt_tokens", 0)) for r in graded)
         ct = sum(int(r.get("completion_tokens", 0)) for r in graded)
+        from prax.eval.benchmarks.datasets import full_datasets_enabled, sample_seed
         return {
             "benchmark": adapter.name,
             "graded": n,
@@ -88,6 +89,15 @@ def run_benchmark(
             "total_tokens": pt + ct,
             "cost_model": cost_model,
             "estimated_cost_usd": estimate_cost(cost_model, pt, ct),
+            # Reporting checklist (external review 2026-07-17): the protocol a
+            # reader needs to interpret the number — task variant + scoring rule,
+            # attempt semantics, and how the subset was drawn.
+            "protocol": {
+                "variant": getattr(adapter, "variant", None),
+                "attempts": getattr(adapter, "attempts", "pass@1"),
+                "dataset": ("real" if full_datasets_enabled() else "seed"),
+                "sampling": f"seeded-random(seed={sample_seed()})",
+            },
         }
 
     return run_batch(
@@ -101,7 +111,8 @@ def run_benchmark(
 # ---------------------------------------------------------------------------
 
 ADAPTER_NAMES = ("ifeval", "injecagent", "sycophancy", "bfcl", "halueval", "truthfulqa",
-                 "gsm8k", "mmlu_pro", "gpqa", "math", "simpleqa", "humaneval", "arc_agi_2")
+                 "gsm8k", "mmlu_pro", "gpqa", "math", "simpleqa", "humaneval", "arc_agi_2",
+                 "longcontext", "agentsafety")
 
 
 def get_adapter(name: str, **kwargs) -> BenchmarkAdapter:
@@ -146,6 +157,12 @@ def get_adapter(name: str, **kwargs) -> BenchmarkAdapter:
     if key == "arc_agi_2":
         from prax.eval.benchmarks.arc_agi_2 import ARCAGI2Adapter
         return ARCAGI2Adapter(**kwargs)
+    if key == "longcontext":
+        from prax.eval.benchmarks.longcontext import LongContextAdapter
+        return LongContextAdapter(**kwargs)
+    if key == "agentsafety":
+        from prax.eval.benchmarks.agentsafety import AgentSafetyAdapter
+        return AgentSafetyAdapter(**kwargs)
     raise ValueError(f"unknown benchmark {name!r} (have: {', '.join(ADAPTER_NAMES)})")
 
 

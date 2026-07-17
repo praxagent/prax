@@ -79,6 +79,7 @@ def score(case: dict, response: str) -> dict:
 
 class GPQAAdapter:
     name = "gpqa"
+    variant = "GPQA-Diamond (198q), letter exact-match, deterministic choice shuffle"
 
     def __init__(self, cases: list[dict] | None = None, full: bool = False):
         from prax.eval.benchmarks.datasets import cases_for

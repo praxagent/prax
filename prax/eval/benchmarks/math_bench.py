@@ -70,6 +70,7 @@ def score(case: dict, response: str) -> dict:
 
 class MATHAdapter:
     name = "math"
+    variant = "MATH-500 subset, exact/equivalent final answer"
 
     def __init__(self, cases: list[dict] | None = None, full: bool = False):
         from prax.eval.benchmarks.datasets import cases_for

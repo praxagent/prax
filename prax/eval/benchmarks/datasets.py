@@ -49,8 +49,29 @@ def full_datasets_enabled() -> bool:
     return os.environ.get("PRAX_EVAL_FULL_DATASETS", "").lower() in ("1", "true", "yes")
 
 
+def sample_seed() -> int:
+    """Deterministic sampling seed (PRAX_EVAL_SAMPLE_SEED, default 0).
+
+    Subsets are a seeded random sample, not first-N: several source datasets are
+    ordered (MMLU-Pro by category, MATH by topic), so first-N would be a biased
+    slice. A fixed default seed keeps runs reproducible and comparable; vary the
+    seed to estimate sampling variance.
+    """
+    try:
+        return int(os.environ.get("PRAX_EVAL_SAMPLE_SEED", "0"))
+    except ValueError:
+        return 0
+
+
 def load_cached(name: str, limit: int | None = None) -> list[dict] | None:
-    """Return cached cases for *name* (up to *limit*), or None if not downloaded."""
+    """Return cached cases for *name*, or None if not downloaded.
+
+    When a limit applies, returns a **seeded random sample** (see
+    :func:`sample_seed`) rather than the first N — representative and
+    reproducible.
+    """
+    import random
+
     path = _cache_path(name)
     if not path.exists():
         return None
@@ -61,7 +82,10 @@ def load_cached(name: str, limit: int | None = None) -> list[dict] | None:
             if line:
                 cases.append(json.loads(line))
     lim = dataset_limit(limit)
-    return cases[:lim] if lim else cases
+    if lim and lim < len(cases):
+        rng = random.Random(sample_seed())
+        cases = rng.sample(cases, lim)
+    return cases
 
 
 def fetch_and_cache(name: str, hf_id: str, split: str, map_row: Callable[[dict], dict | None],
