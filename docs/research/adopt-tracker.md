@@ -43,6 +43,7 @@ Everything here feeds [IDEAS_BACKLOG #29](../IDEAS_BACKLOG.md) (close the recurs
 | **Out-transparency the leaders: publish reasoning + induced schema programs** (not just action counts) as a public HF traces dataset | [arc-agi-3](arc-agi-3-schema-harness.md) | 📋 | sub-GB (frames as int-arrays); extends `trace.py`; public-set traces only (hidden eval uncontaminated); in-repo record stays aggregates-only |
 | **Reproducibility-artifact bundling** (output + code + env + message history) | [claude-science](claude-science-workbench.md) | 📋 | extends trace records |
 | **Traceability reviewer** (numbers/figures/citations trace to source) | [claude-science](claude-science-workbench.md) | 📋 | extends `claim_audit` |
+| **World-model verify soundness** (verify induced programs against ground truth / held-out examples / an *independent* check — never self-report; "runs" ≠ "correct") | [lanyon](lanyon-formal-verification.md) + [exec-world-models](executable-world-models.md) | 📋 | design rule for the `prax/reasoning/worldmodel.py` loop — anti-*misformalization*; reproduces-every-example gate, counterexample survival, not "it didn't crash" |
 | **Email as a channel** (OSS transport: Postal/Cloudflare) | [agentmail](agentmail-email-as-a-channel.md) | ⏸ | **ship only after** the lethal-trifecta guard — inbound email is a prime injection vector |
 | **Mixture-of-Agents hard-task escalation** (`MOA_ENABLED`, default off) | [mixture-of-agents](mixture-of-agents.md) | ⏸ | gate rollout on the HAL `pass_per_1k_tokens` cost axis |
 
