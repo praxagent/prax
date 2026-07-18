@@ -55,15 +55,14 @@ def _extract_answer(response: str) -> str | None:
 
 
 def score(case: dict, response: str) -> dict:
+    from prax.eval.answer_equiv import answers_equivalent
+
     got = _extract_answer(response)
     want = case["answer"]
-    ok = got is not None and _normalize(got) == _normalize(want)
-    if not ok and got is not None:
-        # Numeric fallback: equal value even if formatted differently.
-        try:
-            ok = float(_normalize(got)) == float(_normalize(want))
-        except ValueError:
-            ok = False
+    # Robust equivalence (fraction↔decimal, spacing, LaTeX, optional symbolic) —
+    # so a correct answer in different notation (0.25 vs \frac{1}{4}) isn't marked
+    # wrong. See prax/eval/answer_equiv.py.
+    ok = got is not None and answers_equivalent(got, want)
     return {"passed": ok, "score": 1.0 if ok else 0.0,
             "checks": {"predicted": got, "answer": want}}
 
