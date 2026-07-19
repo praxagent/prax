@@ -21,6 +21,10 @@ from fractions import Fraction
 def normalize(s: str) -> str:
     """Strip LaTeX cruft / spacing so equivalent surface forms compare equal."""
     s = (s or "").strip()
+    # Degrees / units that don't change the value: 76^\circ ≡ 76.
+    s = re.sub(r"\^?\{?\\circ\}?", "", s)
+    s = s.replace("°", "").replace(r"\degree", "").replace(r"\deg", "")
+    s = s.replace(r"\text{ }", "").replace(r"\ ", "")
     for a, b in ((r"\!", ""), (r"\,", ""), (r"\;", ""), (r"\left", ""),
                  (r"\right", ""), (r"\$", ""), ("$", ""), (r"\%", ""),
                  ("%", ""), (r"\cdot", "*"), (r"\times", "*")):
@@ -31,6 +35,19 @@ def normalize(s: str) -> str:
     s = re.sub(r"\\d?frac(\d)(\d)", r"\1/\2", s)
     s = s.strip("{}").rstrip(".").rstrip("=")
     return s.lower()
+
+
+def _split_list(s: str) -> list[str]:
+    """Split a comma-separated solution set into trimmed parts.
+
+    Guards against thousands separators: a part of exactly 3 digits following a
+    numeric part (``1,000``) is *not* a set element, so such strings collapse to a
+    single part and fall through to scalar comparison.
+    """
+    parts = [p.strip() for p in str(s).split(",") if p.strip()]
+    if len(parts) > 1 and all(re.fullmatch(r"\d{3}", p) for p in parts[1:]):
+        return [str(s)]                      # looks like a thousands-grouped number
+    return parts
 
 
 def _to_fraction(s: str) -> Fraction | None:
@@ -67,6 +84,20 @@ def answers_equivalent(a: str | None, b: str | None, *, tol: float = 1e-9) -> bo
     """
     if a is None or b is None:
         return False
+    # Order-insensitive solution sets: "-2,1" ≡ "1,-2". Try the set reading first;
+    # fall through to scalar (which handles "1,000" thousands via comma-removal).
+    la, lb = _split_list(str(a)), _split_list(str(b))
+    if len(la) > 1 and len(lb) == len(la):
+        remaining = list(lb)
+        matched = True
+        for x in la:
+            hit = next((y for y in remaining if answers_equivalent(x, y, tol=tol)), None)
+            if hit is None:
+                matched = False
+                break
+            remaining.remove(hit)
+        if matched:
+            return True
     na, nb = normalize(str(a)), normalize(str(b))
     if na == nb:
         return True                              # spacing / trivial formatting

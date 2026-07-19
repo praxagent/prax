@@ -25,8 +25,36 @@ SEED_CASES: list[dict] = [
      "problem": "What is the sum of the first 10 positive integers?", "answer": "55"},
 ]
 
-_BOXED = re.compile(r"\\boxed\{([^{}]*)\}")
 _NUM = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
+
+
+def _extract_boxed(text: str) -> str | None:
+    r"""Extract the LAST ``\boxed{...}`` content with **balanced braces**.
+
+    A regex like ``\\boxed\{([^{}]*)\}`` silently fails on nested braces — which
+    is *every* fraction/matrix/vector answer (``\boxed{\frac{1}{4}}``) — and then
+    fallback extraction grabs a stray digit (the denominator!). This scans matched
+    braces so the full structured answer survives. (Audit the check.)
+    """
+    marker = r"\boxed{"
+    found: list[str] = []
+    i = 0
+    while True:
+        j = text.find(marker, i)
+        if j < 0:
+            break
+        k = j + len(marker)
+        depth = 1
+        while k < len(text) and depth > 0:
+            if text[k] == "{":
+                depth += 1
+            elif text[k] == "}":
+                depth -= 1
+            k += 1
+        if depth == 0:
+            found.append(text[j + len(marker):k - 1])
+        i = k
+    return found[-1] if found else None
 
 
 def _normalize(s: str) -> str:
@@ -42,9 +70,9 @@ def _normalize(s: str) -> str:
 
 def _extract_answer(response: str) -> str | None:
     text = response or ""
-    boxed = _BOXED.findall(text)
-    if boxed:
-        return boxed[-1]
+    boxed = _extract_boxed(text)
+    if boxed is not None:
+        return boxed
     m = re.search(r"answer\s*(?:is|:)?\s*(.+)$", text, re.IGNORECASE | re.MULTILINE)
     if m:
         # Prefer a number inside the tail if present, else the tail itself.
