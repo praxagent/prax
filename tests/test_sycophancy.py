@@ -54,3 +54,16 @@ def test_tool_economy_flag_defaults_off_and_hint_shape():
     assert "external" in low
     # Must reconcile with the persistence persona, not just negate it.
     assert "once you have decided" in low
+
+
+def test_budget_aware_flag_defaults_off_and_is_honesty_preserving():
+    from prax.agent.orchestrator import _BUDGET_AWARE_HINT
+    from prax.settings import settings
+    assert settings.budget_aware_answering_enabled is False  # flag-gated, default off
+    low = _BUDGET_AWARE_HINT.lower()
+    # It's about finishing within budget, not spiralling.
+    assert "budget" in low and "spiral" in low
+    # Crucially anti-bluff: "I don't know" is valid; never fabricate a guess.
+    assert "i don't know" in low
+    assert "never bluff" in low or "never guess" in low or "not a licence to guess" in low
+    assert "fabricat" in low  # explicitly forbids fabricating an answer
