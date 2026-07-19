@@ -696,6 +696,21 @@ class AppSettings(BaseSettings):
             "doesn't induce premature or fabricated answers."
         ),
     )
+    spiral_recovery_enabled: bool = Field(
+        default=False, alias="SPIRAL_RECOVERY_ENABLED",
+        description=(
+            "When true, adds the 'steadying counsel' middleware to the agent loop: "
+            "detects a spiral in flight (repeating a tool call, burning the tool-call "
+            "budget, or circling without converging) and injects a calm, data-driven "
+            "'pause and try a different route' into the next model call — the "
+            "structural rescue for loops that run to timeout with nothing committed. "
+            "Honesty-preserving (tells the agent an honest 'I don't know' is valid, "
+            "never to fabricate) and rate-limited so it nudges, not nags. Requires the "
+            "middleware seam; independent of AGENT_MIDDLEWARE_ENABLED. Default off; "
+            "grade with the closed-book benchmarks (timeout/no-answer rate) + the "
+            "capability suite."
+        ),
+    )
     intent_clarification_enabled: bool = Field(
         default=False, alias="INTENT_CLARIFICATION_ENABLED",
         description=(
