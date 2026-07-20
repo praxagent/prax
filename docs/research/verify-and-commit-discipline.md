@@ -61,12 +61,35 @@ between-steps seam for a middleware to inject into. The structural fixes:
   must stay honest — commit the *best-supported* answer or an honest unknown,
   never a fabricated guess (the prime directive).
 
-### M3 — Verify-once enforcement / tool-result memoization (structural) — PROPOSED
+### M3 — Verify-once memoization (structural) — IMPLEMENTED (safe subset)
 
-Make the "once" in M1 structural: memoize identical tool calls within a turn
-(return the cached result on a repeat), the same pattern already used to dedup
-parallel `delegate_sandbox` calls. Directly cuts the redundant-verification waste
-that dragged the computed Jacobian run's efficiency to 0.31.
+`IdempotentToolCache` (`loop_middleware.py`, `TOOL_MEMOIZE_ENABLED`, default off):
+within one turn, an identical repeat of a **pure, side-effect-free read** (web
+search/fetch, memory/workspace/conversation/trace lookups) returns the prior
+result instead of re-executing — saving the latency, external call, and tokens of
+a redundant fetch. Correct by construction: the cache is **per-invoke** (bound in
+the orchestrator worker via `use_tool_cache`, never reused in a later turn) and
+only `is_memoizable_read` tools are eligible.
+
+**Honest scope caveat.** This deliberately does NOT memoize the thing the A/B
+actually caught — `run_python`. That tool has **side effects** (writes files,
+reads changing state), so returning a cached result would be a correctness bug;
+`run_python`/shell/writes/browser-navigation always pass straight through. So M3
+removes redundant *reads* (a real, common waste) but does **not** fix the
+`run_python` over-verification. That remains open — the honest levers there are
+prompt-level consolidation ("verify in one comprehensive computation") and the
+existing spiral detector, neither of which is a clean structural fix, because
+safely deduping an effectful tool is not possible without per-call purity
+metadata Prax doesn't yet carry.
+
+### M3-followup — evidence
+
+The 2026-07-20 A/B (M1 on vs off, praxbench Q1, trace-graded, n=3) is the reason
+M3 exists and is scoped this way: the M1 *prompt* hint raised verification (2/3 →
+3/3) but **worsened** efficiency (0.34 → 0.24, tokens 169k → 231k). Prompt can
+raise "do verify"; it did not deliver "verify once." A structural cache is the
+right tool for the efficiency half — but only where it's provably safe (reads),
+which is why the effectful-tool waste stays a separate, open problem.
 
 ### M4 — Trace-grading as the measurement — DONE (this pass)
 

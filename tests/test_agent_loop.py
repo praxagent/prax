@@ -23,12 +23,15 @@ from pydantic import Field
 
 from prax.agent.agent_loop import build_agent_loop
 from prax.agent.loop_middleware import (
+    IdempotentToolCache,
     LoopHeartbeat,
     SteadyingCounsel,
     UntrustedContentTaint,
     current_heartbeat,
     default_middleware,
+    is_memoizable_read,
     use_heartbeat,
+    use_tool_cache,
 )
 
 
@@ -397,3 +400,104 @@ def test_local_tools_not_classified_untrusted():
     from prax.agent.trifecta import is_untrusted_source
     for tool_name in ("workspace_save", "agent_plan", "schedule_list"):
         assert not is_untrusted_source(tool_name), tool_name
+
+
+# ---------------------------------------------------------------------------
+# IdempotentToolCache — memoize identical idempotent reads within a turn
+# ---------------------------------------------------------------------------
+
+class _ReqArgs:
+    def __init__(self, name, args):
+        self.tool_call = {"name": name, "args": args, "id": "t1"}
+        self.tool = None
+        self.state = {}
+        self.runtime = None
+
+
+def test_is_memoizable_read_allows_reads_blocks_effectful():
+    for ok in ("web_search", "fetch_url_content", "memory_search",
+               "conversation_search", "trace_search", "workspace_read"):
+        assert is_memoizable_read(ok) is True
+    for no in ("run_python", "sandbox_shell", "workspace_save", "workspace_patch",
+               "browser_navigate", "desktop_click", "data_query"):
+        assert is_memoizable_read(no) is False
+
+
+def test_memoize_dedups_identical_read_within_turn():
+    mw = IdempotentToolCache()
+    calls = {"n": 0}
+
+    def handler(req):
+        calls["n"] += 1
+        return ToolMessage(content=f"result-{calls['n']}", tool_call_id="t1")
+
+    with use_tool_cache():
+        r1 = mw.wrap_tool_call(_ReqArgs("web_search", {"q": "x"}), handler)
+        r2 = mw.wrap_tool_call(_ReqArgs("web_search", {"q": "x"}), handler)  # identical
+    assert calls["n"] == 1           # handler ran ONCE
+    assert r1 is r2                  # same cached object returned
+
+
+def test_memoize_different_args_not_deduped():
+    mw = IdempotentToolCache()
+    calls = {"n": 0}
+
+    def handler(req):
+        calls["n"] += 1
+        return ToolMessage(content="r", tool_call_id="t1")
+
+    with use_tool_cache():
+        mw.wrap_tool_call(_ReqArgs("web_search", {"q": "a"}), handler)
+        mw.wrap_tool_call(_ReqArgs("web_search", {"q": "b"}), handler)  # different args
+    assert calls["n"] == 2
+
+
+def test_memoize_never_touches_effectful_tools():
+    mw = IdempotentToolCache()
+    calls = {"n": 0}
+
+    def handler(req):
+        calls["n"] += 1
+        return ToolMessage(content="ran", tool_call_id="t1")
+
+    with use_tool_cache():
+        mw.wrap_tool_call(_ReqArgs("run_python", {"code": "x=1"}), handler)
+        mw.wrap_tool_call(_ReqArgs("run_python", {"code": "x=1"}), handler)  # identical
+    assert calls["n"] == 2           # run_python has side effects — NEVER memoized
+
+
+def test_memoize_noop_without_cache_binding():
+    # Outside an instrumented invoke (no use_tool_cache) the middleware no-ops.
+    mw = IdempotentToolCache()
+    calls = {"n": 0}
+
+    def handler(req):
+        calls["n"] += 1
+        return ToolMessage(content="r", tool_call_id="t1")
+
+    mw.wrap_tool_call(_ReqArgs("web_search", {"q": "x"}), handler)
+    mw.wrap_tool_call(_ReqArgs("web_search", {"q": "x"}), handler)
+    assert calls["n"] == 2           # no cache bound -> no dedup
+
+
+def test_memoize_cache_is_per_turn(monkeypatch):
+    # A new use_tool_cache scope (a new turn) starts empty.
+    mw = IdempotentToolCache()
+    calls = {"n": 0}
+
+    def handler(req):
+        calls["n"] += 1
+        return ToolMessage(content="r", tool_call_id="t1")
+
+    with use_tool_cache():
+        mw.wrap_tool_call(_ReqArgs("web_search", {"q": "x"}), handler)
+    with use_tool_cache():  # fresh turn
+        mw.wrap_tool_call(_ReqArgs("web_search", {"q": "x"}), handler)
+    assert calls["n"] == 2           # not reused across turns
+
+
+def test_memoize_in_default_stack_by_flag(monkeypatch):
+    monkeypatch.setattr(_settings(), "agent_middleware_enabled", False)
+    monkeypatch.setattr(_settings(), "spiral_recovery_enabled", False)
+    monkeypatch.setattr(_settings(), "tool_memoize_enabled", True)
+    assert [type(m) for m in default_middleware()] == [IdempotentToolCache]

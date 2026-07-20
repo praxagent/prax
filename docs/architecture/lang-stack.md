@@ -89,6 +89,25 @@ Current stack when enabled:
   start" to "is the loop still stepping". Implemented with `wrap_model_call`,
   not `before_model`/`after_model` — see house rule 4.
 
+## Verify-once: `IdempotentToolCache` (`TOOL_MEMOIZE_ENABLED`, default off)
+
+A **separate flag** again: within one turn, an identical repeat of a **pure,
+side-effect-free read** (web search/fetch, memory/workspace/conversation/trace
+lookups — `is_memoizable_read`) returns the prior result via `wrap_tool_call`
+instead of re-executing, saving the redundant fetch's latency/call/tokens.
+
+- **Correctness rests on two invariants:** (1) the cache is **per-invoke** — a
+  fresh dict bound by the orchestrator worker via `use_tool_cache()` (same
+  ContextVar-in-the-worker pattern as the heartbeat), so a read cached this turn
+  is *never* reused in a later turn where the world may differ; (2) only
+  idempotent reads are eligible — **`run_python`, shell, writes, and browser
+  navigation always pass through untouched** (they have side effects; a cached
+  result would be a bug). Fails open.
+- **Scope note (honest):** this removes redundant *reads*, not the effectful
+  over-verification (`run_python` ×6) the trace-grade A/B caught — safely
+  deduping an effectful tool would need per-call purity metadata Prax doesn't
+  carry. See `docs/research/verify-and-commit-discipline.md` (M3).
+
 ## Self-regulation: `SteadyingCounsel` (`SPIRAL_RECOVERY_ENABLED`, default off)
 
 A **separate flag** from `AGENT_MIDDLEWARE_ENABLED` (they compose but neither

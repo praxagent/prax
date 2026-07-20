@@ -630,6 +630,22 @@ class AppSettings(BaseSettings):
             "cost + defense-in-depth design."
         ),
     )
+    tool_memoize_enabled: bool = Field(
+        default=False, alias="TOOL_MEMOIZE_ENABLED",
+        description=(
+            "When true, adds the IdempotentToolCache middleware to the agent loop: "
+            "within a single turn, an identical repeat of a pure, side-effect-free "
+            "READ (web search/fetch, memory/workspace/conversation/trace lookups) "
+            "returns the prior result instead of re-executing — saving the latency, "
+            "external call, and tokens of a redundant fetch. Correct by construction: "
+            "the cache is per-invoke (never reused in a later turn) and ONLY "
+            "idempotent reads are eligible (run_python/shell/writes/browser "
+            "navigation always pass through). The structural 'verify once' lever "
+            "(prompt hints raised verification but not efficiency — see the A/B in "
+            "docs/research/verify-and-commit-discipline.md). Default off; independent "
+            "of AGENT_MIDDLEWARE_ENABLED."
+        ),
+    )
     claim_audit_attended_quarantine: bool = Field(
         default=False, alias="CLAIM_AUDIT_ATTENDED_QUARANTINE",
         description=(
