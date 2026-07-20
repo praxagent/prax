@@ -633,6 +633,28 @@ def plugin_catalog() -> str:
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
+# Files that carry secrets / credentials / runtime data — NEVER readable via the
+# source tools, regardless of the (model-controlled) glob or extension. Mirrors
+# the git-hygiene sweep. `.env-example` is a safe template and stays readable.
+# This closes the source_grep hole where `file_glob=".env"` read the real .env.
+_SECRET_FILE_GLOBS = (
+    ".env", ".env.*",                      # NOT .env-example (hyphen — unmatched)
+    "*.db", "*.db-*", "*.db.*",            # identity.db / conversations.db + backups
+    "*.sqlite", "*.sqlite3",
+    "*.key", "*.pem", "*.p12", "*.pfx",
+    "*.bak", "*.bak-*",
+    "id_rsa*", "id_ed25519*", "*.ppk",
+    "credentials*", "*credentials",
+)
+
+
+def _is_secret_file(name: str) -> bool:
+    """True if *name* (a basename) is a secrets/credentials/runtime-data file."""
+    from fnmatch import fnmatch
+    if name == ".env-example":
+        return False
+    return any(fnmatch(name, g) for g in _SECRET_FILE_GLOBS)
+
 
 @tool
 def source_read(path: str) -> str:
@@ -650,6 +672,12 @@ def source_read(path: str) -> str:
     abs_path = (_PROJECT_ROOT / path).resolve()
     if not str(abs_path).startswith(str(_PROJECT_ROOT)):
         return f"Path traversal blocked: {path}"
+
+    # Never expose secrets/credentials/runtime data (defense-in-depth on top of
+    # the extension allowlist below — e.g. a secrets-bearing .json would pass the
+    # extension check but must still be blocked).
+    if _is_secret_file(abs_path.name):
+        return f"Blocked: {path} is a secrets/credentials/runtime file (not readable)."
 
     if not abs_path.exists():
         return f"File not found: {path}"
@@ -716,9 +744,17 @@ def source_grep(pattern: str, file_glob: str = "*.py") -> str:
     """
     import subprocess
 
+    # NEVER grep secrets, regardless of the (model-controlled) file_glob. grep's
+    # --exclude wins over --include, so even file_glob=".env" is skipped. This
+    # closes the hole where source_grep read the real .env (source_read blocks it
+    # by extension; source_grep did not).
+    excludes: list[str] = []
+    for g in _SECRET_FILE_GLOBS:
+        excludes += ["--exclude", g]
+
     try:
         result = subprocess.run(
-            ["grep", "-rnI", "--include", file_glob, "-E", pattern, "."],
+            ["grep", "-rnI", "--include", file_glob, *excludes, "-E", pattern, "."],
             cwd=str(_PROJECT_ROOT),
             capture_output=True,
             text=True,
