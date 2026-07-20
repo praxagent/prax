@@ -762,6 +762,11 @@ class AppSettings(BaseSettings):
     # Assessment: docs/research/cdc-lean-teach-prax-lean.md
     lean_tools_enabled: bool = Field(default=False, alias="LEAN_TOOLS_ENABLED")
 
+    # data_query — DuckDB SQL / number-crunching over CSV/Parquet/JSON in the
+    # sandbox. Needs duckdb + pandas in the sandbox image (/opt/prax-venv); the
+    # tool degrades with a clear message when the libs or sandbox are absent.
+    data_tools_enabled: bool = Field(default=False, alias="DATA_TOOLS_ENABLED")
+
     # Fine-tuning / Local Models (optional — GPU required)
     finetune_enabled: bool = Field(default=False, alias="FINETUNE_ENABLED")
     vllm_base_url: str = Field(default="http://localhost:8000/v1", alias="VLLM_BASE_URL")

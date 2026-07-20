@@ -53,6 +53,15 @@ deploying the daemon (TLS, tokens, Tailscale-or-not).
 
 - The **sandbox spoke** (`delegate_sandbox`) + `sandbox_*` tools start/drive coding
   sessions; `run_python` runs throwaway Python in the sandbox's scratch venv.
+- **`data_query`** (opt-in, `DATA_TOOLS_ENABLED`) runs a **DuckDB SQL** query in
+  the sandbox for deterministic number/tabular crunching — DuckDB reads
+  CSV/Parquet/JSON files directly (`SELECT … FROM '/workspace/active/x.csv'`), so
+  most "process these numbers" tasks are one query rather than a coding session.
+  Needs `duckdb` + `pandas` in the sandbox image (installed into `/opt/prax-venv`;
+  the tool addresses that venv's python by absolute path, like `lean_check` pins
+  `/opt/elan`). Spoke-internal (`prax/agent/data_tools.py`); classified LOW —
+  it's read/compute in the already-isolated container. Degrades with a clear
+  message when the flag, libs, or sandbox are absent.
 - The **desktop spoke** drives the Linux desktop via the `desktop_*` tools.
 - `browser_service` connects Playwright to the sandbox's Chrome over CDP, and falls
   back to a local headless Chrome when there is no sandbox.
