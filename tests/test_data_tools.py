@@ -138,3 +138,27 @@ def test_data_query_surfaces_sandbox_error(monkeypatch):
         assert "Sandbox error" in out and "container not running" in out
     finally:
         monkeypatch.undo()
+
+
+def test_data_query_never_executes_on_the_host():
+    """SECURITY regression: data_query must dispatch to the sandbox client's
+    run_shell (→ container.exec_run) and must NOT run DuckDB in the Prax process.
+    A future refactor that ran DuckDB in-process would let `FROM '/etc/...'` read
+    the host's arbitrary files — this pins the sandbox-only guarantee.
+
+    1. data_tools imports NO duckdb at module load (host process never loads it).
+    2. The only execution path is get_client().run_shell — a container exec.
+    """
+    import sys
+
+    import prax.agent.data_tools as dt
+    # (1) The host process must not have imported duckdb by loading data_tools.
+    src = open(dt.__file__, encoding="utf-8").read()
+    assert "import duckdb" not in src.split("_RUNNER")[0], \
+        "duckdb must only be imported inside the in-container runner, not the host module"
+    assert "duckdb" not in sys.modules, "the Prax host process must not load duckdb"
+    # (2) The tool's sole execution primitive is the sandbox client's run_shell —
+    #     no subprocess / os.system / local exec in the module.
+    for host_exec in ("subprocess.", "os.system", "os.popen", "eval(", "exec("):
+        assert host_exec not in src, f"data_tools must not use {host_exec} (host execution)"
+    assert "get_client().run_shell" in src
