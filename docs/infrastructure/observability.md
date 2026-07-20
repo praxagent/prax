@@ -25,7 +25,7 @@ graph LR
     A -->|stdout| Promtail[Promtail]
     Promtail --> Loki[Loki :3100]
 
-    Tempo --> Grafana[Grafana :3001]
+    Tempo --> Grafana[Grafana :3002]
     Prom --> Grafana
     Loki --> Grafana
 
@@ -40,7 +40,7 @@ graph LR
 | **Loki** | Log aggregation (receives Docker logs via Promtail) | 3100 | `grafana/loki:3.4.2` |
 | **Promtail** | Log collector (Docker service discovery) | 9080 | `grafana/promtail:3.4.2` |
 | **Prometheus** | Metrics (scrapes `/metrics` every 10s) | 9090 | `prom/prometheus:v3.2.1` |
-| **Grafana** | Unified dashboards with pre-provisioned datasources | 3001 | `grafana/grafana:11.5.2` |
+| **Grafana** | Unified dashboards with pre-provisioned datasources | 3002 | `grafana/grafana:11.5.2` |
 
 ### Metrics
 
@@ -114,7 +114,7 @@ A separate **Execution Graphs** panel (Workflow icon) provides a tree visualizat
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `OBSERVABILITY_ENABLED` | `true` | Master switch — probes Tempo at startup, silently disables if unreachable |
-| `GRAFANA_URL` | (empty) | Grafana base URL for deep-links (e.g. `http://localhost:3001`) |
+| `GRAFANA_URL` | (empty) | Grafana base URL for deep-links (e.g. `http://localhost:3002`) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://tempo:4318` | OTLP exporter endpoint |
 
 ### Enabling the Observability Stack
@@ -129,7 +129,7 @@ docker compose --profile observability up --build
 docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile observability up --build
 ```
 
-Open Grafana at **http://localhost:3001** (default credentials: admin/prax).
+Open Grafana at **http://localhost:3002** (default credentials: admin/prax).
 
 ### Retention & disk usage (long-running stacks)
 

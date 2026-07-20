@@ -12,11 +12,11 @@ Key fields:
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` | Twilio console credentials (not needed if Discord-only) | `None` |
+| `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` | Twilio console credentials (not needed for TeamWork- or Discord-only setups) | `None` |
 | `OPENAI_KEY` | OpenAI API key | *(required unless using other provider)* |
 | `ANTHROPIC_KEY` | Anthropic API key (for sandbox coding agent) | `None` |
 | `LLM_PROVIDER` | LLM provider: `openai`, `anthropic`, `google_vertex`, `ollama`, `vllm` | `openai` |
-| `BASE_MODEL` | Model name for the main agent | `gpt-4o` |
+| `BASE_MODEL` | Model name for the main agent | `gpt-5.4-nano` |
 | `AGENT_NAME` | Display name for the agent across all channels, greetings, and prompts | `Prax` |
 | `PHONE_TO_NAME_MAP` | JSON: `{"+15551234567": "Alice"}` — whitelists callers | `None` |
 | `PHONE_TO_EMAIL_MAP` | JSON: `{"+15551234567": "alice@example.com"}` | `None` |
@@ -30,7 +30,7 @@ Key fields:
 | `SANDBOX_IMAGE` | Docker image for sandbox | `prax-sandbox:latest` |
 | `SANDBOX_TIMEOUT` | Max sandbox session duration (seconds) | `1800` |
 | `SANDBOX_MAX_CONCURRENT` | Max simultaneous sandbox sessions | `5` |
-| `SANDBOX_DEFAULT_MODEL` | Default model for sandbox coding | `anthropic/claude-sonnet-4-5` |
+| `SANDBOX_DEFAULT_MODEL` | Default model for sandbox coding | `openai/gpt-5.4` |
 | `SANDBOX_MAX_ROUNDS` | Max message rounds per sandbox session | `10` |
 | `SANDBOX_MEM_LIMIT` | Container memory limit | `1g` |
 | `SANDBOX_CPU_LIMIT` | Container CPU limit (nanocpus) | `2000000000` |

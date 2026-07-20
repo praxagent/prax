@@ -43,7 +43,7 @@
 ## TeamWork & Agent Status
 
 - **Agent stuck as "working" in TeamWork UI / Agent World:**
-  The agent's status in TeamWork didn't get reset — usually because the app crashed or restarted mid-turn. The app resets all agents to idle on startup, but if the status is already stuck, restart the app: `docker compose restart app`. To manually reset a stuck agent via the API:
+  The agent's status in TeamWork didn't get reset — usually because the app crashed or restarted mid-turn. The app resets all agents to idle on startup, but if the status is already stuck, restart the app: `docker compose restart prax`. To manually reset a stuck agent via the API:
   ```bash
   # Find the project ID and agent ID
   curl -s http://localhost:8000/api/projects | python3 -m json.tool
@@ -55,16 +55,16 @@
   ```
 
 - **Work Logs always empty (Total Logs: 0):**
-  Activity logs require both the TeamWork external API endpoint (`POST /api/external/projects/{id}/activity`) and Prax pushing log entries. Ensure both TeamWork and the app container are rebuilt after the latest changes: `docker compose up --build teamwork && docker compose restart app`.
+  Activity logs require both the TeamWork external API endpoint (`POST /api/external/projects/{id}/activity`) and Prax pushing log entries. Ensure the `prax` container (which bundles TeamWork) is rebuilt after the latest changes: `docker compose up --build prax`.
 
 - **Live output says "Agent is idle" even when working:**
-  Prax pushes live output via `push_live_output()` during tool execution. If the agent shows as working but live output is empty, the orchestrator's callback handler may not be firing. Check app logs: `docker compose logs app --tail 50`.
+  Prax pushes live output via `push_live_output()` during tool execution. If the agent shows as working but live output is empty, the orchestrator's callback handler may not be firing. Check app logs: `docker compose logs prax --tail 50`.
 
 - **Agent World constellation not updating:**
   The constellation reads agent status from the `useAgents()` hook which polls every 10 seconds. If an agent's status changed but the visualization hasn't updated, wait a few seconds. If it's permanently stuck, see "Agent stuck as working" above.
 
 - **TeamWork shows "Claude Code" in output labels:**
-  This was a hardcoded label. After the fix, it shows the agent's actual name (e.g., "Live Prax Output"). Rebuild TeamWork to pick up the change: `docker compose up --build teamwork`.
+  This was a hardcoded label. After the fix, it shows the agent's actual name (e.g., "Live Prax Output"). Rebuild the `prax` container (which bundles TeamWork) to pick up the change: `docker compose up --build prax`.
 
 - **Stale/renamed agent still visible in TeamWork:**
   If you renamed or removed an agent role from the code but it still shows in chat, the constellation, or the sidebar, it's because the old agent entry persists in TeamWork's database. Delete it via the API:
@@ -125,15 +125,15 @@
   Agent configs are stored in `WORKSPACE_DIR`: `.claude/`, `.codex/`, `.opencode/`. These are bind-mounted into the sandbox. If the workspace directory was deleted or moved, reconfigure via TeamWork terminal (`cd /source && claude login`).
 
 - **`SELF_IMPROVE_ENABLED` is set but coding agent tools don't appear:**
-  The tools are registered at import time. Restart the app after changing `.env`: `docker compose restart app`.
+  The tools are registered at import time. Restart the app after changing `.env`: `docker compose restart prax`.
 
 ## Memory System
 
 - **Qdrant/Neo4j connection refused:**
-  Ensure the services are running: `docker compose ps`. Data is stored in `WORKSPACE_DIR/.qdrant/` and `WORKSPACE_DIR/.neo4j/`. If the workspace directory doesn't exist, create it: `mkdir -p ../workspaces`.
+  Ensure the services are running: `docker compose ps`. Data is stored in `WORKSPACE_DIR/<PRAX_USER_ID>/.services/qdrant/` and `WORKSPACE_DIR/<PRAX_USER_ID>/.services/neo4j/`. If the workspace directory doesn't exist, create it: `mkdir -p ../workspaces`.
 
 - **Memory search returns no results:**
   Check that `MEMORY_ENABLED=true` and that the embedding provider is configured. For Ollama embeddings, verify the model was pulled: `docker compose logs ollama-init`.
 
 - **Consolidation not running:**
-  Consolidation runs every `MEMORY_CONSOLIDATION_INTERVAL` seconds (default: 3600 = hourly). Check logs: `docker compose logs app | grep consolidation`.
+  Consolidation runs every `MEMORY_CONSOLIDATION_INTERVAL` seconds (default: 3600 = hourly). Check logs: `docker compose logs prax | grep consolidation`.
