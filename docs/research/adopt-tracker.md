@@ -62,6 +62,9 @@ Everything here feeds [IDEAS_BACKLOG #29](../IDEAS_BACKLOG.md) (close the recurs
 | **Verify-discipline hint** (`VERIFY_DISCIPLINE_ENABLED`, default off) | [verify-and-commit](verify-and-commit-discipline.md) | 🔨 | `_VERIFY_DISCIPLINE_HINT` in orchestrator; **eval-gate + trace-grade before any flip** (prompt hints have underperformed) |
 | **Per-call output cap + forced commitment** (fixes GPQA single-call non-commitment) | [verify-and-commit](verify-and-commit-discipline.md) | 📋 | structural — a between-steps hint can't reach a single runaway call; **truncation risk, needs eval validation** |
 | **Verify-once tool-result memoization** (dedup identical in-turn tool calls) | [verify-and-commit](verify-and-commit-discipline.md) | 📋 | make M1's "once" structural; same pattern as the `delegate_sandbox` dedup |
+| **Anthropic prompt caching** (`cache_control` on the system prompt) | [opencode-critique](opencode-critique-eval.md) | 📋 | real gap — Claude path caches nothing today. Seam `orchestrator.py:1191`; apply AFTER `prepare_context` (list-vs-string), **verify live cache hits** before flip |
+| **Measure cache-hit rate + re-weigh `PROMPT_SELECTIVITY` cross-turn** | [opencode-critique](opencode-critique-eval.md) | 📋 | selectivity (recommended-on) likely defeats cross-turn OpenAI caching; the flag campaign measured per-call tokens, NOT cache reuse — instrument, then A/B on *total* cost |
+| **System-prompt ordering: stable-first, volatile-last** (extend cached prefix) | [opencode-critique](opencode-critique-eval.md) | 📋 | hints sit after volatile temporal/memory; reorder is behavior-adjacent → flag+eval |
 
 ## The standing structural gaps (tracked in depth elsewhere — pointer, not a re-list)
 
