@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.29.0](https://github.com/praxagent/prax/compare/v0.28.0...v0.29.0) (2026-07-20)
+
+
+### Features
+
+* **agent:** anti-spiral — budget-aware answering + steadying-counsel recovery (general + honest) ([#122](https://github.com/praxagent/prax/issues/122)) ([4b92641](https://github.com/praxagent/prax/commit/4b92641a41c7ef2aa602bf9a9e67ef7fb68a8f6d))
+* **agent:** verify-discipline hint + verify-and-commit synthesis (flag-gated) ([#128](https://github.com/praxagent/prax/issues/128)) ([87be1c9](https://github.com/praxagent/prax/commit/87be1c9cc60fd6f42b177a8d02cd28c264ea862c))
+* **eval:** ARC-AGI-3 interactive harness + live baseline agent ([#113](https://github.com/praxagent/prax/issues/113)) ([25dc2a8](https://github.com/praxagent/prax/commit/25dc2a89ef4d27f225513153a675c7e86d58b258))
+* **eval:** balanced-brace boxed extraction + degrees/set-order equivalence — audit the check (3rd time) ([#121](https://github.com/praxagent/prax/issues/121)) ([0f85d92](https://github.com/praxagent/prax/commit/0f85d92939a8fe8be30821ccd1538760aeb47953))
+* **eval:** dual-axis grading — score the TRACE (process), not just the answer ([#127](https://github.com/praxagent/prax/issues/127)) ([1dd4c96](https://github.com/praxagent/prax/commit/1dd4c96995957d89a62e5e0a564e8ae038838432))
+* **eval:** rigor upgrade (Wilson CIs, seeded sampling, protocol reporting) + longcontext & agentsafety benchmarks ([#115](https://github.com/praxagent/prax/issues/115)) ([1a9c7e9](https://github.com/praxagent/prax/commit/1a9c7e9ddbc7bbbd28d62f0ae097e869ae93d591))
+* **eval:** robust answer equivalence — audit the check, stop under-crediting correct answers ([#120](https://github.com/praxagent/prax/issues/120)) ([793ce76](https://github.com/praxagent/prax/commit/793ce761230d44a098fbe29267215ee453a7d251))
+* **eval:** self-rate-limiting for benchmark runs + programmatic-usage guide ([#126](https://github.com/praxagent/prax/issues/126)) ([1c4b5da](https://github.com/praxagent/prax/commit/1c4b5da188b37746a10ed4fc4525f16301e52ae9))
+* **reasoning:** world-model reasoning loop — solve by inducing + running an executable model ([#118](https://github.com/praxagent/prax/issues/118)) ([d7183d0](https://github.com/praxagent/prax/commit/d7183d09097d79591efa865fb826af62744c5d53))
+* **sandbox:** data_query DuckDB tool + fix run_python to use the venv ([#123](https://github.com/praxagent/prax/issues/123)) ([56e2896](https://github.com/praxagent/prax/commit/56e2896a5bf2a8aacd77a3ed52590a4d00b3f558))
+* **spiral:** escalated smarter-model counselor + reasoning-spiral detection ([#124](https://github.com/praxagent/prax/issues/124)) ([fda9a8b](https://github.com/praxagent/prax/commit/fda9a8bf7e465bcfbe04ecc7c06592e330775e6e))
+
 ## [0.28.0](https://github.com/praxagent/prax/compare/v0.27.1...v0.28.0) (2026-07-17)
 
 
