@@ -51,8 +51,20 @@ deploying the daemon (TLS, tokens, Tailscale-or-not).
 
 ## How Prax uses it
 
-- The **sandbox spoke** (`delegate_sandbox`) + `sandbox_*` tools start/drive coding
-  sessions; `run_python` runs throwaway Python in the sandbox's scratch venv.
+> **2026-07 — no coding-agent crutch by default.** The sandbox image no longer
+> ships the OpenCode/Claude-Code/Codex CLIs or a coding-agent server, and the
+> **coding-SESSION tools (`delegate_sandbox`, `sandbox_start/message/review/
+> finish/abort/search/execute`) are gated OFF** behind `SANDBOX_CODING_AGENT_
+> ENABLED` (default false). Prax codes **directly** — `run_python`,
+> `workspace_save`/`workspace_patch` (syntax-linted), `source_read`/`source_grep`,
+> `sandbox_shell`. This removes a black-box dependency *and* the need for any
+> model key inside the sandbox (see `docs/security/sandbox-execution-boundary.md`).
+> The pure-execution sandbox tools below are unaffected.
+
+- `run_python` runs throwaway Python in the sandbox's scratch venv; `sandbox_shell`
+  runs a shell command in the container. (The **coding-session** spoke —
+  `delegate_sandbox` + the `sandbox_start/…` lifecycle — is opt-in per the note
+  above.)
 - **`data_query`** (opt-in, `DATA_TOOLS_ENABLED`) runs a **DuckDB SQL** query in
   the sandbox for deterministic number/tabular crunching — DuckDB reads
   CSV/Parquet/JSON files directly (`SELECT … FROM '/workspace/active/x.csv'`), so
