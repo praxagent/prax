@@ -202,7 +202,7 @@ The agent also has tools for modifying its own system prompt (`prompt_write`, `p
 
 **Example plugins — [prax-plugins](https://github.com/praxagent/prax-plugins):** A collection of open-source plugins. Install one by telling Prax: *"Import the txt2presentation plugin from https://github.com/praxagent/prax-plugins"* — or install them all: *"Import all plugins from https://github.com/praxagent/prax-plugins"*. See its README for how to create your own plugins.
 
-**Architecture:** See [SELF_MODIFY_PLAN.md](SELF_MODIFY_PLAN.md) for the full design rationale.
+**Architecture:** See [SELF_MODIFY_PLAN.md](../SELF_MODIFY_PLAN.md) for the full design rationale.
 
 ### Manual Tool Registration (for deployment-time extensions)
 

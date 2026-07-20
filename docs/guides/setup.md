@@ -6,8 +6,9 @@
 
 - Python 3.13 (managed via [uv](https://github.com/astral-sh/uv)).
 - **At least one messaging channel:**
-  - **Twilio** (Voice + SMS) — requires a Twilio account, verified phone number, and ngrok for webhooks (Twilio's servers must reach Prax from the public internet, which the local Tailscale sidecar can't provide). Paid per message/minute.
+  - **TeamWork** (web UI) — the Slack-like web frontend and the primary channel. Requires the sibling [TeamWork](https://github.com/praxagent/teamwork) app running and `TEAMWORK_ENABLED=true` (Docker Compose sets this automatically). No external account or ngrok needed. User messages reach Prax over the TeamWork webhook.
   - **Discord** (text + attachments) — requires a Discord bot token (free). No ngrok needed — connects via WebSocket.
+  - **Twilio** (Voice + SMS) — requires a Twilio account, verified phone number, and ngrok for webhooks (Twilio's servers must reach Prax from the public internet, which the local Tailscale sidecar can't provide). Paid per message/minute.
 - **Optional, recommended for remote access:** Tailscale account + a reusable, non-ephemeral auth key. Lets you reach TeamWork over HTTPS from your laptop without exposing the host's network or installing `tailscaled` on the server. See [Configuration → Remote access](../security/configuration.md#remote-access-tailscale-sidecar).
 - OpenAI (or alternate LLM) credentials.
 - Java 11+ (for `opendataloader-pdf` PDF extraction).
@@ -18,7 +19,7 @@
 
 ## Installation Details
 
-See [Quick Start](#quick-start) at the top of this README for the fast path.
+See [Quick Start](../../README.md#quick-start) at the top of the README for the fast path.
 
 **Sandbox code execution** requires both Docker Desktop running **and** the sandbox image built. The sandbox lives in the sibling [prax-sandbox](https://github.com/praxagent/prax-sandbox) repo — build it with `cd ../prax-sandbox && make build` (docker-compose builds it for you). Without the image, sandbox tools fail with a "pull access denied" error — it's a local image, not on Docker Hub. If Docker isn't running, the agent falls back to saving source files to the workspace. See [Providing Prax a sandbox](../infrastructure/sandbox.md) (incl. remote mode).
 
@@ -26,7 +27,7 @@ See [Quick Start](#quick-start) at the top of this README for the fast path.
 
 On startup you'll see:
 ```
-Starting Prax — provider=openai model=gpt-4o temperature=0.7 encoding=o200k_base
+Starting Prax — provider=openai model=gpt-5.4-nano temperature=0.7 encoding=o200k_base
 ```
 
 ## Required Configuration

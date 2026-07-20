@@ -14,9 +14,9 @@ docker compose up --build
 ```bash
 docker compose up                         # start with existing images (fast)
 docker compose up --build                 # rebuild ALL images then start
-docker compose up --build app             # rebuild only the app image, start everything
+docker compose up --build prax            # rebuild only the prax image, start everything
 docker compose up --build sandbox         # rebuild only the sandbox image, start everything
-docker compose build app && docker compose up   # same idea, explicit two-step
+docker compose build prax && docker compose up   # same idea, explicit two-step
 ```
 
 Use `--build` when you've changed a Dockerfile or its dependencies (e.g. added a package). For code-only changes in dev mode, plain `docker compose up` is enough.
@@ -29,14 +29,12 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up
 
 This bind-mounts `prax/`, `app.py`, `config.py`, and `scripts/` into the container and sets `DEBUG=true`, which enables Flask's Werkzeug reloader. Edit code locally, save, and the app restarts automatically. You still need `--build` if you change the Dockerfile, `pyproject.toml`, or system-level dependencies.
 
-This starts four core services:
+This starts two core services (the `prax` container is all-in-one):
 
 | Service | Description |
 |---------|-------------|
-| **app** | Flask app (port 5001), `.env` injected, Docker socket for sandbox management |
+| **prax** | All-in-one container that bundles the Flask app (port 5001), the TeamWork web UI (port 3000) + API (port 8000), Qdrant, Neo4j, and ngrok (dashboard on 4040). `.env` injected, Docker socket for sandbox management. ngrok forwards the Twilio webhook routes (`/transcribe`, `/sms`) and the gated `/shared/<token>` endpoint to the public internet — only files/courses/notes registered in `workspaces/{user}/.shares.json` are reachable through it. |
 | **sandbox** | Always-on OpenCode sandbox with Python, LaTeX, ffmpeg, poppler, pandoc, headless Chrome. Shares `./workspaces` volume. |
-| **teamwork** | Web UI (port 3000) — Slack-like chat, Kanban board, terminal, browser screencast, execution graphs |
-| **ngrok** | Tunnel to app:5001. Forwards the Twilio webhook routes (`/transcribe`, `/sms`) and the gated `/shared/<token>` endpoint to the public internet — only files/courses/notes registered in `workspaces/{user}/.shares.json` are reachable through it. |
 | **tailscale** *(opt-in)* | Userspace `tailscaled` sidecar that joins your tailnet and serves TeamWork (`:443`) + Grafana (`:3001`) over MagicDNS HTTPS. Activated by setting `TS_AUTHKEY` + `COMPOSE_PROFILES=tailscale` in `.env`; silently skipped otherwise. State persists in a Docker volume so the node identity survives restarts. |
 
 The app waits for the sandbox and TeamWork health checks before starting. Environment detection is automatic — `RUNNING_IN_DOCKER=true` and `SANDBOX_HOST=sandbox` are set by compose.
@@ -47,7 +45,7 @@ The app waits for the sandbox and TeamWork health checks before starting. Enviro
 docker compose --profile observability up --build
 ```
 
-This adds five services (Tempo :4318, Loki :3100, Promtail, Prometheus :9090, Grafana :3001). See [Observability](observability.md) for details. Safe to leave `OBSERVABILITY_ENABLED=true` in `.env` — Prax probes Tempo at startup and silently disables tracing if it's unreachable.
+This adds five services (Tempo :4318, Loki :3100, Promtail, Prometheus :9090, Grafana :3002). See [Observability](observability.md) for details. Safe to leave `OBSERVABILITY_ENABLED=true` in `.env` — Prax probes Tempo at startup and silently disables tracing if it's unreachable.
 
 **Runtime capabilities in Docker mode:**
 - `sandbox_install("package")` — apt-get install inside the running sandbox

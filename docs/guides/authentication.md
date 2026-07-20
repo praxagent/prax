@@ -282,8 +282,9 @@ services:
       OAUTH2_PROXY_CLIENT_SECRET: "YOUR_CLIENT_SECRET"
       OAUTH2_PROXY_COOKIE_SECRET: "YOUR_COOKIE_SECRET_FROM_STEP_2"
 
-      # Where to send authenticated traffic
-      OAUTH2_PROXY_UPSTREAMS: "http://teamwork:8000"
+      # Where to send authenticated traffic (TeamWork's API is served by the
+      # all-in-one `prax` container on port 8000)
+      OAUTH2_PROXY_UPSTREAMS: "http://prax:8000"
       OAUTH2_PROXY_HTTP_ADDRESS: "0.0.0.0:4180"
 
       # Who can log in (restrict to your domain, or * for any Google account)
@@ -306,7 +307,7 @@ services:
       # Redirect after login
       OAUTH2_PROXY_REDIRECT_URL: "http://localhost:4180/oauth2/callback"
     depends_on:
-      teamwork:
+      prax:
         condition: service_healthy
 ```
 
@@ -411,7 +412,7 @@ services:
       OAUTH2_PROXY_CLIENT_ID: "YOUR_GITHUB_CLIENT_ID"
       OAUTH2_PROXY_CLIENT_SECRET: "YOUR_GITHUB_CLIENT_SECRET"
       OAUTH2_PROXY_COOKIE_SECRET: "YOUR_COOKIE_SECRET"
-      OAUTH2_PROXY_UPSTREAMS: "http://teamwork:8000"
+      OAUTH2_PROXY_UPSTREAMS: "http://prax:8000"
       OAUTH2_PROXY_HTTP_ADDRESS: "0.0.0.0:4180"
       OAUTH2_PROXY_EMAIL_DOMAINS: "*"
       OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
@@ -424,7 +425,7 @@ services:
       # Optional: restrict to a specific team
       # OAUTH2_PROXY_GITHUB_TEAM: "engineering"
     depends_on:
-      teamwork:
+      prax:
         condition: service_healthy
 ```
 

@@ -109,7 +109,7 @@ One-time reminders work the same way but use `DateTrigger` instead of `CronTrigg
 ## Manual editing
 
 You can edit `schedules.yaml` directly in the workspace (via the file browser or terminal). After editing, either:
-- Restart the app (`docker compose restart app`)
+- Restart the app (`docker compose restart prax`)
 - Or ask Prax to reload: "reload my schedules"
 
 Prax calls `schedule_reload` which re-syncs APScheduler with the YAML.

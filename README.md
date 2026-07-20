@@ -433,7 +433,7 @@ The [Tailscale / HTTPS](#remote-access-tailscale--https) options below also appl
 
 ## Features
 
-Prax is a multi-channel AI assistant powered by a LangGraph ReAct agent. It connects to **Discord** and/or **Twilio** (voice + SMS), remembers everything in SQLite, and can modify its own tools at runtime.
+Prax is a multi-channel AI assistant powered by a LangGraph ReAct agent. It connects through the **TeamWork** web UI and/or **Discord** and/or **Twilio** (voice + SMS), remembers everything in SQLite, and can modify its own tools at runtime.
 
 | Category | Highlights |
 |----------|-----------|
