@@ -1897,8 +1897,12 @@ class ConversationAgent:
                 # ContextVars don't cross thread boundaries, so the binding
                 # must happen here, inside the worker.  Inert unless
                 # AGENT_MIDDLEWARE_ENABLED installed the middleware.
-                from prax.agent.loop_middleware import use_heartbeat
-                with use_heartbeat(heartbeat):
+                from prax.agent.loop_middleware import use_heartbeat, use_tool_cache
+                # use_tool_cache binds a FRESH per-invoke cache for the
+                # IdempotentToolCache middleware (inert unless TOOL_MEMOIZE_ENABLED
+                # installed it). Per-invoke scoping is what makes memoization
+                # correct — a read cached this turn is never reused in a later one.
+                with use_heartbeat(heartbeat), use_tool_cache():
                     result_q.put(("ok", self.graph.invoke({"messages": messages}, config=config)))
             except Exception as exc:
                 result_q.put(("error", exc))

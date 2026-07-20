@@ -75,6 +75,29 @@ def use_heartbeat(heartbeat: TraceHeartbeat | None) -> Iterator[None]:
 
 
 # ---------------------------------------------------------------------------
+# Per-invoke tool-result cache (for IdempotentToolCache)
+# ---------------------------------------------------------------------------
+# A FRESH dict per graph.invoke, bound by the orchestrator in the worker thread
+# (same reason as the heartbeat: ContextVars don't cross threads). Scoping the
+# cache to one invoke is what makes memoization correct — a read cached in this
+# turn is never reused in a later turn, where the world may have changed. Outside
+# an instrumented invoke (spokes, tests) it is None and the middleware no-ops.
+current_tool_cache: ContextVar[dict | None] = ContextVar(
+    "prax_tool_cache", default=None,
+)
+
+
+@contextmanager
+def use_tool_cache() -> Iterator[None]:
+    """Bind a fresh, empty tool-result cache for this invoke (one turn)."""
+    token = current_tool_cache.set({})
+    try:
+        yield
+    finally:
+        current_tool_cache.reset(token)
+
+
+# ---------------------------------------------------------------------------
 # Provenance tainting
 # ---------------------------------------------------------------------------
 # Deliberately generic (never-spike rule): this frames the *class* of
@@ -290,6 +313,107 @@ class SteadyingCounsel(AgentMiddleware):
 
 
 # ---------------------------------------------------------------------------
+# Verify-once: memoize identical IDEMPOTENT reads within a turn
+# ---------------------------------------------------------------------------
+# Substrings of tools that are safe to memoize: a *read* whose result is stable
+# within one turn and that has NO side effects, so returning a prior identical
+# call's result is always correct. Deliberately EXCLUDES anything stateful or
+# effectful — no run_python / shell / writes (side effects), and no browser
+# navigate/screenshot (each call mutates page state). This is the safe subset of
+# trifecta's read classifications; the whole point of memoization is that these
+# calls are pure, so a repeat is pure waste.
+_MEMOIZABLE_READ_NAMES = (
+    # external fetches / searches (idempotent within a turn)
+    "fetch_url", "url_content", "read_url", "fetch_content", "web_search",
+    "background_search", "arxiv", "rss", "news", "web_summary", "pdf_summary",
+    # private read-only lookups
+    "memory_search", "memory_recall", "memory_get", "knowledge_search",
+    "workspace_read", "workspace_search", "workspace_list", "conversation_search",
+    "conversation_history", "note_read", "user_notes_read", "progress_read",
+    "trace_search", "trace_detail",
+)
+
+
+def is_memoizable_read(tool_name: str) -> bool:
+    """True if *tool_name* is a pure, idempotent read safe to memoize in-turn."""
+    n = (tool_name or "").lower()
+    return any(p in n for p in _MEMOIZABLE_READ_NAMES)
+
+
+def _tool_args_key(request: Any) -> str:
+    """Canonical (order-independent) string of a tool call's args."""
+    import json
+    try:
+        tool_call = getattr(request, "tool_call", None) or {}
+        args = tool_call.get("args") if isinstance(tool_call, dict) else {}
+        return json.dumps(args or {}, sort_keys=True, default=str)
+    except Exception:  # pragma: no cover - defensive
+        return ""
+
+
+class IdempotentToolCache(AgentMiddleware):
+    """Return the prior result for an identical, idempotent read within a turn.
+
+    When the model re-issues the SAME read (same tool + same args) it already ran
+    this turn — a redundant re-fetch/re-search/re-lookup — this returns the cached
+    result and skips the real execution (latency + external call + tokens saved).
+    Correct because (a) the cache is per-invoke (one turn — never reused later,
+    when the world may differ) and (b) only pure, side-effect-free reads are
+    eligible (``is_memoizable_read``). Everything else — run_python, shell,
+    writes, browser navigation — passes straight through untouched. Fails open:
+    any hiccup degrades to a normal tool call.
+    """
+
+    def wrap_tool_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
+        hit = self._lookup(request)
+        if hit is not None:
+            return hit
+        result = handler(request)
+        self._store(request, result)
+        return result
+
+    async def awrap_tool_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
+        hit = self._lookup(request)
+        if hit is not None:
+            return hit
+        result = await handler(request)
+        self._store(request, result)
+        return result
+
+    @staticmethod
+    def _key(request: Any) -> str | None:
+        name = _tool_name(request)
+        if not name or not is_memoizable_read(name):
+            return None
+        return f"{name}\x00{_tool_args_key(request)}"
+
+    def _lookup(self, request: Any) -> Any:
+        try:
+            cache = current_tool_cache.get()
+            if cache is None:
+                return None
+            key = self._key(request)
+            if key is None or key not in cache:
+                return None
+            logger.info("IdempotentToolCache hit: %s", _tool_name(request))
+            return cache[key]
+        except Exception:  # pragma: no cover - never break the loop
+            logger.debug("IdempotentToolCache lookup failed", exc_info=True)
+            return None
+
+    def _store(self, request: Any, result: Any) -> None:
+        try:
+            cache = current_tool_cache.get()
+            if cache is None:
+                return
+            key = self._key(request)
+            if key is not None:
+                cache[key] = result
+        except Exception:  # pragma: no cover - defensive
+            logger.debug("IdempotentToolCache store failed", exc_info=True)
+
+
+# ---------------------------------------------------------------------------
 # Stack assembly
 # ---------------------------------------------------------------------------
 def default_middleware() -> list[AgentMiddleware]:
@@ -297,15 +421,21 @@ def default_middleware() -> list[AgentMiddleware]:
 
     Empty (behaviour-identical to a bare ``create_agent``) unless a middleware flag
     is on. ``AGENT_MIDDLEWARE_ENABLED`` governs taint+heartbeat; ``SPIRAL_RECOVERY_
-    ENABLED`` independently adds the steadying counsel.
+    ENABLED`` independently adds the steadying counsel; ``TOOL_MEMOIZE_ENABLED``
+    independently adds the idempotent-read cache.
     """
     try:
         from prax.settings import settings
         base = bool(getattr(settings, "agent_middleware_enabled", False))
         spiral = bool(getattr(settings, "spiral_recovery_enabled", False))
+        memoize = bool(getattr(settings, "tool_memoize_enabled", False))
     except Exception:  # pragma: no cover - settings unavailable in odd contexts
-        base = spiral = False
+        base = spiral = memoize = False
     stack: list[AgentMiddleware] = []
+    # Memoizer first so a cache hit short-circuits before taint re-processing;
+    # the cached result was already tainted on the miss that stored it.
+    if memoize:
+        stack.append(IdempotentToolCache())
     if base:
         stack += [UntrustedContentTaint(), LoopHeartbeat()]
     if spiral:
