@@ -123,6 +123,25 @@ _BUDGET_AWARE_HINT = (
 )
 
 
+_VERIFY_DISCIPLINE_HINT = (
+    "\n\n## Verify what your answer rests on — with a tool, once\n"
+    "When your conclusion depends on a claim you can CHECK with a tool — a "
+    "non-trivial calculation, a symbolic manipulation, the output of a snippet of "
+    "code, a specific fact you can look up — verify it with the tool rather than "
+    "asserting it from memory or mental arithmetic. A load-bearing computation done "
+    "in your head is a common, silent source of wrong answers; actually running it "
+    "makes the answer airtight. If you find yourself writing \"it can be shown "
+    "that\" or \"this simplifies to\" about something a tool could confirm in "
+    "seconds, run the tool.\n"
+    "But verify EFFICIENTLY: run the check ONCE, read the result, and trust it. "
+    "Don't re-derive by hand what you just computed, and don't re-run the same "
+    "computation several times to reassure yourself — one decisive verification, "
+    "then move on. This is not a licence to tool-call for things you already know "
+    "or that don't affect the answer (see tool economy); it is specifically about "
+    "closing a load-bearing, checkable gap — cheaply and once."
+)
+
+
 def _load_system_prompt() -> str:
     """Load the system prompt from the plugin prompts directory."""
     from prax.agent.model_tiers import tier_for_system_prompt
@@ -1132,6 +1151,18 @@ class ConversationAgent:
         except Exception:
             pass
 
+        # Verify-discipline (flag-gated, default off) — verify a load-bearing,
+        # tool-checkable claim WITH the tool (not mental arithmetic), and verify it
+        # ONCE. Targets the observed variance where the same task is sometimes
+        # hand-asserted and sometimes over-verified. See
+        # docs/research/verify-and-commit-discipline.md.
+        verify_discipline_hint = ""
+        try:
+            if settings.verify_discipline_enabled:
+                verify_discipline_hint = _VERIFY_DISCIPLINE_HINT
+        except Exception:
+            pass
+
         full_prompt = (
             base_system_prompt
             + temporal_context
@@ -1145,6 +1176,7 @@ class ConversationAgent:
             + vigilance_hint
             + tool_economy_hint
             + budget_aware_hint
+            + verify_discipline_hint
         )
 
         # Persist instructions so the agent can re-read them mid-conversation.

@@ -58,6 +58,10 @@ Everything here feeds [IDEAS_BACKLOG #29](../IDEAS_BACKLOG.md) (close the recurs
 | **SEAL → Sleep recipe** for the local-model finetune lane | [lm-sleep](lm-sleep-consolidation.md) + [expert-judgment](expert-judgment-finetune.md) | 💤 | GPU-gated; the recipe to reach for when the finetune lane opens |
 | **Learning-curve harness-lift + experience-reuse ablation** | [edge-bench](edge-bench-learning-curves.md) | 📋 | an eval *method*, not the gated task set |
 | **Non-stationary / no-reset "does memory actually adapt?" eval** (adaptation/recovery/forgetting, curve-not-point) | [morpheus](skyfall-morpheus-continual-learning.md) | 🔨 | **Banked as a tracked golden** (`memory_adaptation_under_drift.yaml` — single-turn, measures the adaptation *reasoning*); the full multi-config curve-not-point *harness* is still 📋 (same bucket as learning-curves + τ-bench; build the metric before any memory maximizer) |
+| **Trace-grading** (score the process — committed/verification/efficiency — not just the answer) | [verify-and-commit](verify-and-commit-discipline.md) | ✅ | `prax/eval/trace_grade.py` + `docs/guides/trace-grading.md`; praxbench Q1 is the first dual-axis consumer |
+| **Verify-discipline hint** (`VERIFY_DISCIPLINE_ENABLED`, default off) | [verify-and-commit](verify-and-commit-discipline.md) | 🔨 | `_VERIFY_DISCIPLINE_HINT` in orchestrator; **eval-gate + trace-grade before any flip** (prompt hints have underperformed) |
+| **Per-call output cap + forced commitment** (fixes GPQA single-call non-commitment) | [verify-and-commit](verify-and-commit-discipline.md) | 📋 | structural — a between-steps hint can't reach a single runaway call; **truncation risk, needs eval validation** |
+| **Verify-once tool-result memoization** (dedup identical in-turn tool calls) | [verify-and-commit](verify-and-commit-discipline.md) | 📋 | make M1's "once" structural; same pattern as the `delegate_sandbox` dedup |
 
 ## The standing structural gaps (tracked in depth elsewhere — pointer, not a re-list)
 

@@ -696,6 +696,23 @@ class AppSettings(BaseSettings):
             "doesn't induce premature or fabricated answers."
         ),
     )
+    verify_discipline_enabled: bool = Field(
+        default=False, alias="VERIFY_DISCIPLINE_ENABLED",
+        description=(
+            "When true, appends a 'verify what your answer rests on — with a tool, "
+            "once' principle to the system prompt: when the conclusion depends on a "
+            "load-bearing, tool-checkable claim (a calculation, a symbolic result, "
+            "code output, a lookup), verify it WITH the tool rather than mental "
+            "arithmetic — and verify it ONCE, not repeatedly. Targets the observed "
+            "process variance where the same task is sometimes hand-asserted "
+            "(under-verified) and sometimes over-verified (redundant tool calls). "
+            "Scoped against tool economy — it's about closing a checkable load-bearing "
+            "gap, not general tool use. Default off; grade with the closed-book "
+            "benchmarks AND the trace-grade (prax/eval/trace_grade.py) to confirm it "
+            "raises verification without wrecking efficiency. Design: "
+            "docs/research/verify-and-commit-discipline.md."
+        ),
+    )
     spiral_recovery_enabled: bool = Field(
         default=False, alias="SPIRAL_RECOVERY_ENABLED",
         description=(

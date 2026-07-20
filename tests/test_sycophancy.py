@@ -67,3 +67,18 @@ def test_budget_aware_flag_defaults_off_and_is_honesty_preserving():
     assert "i don't know" in low
     assert "never bluff" in low or "never guess" in low or "not a licence to guess" in low
     assert "fabricat" in low  # explicitly forbids fabricating an answer
+
+
+def test_verify_discipline_flag_defaults_off_and_hint_shape():
+    from prax.agent.orchestrator import _VERIFY_DISCIPLINE_HINT
+    from prax.settings import settings
+    assert settings.verify_discipline_enabled is False  # flag-gated, default off
+    low = _VERIFY_DISCIPLINE_HINT.lower()
+    # Verify a load-bearing checkable claim WITH a tool, not mental arithmetic.
+    assert "verify" in low and "tool" in low
+    assert "mental arithmetic" in low or "in your head" in low
+    # ...but efficiently: once, not repeatedly.
+    assert "once" in low
+    assert "re-run" in low or "several times" in low
+    # Scoped against tool economy so the two hints don't contradict.
+    assert "tool economy" in low
