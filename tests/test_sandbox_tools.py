@@ -234,3 +234,24 @@ class TestSandboxView:
         current_user_id.set("+10000000000")
         result = module.sandbox_view.invoke({"path": "/workspace/app.py"})
         assert "container not running" in result
+
+
+def test_coding_session_tools_gated_off_by_default(monkeypatch):
+    """The OpenCode coding-session tools are OFF by default (the sandbox image no
+    longer ships a coding-agent server; Prax codes natively). Pure-exec tools stay."""
+    from prax.settings import settings
+    monkeypatch.setattr(type(settings), "sandbox_available", property(lambda self: True))
+    monkeypatch.setattr(settings, "sandbox_coding_agent_enabled", False, raising=False)
+    from prax.agent.sandbox_tools import build_sandbox_tools
+    from prax.agent.spokes.sandbox.agent import build_spoke_tools
+    names = {t.name for t in build_sandbox_tools()}
+    assert "sandbox_shell" in names                 # pure exec — always available
+    assert "sandbox_start" not in names             # coding session — gated off
+    assert "sandbox_message" not in names
+    assert build_spoke_tools() == []                # delegate_sandbox not offered
+
+    # Flipping the flag on restores them (for a user who reinstalls a CLI+server).
+    monkeypatch.setattr(settings, "sandbox_coding_agent_enabled", True, raising=False)
+    names2 = {t.name for t in build_sandbox_tools()}
+    assert "sandbox_start" in names2
+    assert len(build_spoke_tools()) == 1

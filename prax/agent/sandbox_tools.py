@@ -584,15 +584,25 @@ def build_sandbox_tools() -> list:
     from prax.settings import settings
     if not settings.sandbox_available:
         return []
+    # Pure-execution tools — direct docker-exec / browser / desktop. These need
+    # NO coding-agent server and are always available with the sandbox.
     tools = [
         sandbox_shell, terminal_history,
-        sandbox_start, sandbox_message, sandbox_review,
-        sandbox_finish, sandbox_abort, sandbox_search, sandbox_execute,
         sandbox_install, sandbox_rebuild,
         sandbox_view, sandbox_scroll, sandbox_goto,
         desktop_screenshot, desktop_click, desktop_type, desktop_key,
         desktop_list_windows, desktop_open,
     ]
+    # OpenCode coding-SESSION tools — gated off by default
+    # (SANDBOX_CODING_AGENT_ENABLED). The sandbox image no longer ships a
+    # coding-agent server, and Prax codes directly with run_python /
+    # workspace_save|patch / source_read|grep / sandbox_shell. A user who
+    # reinstalls a coding-agent CLI + server can flip the flag back on.
+    if settings.sandbox_coding_agent_enabled:
+        tools += [
+            sandbox_start, sandbox_message, sandbox_review,
+            sandbox_finish, sandbox_abort, sandbox_search, sandbox_execute,
+        ]
     # Lean 4 proof-check tool (opt-in, LEAN_TOOLS_ENABLED) — needs the Lean
     # toolchain in the sandbox image. See docs/research/cdc-lean-teach-prax-lean.md.
     from prax.agent.lean_tools import build_lean_tools

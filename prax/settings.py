@@ -162,6 +162,20 @@ class AppSettings(BaseSettings):
             "tools, spokes, or container dependency."
         ),
     )
+    sandbox_coding_agent_enabled: bool = Field(
+        default=False, alias="SANDBOX_CODING_AGENT_ENABLED",
+        description=(
+            "Whether to offer the OpenCode coding-SESSION tools (delegate_sandbox, "
+            "sandbox_start/message/review/finish/abort/search/execute). Default "
+            "OFF: the sandbox image no longer ships a coding-agent server, and Prax "
+            "codes directly with run_python / workspace_save|patch / "
+            "source_read|grep / sandbox_shell — no black-box coding-agent crutch, "
+            "and no model key needed in the sandbox. Flip on ONLY if you reinstall "
+            "a coding-agent CLI + server in the sandbox image yourself. The "
+            "pure-execution sandbox tools (shell, browser, desktop, data_query, "
+            "lean_check) are unaffected and always available with SANDBOX_ENABLED."
+        ),
+    )
     sandbox_image: str = Field(default="prax-sandbox:latest", alias="SANDBOX_IMAGE")
     sandbox_host: str = Field(default="localhost", alias="SANDBOX_HOST")
     sandbox_timeout: int = Field(default=1800, alias="SANDBOX_TIMEOUT")

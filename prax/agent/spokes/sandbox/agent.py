@@ -157,5 +157,14 @@ def delegate_sandbox(task: str) -> str:
 # ---------------------------------------------------------------------------
 
 def build_spoke_tools() -> list:
-    """Return the delegation tool for the main agent."""
-    return [delegate_sandbox]
+    """Return the delegation tool for the main agent.
+
+    ``delegate_sandbox`` drives an OpenCode coding SESSION, which the sandbox
+    image no longer ships by default — so it's gated behind
+    ``SANDBOX_CODING_AGENT_ENABLED`` (default off). With it off, Prax codes
+    directly (run_python / workspace_save|patch / source_read|grep /
+    sandbox_shell); the pure-execution sandbox tools stay available regardless.
+    """
+    if settings.sandbox_coding_agent_enabled:
+        return [delegate_sandbox]
+    return []
