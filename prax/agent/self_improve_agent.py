@@ -3,13 +3,13 @@
 Prax delegates to this agent when it detects a bug or the user reports one.
 The agent has access to:
   - Source introspection (read Prax's code)
-  - Sandbox (run/test patches directly — sandbox_shell / run_python)
-  - Codegen tools (deploy verified fixes to the live app)
+  - Native codegen tools (self_improve_read/write/patch/test/lint/verify/deploy)
+    — Prax edits/tests/deploys its own code; there is no external coding agent.
+  - run_python + sandbox shell (run/verify code)
   - Log reading (diagnose errors)
 
-The source code is mounted in the sandbox at /source/ so code run there can read
-and modify it directly.  In dev mode (bind mounts), changes in the sandbox
-propagate to the live app via the shared filesystem.
+Changes are made in an isolated git worktree (self_improve_start) and hot-swapped
+into the live app via self_improve_deploy after self_improve_verify passes.
 """
 from __future__ import annotations
 
@@ -58,8 +58,8 @@ and fix bugs in the application's own code.
    bug, check logs with read_logs.
 3. **Branch**: Use self_improve_start to create an isolated worktree.
 4. **Edit**: Use self_improve_patch for surgical edits to existing files.
-   Use self_improve_write ONLY for creating new files.  For complex tasks
-   that need multiple coordinated changes, consider using the sandbox.
+   Use self_improve_write ONLY for creating new files.  Use run_python and the
+   sandbox shell to run/verify code as you go.
 5. **Review**: Use self_improve_diff to see all changes before deploying.
    Verify it looks right — catch accidental changes here.
 6. **Verify**: Use self_improve_verify (tests + lint + startup check).
