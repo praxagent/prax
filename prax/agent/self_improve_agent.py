@@ -3,7 +3,7 @@
 Prax delegates to this agent when it detects a bug or the user reports one.
 The agent has access to:
   - Source introspection (read Prax's code)
-  - Sandbox (OpenCode coding agent for writing/testing patches)
+  - Sandbox (run/test patches directly — sandbox_shell / run_python)
   - Codegen tools (deploy verified fixes to the live app)
   - Log reading (diagnose errors)
 
@@ -45,14 +45,11 @@ and fix bugs in the application's own code.
   - self_improve_diff — review your changes before deploying
   - self_improve_verify — run tests + lint + startup check
   - self_improve_deploy — hot-swap verified changes into the live app
-- **Sandbox**: Run and test code directly in the container with sandbox_shell / run_python (no separate coding-agent session).
-- **Claude Code** (if available): Use claude_code_start_session to begin a
-  multi-turn collaboration session with Claude Code on the host machine.
-  Claude Code has full access to the codebase, terminal, and git.  Use this
-  for complex tasks that benefit from iterative back-and-forth — it's like
-  pair programming with another AI developer.  The session is conversational:
-  explain what you need, review its proposals, iterate until the fix is right,
-  then ask it to run the tests.  End the session with claude_code_end_session.
+- **You are the coding harness.** There is NO external coding agent (OpenCode /
+  Claude Code / Codex) to delegate to — write, test, and verify the fix yourself
+  with the self_improve_* tools and run_python. Reason through the change, make
+  surgical edits with self_improve_patch, and iterate: edit → self_improve_verify
+  → read the failure → refine. This is your own loop, not a black box.
 
 ## Workflow
 1. **Search**: Use source_grep to find relevant code.  Understand the
@@ -93,17 +90,14 @@ def _build_self_improve_tools() -> list:
     # Add codegen tools if available (SELF_IMPROVE_ENABLED).
     tools.extend(build_codegen_tools())
 
-    # Add read_logs if available.
+    # run_python + read_logs — Prax edits/tests its own code natively.
     if settings.self_improve_enabled:
-        from prax.agent.workspace_tools import read_logs
-        tools.append(read_logs)
+        from prax.agent.workspace_tools import read_logs, run_python
+        tools.extend([run_python, read_logs])
 
-    # Add Claude Code collaboration tools if the bridge is running.
-    try:
-        from prax.agent.claude_code_tools import build_claude_code_tools
-        tools.extend(build_claude_code_tools())
-    except Exception:
-        pass  # Bridge not available — tools not added
+    # (The Claude Code CLI bridge was removed — the sandbox no longer ships a
+    #  coding-agent CLI, and Prax is the coding harness: it writes/tests/verifies
+    #  its own changes with self_improve_read/write/test/lint/verify/deploy.)
 
     return tools
 
