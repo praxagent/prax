@@ -1468,7 +1468,20 @@ def run_python(code: str, packages: str = "") -> str:
     stderr = result.get("stderr", "")
     exit_code = result.get("exit_code", -1)
     if exit_code != 0:
-        return f"Exit code {exit_code}\nstdout: {stdout[-1000:]}\nstderr: {stderr[-1000:]}"
+        # Make failure UNMISTAKABLE. The old "Exit code 1\nstdout: …" led with the
+        # code then the partial stdout, which a model can misread as success and
+        # report a crashed run as done (observed + caught by the claim-audit guard).
+        # Lead with the failure, surface stderr first, and mark stdout unreliable.
+        err = (stderr or "").strip()[-1500:]
+        out = (stdout or "").strip()[-800:]
+        parts = [f"❌ run_python FAILED — exit code {exit_code}. The code did "
+                 f"NOT complete successfully; do NOT report this as a success, and "
+                 f"treat any partial output below as unreliable."]
+        if err:
+            parts.append(f"\nError (stderr):\n{err}")
+        if out:
+            parts.append(f"\nPartial stdout (before the failure):\n{out}")
+        return "\n".join(parts)
     return stdout[-2000:] if stdout else "(no output)"
 
 

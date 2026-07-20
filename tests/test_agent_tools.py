@@ -225,3 +225,30 @@ def test_run_python_installs_packages_into_venv(monkeypatch):
         assert "uv pip install -q --python /opt/prax-venv/bin/python numpy" in captured["cmd"]
     finally:
         monkeypatch.undo()
+
+
+def test_run_python_failure_is_unmistakable(monkeypatch):
+    """A non-zero exit must read as a FAILURE, not be swallowed as success — the
+    old 'Exit code 1\\nstdout: …' led with partial stdout that models misread as
+    done (observed; caught by the claim-audit guard)."""
+    from prax.settings import settings
+    monkeypatch.setattr(type(settings), "sandbox_available",
+                        property(lambda self: True))
+
+    class _FailClient:
+        def run_shell(self, command, timeout=120):
+            return {"stdout": "F1 expanded: x**3...", "stderr": "NameError: name 'q' is not defined",
+                    "exit_code": 1}
+
+    monkeypatch.setattr("prax.services.sandbox_bridge.configured_client",
+                        lambda: _FailClient())
+    try:
+        from prax.agent.workspace_tools import run_python
+        out = run_python.invoke({"code": "print(q)"})
+        low = out.lower()
+        assert "failed" in low and "exit code 1" in low
+        assert "do not report this as a success" in low
+        assert "NameError" in out                 # the real error is surfaced
+        assert "unreliable" in low                 # partial stdout flagged
+    finally:
+        monkeypatch.undo()
