@@ -597,4 +597,8 @@ def build_sandbox_tools() -> list:
     # toolchain in the sandbox image. See docs/research/cdc-lean-teach-prax-lean.md.
     from prax.agent.lean_tools import build_lean_tools
     tools.extend(build_lean_tools())
+    # data_query — DuckDB SQL / number-crunching (opt-in, DATA_TOOLS_ENABLED);
+    # needs duckdb + pandas in the sandbox image. See prax/agent/data_tools.py.
+    from prax.agent.data_tools import build_data_tools
+    tools.extend(build_data_tools())
     return tools

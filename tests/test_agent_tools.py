@@ -174,3 +174,54 @@ def test_orchestrator_default_tools_omit_analyze_image_without_vision(monkeypatc
     module = importlib.reload(importlib.import_module('prax.agent.tools'))
     tool_names = {t.name for t in module.build_default_tools()}
     assert 'analyze_image' not in tool_names
+
+
+def test_run_python_uses_base64_and_venv_python(monkeypatch):
+    """Regression: multi-line code was silently lost (the closing heredoc
+    delimiter got ` && …` appended, so bash never terminated it), and the
+    script ran under system python3 instead of the curated /opt/prax-venv
+    (where numpy/pandas/duckdb/sympy live). It must now base64 the code and run
+    the venv python by absolute path."""
+    from prax.settings import settings
+    monkeypatch.setattr(type(settings), "sandbox_available",
+                        property(lambda self: True))
+    captured = {}
+
+    class _FakeClient:
+        def run_shell(self, command, timeout=120):
+            captured["cmd"] = command
+            return {"stdout": "ok", "stderr": "", "exit_code": 0}
+
+    monkeypatch.setattr("prax.services.sandbox_bridge.configured_client",
+                        lambda: _FakeClient())
+    try:
+        from prax.agent.workspace_tools import run_python
+        out = run_python.invoke({"code": "x = 1\nprint(x + 1)"})  # multi-line
+        assert out == "ok"
+        cmd = captured["cmd"]
+        assert "base64 -d" in cmd                       # base64, not heredoc
+        assert "<< 'PRAX_PYTHON_EOF'" not in cmd         # the broken pattern is gone
+        assert "/opt/prax-venv/bin/python" in cmd        # venv, not system python3
+    finally:
+        monkeypatch.undo()
+
+
+def test_run_python_installs_packages_into_venv(monkeypatch):
+    from prax.settings import settings
+    monkeypatch.setattr(type(settings), "sandbox_available",
+                        property(lambda self: True))
+    captured = {}
+
+    class _FakeClient:
+        def run_shell(self, command, timeout=120):
+            captured["cmd"] = command
+            return {"stdout": "", "stderr": "", "exit_code": 0}
+
+    monkeypatch.setattr("prax.services.sandbox_bridge.configured_client",
+                        lambda: _FakeClient())
+    try:
+        from prax.agent.workspace_tools import run_python
+        run_python.invoke({"code": "import numpy", "packages": "numpy"})
+        assert "uv pip install -q --python /opt/prax-venv/bin/python numpy" in captured["cmd"]
+    finally:
+        monkeypatch.undo()

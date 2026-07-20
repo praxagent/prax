@@ -1437,15 +1437,31 @@ def run_python(code: str, packages: str = "") -> str:
         )
     from prax.services.sandbox_bridge import configured_client as get_client
 
-    commands = []
-    if packages.strip():
-        commands.append(f"uv pip install -q {packages}")
-    # Write code to a temp file and execute it for proper multi-line support
+    # Run in the curated scratch venv (/opt/prax-venv) — where the sandbox image
+    # installs numpy/pandas/duckdb/sympy/faster-whisper — NOT the bare system
+    # python3, which the venv is deliberately kept separate from (Debian's
+    # externally-managed interpreter). This makes run_python match its docstring
+    # and actually reach those libs; falls back to system python3 if the venv is
+    # somehow absent (older image). The venv is addressed by absolute path
+    # because it is NOT on the docker-exec PATH.
+    venv_py = "/opt/prax-venv/bin/python"
+    # base64 the code through the shell so arbitrary quotes, newlines, heredoc
+    # markers, and unicode survive intact — the same robust pattern as
+    # data_tools/lean_tools. (The previous heredoc build joined the closing
+    # delimiter with ` && …`, which bash never recognises as the terminator, so
+    # multi-line code silently produced no output.) The script runs under the
+    # curated scratch venv python by absolute path (it is NOT on the docker-exec
+    # PATH), falling back to system python3 on an older image without the venv.
+    import base64
     import hashlib
     script_hash = hashlib.md5(code.encode()).hexdigest()[:8]
     script_path = f"/tmp/prax_script_{script_hash}.py"
-    commands.append(f"cat > {script_path} << 'PRAX_PYTHON_EOF'\n{code}\nPRAX_PYTHON_EOF")
-    commands.append(f"python3 {script_path}")
+    code_b64 = base64.b64encode(code.encode()).decode()
+    commands = []
+    if packages.strip():
+        commands.append(f"uv pip install -q --python {venv_py} {packages}")
+    commands.append(f"printf %s {code_b64} | base64 -d > {script_path}")
+    commands.append(f"if [ -x {venv_py} ]; then {venv_py} {script_path}; else python3 {script_path}; fi")
     full_cmd = " && ".join(commands)
     result = get_client().run_shell(full_cmd, timeout=120)
     stdout = result.get("stdout", "")
