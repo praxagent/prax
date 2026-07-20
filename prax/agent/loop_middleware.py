@@ -203,19 +203,76 @@ class LoopHeartbeat(AgentMiddleware):
 
 
 # ---------------------------------------------------------------------------
+# Self-regulation — steadying counsel when the loop starts to spiral
+# ---------------------------------------------------------------------------
+class SteadyingCounsel(AgentMiddleware):
+    """Detect a spiral in flight and inject a calm, honest regroup.
+
+    The structural rescue for the loop running to timeout with nothing committed:
+    when the agent is repeating a tool call, burning its budget, or circling
+    without converging, this injects a de-escalating, data-driven "let's pause and
+    try a different route" into the next model call (see ``spiral_recovery``). Rate-
+    limited so it nudges, not nags. Honesty-preserving: it explicitly tells the
+    agent an honest "I don't know" is a valid answer — never to fabricate one.
+    """
+
+    def __init__(self) -> None:
+        self._last_inject = -100          # message-count at last injection
+
+    def wrap_model_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
+        self._maybe_inject(request)
+        return handler(request)
+
+    async def awrap_model_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
+        self._maybe_inject(request)
+        return await handler(request)
+
+    def _maybe_inject(self, request: Any) -> None:
+        try:
+            from langchain_core.messages import HumanMessage
+
+            from prax.agent.governed_tool import get_budget_status
+            from prax.agent.spiral_recovery import diagnose_spiral, steadying_message
+
+            messages = getattr(request, "messages", None)
+            if not messages:
+                return
+            n = len(messages)
+            if n - self._last_inject < 4:     # rate-limit: nudge, don't nag
+                return
+            try:
+                used, total = get_budget_status()
+            except Exception:  # noqa: BLE001
+                used, total = None, None
+            diagnosis = diagnose_spiral(messages, budget_used=used, budget_total=total)
+            if not diagnosis:
+                return
+            messages.append(HumanMessage(content=steadying_message(diagnosis)))
+            self._last_inject = n + 1
+            logger.info("SteadyingCounsel: %s", diagnosis)
+        except Exception:  # pragma: no cover - never break the loop
+            logger.debug("SteadyingCounsel inject failed", exc_info=True)
+
+
+# ---------------------------------------------------------------------------
 # Stack assembly
 # ---------------------------------------------------------------------------
 def default_middleware() -> list[AgentMiddleware]:
     """The flag-gated default middleware stack for ``build_agent_loop``.
 
-    Empty (and therefore behaviour-identical to a bare ``create_agent``) unless
-    ``AGENT_MIDDLEWARE_ENABLED=true``.
+    Empty (behaviour-identical to a bare ``create_agent``) unless a middleware flag
+    is on. ``AGENT_MIDDLEWARE_ENABLED`` governs taint+heartbeat; ``SPIRAL_RECOVERY_
+    ENABLED`` independently adds the steadying counsel.
     """
     try:
         from prax.settings import settings
-        enabled = bool(getattr(settings, "agent_middleware_enabled", False))
+        base = bool(getattr(settings, "agent_middleware_enabled", False))
+        spiral = bool(getattr(settings, "spiral_recovery_enabled", False))
     except Exception:  # pragma: no cover - settings unavailable in odd contexts
-        enabled = False
-    if not enabled:
-        return []
-    return [UntrustedContentTaint(), LoopHeartbeat()]
+        base = spiral = False
+    stack: list[AgentMiddleware] = []
+    if base:
+        stack += [UntrustedContentTaint(), LoopHeartbeat()]
+    if spiral:
+        stack.append(SteadyingCounsel())
+    return stack

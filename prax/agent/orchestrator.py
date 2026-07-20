@@ -105,6 +105,23 @@ _TOOL_ECONOMY_HINT = (
     "out of a correct answer you already had."
 )
 
+_BUDGET_AWARE_HINT = (
+    "\n\n## Finish within your budget — commit the truth, don't spiral (never bluff)\n"
+    "You work under a time and token budget. The failure to avoid is *spiralling*: "
+    "re-deriving a result you already have, re-reading what you already understand, or "
+    "making tool call after tool call, until the budget runs out having committed "
+    "nothing. Instead, reason efficiently, and once you reach a conclusion, COMMIT to "
+    "it clearly and stop — spend effort only where it could change the answer, not on "
+    "restating what's already settled.\n"
+    "Your conclusion may legitimately be \"I don't know\" or \"I can't determine this "
+    "from what I have\" — that is an honest, valid answer, and it is FAR better than "
+    "fabricating a confident guess to fill the space. Never bluff to look decisive: a "
+    "made-up answer is worse than an honest one, because it misleads. Commit the TRUTH "
+    "within budget — a well-supported answer when you genuinely have one, an honest "
+    "acknowledgement of uncertainty when you don't. Both beat spiralling into silence; "
+    "neither is a licence to guess."
+)
+
 
 def _load_system_prompt() -> str:
     """Load the system prompt from the plugin prompts directory."""
@@ -1105,6 +1122,16 @@ class ConversationAgent:
         except Exception:
             pass
 
+        # Budget-aware answering (flag-gated, default off) — commit a best-effort
+        # answer within budget instead of spiralling into re-analysis/over-tooling
+        # until time runs out with no answer (a general robustness principle).
+        budget_aware_hint = ""
+        try:
+            if settings.budget_aware_answering_enabled:
+                budget_aware_hint = _BUDGET_AWARE_HINT
+        except Exception:
+            pass
+
         full_prompt = (
             base_system_prompt
             + temporal_context
@@ -1117,6 +1144,7 @@ class ConversationAgent:
             + health_hint
             + vigilance_hint
             + tool_economy_hint
+            + budget_aware_hint
         )
 
         # Persist instructions so the agent can re-read them mid-conversation.

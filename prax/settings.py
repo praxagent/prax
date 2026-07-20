@@ -679,6 +679,38 @@ class AppSettings(BaseSettings):
             "confirm it doesn't suppress genuinely-needed tool use."
         ),
     )
+    budget_aware_answering_enabled: bool = Field(
+        default=False, alias="BUDGET_AWARE_ANSWERING_ENABLED",
+        description=(
+            "When true, appends a 'budget-aware answering' principle to the system "
+            "prompt: reason efficiently and COMMIT your conclusion within the "
+            "time/token budget instead of spiralling into endless re-analysis or "
+            "over-tooling until the turn times out with nothing committed. Crucially "
+            "honesty-preserving — the committed conclusion may be an honest \"I don't "
+            "know\" (never a fabricated guess to look decisive), so it does NOT reward "
+            "bluffing or spike multiple-choice benchmarks; it only recovers cases "
+            "where the agent genuinely reached an answer but spiralled before "
+            "committing it. Addresses the dominant hard-problem failure mode on GPQA/"
+            "MMLU-Pro (180s timeouts, no answer). Default off; grade with the "
+            "closed-book benchmarks + a hallucination/abstention check to confirm it "
+            "doesn't induce premature or fabricated answers."
+        ),
+    )
+    spiral_recovery_enabled: bool = Field(
+        default=False, alias="SPIRAL_RECOVERY_ENABLED",
+        description=(
+            "When true, adds the 'steadying counsel' middleware to the agent loop: "
+            "detects a spiral in flight (repeating a tool call, burning the tool-call "
+            "budget, or circling without converging) and injects a calm, data-driven "
+            "'pause and try a different route' into the next model call — the "
+            "structural rescue for loops that run to timeout with nothing committed. "
+            "Honesty-preserving (tells the agent an honest 'I don't know' is valid, "
+            "never to fabricate) and rate-limited so it nudges, not nags. Requires the "
+            "middleware seam; independent of AGENT_MIDDLEWARE_ENABLED. Default off; "
+            "grade with the closed-book benchmarks (timeout/no-answer rate) + the "
+            "capability suite."
+        ),
+    )
     intent_clarification_enabled: bool = Field(
         default=False, alias="INTENT_CLARIFICATION_ENABLED",
         description=(

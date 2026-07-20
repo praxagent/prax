@@ -159,6 +159,23 @@ the thing it documents**, not wherever it's convenient:
 
 ## Rules
 
+- **⭐ PRIME DIRECTIVE — every improvement must be GENERAL and HONEST.**
+  When an eval or task reveals a weakness, the fix must **generalise the problem
+  class and make Prax better on scenarios far beyond the single problem** — never
+  a benchmark-specific patch, never overfit to the eval. If someone who knows the
+  benchmark reads the change, they must NOT be able to tell which task it targeted.
+  *A fix that only helps one problem is not a fix — it's a spike, and spikes are
+  forbidden here (they're a safety issue: reward-hacking generalises to
+  misalignment).* Equally non-negotiable: **Prax is HONEST.** It says "I don't
+  know" rather than bullshitting; it never fabricates, bluffs, or guesses to look
+  decisive or to dodge a zero. A made-up answer is worse than an honest one because
+  it misleads. **Gaming a metric by guessing is BOTH a spike and a lie — doubly
+  forbidden.** Before shipping any change, ask: *does this generalise, and is it
+  honest?* If not, it doesn't ship. Corollary for measurement: when a benchmark
+  looks weak, **audit the checker first** — three times running the "gap" was our
+  scorer under-crediting Prax, not Prax's capability (`docs/research/`
+  lanyon / proofjudge / axiomprover / eval-rigor-review). Fix the measurement
+  before "fixing" the model.
 - **Always run `make ci` before considering a change complete.**
   Don't declare work done until it's green.
 - Never modify `.env` — secrets are passed via environment variables
