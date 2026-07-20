@@ -54,10 +54,16 @@ def run_benchmark(
 
     by_id = {str(c["id"]): c for c in adapter.cases()}
 
+    from prax.eval.rate_limit import call_with_rate_limit
+
     def _run_one(case_id: str) -> dict:
         case = by_id[case_id]
         with collect_usage() as usage:
-            response = replay_fn(adapter.prompt(case))
+            # Self-rate-limit: throttle + retry transient provider failures (connect
+            # timeouts, 429s, empty answers) so infra flakiness doesn't score as a
+            # wrong answer and deflate the number. See prax/eval/rate_limit.py.
+            response = call_with_rate_limit(
+                replay_fn, adapter.prompt(case), label=f"{adapter.name}:{case_id}")
         snap = usage.snapshot()
         graded = adapter.score(case, response) or {}
         return {
