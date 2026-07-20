@@ -105,8 +105,18 @@ def data_query(sql: str, timeout: int = 60) -> str:
 
     It also does pure computation and stats (``SELECT 2^10``, ``median(x)``,
     ``regr_slope(y, x)``, window functions, ``PIVOT``…). Results come back as a
-    bounded text table (first 100 rows). Runs entirely in the isolated sandbox
-    container.
+    bounded text table (first 100 rows).
+
+    SECURITY — sandbox-only by construction. This runs entirely INSIDE the
+    isolated sandbox Docker container (via ``run_shell`` → ``exec_in_sandbox`` →
+    ``container.exec_run``), NEVER on the Prax host: DuckDB can read files (e.g.
+    ``FROM '/path.csv'``) can therefore only see the CONTAINER's filesystem —
+    ``/workspace`` (the user's own mounted data) and the container's own paths —
+    exactly the boundary as run_python/sandbox_shell. The Prax host never loads
+    DuckDB (the import lives in the in-container runner). If the sandbox is off or
+    its container is absent, the tool refuses/errors — it does not fall back to
+    host execution. Do NOT change this to run DuckDB in-process on the host: that
+    would let ``FROM '/etc/…'`` read the host's arbitrary files.
 
     Note: files the user should receive go under /workspace/active/ (deliver
     with workspace_send_file); the container's /tmp is internal.
