@@ -218,6 +218,7 @@ class SteadyingCounsel(AgentMiddleware):
 
     def __init__(self) -> None:
         self._last_inject = -100          # message-count at last injection
+        self._counselor: Any = None       # lazily-built HIGH-tier LLM (or False)
 
     def wrap_model_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
         self._maybe_inject(request)
@@ -227,12 +228,30 @@ class SteadyingCounsel(AgentMiddleware):
         self._maybe_inject(request)
         return await handler(request)
 
+    def _counselor_complete(self) -> Callable[[str], str] | None:
+        """A HIGH-tier completion fn for the escalated counsel, built once. None if
+        unavailable (caller falls back to the static message)."""
+        if self._counselor is None:
+            try:
+                from prax.agent.llm_factory import build_llm
+                self._counselor = build_llm(default_tier="high", config_key="steadying_counsel")
+            except Exception:  # noqa: BLE001
+                self._counselor = False
+        llm = self._counselor
+        if not llm:
+            return None
+        return lambda prompt: (llm.invoke(prompt).content or "")
+
     def _maybe_inject(self, request: Any) -> None:
         try:
             from langchain_core.messages import HumanMessage
 
             from prax.agent.governed_tool import get_budget_status
-            from prax.agent.spiral_recovery import diagnose_spiral, steadying_message
+            from prax.agent.spiral_recovery import (
+                diagnose_spiral,
+                escalated_counsel,
+                steadying_message,
+            )
 
             messages = getattr(request, "messages", None)
             if not messages:
@@ -244,12 +263,28 @@ class SteadyingCounsel(AgentMiddleware):
                 used, total = get_budget_status()
             except Exception:  # noqa: BLE001
                 used, total = None, None
-            diagnosis = diagnose_spiral(messages, budget_used=used, budget_total=total)
+            # Reasoning-round count = AI messages so far this turn (stateless; no
+            # cross-turn leakage from instance state).
+            rounds = sum(1 for m in messages
+                         if (getattr(m, "type", None) or "") in ("ai", "assistant"))
+            diagnosis = diagnose_spiral(messages, budget_used=used, budget_total=total,
+                                        model_calls=rounds)
             if not diagnosis:
                 return
-            messages.append(HumanMessage(content=steadying_message(diagnosis)))
+            # Escalate to a smarter model for specific, diagnostic clues; fall back
+            # to the static steadying message if escalation isn't available.
+            counsel = None
+            fn = self._counselor_complete()
+            if fn is not None:
+                counsel = escalated_counsel(messages, diagnosis, fn)
+            mode = "escalated" if counsel else "static"
+            counsel = counsel or steadying_message(diagnosis)
+            messages.append(HumanMessage(content=counsel))
             self._last_inject = n + 1
-            logger.info("SteadyingCounsel: %s", diagnosis)
+            # WARNING, not INFO: an in-loop self-regulation intervention is a
+            # noteworthy operational event — it should surface in prod logs (and
+            # eval runs, which run at WARNING) so the counselor is observable.
+            logger.warning("SteadyingCounsel fired (%s): %s", mode, diagnosis)
         except Exception:  # pragma: no cover - never break the loop
             logger.debug("SteadyingCounsel inject failed", exc_info=True)
 

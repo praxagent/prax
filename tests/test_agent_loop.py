@@ -24,6 +24,7 @@ from pydantic import Field
 from prax.agent.agent_loop import build_agent_loop
 from prax.agent.loop_middleware import (
     LoopHeartbeat,
+    SteadyingCounsel,
     UntrustedContentTaint,
     current_heartbeat,
     default_middleware,
@@ -118,6 +119,63 @@ def test_default_middleware_stack_when_flag_on(monkeypatch):
     monkeypatch.setattr(_settings(), "agent_middleware_enabled", True)
     stack = default_middleware()
     assert [type(m) for m in stack] == [UntrustedContentTaint, LoopHeartbeat]
+
+
+# ---------------------------------------------------------------------------
+# SteadyingCounsel — spiral self-regulation (independent of the taint/heartbeat flag)
+# ---------------------------------------------------------------------------
+
+class _ReqMsgs:
+    def __init__(self, messages):
+        self.messages = messages
+
+
+def _repeat_spiral_msgs(n=3):
+    return [AIMessage(content="", tool_calls=[
+        {"name": "search", "args": {"q": "same"}, "id": f"c{i}"}])
+        for i in range(n)]
+
+
+def test_spiral_counsel_added_by_its_own_flag(monkeypatch):
+    # SPIRAL_RECOVERY_ENABLED is independent of AGENT_MIDDLEWARE_ENABLED.
+    monkeypatch.setattr(_settings(), "agent_middleware_enabled", False)
+    monkeypatch.setattr(_settings(), "spiral_recovery_enabled", True)
+    assert [type(m) for m in default_middleware()] == [SteadyingCounsel]
+
+
+def test_counsel_injects_on_spiral(monkeypatch):
+    mw = SteadyingCounsel()
+    monkeypatch.setattr(mw, "_counselor_complete", lambda: None)  # no smarter model → static
+    req = _ReqMsgs(_repeat_spiral_msgs(3))
+    before = len(req.messages)
+    mw._maybe_inject(req)
+    assert len(req.messages) == before + 1
+    assert isinstance(req.messages[-1], HumanMessage)
+    # honest, calm, de-escalating counsel
+    assert "pause" in req.messages[-1].content.lower()
+    assert "i don't know" in req.messages[-1].content.lower()
+
+
+def test_counsel_silent_on_normal_work(monkeypatch):
+    mw = SteadyingCounsel()
+    monkeypatch.setattr(mw, "_counselor_complete", lambda: None)
+    req = _ReqMsgs([
+        AIMessage(content="", tool_calls=[{"name": "search", "args": {"q": "a"}, "id": "1"}]),
+        AIMessage(content="", tool_calls=[{"name": "fetch", "args": {"u": "b"}, "id": "2"}]),
+    ])
+    before = len(req.messages)
+    mw._maybe_inject(req)
+    assert len(req.messages) == before  # no spiral → no injection
+
+
+def test_counsel_rate_limited(monkeypatch):
+    mw = SteadyingCounsel()
+    monkeypatch.setattr(mw, "_counselor_complete", lambda: None)
+    req = _ReqMsgs(_repeat_spiral_msgs(3))
+    mw._maybe_inject(req)
+    n_after_first = len(req.messages)
+    mw._maybe_inject(req)  # immediately again, within the rate-limit window
+    assert len(req.messages) == n_after_first  # nudge, don't nag
 
 
 def test_flag_on_untrusted_tool_result_is_tainted(monkeypatch):
