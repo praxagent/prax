@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from collections.abc import Callable
 from typing import Any
 
 # Thresholds — deliberately lenient so the counsel only fires on a *real* spiral,
@@ -26,6 +27,8 @@ from typing import Any
 REPEAT_THRESHOLD = 3          # same tool+args this many times = going in circles
 STEP_THRESHOLD = 14           # this many tool calls with no answer = not converging
 BUDGET_FRACTION = 0.85        # this share of the tool-call budget spent = wrap up
+MODEL_CALL_THRESHOLD = 10     # this many model calls (a REASONING spiral — no tools)
+CONTEXT_CHAR_THRESHOLD = 120_000  # ballooned context with no answer
 
 
 def _tool_call_keys(messages: list[Any]) -> list[tuple[str, str]]:
@@ -46,11 +49,14 @@ def _tool_call_keys(messages: list[Any]) -> list[tuple[str, str]]:
 
 
 def diagnose_spiral(messages: list[Any], *, budget_used: int | None = None,
-                    budget_total: int | None = None) -> str | None:
+                    budget_total: int | None = None,
+                    model_calls: int | None = None) -> str | None:
     """Return a plain-language diagnosis of the spiral, or None if not spiralling.
 
-    The diagnosis is **data-driven** so the counsel can say *what* is actually going
-    wrong ("you've run the same search 4 times"), not a generic scold.
+    Catches BOTH tool spirals (repeated/too-many tool calls) and **reasoning
+    spirals** (many model calls or a ballooning context with no answer — the
+    closed-book failure mode where the agent over-thinks without ever tooling).
+    Data-driven so the counsel can say *what* is going wrong, not a generic scold.
     """
     keys = _tool_call_keys(messages)
     if keys:
@@ -64,7 +70,62 @@ def diagnose_spiral(messages: list[Any], *, budget_used: int | None = None,
     if len(keys) >= STEP_THRESHOLD:
         return (f"you've made {len(keys)} tool calls without reaching an answer — "
                 f"you're circling, not closing in")
+    # Reasoning spiral (no/few tools): being *inside* a model call already means the
+    # loop hasn't ended (no final answer yet), so a high round-count or ballooned
+    # context is itself the signal — the closed-book over-thinking failure mode.
+    if model_calls and model_calls >= MODEL_CALL_THRESHOLD:
+        return (f"you've gone {model_calls} rounds without committing an answer — "
+                f"you're re-deriving, not converging")
+    ctx_chars = sum(
+        len(str(getattr(m, "content", "") or (m.get("content") if isinstance(m, dict) else "")))
+        for m in (messages or []))
+    if ctx_chars >= CONTEXT_CHAR_THRESHOLD:
+        return ("your working context has ballooned while you keep going without an "
+                "answer — you're accumulating, not resolving")
     return None
+
+
+def _trajectory_digest(messages: list[Any], max_chars: int = 4000) -> str:
+    """A compact readable digest of what the agent has been doing (for the counsel)."""
+    lines: list[str] = []
+    for m in (messages or [])[-24:]:
+        role = getattr(m, "type", None) or (m.get("role") if isinstance(m, dict) else "?")
+        content = str(getattr(m, "content", "") or (m.get("content") if isinstance(m, dict) else ""))
+        tcs = _tool_call_keys([m])
+        if tcs:
+            lines.append(f"[{role}] called {', '.join(f'{n}({a[:80]})' for n, a in tcs)}")
+        elif content.strip():
+            lines.append(f"[{role}] {content.strip()[:300]}")
+    digest = "\n".join(lines)
+    return digest[-max_chars:]
+
+
+_ESCALATION_PROMPT = (
+    "You are a calm, sharp senior colleague. A teammate (an AI agent) is stuck on a "
+    "task — they keep going without converging. Here's the recent trace of what "
+    "they've been doing:\n\n{digest}\n\nThe stall pattern: {diagnosis}.\n\n"
+    "In 3–5 short sentences, help them regroup: (1) name the most likely WRONG TURN "
+    "or false assumption in their approach, specifically; (2) suggest ONE concrete, "
+    "genuinely DIFFERENT next step (not a repeat of what they've tried); (3) remind "
+    "them that if the answer honestly can't be determined from what they have, saying "
+    "\"I don't know\" is a valid, good answer — they must never fabricate one to "
+    "escape the loop. Be warm, direct, and specific — not generic. Speak to them "
+    "('you...'), starting with a brief steadying note."
+)
+
+
+def escalated_counsel(messages: list[Any], diagnosis: str,
+                      complete_fn: Callable[[str], str]) -> str | None:
+    """Escalate to a smarter model: it reviews the trajectory and returns specific,
+    diagnostic guidance. Returns None on failure (caller falls back to the static
+    :func:`steadying_message`)."""
+    try:
+        prompt = _ESCALATION_PROMPT.format(
+            digest=_trajectory_digest(messages), diagnosis=diagnosis)
+        out = (complete_fn(prompt) or "").strip()
+        return out or None
+    except Exception:  # noqa: BLE001 — never break the loop on a counsel failure
+        return None
 
 
 def steadying_message(diagnosis: str) -> str:

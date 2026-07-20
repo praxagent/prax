@@ -89,6 +89,43 @@ Current stack when enabled:
   start" to "is the loop still stepping". Implemented with `wrap_model_call`,
   not `before_model`/`after_model` — see house rule 4.
 
+## Self-regulation: `SteadyingCounsel` (`SPIRAL_RECOVERY_ENABLED`, default off)
+
+A **separate flag** from `AGENT_MIDDLEWARE_ENABLED` (they compose but neither
+implies the other): `SPIRAL_RECOVERY_ENABLED=true` adds one more middleware,
+`SteadyingCounsel`, to the stack. It is the structural rescue for a loop that
+runs to timeout having committed *nothing* — the failure mode nothing was
+watching in flight.
+
+- **Detection** (`spiral_recovery.diagnose_spiral`, pure + keyless-testable):
+  data-driven, catches BOTH *tool spirals* (same tool+args ≥3×; ≥14 tool calls
+  with no answer; ≥85% of the tool-call budget spent) and *reasoning spirals*
+  (≥10 model rounds without committing; context ballooned past ~120k chars).
+  Returns a plain-language diagnosis of *what* is going wrong, or `None`.
+- **Intervention** (`wrap_model_call`, budget-neutral): on a diagnosis it
+  injects a calm, de-escalating `HumanMessage` into the next model call —
+  "pause, here's the pattern, try a genuinely *different* route." Rate-limited
+  (≥4 messages between nudges) so it nudges, not nags.
+- **Escalated counsel** (`spiral_recovery.escalated_counsel`): when a smarter
+  model is reachable, the counsel escalates to a HIGH-tier LLM
+  (`build_llm(default_tier="high")`) that reviews the trajectory digest and
+  names the likely **wrong turn** + one concrete different next step. Falls
+  back to the static message if escalation is unavailable. The firing logs at
+  **WARNING** (`SteadyingCounsel fired (escalated|static): …`) so it's visible
+  in prod and eval logs.
+- **Honesty-preserving by construction** (the prime directive): every counsel
+  variant explicitly tells the agent that an honest "I don't know" is a valid,
+  good answer — it must never fabricate one to escape the loop. Pairs with the
+  `BUDGET_AWARE_ANSWERING_ENABLED` orchestrator hint (commit the truth OR an
+  honest "I don't know" within budget — never bluff, which would also spike
+  multiple-choice).
+- **Scope note (honest):** the counsel targets *many-round* agentic spirals
+  (the orchestrator's real loop failure on open-ended tasks). It structurally
+  does **not** help single-pass failures — a verbose one-call over-generation
+  or a 0-token hang (e.g. closed-book GPQA timeouts) — because there is no
+  "next model call" to steer. Those want a per-call output/timeout cap, not the
+  counsel; don't over-fit the detector to make it fire on them.
+
 ### House rules for middleware
 
 1. **One module.** All middleware lives in `loop_middleware.py`; upstream
