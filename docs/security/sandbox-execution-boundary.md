@@ -46,8 +46,34 @@ may call*, not *which strings a shell may run*.
 | **Prax host filesystem** | ❌ No | Not mounted. `FROM '/etc/passwd'` reads the *container's* `/etc`, not the host's. |
 | **`/workspace`** | ✅ Yes (rw) | The **user's own** workspace, bind-mounted (`WORKSPACE_DIR/<user_id>`). Intended: this is the data the tools operate on. |
 | **Container's own image fs** (`/opt`, `/etc`, `/tmp`, installed pkgs) | ✅ Yes | It's the image — no host secrets live here. `/tmp` is internal (never delivered to the user). |
-| **Prax source / `.env` / DB / secrets** | ❌ No (default) | **Not mounted** into the persistent sandbox. |
+| **Prax source / host `.env` / DB / secrets on disk** | ❌ No (default) | **Not mounted** into the persistent sandbox. |
+| **Container ENVIRONMENT variables** | ⚠️ **Yes — and they can hold secrets** | See below — this is a real exposure. |
 | **Network egress** (pip, curl, DuckDB `httpfs`, …) | ✅ Yes (unrestricted, default) | The container has outbound network — see the residual-risk below. |
+
+### ⚠️ Environment variables ARE readable — and today carry API keys
+
+The container's env is fully readable by any code-exec tool (`printenv`,
+`os.environ`, even DuckDB's `SELECT getenv('X')`). The default `docker-compose.yml`
+passes **`ANTHROPIC_API_KEY` and `OPENAI_API_KEY`** into the container so OpenCode
+(the coding agent) can call models. So **those keys are readable by `run_python`,
+`data_query`, and `sandbox_shell`**, and — combined with the unrestricted egress
+above — **exfiltratable** by a code-exec tool driven by untrusted content (an
+indirect prompt injection). This is the lethal-trifecta "sensitive-data +
+exfiltration" pair at the sandbox layer, and it is **live in the current config**.
+More broadly: *anything the operator puts in the sandbox's environment (or a
+per-user daemon env) is reachable by every exec tool* — treat the sandbox env as
+readable-by-the-model.
+
+**Mitigations (tracked — none fully implemented):**
+- **Restrict container egress** (allowlist/proxy) so a read key can't leave — the
+  single highest-leverage fix (breaks the exfiltration leg for env *and* files).
+- **Use a dedicated, low-blast-radius key for the sandbox** — a separate model
+  key with a hard spend cap / easy rotation, not the operator's primary
+  `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`, so a leak is bounded and rotatable.
+- **Keep model keys out of the shared container env** — inject them only into
+  OpenCode's own process/config rather than the container-wide environment every
+  shell inherits (harder; needs a sandbox-side change).
+- Don't rely on the model "not looking" — assume untrusted content can drive it.
 
 ### The one elevated case: self-improvement mounts `/source`
 
@@ -62,16 +88,22 @@ with `docker inspect prax-sandbox-sandbox-1 --format '{{range .Mounts}}…'`.
 
 ## Residual risks & hardening (status)
 
-1. **Unrestricted container network egress** — a code-exec tool driven by
+1. **Secrets in the container env + unrestricted egress = a live exfiltration
+   path.** The container carries `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` (for
+   OpenCode) and has open outbound network, so a code-exec tool driven by
    *untrusted content* (indirect prompt injection in a fetched page, a poisoned
-   CSV) could exfiltrate `/workspace` data outward (`curl`, DuckDB `httpfs`, a
-   `COPY … TO` then upload). This is the **lethal-trifecta "exfiltrate" leg** at
-   the sandbox layer; the perimeter trifecta guard + provenance taint
-   (`UntrustedContentTaint`) reduce the *"untrusted-in → sensitive-tool"* path,
-   but the container's raw egress is not itself restricted. **Status: not
-   implemented — tracked** (adopt-tracker). Options: an egress allowlist/proxy for
-   the container; a no-network mode for pure-compute tools; a DuckDB variant with
-   `httpfs`/`INSTALL` disabled and read-only file access.
+   CSV) could read those keys (or `/workspace` data) and POST them out (`curl`,
+   DuckDB `httpfs`/`getenv`, a `COPY … TO` then upload). This is the
+   **lethal-trifecta "sensitive-data + exfiltrate" pair** at the sandbox layer,
+   and it is **present in the default config**. The perimeter trifecta guard +
+   provenance taint (`UntrustedContentTaint`) reduce the *"untrusted-in →
+   sensitive-tool"* path, but neither the keys-in-env nor the raw egress is itself
+   restricted. **Status: not implemented — tracked** (adopt-tracker). Ranked
+   options: **(a)** restrict container egress (allowlist/proxy) — kills the leg for
+   both env *and* files; **(b)** give the sandbox a **dedicated, spend-capped,
+   rotatable** model key, not the operator's primary one, so a leak is bounded;
+   **(c)** keep model keys out of the shared container env (inject only into
+   OpenCode's process); **(d)** a no-network / read-only DuckDB compute mode.
 2. **`/source` mount exposes secrets during self-improvement** — mitigated by
    keeping that flow HIGH-risk + human-gated (do not relax that).
 3. **The container overlay IS the host disk** — a runaway in-container process can
