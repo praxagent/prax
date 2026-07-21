@@ -23,7 +23,7 @@ graph TB
     Prax -->|delegate_environment| Environment["Environment Spoke\nweather + local conditions"]
     Prax -->|delegate_plugins| Plugins["Plugin Spoke\nmanifest-routed end-user tools"]
     Prax -->|delegate_sysadmin| Sysadmin["Sysadmin\nsub-hub"]
-    Prax -->|delegate_sandbox| Sandbox["Sandbox Spoke\n+ sandbox_view/scroll/goto"]
+    Prax -->|delegate_sandbox (opt-in)| Sandbox["Sandbox Spoke\n+ sandbox_view/scroll/goto"]
     Prax -->|delegate_finetune| Finetune["Finetune Spoke"]
     Prax -->|delegate_knowledge| Knowledge["Knowledge Spoke"]
     Prax -->|delegate_scheduler| Scheduler["Scheduler Spoke"]
@@ -100,6 +100,17 @@ graph LR
 #### Sandbox Agent
 
 Executes code in an isolated Docker container with a full dev environment.
+
+> **Opt-in coding sessions.** The multi-round coding-session tools shown below
+> (`sandbox_start` / `sandbox_message` / `sandbox_review` / `sandbox_finish` /
+> `sandbox_abort` / `sandbox_search` / `sandbox_execute`, and the `delegate_sandbox`
+> spoke itself) are gated behind `SANDBOX_CODING_AGENT_ENABLED` (**default off**):
+> the sandbox image no longer ships a coding-agent server, and Prax codes natively
+> (`run_python`, `workspace_save`/`workspace_patch`, `source_read`/`source_grep`,
+> `sandbox_shell`). The **pure-execution** tools (`sandbox_shell`, `sandbox_install`,
+> `sandbox_view/scroll/goto`, `desktop_*`, plus `data_query` / `lean_check`) are
+> always available with `SANDBOX_ENABLED`. See
+> [sandbox-execution-boundary](../security/sandbox-execution-boundary.md).
 
 ```mermaid
 graph LR
@@ -266,7 +277,7 @@ graph LR
 | `prax/services/sms_service.py` | SMS workflow: media handling, PDF pipeline, agent routing |
 | `prax/services/voice_service.py` | Voice workflow: speech processing, TTS buffer management |
 | `prax/services/conversation_service.py` | Shared conversation layer with workspace context injection |
-| `prax/services/sandbox_service.py` | Docker + OpenCode sandbox lifecycle, archiving, budget control |
+| `prax/services/sandbox_service.py` | Docker sandbox execution + (opt-in, `SANDBOX_CODING_AGENT_ENABLED`) coding-session lifecycle, archiving, budget control |
 | `prax/services/scheduler_service.py` | APScheduler-backed cron service reading YAML definitions |
 | `prax/services/finetune_service.py` | LoRA fine-tuning pipeline: harvest → train → verify → hot-swap |
 | `prax/services/note_service.py` | Note CRUD, search, knowledge graph (related notes), Hugo page generation |

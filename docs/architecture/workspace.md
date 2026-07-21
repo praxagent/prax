@@ -30,7 +30,7 @@ workspaces/{user_id}/          ← phone number or Discord user ID
 │       └── paper.md
 ├── active/                ← files the agent is currently aware of
 │   ├── 2301.12345.md      ← extracted PDF with frontmatter
-│   └── sessions/          ← live sandbox coding sessions
+│   └── sessions/          ← live coding sessions (only when SANDBOX_CODING_AGENT_ENABLED)
 │       └── {session_id}/
 └── archive/               ← agent moves files here when done
     ├── trace_logs/        ← rotated trace logs (plain text, grep-able)

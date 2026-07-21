@@ -157,7 +157,17 @@ notes like `[I just edited this]` as completed actions rather than
 instructions — the user is informing Prax of a state change, not
 asking for one.
 
-### Sandbox Code Execution Flow
+### Sandbox Code Execution Flow (opt-in coding sessions)
+
+> **This flow is opt-in and off by default.** The multi-round OpenCode coding
+> session below (`sandbox_start` → `sandbox_review` → `sandbox_message` →
+> `sandbox_finish`, plus the `sandbox_search`/`sandbox_execute` reuse flow) is
+> gated behind `SANDBOX_CODING_AGENT_ENABLED` (**default off**). The sandbox image
+> no longer ships a coding-agent server, so by default **Prax codes natively**
+> (`run_python`, `workspace_save`/`workspace_patch`, `source_read`/`source_grep`,
+> `sandbox_shell`) and the diagrams below don't run. The pure-execution sandbox
+> tools are unaffected. See
+> [sandbox-execution-boundary](../security/sandbox-execution-boundary.md).
 
 ```mermaid
 sequenceDiagram
