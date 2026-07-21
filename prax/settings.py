@@ -42,7 +42,8 @@ class AppSettings(BaseSettings):
     # See docs/guides/cheap-evals.md.
     openai_base_url: str | None = Field(default=None, alias="OPENAI_BASE_URL")
     # Point the Anthropic client at a base URL — used to route Claude calls through
-    # the KEYLESS secrets-proxy (prax/secrets_proxy). When set, Prax needs only a
+    # the KEYLESS secrets-proxy (the separate praxagent/prax-secrets-proxy service).
+    # When set, Prax needs only a
     # placeholder ANTHROPIC_KEY; the proxy injects the real one. Default None =
     # api.anthropic.com. See docs/security/secrets-proxy.md.
     anthropic_base_url: str | None = Field(default=None, alias="ANTHROPIC_BASE_URL")

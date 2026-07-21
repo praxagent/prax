@@ -92,6 +92,37 @@ services:
       start_period: 15s
       retries: 5
 
+  # ── Secrets proxy (KEYLESS Prax — endorsed security path) ─────────
+  # Opt-in:  docker compose --profile secrets-proxy up
+  # Runs the sibling praxagent/prax-secrets-proxy repo as its OWN container, so a
+  # compromised/injected Prax cannot reach the real keys (separate container = the
+  # isolation). The REAL keys live ONLY in that repo's gitignored .env — NOT Prax's.
+  # To route Prax through it, set in Prax's .env (with PLACEHOLDER keys):
+  #   OPENAI_BASE_URL=http://secrets-proxy:8785/openai
+  #   ANTHROPIC_BASE_URL=http://secrets-proxy:8785/anthropic
+  # See docs/security/secrets-proxy.md.
+  secrets-proxy:
+    profiles: ["secrets-proxy"]
+    build:
+      context: ${PRAX_SECRETS_PROXY_PATH:-../prax-secrets-proxy}
+    image: prax-secrets-proxy:latest
+    restart: unless-stopped
+    # The real keys come from the PROXY repo's own .env — deliberately NOT Prax's
+    # .env, so the isolation is real (this container never sees Prax's config).
+    env_file: ${PRAX_SECRETS_PROXY_PATH:-../prax-secrets-proxy}/.env
+    environment:
+      - PROXY_HOST=0.0.0.0
+      - PROXY_PORT=8785
+    ports:
+      - "127.0.0.1:8785:8785"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8785/healthz').status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   # ── Ollama (local embeddings + LLM) ───────────────────────────────
   # Optional — start with: docker compose --profile local-llm up
   ollama:

@@ -21,10 +21,6 @@ share/python-wheels/
 # ---- Environments ----
 .env
 .env.bak*
-# The secrets-proxy's env — holds the REAL API keys, NEVER commit.
-# (.env-proxy-example is the committed template and is NOT matched by this.)
-.env-proxy
-.env-proxy.bak*
 .venv
 env/
 venv/
