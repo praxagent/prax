@@ -41,6 +41,11 @@ class AppSettings(BaseSettings):
     # bill-shock. Default None = OpenAI. Set OPENAI_KEY to that provider's key.
     # See docs/guides/cheap-evals.md.
     openai_base_url: str | None = Field(default=None, alias="OPENAI_BASE_URL")
+    # Point the Anthropic client at a base URL — used to route Claude calls through
+    # the KEYLESS secrets-proxy (prax/secrets_proxy). When set, Prax needs only a
+    # placeholder ANTHROPIC_KEY; the proxy injects the real one. Default None =
+    # api.anthropic.com. See docs/security/secrets-proxy.md.
+    anthropic_base_url: str | None = Field(default=None, alias="ANTHROPIC_BASE_URL")
     # OpenRouter key for the dedicated `openrouter` provider (LLM_PROVIDER=openrouter,
     # or `make eval CHEAP=1`). Presence alone does NOT redirect traffic — you must
     # select the provider — so production stays on OpenAI even with this set.

@@ -1,4 +1,4 @@
-.PHONY: lint layers test actions ci eval eval-capability eval-harness-lift eval-benchmark eval-matrix eval-gaia eval-self-regen tailscale-up tailscale-down tailscale-status sandbox-gpu sandbox-gpu-check \
+.PHONY: secrets-proxy lint layers test actions ci eval eval-capability eval-harness-lift eval-benchmark eval-matrix eval-gaia eval-self-regen tailscale-up tailscale-down tailscale-status sandbox-gpu sandbox-gpu-check \
         run-local-min run-local-all run-local-all-dev run-local-all-tail-dev shutdown restart-prax restart-teamwork restart-sandbox local-status local-logs smoke integration \
         _local-qdrant _local-neo4j _local-observability _local-teamwork _local-teamwork-prod _local-teamwork-dev _local-sandbox _local-prax _tailscale-local
 
@@ -274,6 +274,13 @@ TW_SANDBOX_ENV = SANDBOX_CONTAINER=prax-sandbox-sandbox-1 CHROME_CDP_HOST=localh
 run-local-min:
 	@echo "Starting Prax core (no memory / sandbox / TeamWork). Ctrl-C to stop."
 	@MEMORY_ENABLED=false SANDBOX_ENABLED=false TEAMWORK_ENABLED=false $(LOCAL_PY) app.py
+
+# The secrets proxy — run in ITS OWN shell with the REAL keys, so a KEYLESS Prax
+# can point OPENAI_BASE_URL/ANTHROPIC_BASE_URL at it. See docs/security/secrets-proxy.md.
+# (Real keys come from this shell's env — do NOT put them in Prax's env.)
+secrets-proxy:
+	@echo "Starting the secrets proxy on 127.0.0.1:$${PROXY_PORT:-8785} (Ctrl-C to stop)."
+	@$(LOCAL_PY) -m prax.secrets_proxy
 
 run-local-all: _local-qdrant _local-neo4j _local-observability _local-teamwork _local-sandbox _local-prax
 	@# Prax is the last to bind (it waits for TeamWork, then boots a heavy

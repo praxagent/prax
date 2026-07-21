@@ -262,10 +262,18 @@ def build_llm(
     if provider_name == "anthropic":
         if not settings.anthropic_key:
             raise ValueError("ANTHROPIC_KEY is required for Anthropic provider")
+        # anthropic_base_url routes Claude calls through the keyless secrets-proxy;
+        # then ANTHROPIC_KEY is just a placeholder the proxy overwrites. None →
+        # api.anthropic.com (unchanged prior behaviour).
+        _anthropic_url = getattr(settings, "anthropic_base_url", None) or None
+        anthropic_kwargs = {}
+        if _anthropic_url:
+            anthropic_kwargs["anthropic_api_url"] = _anthropic_url
         return ChatAnthropic(
             model=model_name, api_key=settings.anthropic_key,
             temperature=temp, callbacks=callbacks,
             timeout=settings.llm_request_timeout,
+            **anthropic_kwargs,
         )
 
     if provider_name in {"google", "google-vertex"}:
