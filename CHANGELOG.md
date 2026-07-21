@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.31.0](https://github.com/praxagent/prax/compare/v0.30.0...v0.31.0) (2026-07-21)
+
+
+### Features
+
+* **reliability:** failover backoff + silent-model-substitution detection ([#144](https://github.com/praxagent/prax/issues/144)) ([ab1bbe6](https://github.com/praxagent/prax/commit/ab1bbe6659994bba349fa6c0cb390f59dc1069cd))
+
 ## [0.30.0](https://github.com/praxagent/prax/compare/v0.29.0...v0.30.0) (2026-07-21)
 
 
