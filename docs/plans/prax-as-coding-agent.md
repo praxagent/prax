@@ -8,8 +8,9 @@ the two paths forward so future-us can pick one up with context.
 > no longer holds: **Prax now codes natively** (`run_python`,
 > `workspace_save`/`workspace_patch`, `source_read`/`source_grep`, `sandbox_shell`;
 > self-improve via `self_improve_*`), the sandbox image ships **no** coding-agent
-> CLI or server, and the coding-session pathway is gated off by default behind
-> `SANDBOX_CODING_AGENT_ENABLED`. This note is preserved as a historical snapshot
+> CLI or server, and the multi-round coding-session pathway was **removed**
+> entirely (2026-07) — `delegate_sandbox` is now a headless sub-agent that writes
+> and runs code directly via `sandbox_shell`. This note is preserved as a historical snapshot
 > of the 2026-04 decision point; read the sections below in that light. See
 > [sandbox-execution-boundary](../security/sandbox-execution-boundary.md).
 

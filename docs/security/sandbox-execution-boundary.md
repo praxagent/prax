@@ -18,7 +18,7 @@ Docker container, never on the Prax host**:
 | `data_query` (DuckDB) | container (same path; host never even loads duckdb) |
 | `lean_check` | container |
 | `desktop_*`, browser tools | container (Xvfb + Chromium) |
-| `delegate_sandbox` + coding-session tools (`SANDBOX_CODING_AGENT_ENABLED`, **default off**) | container — opt-in only; the image ships no coding-agent server (2026-07) |
+| `delegate_sandbox` (headless direct code-execution sub-agent) | container — writes+runs code via `sandbox_shell`; registered whenever `SANDBOX_ENABLED` |
 
 **There is no host-`subprocess` fallback.** The dispatch (`prax_sandbox_client` →
 `control_plane` → `exec_in_sandbox`) resolves the running container and
@@ -61,10 +61,10 @@ env as readable-by-the-model.
 `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` into the container (for OpenCode), so those
 keys were readable + exfiltratable by a code-exec tool driven by untrusted content
 — a live lethal-trifecta pair. That was **fixed**: the coding-agent CLIs + the
-model keys were **removed from the sandbox image by default** (prax-sandbox #4),
-and the coding-session tools were gated off (#137). A **keyless container** is the
-default; a user who opts into a coding-agent CLI adds a *dedicated, spend-capped*
-key themselves.
+model keys were **removed from the sandbox image** (prax-sandbox #4), and the
+multi-round coding-session tools were **removed** from Prax entirely (#142). A
+**keyless container** is the default; a user who reinstalls a coding-agent CLI
+themselves adds a *dedicated, spend-capped* key.
 
 **Residual + stronger mitigations (tracked):**
 - **Secret-injecting egress proxy (strongest — the real wall).** Run Prax with NO

@@ -343,9 +343,9 @@ Organized by what they measure.  For each one:
   repositories.  Given an issue description and the repo state, the
   agent must produce a patch that resolves the issue without
   breaking existing tests.
-- **Prax mapping:** `delegate_sandbox` (the Claude Code / OpenCode
-  spoke), `workspace_tools` for file editing, the self_improve
-  codegen loop.  This is the benchmark for Prax's coding ability.
+- **Prax mapping:** `delegate_sandbox` (the headless direct
+  code-execution spoke), `workspace_tools` for file editing, the
+  self_improve codegen loop.  This is the benchmark for Prax's coding ability.
 - **Structure:** 500 tasks drawn from 12 popular Python repos
   (django, sympy, scikit-learn, etc.).  Evaluation: apply patch,
   run test suite, verify the target test passes and no regressions.

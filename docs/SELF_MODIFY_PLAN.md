@@ -32,7 +32,7 @@ prax/
     tools/                 # Each file = one or more tools
       builtin.py           # search, datetime, pdf, etc.
       workspace.py         # workspace_save, workspace_read, etc.
-      sandbox.py           # sandbox_start, sandbox_message, etc.
+      sandbox.py           # sandbox_shell, sandbox_view, etc.
       scheduler.py         # schedule_create, reminder, etc.
       browser.py           # browser_navigate, browser_click, etc.
       custom/              # Agent-created tools land here

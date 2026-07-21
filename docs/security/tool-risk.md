@@ -8,7 +8,7 @@ Every tool is classified by risk level at the governance layer:
 
 | Risk | Behavior | Examples |
 |------|----------|---------|
-| **HIGH** | Blocked on first call; requires user confirmation | `sandbox_execute`, `workspace_send_file`, `browser_click`, `plugin_write`, `schedule_create` |
+| **HIGH** | Blocked on first call; requires user confirmation | `self_improve_deploy`, `browser_click`, `plugin_write`, `plugin_import`, `schedule_create` |
 | **MEDIUM** | Executes immediately; logged to audit trail | `note_create`, `browser_navigate`, `arxiv_search`, `course_publish` |
 | **LOW** | Executes immediately; logged | `note_list`, `todo_add`, `workspace_read`, `get_current_datetime` |
 

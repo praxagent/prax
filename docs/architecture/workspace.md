@@ -29,19 +29,11 @@ workspaces/{user_id}/          ← phone number or Discord user ID
 │       ├── project.yaml
 │       └── paper.md
 ├── active/                ← files the agent is currently aware of
-│   ├── 2301.12345.md      ← extracted PDF with frontmatter
-│   └── sessions/          ← live coding sessions (only when SANDBOX_CODING_AGENT_ENABLED)
-│       └── {session_id}/
+│   └── 2301.12345.md      ← extracted PDF with frontmatter
 └── archive/               ← agent moves files here when done
     ├── trace_logs/        ← rotated trace logs (plain text, grep-able)
     │   └── trace.20250301-120000.log
-    ├── 2301.12345.pdf     ← original PDF preserved
-    └── code/              ← completed coding solutions
-        └── pdf_to_beamer/
-            ├── SOLUTION.md
-            ├── session_log.json
-            ├── convert.py
-            └── build.sh
+    └── 2301.12345.pdf     ← original PDF preserved
 
 adapters/                  ← LoRA adapter storage (FINETUNE_OUTPUT_DIR)
 ├── adapter_registry.json  ← active/previous adapter tracking

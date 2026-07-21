@@ -89,7 +89,7 @@ graph TB
 | **Environment** | `delegate_environment` | Location resolver + live weather fetch + datetime | Weather, local conditions, and time/location context; asks for location when only timezone is known |
 | **Plugins** | `delegate_plugins` | Manifest-routed `artifact`/`media`/`utility`/`vision`/`workspace` plugin tools | Installed end-user plugin capabilities such as presentations, media generation, OCR, and artifact conversion |
 | **Sysadmin** | `delegate_sysadmin` | 30+: plugin mgmt, prompts, LLM config, source, workspace sync | Plugin install/update, config changes, self-improvement |
-| **Sandbox** | `delegate_sandbox` *(opt-in, `SANDBOX_CODING_AGENT_ENABLED`, default off)* | Coding-session lifecycle, archive, package management, 6 desktop tools, `sandbox_view` / `sandbox_scroll` / `sandbox_goto` (SWE-agent-style line-numbered file viewer) | Multi-round coding sessions in isolated Docker containers + GUI desktop interaction. **Default off:** the image ships no coding-agent server and Prax codes natively (`run_python`, `workspace_save`/`workspace_patch`, `source_read`/`source_grep`, `sandbox_shell`). Pure-execution sandbox tools (`sandbox_shell`, browser, desktop, `data_query`, `lean_check`) are always available with `SANDBOX_ENABLED`. See [sandbox-execution-boundary](../security/sandbox-execution-boundary.md). |
+| **Sandbox** | `delegate_sandbox` *(registered whenever `SANDBOX_ENABLED`)* | Direct code execution via `sandbox_shell`, `sandbox_view` / `sandbox_scroll` / `sandbox_goto` (SWE-agent-style line-numbered file viewer), `sandbox_install`, `sandbox_rebuild`, plus `data_query` / `lean_check` (when their flags are on) and the 6 desktop tools | Headless direct code-execution sub-agent: writes and runs code directly in the Docker container via `sandbox_shell` (no coding-session lifecycle, no rounds, no archive/replay) + GUI desktop interaction. Prax codes natively (`run_python`, `workspace_save`/`workspace_patch`, `source_read`/`source_grep`, `sandbox_shell`). See [sandbox-execution-boundary](../security/sandbox-execution-boundary.md). |
 | **Finetune** | `delegate_finetune` | 8: harvest, train, verify, promote, rollback | LoRA fine-tuning pipeline (requires FINETUNE_ENABLED) |
 | **Knowledge** | `delegate_knowledge` | 13: note CRUD, search, linking, URL/PDF-to-note, project management | Notes, knowledge graph, research projects |
 | **Scheduler** | `delegate_scheduler` | Cron + one-shot reminders | Schedule creation, reminder management |
@@ -379,7 +379,7 @@ agent — via `self_improve_read/write/patch/test/verify/deploy`):
 | `prax/agent/spokes/browser/agent.py` | Browser spoke — CDP-first routing, Playwright fallback, login flows |
 | `prax/agent/spokes/content/agent.py` | Content Editor sub-hub — multi-agent pipeline (research → write → review) |
 | `prax/agent/spokes/sysadmin/agent.py` | Sysadmin sub-hub — plugin/config mgmt, delegates to self-improve + plugin-fix |
-| `prax/agent/spokes/sandbox/agent.py` | Sandbox spoke — Docker code execution; multi-round coding sessions are opt-in (`SANDBOX_CODING_AGENT_ENABLED`) |
+| `prax/agent/spokes/sandbox/agent.py` | Sandbox spoke — headless direct code-execution sub-agent; writes+runs code in the container via `sandbox_shell` (registered whenever `SANDBOX_ENABLED`) |
 | `prax/agent/spokes/finetune/agent.py` | Finetune spoke — LoRA training pipeline |
 | `prax/agent/spokes/knowledge/agent.py` | Knowledge spoke — notes, knowledge graph, research projects |
 | `prax/agent/self_improve_agent.py` | Self-improvement sub-agent (used by sysadmin spoke) |

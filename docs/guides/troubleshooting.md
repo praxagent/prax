@@ -127,10 +127,13 @@ verify/deploy`). **The sandbox image no longer ships the OpenCode / Claude-Code 
 Codex CLIs or a coding-agent server**, and takes no model API keys.
 
 - **Where did the coding-session tools go?**
-  `delegate_sandbox` and `sandbox_start`/`message`/`review`/`finish`/`abort`/
-  `search`/`execute` are gated behind `SANDBOX_CODING_AGENT_ENABLED` (**default
-  off**). With the flag off they aren't registered — this is expected. Flip it on
-  only if you reinstall a coding-agent CLI + server in the sandbox image yourself.
+  The multi-round OpenCode coding-session tools (`sandbox_start`/`message`/
+  `review`/`finish`/`abort`/`search`/`execute`) and the `SANDBOX_CODING_AGENT_ENABLED`
+  flag were **removed** (2026-07). `delegate_sandbox` is still here, but it's now a
+  headless sub-agent that writes and runs code **directly** in the container via
+  `sandbox_shell` — no session lifecycle, no rounds, no archive/replay. It's
+  registered whenever `SANDBOX_ENABLED`. Prax also codes natively on the host
+  (`run_python`, `workspace_save`/`workspace_patch`, `source_read`/`source_grep`).
 
 - **`SELF_IMPROVE_ENABLED` is set but the self-improve tools don't appear:**
   Tools are registered at import time. Restart the app after changing `.env`:
