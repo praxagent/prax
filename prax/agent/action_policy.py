@@ -167,13 +167,6 @@ _MEDIUM: set[str] = {
     "schedule_delete",
     "schedule_reload",
     "reminder_delete",
-    # sandbox — the container itself is the safety boundary
-    "sandbox_execute",
-    "sandbox_start",
-    "sandbox_message",
-    "sandbox_review",
-    "sandbox_finish",
-    "sandbox_abort",
     # publishable content
     "note_create",
     "note_update",

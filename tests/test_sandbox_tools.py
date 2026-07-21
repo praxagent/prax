@@ -4,147 +4,6 @@ import importlib
 from prax.agent.user_context import current_user_id
 
 
-def test_sandbox_start(monkeypatch):
-    module = importlib.reload(importlib.import_module("prax.agent.sandbox_tools"))
-    svc = importlib.import_module("prax_sandbox.control_plane")
-
-    monkeypatch.setattr(
-        svc, "start_session",
-        lambda uid, task, model=None: {"session_id": "abc-123-456", "status": "running", "model": model or "anthropic/claude-test"},
-    )
-    current_user_id.set("+10000000000")
-
-    result = module.sandbox_start.invoke({"task_description": "Build a calculator"})
-    assert "abc-123-456" in result
-    assert "running" in result.lower() or "started" in result.lower()
-
-
-def test_sandbox_start_error(monkeypatch):
-    module = importlib.reload(importlib.import_module("prax.agent.sandbox_tools"))
-    svc = importlib.import_module("prax_sandbox.control_plane")
-
-    monkeypatch.setattr(svc, "start_session", lambda uid, task, model=None: {"error": "Docker not available"})
-    current_user_id.set("+10000000000")
-
-    result = module.sandbox_start.invoke({"task_description": "Task"})
-    assert "Failed" in result
-
-
-def test_sandbox_message(monkeypatch):
-    module = importlib.reload(importlib.import_module("prax.agent.sandbox_tools"))
-    svc = importlib.import_module("prax_sandbox.control_plane")
-
-    monkeypatch.setattr(
-        svc, "send_message",
-        lambda uid, msg, model=None, session_id=None: {"session_id": "abc", "model": "anthropic/test", "response": {"content": "Done"}},
-    )
-    current_user_id.set("+10000000000")
-
-    result = module.sandbox_message.invoke({"message": "Add tests"})
-    assert "Done" in result
-
-
-def test_sandbox_message_with_model_switch(monkeypatch):
-    module = importlib.reload(importlib.import_module("prax.agent.sandbox_tools"))
-    svc = importlib.import_module("prax_sandbox.control_plane")
-
-    monkeypatch.setattr(
-        svc, "send_message",
-        lambda uid, msg, model=None, session_id=None: {"session_id": "abc", "model": model or "default", "response": "switched"},
-    )
-    current_user_id.set("+10000000000")
-
-    result = module.sandbox_message.invoke({"message": "Try again", "model": "openai/gpt-5"})
-    assert "openai/gpt-5" in result
-
-
-def test_sandbox_review(monkeypatch):
-    module = importlib.reload(importlib.import_module("prax.agent.sandbox_tools"))
-    svc = importlib.import_module("prax_sandbox.control_plane")
-
-    monkeypatch.setattr(
-        svc, "review_session",
-        lambda uid, session_id=None: {
-            "session_id": "abc-123-456",
-            "status": "running",
-            "model": "anthropic/test",
-            "elapsed_seconds": 42,
-            "timeout_seconds": 1800,
-            "files": ["main.py", "test.py"],
-            "opencode_state": {},
-        },
-    )
-    current_user_id.set("+10000000000")
-
-    result = module.sandbox_review.invoke({})
-    assert "main.py" in result
-    assert "running" in result.lower()
-
-
-def test_sandbox_finish(monkeypatch):
-    module = importlib.reload(importlib.import_module("prax.agent.sandbox_tools"))
-    svc = importlib.import_module("prax_sandbox.control_plane")
-
-    monkeypatch.setattr(
-        svc, "finish_session",
-        lambda uid, summary="", session_id=None: {"session_id": "abc", "status": "finished", "archived_path": "/archive/code/abc"},
-    )
-    current_user_id.set("+10000000000")
-
-    result = module.sandbox_finish.invoke({"summary": "Built a calculator"})
-    assert "finished" in result.lower() or "archived" in result.lower()
-
-
-def test_sandbox_abort(monkeypatch):
-    module = importlib.reload(importlib.import_module("prax.agent.sandbox_tools"))
-    svc = importlib.import_module("prax_sandbox.control_plane")
-
-    monkeypatch.setattr(svc, "abort_session", lambda uid, session_id=None: {"session_id": "abc", "status": "aborted"})
-    current_user_id.set("+10000000000")
-
-    result = module.sandbox_abort.invoke({})
-    assert "aborted" in result.lower()
-
-
-def test_sandbox_search(monkeypatch):
-    module = importlib.reload(importlib.import_module("prax.agent.sandbox_tools"))
-    svc = importlib.import_module("prax_sandbox.control_plane")
-
-    monkeypatch.setattr(
-        svc, "search_solutions",
-        lambda uid, q: [{"session_id": "abc123", "path": "/p", "snippet": "beamer presentation"}],
-    )
-    current_user_id.set("+10000000000")
-
-    result = module.sandbox_search.invoke({"query": "beamer"})
-    assert "beamer" in result
-
-
-def test_sandbox_search_no_results(monkeypatch):
-    module = importlib.reload(importlib.import_module("prax.agent.sandbox_tools"))
-    svc = importlib.import_module("prax_sandbox.control_plane")
-
-    monkeypatch.setattr(svc, "search_solutions", lambda uid, q: [])
-    current_user_id.set("+10000000000")
-
-    result = module.sandbox_search.invoke({"query": "nothing"})
-    assert "No archived" in result
-
-
-def test_sandbox_execute(monkeypatch):
-    module = importlib.reload(importlib.import_module("prax.agent.sandbox_tools"))
-    svc = importlib.import_module("prax_sandbox.control_plane")
-
-    monkeypatch.setattr(
-        svc, "execute_solution",
-        lambda uid, sid, command=None: {"session_id": "new-session", "status": "running", "model": "anthropic/test"},
-    )
-    current_user_id.set("+10000000000")
-
-    result = module.sandbox_execute.invoke({"solution_id": "abc123"})
-    assert "Re-executing" in result
-
-
 class TestSandboxView:
     """Windowed, line-numbered file viewer — the ACI pattern."""
 
@@ -236,22 +95,18 @@ class TestSandboxView:
         assert "container not running" in result
 
 
-def test_coding_session_tools_gated_off_by_default(monkeypatch):
-    """The OpenCode coding-session tools are OFF by default (the sandbox image no
-    longer ships a coding-agent server; Prax codes natively). Pure-exec tools stay."""
+def test_coding_session_tools_removed(monkeypatch):
+    """The OpenCode coding-session tools are gone (the sandbox image + client no
+    longer ship the session API; Prax codes directly). The pure-execution tools
+    stay, and the sandbox spoke delegates direct code execution."""
     from prax.settings import settings
     monkeypatch.setattr(type(settings), "sandbox_available", property(lambda self: True))
-    monkeypatch.setattr(settings, "sandbox_coding_agent_enabled", False, raising=False)
     from prax.agent.sandbox_tools import build_sandbox_tools
     from prax.agent.spokes.sandbox.agent import build_spoke_tools
     names = {t.name for t in build_sandbox_tools()}
-    assert "sandbox_shell" in names                 # pure exec — always available
-    assert "sandbox_start" not in names             # coding session — gated off
-    assert "sandbox_message" not in names
-    assert build_spoke_tools() == []                # delegate_sandbox not offered
-
-    # Flipping the flag on restores them (for a user who reinstalls a CLI+server).
-    monkeypatch.setattr(settings, "sandbox_coding_agent_enabled", True, raising=False)
-    names2 = {t.name for t in build_sandbox_tools()}
-    assert "sandbox_start" in names2
-    assert len(build_spoke_tools()) == 1
+    assert "sandbox_shell" in names                 # direct exec — always available
+    for gone in ("sandbox_start", "sandbox_message", "sandbox_review",
+                 "sandbox_finish", "sandbox_abort", "sandbox_search", "sandbox_execute"):
+        assert gone not in names
+    # delegate_sandbox is offered (direct code-execution sub-agent).
+    assert [t.name for t in build_spoke_tools()] == ["delegate_sandbox"]

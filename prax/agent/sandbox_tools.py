@@ -5,7 +5,6 @@ import logging
 
 from langchain_core.tools import tool
 
-from prax.agent.action_policy import RiskLevel, risk_tool
 from prax.agent.user_context import current_user_id
 from prax.services.sandbox_bridge import configured_client as get_client
 
@@ -28,8 +27,8 @@ def sandbox_shell(command: str, timeout: int = 60) -> str:
     This is the ONLY tool for terminal pairing. Use it for ANY shell
     command: ls, df, git, pytest, pip, apt, curl, etc.
 
-    Do NOT delegate to sandbox_start/delegate_sandbox when in terminal mode.
-    Just call this tool directly with the command.
+    This is how Prax runs code directly — there is no separate coding-agent
+    session to delegate to. Just call this tool with the command.
 
     FILES FOR THE USER: the container's /tmp is internal — the user can NEVER
     receive a file from there, and "sandbox:/tmp/..." links do not work.
@@ -83,28 +82,6 @@ def sandbox_shell(command: str, timeout: int = 60) -> str:
     return "\n".join(parts)
 
 
-@risk_tool(risk=RiskLevel.MEDIUM)
-def sandbox_start(task_description: str, model: str | None = None) -> str:
-    """Start a sandboxed coding session with an AI coding agent.
-
-    The coding agent can write and execute code (Python, LaTeX, ffmpeg, etc.)
-    inside an isolated container. Provide a clear description of the task.
-    Optionally specify the model (e.g. 'anthropic/claude-sonnet-4-5' or 'openai/gpt-5.4').
-
-    Returns the session_id — pass it to sandbox_message/review/finish/abort
-    if you have multiple sessions running.
-    """
-    from prax.services import sandbox_sync
-    result = sandbox_sync.start_session(get_client(), _get_user_id(), task_description, model=model)
-    if "error" in result:
-        return f"Failed to start sandbox: {result['error']}"
-    return (
-        f"Sandbox session started (id: {result['session_id'][:12]}, model: {result['model']}). "
-        f"The coding agent is working on your task. Use sandbox_review to check progress "
-        f"or sandbox_message to send follow-up instructions."
-    )
-
-
 @tool
 def terminal_history(lines: int = 200) -> str:
     """Read the recent scrollback from the user's persistent terminal.
@@ -144,131 +121,6 @@ def terminal_history(lines: int = 200) -> str:
         return f"Could not read terminal history: HTTP {resp.status_code}"
     output = (resp.json() or {}).get("output", "")
     return output or "(terminal buffer is empty)"
-
-
-@risk_tool(risk=RiskLevel.MEDIUM)
-def sandbox_message(message: str, model: str | None = None, session_id: str | None = None) -> str:
-    """Send a follow-up message or instruction to a sandbox coding session.
-
-    Use this to refine the task, request changes, or ask the coding agent to try
-    a different approach. Optionally switch to a different model if the current one
-    isn't producing good results.
-
-    If session_id is omitted, targets the most recently created session.
-    """
-    result = get_client().send_message(_get_user_id(), message, model=model, session_id=session_id)
-    if result.get("auto_aborted"):
-        return (
-            f"⚠️ Sandbox AUTO-ABORTED: {result['error']}. "
-            f"Start a new session with sandbox_start if you want to try again."
-        )
-    if "error" in result:
-        return f"Sandbox error: {result['error']}"
-    response = result.get("response", {})
-    if isinstance(response, dict) and "error" in response:
-        return (
-            f"Coding agent error: {response['error']}. "
-            f"If this keeps happening, use sandbox_abort to stop the session "
-            f"and sandbox_start to begin fresh."
-        )
-    model_info = f" (model: {result.get('model', 'unknown')})" if model else ""
-    rounds_left = result.get("rounds_remaining")
-    budget_info = f" [{rounds_left} rounds remaining]" if rounds_left is not None else ""
-    return f"Message sent to coding agent{model_info}.{budget_info} Response: {response}"
-
-
-@tool
-def sandbox_review(session_id: str | None = None) -> str:
-    """Review the current status of a sandbox session.
-
-    Shows elapsed time, files created/modified, and conversation state.
-    If session_id is omitted, shows the most recent session.
-    """
-    result = get_client().review_session(_get_user_id(), session_id=session_id)
-    if "error" in result:
-        return f"Sandbox error: {result['error']}"
-    files = result.get("files", [])
-    file_list = "\n".join(f"  - {f}" for f in files) if files else "  (no files yet)"
-    elapsed = result.get("elapsed_seconds", 0)
-    timeout = result.get("timeout_seconds", 0)
-    rounds_used = result.get("rounds_used", 0)
-    rounds_left = result.get("rounds_remaining", "?")
-    return (
-        f"Sandbox session {result['session_id'][:12]}:\n"
-        f"  Status: {result['status']}\n"
-        f"  Model: {result['model']}\n"
-        f"  Elapsed: {elapsed}s / {timeout}s timeout\n"
-        f"  Rounds: {rounds_used} used, {rounds_left} remaining\n"
-        f"  Files:\n{file_list}"
-    )
-
-
-@tool
-def sandbox_finish(summary: str = "", session_id: str | None = None) -> str:
-    """Finish a sandbox session and archive all artifacts.
-
-    Code, SOLUTION.md, and the full session log are saved to the workspace
-    archive for future reference. Provide a brief summary of what was accomplished.
-    If session_id is omitted, finishes the most recent session.
-    """
-    from prax.services import sandbox_sync
-    result = sandbox_sync.finish_session(get_client(), _get_user_id(), summary=summary, session_id=session_id)
-    if "error" in result:
-        return f"Sandbox error: {result['error']}"
-    path = result.get("archived_path", "unknown")
-    return (
-        f"Sandbox session finished and archived to {path}. "
-        f"The solution can be found and re-executed later with sandbox_search."
-    )
-
-
-@tool
-def sandbox_abort(session_id: str | None = None) -> str:
-    """Abort a sandbox session immediately.
-
-    Destroys the container without archiving artifacts. Use only if the session
-    is stuck or producing unwanted results.
-    If session_id is omitted, aborts the most recent session.
-    """
-    result = get_client().abort_session(_get_user_id(), session_id=session_id)
-    if "error" in result:
-        return f"Sandbox error: {result['error']}"
-    elapsed = result.get("elapsed_seconds", "?")
-    rounds = result.get("rounds_used", "?")
-    return f"Sandbox session aborted after {elapsed}s ({rounds} rounds used)."
-
-
-@tool
-def sandbox_search(query: str) -> str:
-    """Search past sandbox solutions by keyword.
-
-    Returns matching solutions from the archive so you can re-execute them
-    instead of solving the problem from scratch.
-    """
-    results = get_client().search_solutions(_get_user_id(), query)
-    if not results:
-        return f"No archived solutions match '{query}'."
-    lines = []
-    for r in results:
-        lines.append(f"**{r['session_id']}**:\n{r['snippet']}")
-    return "Found solutions:\n\n" + "\n\n".join(lines)
-
-
-@risk_tool(risk=RiskLevel.MEDIUM)
-def sandbox_execute(solution_id: str, command: str | None = None) -> str:
-    """Re-execute a previously archived sandbox solution.
-
-    Use sandbox_search first to find the solution_id. Optionally provide
-    a specific command to run. If no command is given, the agent will look
-    for build.sh or main.py in the solution directory.
-    """
-    result = get_client().execute_solution(_get_user_id(), solution_id, command=command)
-    if "error" in result:
-        return f"Sandbox error: {result['error']}"
-    return (
-        f"Re-executing solution '{solution_id}' in a new sandbox "
-        f"(session: {result['session_id'][:12]}, model: {result['model']})."
-    )
 
 
 @tool
@@ -593,16 +445,10 @@ def build_sandbox_tools() -> list:
         desktop_screenshot, desktop_click, desktop_type, desktop_key,
         desktop_list_windows, desktop_open,
     ]
-    # OpenCode coding-SESSION tools — gated off by default
-    # (SANDBOX_CODING_AGENT_ENABLED). The sandbox image no longer ships a
-    # coding-agent server, and Prax codes directly with run_python /
-    # workspace_save|patch / source_read|grep / sandbox_shell. A user who
-    # reinstalls a coding-agent CLI + server can flip the flag back on.
-    if settings.sandbox_coding_agent_enabled:
-        tools += [
-            sandbox_start, sandbox_message, sandbox_review,
-            sandbox_finish, sandbox_abort, sandbox_search, sandbox_execute,
-        ]
+    # The OpenCode coding-SESSION tools were removed: the sandbox image no longer
+    # ships a coding-agent server and the control-plane/client dropped the session
+    # API (prax-sandbox #4/#5). Prax now codes DIRECTLY — run_python /
+    # workspace_save|patch / source_read|grep / sandbox_shell — no separate agent.
     # Lean 4 proof-check tool (opt-in, LEAN_TOOLS_ENABLED) — needs the Lean
     # toolchain in the sandbox image. See docs/research/cdc-lean-teach-prax-lean.md.
     from prax.agent.lean_tools import build_lean_tools

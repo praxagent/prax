@@ -18,24 +18,6 @@ def test_search_returns_empty(run_e2e):
     assert llm.call_count == 2
 
 
-def test_no_active_sandbox(run_e2e):
-    """Agent handles 'no active session' when trying to message sandbox."""
-    response, llm = run_e2e(
-        "Send a message to my sandbox",
-        [
-            ai_tools(tc("sandbox_message", {"message": "hello"})),
-            ai("It looks like you don't have an active sandbox session. Would you like me to start one?"),
-        ],
-        mocks={
-            "prax_sandbox.control_plane.send_message": {
-                "error": "No active sandbox session.",
-            },
-        },
-    )
-    assert "sandbox" in response.lower()
-    assert llm.call_count == 2
-
-
 def test_note_creation_error(run_e2e):
     """Agent handles a note service failure."""
 
@@ -97,27 +79,4 @@ def test_delegation_failure(run_e2e):
         },
     )
     assert "error" in response.lower() or "instead" in response.lower()
-    assert llm.call_count == 2
-
-
-def test_sandbox_max_rounds_reached(run_e2e):
-    """Agent handles sandbox round limit exhaustion."""
-    response, llm = run_e2e(
-        "Keep working on the code",
-        [
-            ai_tools(tc("sandbox_message", {"message": "Continue working on the implementation"})),
-            ai(
-                "The sandbox has reached its maximum of 10 message rounds. "
-                "I'll finish the session and save what we have."
-            ),
-        ],
-        mocks={
-            "prax_sandbox.control_plane.send_message": {
-                "error": "Sandbox has reached the maximum of 10 message rounds. Use sandbox_finish to save what you have, or sandbox_abort to discard.",
-                "rounds_used": 10,
-                "max_rounds": 10,
-            },
-        },
-    )
-    assert "maximum" in response.lower() or "10" in response
     assert llm.call_count == 2

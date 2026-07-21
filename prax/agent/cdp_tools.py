@@ -322,7 +322,7 @@ def browser_verify(flow: list[dict]) -> str:
     if not cdp_service.is_available():
         return (
             "browser_verify unavailable: sandbox browser (Chrome) is not running. "
-            "Start it first via sandbox_start or ask the user to open the browser panel."
+            "Ask the user to open the browser panel in TeamWork to start it."
         )
     if not isinstance(flow, list) or not flow:
         return "browser_verify: `flow` must be a non-empty list of step dicts."

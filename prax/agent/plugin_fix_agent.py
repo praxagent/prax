@@ -32,9 +32,8 @@ Plugins are Python modules at ``custom/<name>/plugin.py`` with:
   existing plugins under prax/plugins/tools/.
 - **plugin_read**: Read a custom plugin's source.
 - **plugin_catalog**: See all available plugins (built-in and custom).
-- **sandbox_start / sandbox_message / sandbox_review**: Use the sandbox
-  (OpenCode coding agent) to write and test plugin code.  The Prax source
-  is available at /source/ in the sandbox.
+- **sandbox_shell / run_python**: Write and test plugin code directly in the
+  sandbox container.  The Prax source is available at /source/ in the sandbox.
 - **plugin_write**: Write a plugin (auto-tests in sandbox, creates folder).
 - **plugin_activate**: Make a plugin live.
 - **plugin_test**: Test a plugin without activating.
@@ -44,10 +43,9 @@ Plugins are Python modules at ``custom/<name>/plugin.py`` with:
 ## Workflow
 1. **Understand**: Read the existing plugin source (source_read or plugin_read)
    and the error or requirement.
-2. **Write the fix**: For simple fixes, write the code directly with plugin_write.
-   For complex ones, use the sandbox — start a session with the current plugin
-   source pasted in, describe the fix needed, let OpenCode produce the patched
-   code, then use plugin_write with the result.
+2. **Write the fix**: Write the code directly with plugin_write.  For complex
+   ones, prototype and test in the sandbox first (sandbox_shell / run_python),
+   then use plugin_write with the working result.
 3. **Test**: plugin_write auto-tests.  If it fails, read the error, fix, retry.
 4. **Activate**: Call plugin_activate to make it live.
 5. **Report**: Return what you changed, which tools are affected, and whether

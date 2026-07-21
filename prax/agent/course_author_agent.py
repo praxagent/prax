@@ -1,9 +1,9 @@
 """Course content author sub-agent — produces rich, visual course materials.
 
 Prax delegates to this agent when course content needs to be created or
-improved.  The agent uses the sandbox (OpenCode) to iteratively draft,
-review, and refine markdown content with mermaid diagrams, code blocks,
-LaTeX, and structured pedagogy — then saves and publishes the result.
+improved.  The agent drafts, self-reviews, and refines markdown content with
+mermaid diagrams, code blocks, LaTeX, and structured pedagogy — then saves and
+publishes the result.
 """
 from __future__ import annotations
 
@@ -54,22 +54,16 @@ Every module you produce MUST include:
 
 1. **Read context**: Call course_status(course_id) to get the module list,
    current level, and status.
-2. **Draft via sandbox**: Start a sandbox session with a VERY specific task.
-   Tell OpenCode: "Write the FULL markdown content for Module N: <title>.
-   Write it to /workspace/module_N_lesson.md.  Include mermaid diagrams,
-   code blocks, LaTeX.  Level: <level>."
-   Include the content template above in your sandbox_start task description.
-3. **Wait & review**: Call sandbox_message to ask "Show me the content
-   of /workspace/module_N_lesson.md" — this gets the generated content back.
-   Review it carefully.  If sections are shallow, examples are missing,
-   or the content merely defines terms without explaining them, iterate
-   with specific feedback until it genuinely teaches the concept.
-   A lesson that a beginner cannot learn from is worthless.
-4. **Extract**: The sandbox response contains the markdown.  Extract it.
-5. **Save**: Call course_save_material(course_id, "module_N_lesson.md", content).
-6. **Finish sandbox**: Call sandbox_finish to clean up.
-7. **Publish**: Call course_publish(course_id) to rebuild the Hugo site.
-8. **Report**: Return what was created and the published URL.
+2. **Draft the lesson**: Write the FULL markdown content for Module N yourself,
+   following the content template above.  Include mermaid diagrams, code blocks,
+   and LaTeX as appropriate for the level.  Do not merely define terms — explain
+   them so a beginner can genuinely learn from the lesson.
+3. **Self-review**: Re-read your draft critically.  If sections are shallow or
+   examples are missing, revise until it genuinely teaches the concept.  A lesson
+   a beginner cannot learn from is worthless.
+4. **Save**: Call course_save_material(course_id, "module_N_lesson.md", content).
+5. **Publish**: Call course_publish(course_id) to rebuild the Hugo site.
+6. **Report**: Return what was created and the published URL.
 
 ## Content Structure Template
 
@@ -157,9 +151,9 @@ def _build_course_author_tools() -> list:
 def delegate_course_author(task: str) -> str:
     """Delegate course content creation or improvement to the content author agent.
 
-    The content author agent uses the sandbox (OpenCode) to produce visually
-    rich markdown with mermaid diagrams, code blocks, LaTeX, and structured
-    pedagogy.  It iterates on quality, then saves and publishes the result.
+    The content author agent produces visually rich markdown with mermaid
+    diagrams, code blocks, LaTeX, and structured pedagogy.  It iterates on
+    quality, then saves and publishes the result.
 
     **Scope each call to ONE module.**  For multiple modules, call this tool
     once per module.  This keeps each invocation fast and within budget.
