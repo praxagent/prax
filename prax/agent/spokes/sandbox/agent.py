@@ -1,9 +1,10 @@
-"""Sandbox spoke agent — code execution in isolated containers.
+"""Sandbox spoke agent — direct code execution in isolated containers.
 
-Prax delegates coding tasks here instead of keeping 9 sandbox tools in the
-main orchestrator's tool list.  The sandbox agent manages session lifecycle,
-communicates with the AI coding agent (OpenCode), handles artifact archival,
-and manages package installation.
+Prax delegates headless coding/execution tasks here instead of keeping the
+sandbox tools in the main orchestrator's tool list.  The sandbox agent writes
+and runs code DIRECTLY in the container (shell, file editing, package install)
+— there is no separate AI coding-agent session (the OpenCode subsystem was
+removed from the sandbox image; Prax codes directly).
 """
 from __future__ import annotations
 
@@ -29,58 +30,41 @@ _active_tasks_lock = threading.Lock()
 # ---------------------------------------------------------------------------
 
 SYSTEM_PROMPT = """\
-You are the Sandbox Agent for {agent_name}.  You manage sandboxed coding
-sessions where an AI coding agent (OpenCode) writes and executes code inside
-isolated Docker containers.
+You are the Sandbox Agent for {agent_name}.  You write and run code DIRECTLY in
+an isolated Docker container — there is no separate coding-agent session; YOU are
+the one writing the commands and code.
 
 ## Available tools
 
-### Direct shell (fast — no AI agent needed)
-- **sandbox_shell** — Run a shell command directly in the sandbox container
-  via docker exec.  Use for simple commands: ls, pwd, df -h, cat, grep,
-  python -c '...', du, find, env, pip list, etc.  Instant results — no
-  session overhead.
+### Shell & execution
+- **sandbox_shell** — Run a shell command in the container via docker exec:
+  ls, cat, grep, python script.py, pytest, pip, ffmpeg, pdflatex, git, etc.
+  This is how you write files (heredoc/`tee`), run scripts, and inspect output.
 
-### Session lifecycle (for complex coding tasks)
-- **sandbox_start** — Start a new coding session with an AI coding agent.
-  Returns a session_id.  You can run multiple sessions concurrently.
-- **sandbox_message** — Send follow-up instructions to a session.
-  Pass session_id if you have multiple sessions; omit to target the latest.
-- **sandbox_review** — Check session status (elapsed time, files, rounds).
-- **sandbox_finish** — End the session and archive all artifacts to workspace.
-- **sandbox_abort** — Kill the session without archiving (stuck/bad results).
-
-### Search & re-execute
-- **sandbox_search** — Search past solutions by keyword.
-- **sandbox_execute** — Re-run an archived solution in a new container.
+### Reading files
+- **sandbox_view / sandbox_scroll / sandbox_goto** — Page through a file in the
+  container with line numbers (view a window, scroll, jump to a line).
 
 ### Environment
 - **sandbox_install** — Install a system package (apt-get) in the container.
 - **sandbox_rebuild** — Rebuild the sandbox Docker image for permanent changes.
 
-## Choosing the right tool
+(data_query and lean_check are also available when their flags are enabled.)
 
-- **Simple commands** (ls, df, pwd, cat, grep, running a script) →
-  use **sandbox_shell**.  This is instant.
-- **Complex coding tasks** (write a script, generate a document, multi-step
-  development) → use **sandbox_start** + **sandbox_message** to work with
-  the AI coding agent.
-- Do NOT start an OpenCode session just to run shell commands.
-
-## Workflow for coding tasks
-1. **Start** a session with a clear, detailed task description.
-2. **Monitor** with sandbox_review if the orchestrator asks for status.
-3. **Iterate** with sandbox_message — refine the task, request changes, or
-   ask the coding agent to try a different approach.  Max 2-3 iterations.
-4. **Finish** when done — sandbox_finish archives everything to the workspace.
-5. **Report** back what was created, any files produced, and whether it succeeded.
+## Workflow
+1. **Plan** the steps, then **write** code/files with sandbox_shell (e.g.
+   `tee /workspace/active/foo.py <<'EOF' ... EOF`).
+2. **Run** it with sandbox_shell and read the output.
+3. **Iterate** — fix errors and re-run until it works.
+4. **Deliver** any artifact the user should receive under /workspace/active/
+   (the app's shared workspace), then report the filename.
+5. **Report** honestly what you did, what was produced, and whether it succeeded.
 
 ## Rules
-- For simple commands, ALWAYS prefer sandbox_shell over sandbox_start.
-- Keep iterations tight — 2-3 sandbox_message calls max per session.
-- If the session times out or errors repeatedly, abort and report honestly.
-- Always finish or abort sessions — don't leave them running.
-- If the task needs a missing package, install it before starting the session.
+- Install missing packages before you need them.
+- BOUND your output — the container disk IS the host disk; never run an unbounded
+  generator (e.g. ffmpeg with a lavfi source needs `-t`).
+- If something fails repeatedly, stop and report honestly rather than looping.
 """
 
 
@@ -100,21 +84,20 @@ def build_tools() -> list:
 
 @tool
 def delegate_sandbox(task: str) -> str:
-    """Delegate a coding task to the Sandbox Agent.
+    """Delegate a headless code-execution task to the Sandbox Agent.
 
-    The Sandbox Agent manages isolated coding sessions with an AI coding
-    agent (OpenCode) inside Docker containers.  It handles starting sessions,
-    sending instructions, reviewing progress, and archiving results.
+    The Sandbox Agent writes and runs code DIRECTLY in an isolated Docker
+    container (shell, file editing, package install) and reports the result.
+    There is no separate coding-agent session — it runs the commands itself.
 
     Use this for:
-    - "Write a Python script that does X"
+    - "Write a Python script that does X and run it"
     - "Generate a LaTeX document for Y"
     - "Run this code and show me the output"
-    - "Re-execute the solution from last week"
     - "Install package Z in the sandbox"
 
-    Do NOT use this for browser tasks (use delegate_browser) or for
-    fixing Prax's own code (use delegate_sysadmin).
+    Do NOT use this for browser tasks (use delegate_browser), desktop/GUI tasks
+    (use delegate_desktop), or for fixing Prax's own code (use delegate_sysadmin).
 
     Args:
         task: A clear, self-contained description of the coding task.
@@ -159,12 +142,9 @@ def delegate_sandbox(task: str) -> str:
 def build_spoke_tools() -> list:
     """Return the delegation tool for the main agent.
 
-    ``delegate_sandbox`` drives an OpenCode coding SESSION, which the sandbox
-    image no longer ships by default — so it's gated behind
-    ``SANDBOX_CODING_AGENT_ENABLED`` (default off). With it off, Prax codes
-    directly (run_python / workspace_save|patch / source_read|grep /
-    sandbox_shell); the pure-execution sandbox tools stay available regardless.
+    ``delegate_sandbox`` runs headless code-execution tasks directly in the
+    container (no OpenCode session — that subsystem was removed). Registered
+    whenever the sandbox is available (the caller already gates on
+    ``settings.sandbox_available``).
     """
-    if settings.sandbox_coding_agent_enabled:
-        return [delegate_sandbox]
-    return []
+    return [delegate_sandbox]

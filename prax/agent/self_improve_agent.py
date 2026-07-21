@@ -7,7 +7,7 @@ The agent has access to:
   - Codegen tools (deploy verified fixes to the live app)
   - Log reading (diagnose errors)
 
-The source code is mounted in the sandbox at /source/ so OpenCode can read
+The source code is mounted in the sandbox at /source/ so code run there can read
 and modify it directly.  In dev mode (bind mounts), changes in the sandbox
 propagate to the live app via the shared filesystem.
 """
@@ -45,7 +45,7 @@ and fix bugs in the application's own code.
   - self_improve_diff — review your changes before deploying
   - self_improve_verify — run tests + lint + startup check
   - self_improve_deploy — hot-swap verified changes into the live app
-- **Sandbox**: For complex tasks, use sandbox_start to launch OpenCode.
+- **Sandbox**: Run and test code directly in the container with sandbox_shell / run_python (no separate coding-agent session).
 - **Claude Code** (if available): Use claude_code_start_session to begin a
   multi-turn collaboration session with Claude Code on the host machine.
   Claude Code has full access to the codebase, terminal, and git.  Use this
