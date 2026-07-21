@@ -39,12 +39,26 @@ The **sandbox** (coding agents + browser + desktop container) is its own repo,
 source). Prax runs with or without it (`SANDBOX_ENABLED`); local or remote
 (`SANDBOX_DAEMON_URL`). See `docs/infrastructure/sandbox.md`.
 
+**Sibling-repo pattern.** The agent-agnostic add-ons live *next to* the prax
+checkout and are consumed as siblings, never vendored in: `../teamwork` (UI),
+`../prax-sandbox` (exec/browser/desktop), and `../prax-secrets-proxy` (the
+credential-injecting egress proxy for **keyless Prax** — real keys held by a
+separate, isolated service so a compromised Prax has nothing to steal). The
+Makefile parameterises each path (`TEAMWORK_PATH`, `SANDBOX_PATH`,
+`SECRETS_PROXY_PATH`) and docker-compose builds each from `${*_PATH}` (opt-in
+profiles for the proxy). Prax's only coupling to the proxy is the `OPENAI_BASE_URL`
+/ `ANTHROPIC_BASE_URL` wiring (`prax/agent/llm_factory.py`) — no code dependency; it
+degrades to keys-in-`.env` when unset. Integration doc:
+`docs/security/secrets-proxy.md` (proxy internals live in that repo's README).
+
 ## Docs placement — federate by ownership
 
-Prax, **TeamWork** (`../teamwork`), and **prax-sandbox** (`../prax-sandbox`) are
-separate, independently-cloneable repos. Both add-ons are **agent-agnostic** (you
-can run them with a different harness), so a doc belongs to the repo that **owns
-the thing it documents**, not wherever it's convenient:
+Prax, **TeamWork** (`../teamwork`), **prax-sandbox** (`../prax-sandbox`), and
+**prax-secrets-proxy** (`../prax-secrets-proxy`) are separate, independently-
+cloneable repos. The add-ons are **agent-agnostic** (you can run them with a
+different harness), so a doc belongs to the repo that **owns the thing it
+documents**, not wherever it's convenient — e.g. the proxy's own internals live in
+its README, while *how Prax uses it* lives in `docs/security/secrets-proxy.md`:
 
 - **Component-intrinsic docs** (TeamWork's own UI/panels/mobile UX/API; the
   sandbox's container/browser/desktop/remote internals) live in **that repo's

@@ -1,4 +1,4 @@
-.PHONY: lint layers test actions ci eval eval-capability eval-harness-lift eval-benchmark eval-matrix eval-gaia eval-self-regen tailscale-up tailscale-down tailscale-status sandbox-gpu sandbox-gpu-check \
+.PHONY: secrets-proxy lint layers test actions ci eval eval-capability eval-harness-lift eval-benchmark eval-matrix eval-gaia eval-self-regen tailscale-up tailscale-down tailscale-status sandbox-gpu sandbox-gpu-check \
         run-local-min run-local-all run-local-all-dev run-local-all-tail-dev shutdown restart-prax restart-teamwork restart-sandbox local-status local-logs smoke integration \
         _local-qdrant _local-neo4j _local-observability _local-teamwork _local-teamwork-prod _local-teamwork-dev _local-sandbox _local-prax _tailscale-local
 
@@ -231,6 +231,7 @@ LOCAL_RUN     := .local-run
 LOCAL_PY      := uv run --python 3.13 python
 TEAMWORK_PATH ?= ../teamwork
 SANDBOX_PATH  ?= ../prax-sandbox
+SECRETS_PROXY_PATH ?= ../prax-secrets-proxy
 # Workspace owner for the local stack. Qdrant/Neo4j persist their data under
 # this user's workspace (mirrors the bundled container's .services/ layout),
 # and Prax runs as this user. Defaults from .env's PRAX_USER_ID (the app-level
@@ -274,6 +275,30 @@ TW_SANDBOX_ENV = SANDBOX_CONTAINER=prax-sandbox-sandbox-1 CHROME_CDP_HOST=localh
 run-local-min:
 	@echo "Starting Prax core (no memory / sandbox / TeamWork). Ctrl-C to stop."
 	@MEMORY_ENABLED=false SANDBOX_ENABLED=false TEAMWORK_ENABLED=false $(LOCAL_PY) app.py
+
+# ── Secrets proxy: run KEYLESS Prax (endorsed security path) ──────
+# The proxy is a SEPARATE, isolated repo (praxagent/prax-secrets-proxy) — it holds
+# the REAL keys so a compromised/injected Prax has nothing to steal. This target
+# runs the sibling checkout in ITS OWN venv (the isolation is process/repo
+# separation, NOT a second env file Prax could open()). Real keys come from the
+# proxy repo's OWN gitignored .env — never from Prax's. Then point Prax's
+# OPENAI_BASE_URL/ANTHROPIC_BASE_URL at 127.0.0.1:8785 and set placeholder keys.
+# See docs/security/secrets-proxy.md. Docker path: `docker compose --profile
+# secrets-proxy up` (stronger isolation — separate container).
+secrets-proxy:
+	@if [ ! -d "$(SECRETS_PROXY_PATH)" ]; then \
+	  echo "ERROR: $(SECRETS_PROXY_PATH) not found. Clone it next to prax:"; \
+	  echo "  git clone https://github.com/praxagent/prax-secrets-proxy $(SECRETS_PROXY_PATH)"; \
+	  echo "  cp $(SECRETS_PROXY_PATH)/.env-example $(SECRETS_PROXY_PATH)/.env  # add REAL keys"; \
+	  exit 1; \
+	fi
+	@if [ ! -f "$(SECRETS_PROXY_PATH)/.env" ]; then \
+	  echo "ERROR: $(SECRETS_PROXY_PATH)/.env missing — that's where the REAL keys go."; \
+	  echo "  cp $(SECRETS_PROXY_PATH)/.env-example $(SECRETS_PROXY_PATH)/.env  # then fill it in"; \
+	  exit 1; \
+	fi
+	@echo "Starting the secrets proxy from $(SECRETS_PROXY_PATH) (its own venv + keys). Ctrl-C to stop."
+	@cd $(SECRETS_PROXY_PATH) && uv run python -m secrets_proxy
 
 run-local-all: _local-qdrant _local-neo4j _local-observability _local-teamwork _local-sandbox _local-prax
 	@# Prax is the last to bind (it waits for TeamWork, then boots a heavy
