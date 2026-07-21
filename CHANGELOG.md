@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.30.0](https://github.com/praxagent/prax/compare/v0.29.0...v0.30.0) (2026-07-21)
+
+
+### Features
+
+* **agent:** IdempotentToolCache — memoize identical idempotent reads in-turn (M3) ([#130](https://github.com/praxagent/prax/issues/130)) ([c0e2668](https://github.com/praxagent/prax/commit/c0e2668cb21c1f7165885123cbb3024405a24723))
+* **sandbox:** code natively by default — gate OpenCode coding-session tools off ([#137](https://github.com/praxagent/prax/issues/137)) ([eb8a290](https://github.com/praxagent/prax/commit/eb8a2903be3a2be1cb69d071b96c80a59a443a3d))
+* **self-improve:** Prax codes its own improvements natively — drop the Claude Code CLI ([#139](https://github.com/praxagent/prax/issues/139)) ([0364be7](https://github.com/praxagent/prax/commit/0364be72caf6f4d7e38eae7a6e584c70b05e8f04))
+
+
+### Bug Fixes
+
+* **agent:** make run_python failure unmistakable (don't let the model swallow it) ([#131](https://github.com/praxagent/prax/issues/131)) ([a763410](https://github.com/praxagent/prax/commit/a763410f8529626d6779834e98b91a842d15c35a))
+* **sandbox:** finish the OpenCode removal — Prax codes directly ([#142](https://github.com/praxagent/prax/issues/142)) ([6e4410f](https://github.com/praxagent/prax/commit/6e4410fb7c057114280c78c740e02b19e4133dd6))
+* **security:** source_grep/source_read must never expose .env or other secrets ([#136](https://github.com/praxagent/prax/issues/136)) ([0926ab4](https://github.com/praxagent/prax/commit/0926ab44d5c270928da6bc688786d870f7102679))
+
 ## [0.29.0](https://github.com/praxagent/prax/compare/v0.28.0...v0.29.0) (2026-07-20)
 
 
