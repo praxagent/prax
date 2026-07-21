@@ -336,6 +336,29 @@ class AppSettings(BaseSettings):
             "until the process restarts."
         ),
     )
+    llm_failover_backoff_ms: int = Field(
+        default=0, alias="LLM_FAILOVER_BACKOFF_MS",
+        description=(
+            "Milliseconds to wait before a cross-provider failover retry, with "
+            "±25%% jitter, so a shared transient blip (a regional network wobble, "
+            "a rate-limit wave) doesn't turn into a tight retry storm across the "
+            "provider chain. 0 (default) = fail over immediately, i.e. prior "
+            "behaviour. Only applies when LLM_FALLBACK_ENABLED is on. "
+            "(FailureAtlas: retry storms / rate-limit deadlocks.)"
+        ),
+    )
+    llm_record_answering_model: bool = Field(
+        default=False, alias="LLM_RECORD_ANSWERING_MODEL",
+        description=(
+            "When true, after each successful turn the orchestrator reads the "
+            "model that ACTUALLY answered from the response metadata and, if it "
+            "differs from the model requested, logs a warning + telemetry event "
+            "('silent model substitution'). Guards against a provider or gateway "
+            "quietly serving a different (often cheaper/weaker) model than asked "
+            "for — a silent, HTTP-200 corruption. Off by default (pure "
+            "observability, no behaviour change). (FailureAtlas.)"
+        ),
+    )
     recovery_context_injection_enabled: bool = Field(
         default=True, alias="RECOVERY_CONTEXT_INJECTION",
         description=(

@@ -214,3 +214,86 @@ def test_invoke_with_retry_fails_over_and_injects_recovery(monkeypatch):
         isinstance(m, HumanMessage) and "recovery guidance" in m.content
         for m in second
     )
+
+
+# --- Failover backoff (#3, FailureAtlas: retry storms) ----------------------
+
+def test_failover_backoff_noop_when_zero(monkeypatch):
+    import prax.agent.orchestrator as orch_mod
+    monkeypatch.setattr(orch_mod.settings, "llm_failover_backoff_ms", 0)
+    slept = []
+    monkeypatch.setattr("time.sleep", lambda s: slept.append(s))
+    orch_mod.ConversationAgent._failover_backoff()
+    assert slept == []  # immediate — prior behaviour
+
+
+def test_failover_backoff_sleeps_jittered_when_configured(monkeypatch):
+    import prax.agent.orchestrator as orch_mod
+    monkeypatch.setattr(orch_mod.settings, "llm_failover_backoff_ms", 200)
+    slept = []
+    monkeypatch.setattr("time.sleep", lambda s: slept.append(s))
+    orch_mod.ConversationAgent._failover_backoff()
+    assert len(slept) == 1
+    # 200ms ±25% jitter → [0.15, 0.25]s
+    assert 0.15 <= slept[0] <= 0.25
+
+
+def test_maybe_failover_applies_backoff_before_retry(monkeypatch):
+    import prax.agent.orchestrator as orch_mod
+    monkeypatch.setattr(orch_mod.settings, "llm_fallback_enabled", True)
+    monkeypatch.setattr(orch_mod.settings, "llm_fallback_chain", "anthropic:claude-x")
+    monkeypatch.setattr(orch_mod.settings, "llm_failover_backoff_ms", 100)
+    slept = []
+    monkeypatch.setattr("time.sleep", lambda s: slept.append(s))
+    agent = _bare_agent()
+    monkeypatch.setattr(type(agent), "_bind_provider",
+                        lambda self, p, m: setattr(self, "_active_provider", p))
+    assert agent._maybe_failover(ConnectionError("overloaded"), "u1") is True
+    assert len(slept) == 1 and slept[0] > 0  # backed off before handing back for retry
+
+
+# --- Silent model substitution detection (#2, FailureAtlas) -----------------
+
+def _agent_with_model(requested: str):
+    import types
+    agent = _bare_agent()
+    agent.llm = types.SimpleNamespace(model_name=requested)
+    return agent
+
+
+def _payload(answered_model):
+    from langchain_core.messages import AIMessage
+    return {"messages": [AIMessage(content="hi", response_metadata={"model_name": answered_model})]}
+
+
+def test_record_answering_model_off_by_default(monkeypatch, caplog):
+    import logging
+
+    import prax.agent.orchestrator as orch_mod
+    monkeypatch.setattr(orch_mod.settings, "llm_record_answering_model", False)
+    agent = _agent_with_model("gpt-5.4")
+    with caplog.at_level(logging.WARNING):
+        agent._record_answering_model(_payload("gpt-3.5-turbo"))  # blatant substitution
+    assert "substitution" not in caplog.text.lower()  # flag off → silent
+
+
+def test_record_answering_model_warns_on_substitution(monkeypatch, caplog):
+    import logging
+
+    import prax.agent.orchestrator as orch_mod
+    monkeypatch.setattr(orch_mod.settings, "llm_record_answering_model", True)
+    agent = _agent_with_model("gpt-5.4")
+    with caplog.at_level(logging.WARNING):
+        agent._record_answering_model(_payload("gpt-3.5-turbo"))
+    assert "silent model substitution" in caplog.text.lower()
+
+
+def test_record_answering_model_allows_version_suffix(monkeypatch, caplog):
+    import logging
+
+    import prax.agent.orchestrator as orch_mod
+    monkeypatch.setattr(orch_mod.settings, "llm_record_answering_model", True)
+    agent = _agent_with_model("gpt-5.4")
+    with caplog.at_level(logging.WARNING):
+        agent._record_answering_model(_payload("gpt-5.4-2026-01-15"))  # dated build, same model
+    assert "substitution" not in caplog.text.lower()  # prefix match → not a substitution

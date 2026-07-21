@@ -495,6 +495,7 @@ class ConversationAgent:
                     self._pending_denylist_notices.append(
                         terminal_user_notice(denied, kind, detail, continuing=prov, cooldown_seconds=cooldown)
                     )
+                self._failover_backoff()
                 return True
             # No healthy fallback left — still tell the user why the pool shrank.
             if terminal:
@@ -504,6 +505,73 @@ class ConversationAgent:
         except Exception:
             logger.debug("Failover evaluation failed", exc_info=True)
         return False
+
+    @staticmethod
+    def _failover_backoff() -> None:
+        """Sleep a jittered backoff before a failover retry (no-op unless configured).
+
+        Bounds the *rate* of failover retries so a shared transient blip can't
+        become a retry storm across the provider chain. ±25% jitter de-synchronises
+        concurrent turns. Default LLM_FAILOVER_BACKOFF_MS=0 → immediate (prior
+        behaviour). (FailureAtlas: retry storms / rate-limit deadlocks.)
+        """
+        base_ms = getattr(settings, "llm_failover_backoff_ms", 0) or 0
+        if base_ms <= 0:
+            return
+        import random
+        import time
+        jittered = (base_ms / 1000.0) * random.uniform(0.75, 1.25)
+        time.sleep(jittered)
+
+    def _record_answering_model(self, payload: object) -> None:
+        """Detect silent model substitution: warn if the model that answered isn't
+        the one we requested. Opt-in (LLM_RECORD_ANSWERING_MODEL); observability only.
+
+        A provider or gateway can quietly serve a different (often cheaper/weaker)
+        model than requested and still return HTTP 200 — a silent corruption
+        ordinary monitoring misses. (FailureAtlas.)
+        """
+        if not getattr(settings, "llm_record_answering_model", False):
+            return
+        try:
+            messages = payload.get("messages") if isinstance(payload, dict) else None
+            if not messages:
+                return
+            answered = None
+            for msg in reversed(messages):
+                meta = getattr(msg, "response_metadata", None) or {}
+                answered = meta.get("model_name") or meta.get("model")
+                if answered:
+                    break
+            if not answered:
+                return
+            requested = (getattr(self.llm, "model_name", None)
+                         or getattr(self.llm, "model", None))
+            # Normalise: a provider often appends a date/version suffix
+            # (gpt-5.4 → gpt-5.4-2026-xx); treat a prefix match as the same model.
+            def _base(m: str) -> str:
+                return str(m).strip().lower().split("@")[0]
+            if requested and _base(answered) != _base(requested) \
+                    and not _base(answered).startswith(_base(requested)) \
+                    and not _base(requested).startswith(_base(answered)):
+                logger.warning(
+                    "Silent model substitution: requested %r on provider %r but %r answered",
+                    requested, self._active_provider, answered,
+                )
+                try:
+                    from prax.services.health_telemetry import (
+                        EventCategory,
+                        Severity,
+                        record_event,
+                    )
+                    record_event(
+                        EventCategory.RETRY, Severity.WARNING, component="orchestrator",
+                        details=f"model substitution: requested {requested} got {answered} ({self._active_provider})",
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            logger.debug("answering-model check failed", exc_info=True)
 
     @staticmethod
     def _maybe_clarify(user_input: str) -> str | None:
@@ -1957,6 +2025,7 @@ class ConversationAgent:
             raise RuntimeError("graph.invoke worker exited without returning a result") from exc
         if status == "error":
             raise payload  # type: ignore[misc]
+        self._record_answering_model(payload)
         return payload  # type: ignore[return-value]
 
     @staticmethod
