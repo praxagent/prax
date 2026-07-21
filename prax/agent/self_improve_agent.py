@@ -3,13 +3,13 @@
 Prax delegates to this agent when it detects a bug or the user reports one.
 The agent has access to:
   - Source introspection (read Prax's code)
-  - Sandbox (OpenCode coding agent for writing/testing patches)
-  - Codegen tools (deploy verified fixes to the live app)
+  - Native codegen tools (self_improve_read/write/patch/test/lint/verify/deploy)
+    — Prax edits/tests/deploys its own code; there is no external coding agent.
+  - run_python + sandbox shell (run/verify code)
   - Log reading (diagnose errors)
 
-The source code is mounted in the sandbox at /source/ so code run there can read
-and modify it directly.  In dev mode (bind mounts), changes in the sandbox
-propagate to the live app via the shared filesystem.
+Changes are made in an isolated git worktree (self_improve_start) and hot-swapped
+into the live app via self_improve_deploy after self_improve_verify passes.
 """
 from __future__ import annotations
 
@@ -45,14 +45,11 @@ and fix bugs in the application's own code.
   - self_improve_diff — review your changes before deploying
   - self_improve_verify — run tests + lint + startup check
   - self_improve_deploy — hot-swap verified changes into the live app
-- **Sandbox**: Run and test code directly in the container with sandbox_shell / run_python (no separate coding-agent session).
-- **Claude Code** (if available): Use claude_code_start_session to begin a
-  multi-turn collaboration session with Claude Code on the host machine.
-  Claude Code has full access to the codebase, terminal, and git.  Use this
-  for complex tasks that benefit from iterative back-and-forth — it's like
-  pair programming with another AI developer.  The session is conversational:
-  explain what you need, review its proposals, iterate until the fix is right,
-  then ask it to run the tests.  End the session with claude_code_end_session.
+- **You are the coding harness.** There is NO external coding agent (OpenCode /
+  Claude Code / Codex) to delegate to — write, test, and verify the fix yourself
+  with the self_improve_* tools and run_python. Reason through the change, make
+  surgical edits with self_improve_patch, and iterate: edit → self_improve_verify
+  → read the failure → refine. This is your own loop, not a black box.
 
 ## Workflow
 1. **Search**: Use source_grep to find relevant code.  Understand the
@@ -61,8 +58,8 @@ and fix bugs in the application's own code.
    bug, check logs with read_logs.
 3. **Branch**: Use self_improve_start to create an isolated worktree.
 4. **Edit**: Use self_improve_patch for surgical edits to existing files.
-   Use self_improve_write ONLY for creating new files.  For complex tasks
-   that need multiple coordinated changes, consider using the sandbox.
+   Use self_improve_write ONLY for creating new files.  Use run_python and the
+   sandbox shell to run/verify code as you go.
 5. **Review**: Use self_improve_diff to see all changes before deploying.
    Verify it looks right — catch accidental changes here.
 6. **Verify**: Use self_improve_verify (tests + lint + startup check).
@@ -93,17 +90,14 @@ def _build_self_improve_tools() -> list:
     # Add codegen tools if available (SELF_IMPROVE_ENABLED).
     tools.extend(build_codegen_tools())
 
-    # Add read_logs if available.
+    # run_python + read_logs — Prax edits/tests its own code natively.
     if settings.self_improve_enabled:
-        from prax.agent.workspace_tools import read_logs
-        tools.append(read_logs)
+        from prax.agent.workspace_tools import read_logs, run_python
+        tools.extend([run_python, read_logs])
 
-    # Add Claude Code collaboration tools if the bridge is running.
-    try:
-        from prax.agent.claude_code_tools import build_claude_code_tools
-        tools.extend(build_claude_code_tools())
-    except Exception:
-        pass  # Bridge not available — tools not added
+    # (The Claude Code CLI bridge was removed — the sandbox no longer ships a
+    #  coding-agent CLI, and Prax is the coding harness: it writes/tests/verifies
+    #  its own changes with self_improve_read/write/test/lint/verify/deploy.)
 
     return tools
 
