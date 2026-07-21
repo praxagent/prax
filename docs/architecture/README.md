@@ -94,7 +94,7 @@ graph TB
 
     subgraph Sandbox["Docker Sandbox"]
         Container["Docker Container"]
-        OpenCode["OpenCode\n(headless HTTP API)"]
+        Exec["Pure exec env\n(shell · Python · DuckDB · Lean · desktop)"]
     end
 
     subgraph LocalML["Local ML Stack (optional)"]
@@ -134,7 +134,7 @@ graph TB
     Orchestrator --> Tools
     WS --> Workspace
     Spokes -->|sandbox| Container
-    Container --> OpenCode
+    Container --> Exec
     Sched --> ScheduleYAML
     Spokes -->|finetune| Unsloth
     Spokes -->|finetune| vLLM
@@ -176,7 +176,7 @@ Prax is organized in five layers. Each has a clear job and a single direction of
 |-------|-----------|------------|---------|
 | **Blueprints** | `prax/blueprints/` | Flask route handlers — the HTTP surface. They receive webhooks from Twilio (voice, SMS) or serve static files. Blueprints know about *channels* but not about the agent. | `POST /sms` validates a Twilio signature, hands the message to `SmsService`, and returns a TwiML response. |
 | **Services** | `prax/services/` | Business logic that doesn't belong in the agent. A service encapsulates one capability: workspace git ops, Docker sandbox lifecycle, Playwright browser sessions, APScheduler cron, Hugo publishing, etc. Services are called *both* by blueprints (channel-facing) and by agent tools (capability-facing). They never call the agent directly. | `workspace_service.py` manages the per-user git repo — creating, reading, locking, committing. |
-| **Agent** | `prax/agent/` | The LangGraph ReAct loop and everything around it: the orchestrator, LLM factory, tool builders, governance, checkpointing. Tool builder files (`*_tools.py`) define groups of LangChain tools that thin-wrap a service. The agent layer decides *what* to do; services decide *how* to do it. | `sandbox_tools.py` exposes 7 tools (`sandbox_start`, `sandbox_message`, …) that all delegate to `sandbox_service.py`. |
+| **Agent** | `prax/agent/` | The LangGraph ReAct loop and everything around it: the orchestrator, LLM factory, tool builders, governance, checkpointing. Tool builder files (`*_tools.py`) define groups of LangChain tools that thin-wrap a service. The agent layer decides *what* to do; services decide *how* to do it. | `sandbox_tools.py` exposes the direct-execution tools (`sandbox_shell`, `sandbox_install`, `sandbox_rebuild`, `sandbox_view/scroll/goto`, `desktop_*`) that delegate to `sandbox_service.py`; `delegate_sandbox` runs a headless sub-agent that writes and runs code directly in the container via `sandbox_shell`. The multi-round OpenCode coding-session tools were removed (2026-07) — Prax codes natively. |
 | **Plugins** | `prax/plugins/` | Hot-swappable extensions discovered at startup. Each plugin lives in `plugins/tools/<name>/plugin.py`, exports a `register()` function returning LangChain tools, and can be created/modified/rolled back at runtime — by the agent itself. The plugin system also manages the system prompt and LLM routing config. | `plugins/tools/news/plugin.py` provides the unified `news` tool with actions for briefings, RSS checking, and audio. |
 | **Readers** | `prax/readers/` | Legacy content-extraction helpers (ArXiv, NPR audio, web scraping). Being migrated into plugins. New code should use or create a plugin instead. | `readers/news/npr_top_hour.py` fetches the latest NPR podcast URL — now called by the `news` plugin. |
 

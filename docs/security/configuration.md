@@ -14,7 +14,7 @@ Key fields:
 |----------|---------|---------|
 | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` | Twilio console credentials (not needed for TeamWork- or Discord-only setups) | `None` |
 | `OPENAI_KEY` | OpenAI API key | *(required unless using other provider)* |
-| `ANTHROPIC_KEY` | Anthropic API key (for sandbox coding agent) | `None` |
+| `ANTHROPIC_KEY` | Anthropic API key (Claude provider for the main agent) | `None` |
 | `LLM_PROVIDER` | LLM provider: `openai`, `anthropic`, `google_vertex`, `ollama`, `vllm` | `openai` |
 | `BASE_MODEL` | Model name for the main agent | `gpt-5.4-nano` |
 | `AGENT_NAME` | Display name for the agent across all channels, greetings, and prompts | `Prax` |

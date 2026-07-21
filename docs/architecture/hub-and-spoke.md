@@ -23,7 +23,7 @@ graph TB
     Prax -->|delegate_environment| Environment["Environment Spoke\nweather + local conditions"]
     Prax -->|delegate_plugins| Plugins["Plugin Spoke\nmanifest-routed end-user tools"]
     Prax -->|delegate_sysadmin| Sysadmin["Sysadmin\nsub-hub"]
-    Prax -->|delegate_sandbox| Sandbox["Sandbox Spoke\n+ sandbox_view/scroll/goto"]
+    Prax -->|delegate_sandbox (opt-in)| Sandbox["Sandbox Spoke\n+ sandbox_view/scroll/goto"]
     Prax -->|delegate_finetune| Finetune["Finetune Spoke"]
     Prax -->|delegate_knowledge| Knowledge["Knowledge Spoke"]
     Prax -->|delegate_scheduler| Scheduler["Scheduler Spoke"]
@@ -101,15 +101,23 @@ graph LR
 
 Executes code in an isolated Docker container with a full dev environment.
 
+> **Direct code execution — no coding sessions.** `delegate_sandbox` is a
+> headless sub-agent that writes and runs code **directly** in the container via
+> `sandbox_shell` (no session lifecycle, no rounds, no archive/replay). The
+> multi-round OpenCode coding-session tools were **removed** (2026-07): the sandbox
+> image no longer ships a coding-agent server, and Prax codes natively
+> (`run_python`, `workspace_save`/`workspace_patch`, `source_read`/`source_grep`,
+> `sandbox_shell`). The spoke and all sandbox tools below are available whenever
+> `SANDBOX_ENABLED` is set. See
+> [sandbox-execution-boundary](../security/sandbox-execution-boundary.md).
+
 ```mermaid
 graph LR
-    Sandbox["🐳 Sandbox Agent"] --> exec["sandbox_execute"]
-    Sandbox --> start["sandbox_start"]
-    Sandbox --> msg["sandbox_message"]
-    Sandbox --> review["sandbox_review"]
-    Sandbox --> finish["sandbox_finish"]
-    Sandbox --> abort["sandbox_abort"]
-    Sandbox --> search["sandbox_search"]
+    Sandbox["🐳 Sandbox Agent"] --> shell["sandbox_shell"]
+    Sandbox --> view["sandbox_view"]
+    Sandbox --> scroll["sandbox_scroll"]
+    Sandbox --> goto["sandbox_goto"]
+    Sandbox --> rebuild["sandbox_rebuild"]
     Sandbox --> install["sandbox_install"]
     Sandbox --> dshot["desktop_screenshot"]
     Sandbox --> dclick["desktop_click"]
@@ -266,7 +274,7 @@ graph LR
 | `prax/services/sms_service.py` | SMS workflow: media handling, PDF pipeline, agent routing |
 | `prax/services/voice_service.py` | Voice workflow: speech processing, TTS buffer management |
 | `prax/services/conversation_service.py` | Shared conversation layer with workspace context injection |
-| `prax/services/sandbox_service.py` | Docker + OpenCode sandbox lifecycle, archiving, budget control |
+| `prax/services/sandbox_service.py` | Docker sandbox execution: shell commands, file viewer, package install, container rebuild |
 | `prax/services/scheduler_service.py` | APScheduler-backed cron service reading YAML definitions |
 | `prax/services/finetune_service.py` | LoRA fine-tuning pipeline: harvest → train → verify → hot-swap |
 | `prax/services/note_service.py` | Note CRUD, search, knowledge graph (related notes), Hugo page generation |

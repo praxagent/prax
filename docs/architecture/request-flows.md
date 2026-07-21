@@ -157,71 +157,50 @@ notes like `[I just edited this]` as completed actions rather than
 instructions — the user is informing Prax of a state change, not
 asking for one.
 
-### Sandbox Code Execution Flow
+### Sandbox Code Execution Flow (direct execution)
+
+> **Direct code execution — no coding sessions.** The multi-round OpenCode
+> coding-session tools (`sandbox_start` / `sandbox_message` / `sandbox_review` /
+> `sandbox_finish` / `sandbox_abort` / `sandbox_search` / `sandbox_execute`) were
+> **removed** (2026-07): the sandbox image no longer ships a coding-agent server.
+> `delegate_sandbox` is now a headless sub-agent that writes and runs code
+> **directly** in the container via `sandbox_shell` — no session lifecycle, no
+> rounds, no archive/replay. Prax also codes natively on the host
+> (`run_python`, `workspace_save`/`workspace_patch`, `source_read`/`source_grep`).
+> Available whenever `SANDBOX_ENABLED`. See
+> [sandbox-execution-boundary](../security/sandbox-execution-boundary.md).
 
 ```mermaid
 sequenceDiagram
     participant A as Main Agent
+    participant SB as Sandbox Spoke
     participant SS as Sandbox Service
     participant D as Docker
-    participant OC as OpenCode (HTTP)
     participant W as Workspace Git
 
     Note over A: User asks: "Turn this PDF into a beamer presentation with voiceover"
-    A->>SS: sandbox_start("Build beamer deck from PDF")
-    SS->>D: containers.run(sandbox image)
-    D-->>SS: Container started (port 19000)
-    SS->>OC: POST /session (create + initial task)
-    OC-->>SS: session_id
-    SS-->>A: {session_id, status: running, model}
+    A->>SB: delegate_sandbox("Build beamer deck from PDF")
+    Note over SB: Headless sub-agent plans and codes directly
+    SB->>SS: sandbox_shell("cat main.tex > ...")
+    SS->>D: docker exec (write file)
+    D-->>SS: ok
+    SS-->>SB: stdout / exit code
 
-    Note over A: Agent checks progress
-    A->>SS: sandbox_review()
-    SS->>OC: GET /session/{id}
-    OC-->>SS: {status, files: [main.tex, build.sh]}
-    SS-->>A: Status + file list + rounds used
+    SB->>SS: sandbox_shell("pdflatex main.tex && ...")
+    SS->>D: docker exec (build)
+    D-->>SS: build output
+    SS-->>SB: stdout / exit code
 
-    Note over A: Agent wants changes
-    A->>SS: sandbox_message("Add speaker notes")
-    SS->>OC: POST /session/{id}/message
-    OC-->>SS: {content: "Done, added notes"}
-    SS-->>A: Response + rounds_remaining
+    Note over SB: Inspect a file with the line-numbered viewer
+    SB->>SS: sandbox_view("build.sh")
+    SS->>D: docker exec (read)
+    D-->>SS: file contents
+    SS-->>SB: numbered lines
 
-    Note over A: Agent not satisfied, switches model
-    A->>SS: sandbox_message("Try again", model="openai/gpt-5")
-    SS->>OC: POST /session/{id}/message (model override)
-    OC-->>SS: Updated response
-    SS-->>A: Response (2 rounds remaining)
-
-    Note over A: Agent satisfied
-    A->>SS: sandbox_finish(summary="Beamer deck with voiceover")
-    SS->>OC: GET /session/{id}/message (export log)
-    SS->>W: Copy artifacts + SOLUTION.md + session_log.json
-    SS->>W: git commit
-    SS->>D: Stop + remove container
-    SS-->>A: {status: finished, archived_path}
+    Note over SB: Copy the artifact back to the user's workspace
+    SB->>W: write artifact + git commit
+    SB-->>A: Summary of what was built + artifact path
     A->>A: Respond to user via SMS
-```
-
-### Solution Reuse Flow
-
-```mermaid
-sequenceDiagram
-    participant A as Main Agent
-    participant SS as Sandbox Service
-    participant W as Workspace Git
-
-    Note over A: User asks: "Make another presentation from this new PDF"
-    A->>SS: sandbox_search("beamer presentation")
-    SS->>W: grep -ril SOLUTION.md
-    W-->>SS: Found: archive/code/pdf_to_beamer/
-    SS-->>A: [{session_id, snippet: "Beamer deck with voiceover"}]
-
-    A->>SS: sandbox_execute("pdf_to_beamer")
-    SS->>SS: Read SOLUTION.md for context
-    SS->>SS: start_session() with archived context
-    SS-->>A: New session running with pre-loaded solution
-    Note over A: No tokens burned re-solving a solved problem
 ```
 
 ### Scheduled Messages Flow

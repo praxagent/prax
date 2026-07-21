@@ -17,8 +17,8 @@ Docker container, never on the Prax host**:
 | `sandbox_shell`, `run_python` | container (`run_shell` → `exec_in_sandbox` → `container.exec_run`) |
 | `data_query` (DuckDB) | container (same path; host never even loads duckdb) |
 | `lean_check` | container |
-| `delegate_sandbox` (OpenCode coding sessions) | container (OpenCode HTTP API, `:4096`, loopback-only) |
 | `desktop_*`, browser tools | container (Xvfb + Chromium) |
+| `delegate_sandbox` (headless direct code-execution sub-agent) | container — writes+runs code via `sandbox_shell`; registered whenever `SANDBOX_ENABLED` |
 
 **There is no host-`subprocess` fallback.** The dispatch (`prax_sandbox_client` →
 `control_plane` → `exec_in_sandbox`) resolves the running container and
@@ -50,36 +50,45 @@ may call*, not *which strings a shell may run*.
 | **Container ENVIRONMENT variables** | ⚠️ **Yes — and they can hold secrets** | See below — this is a real exposure. |
 | **Network egress** (pip, curl, DuckDB `httpfs`, …) | ✅ Yes (unrestricted, default) | The container has outbound network — see the residual-risk below. |
 
-### ⚠️ Environment variables ARE readable — and today carry API keys
+### Environment variables ARE readable by any exec tool
 
 The container's env is fully readable by any code-exec tool (`printenv`,
-`os.environ`, even DuckDB's `SELECT getenv('X')`). The default `docker-compose.yml`
-passes **`ANTHROPIC_API_KEY` and `OPENAI_API_KEY`** into the container so OpenCode
-(the coding agent) can call models. So **those keys are readable by `run_python`,
-`data_query`, and `sandbox_shell`**, and — combined with the unrestricted egress
-above — **exfiltratable** by a code-exec tool driven by untrusted content (an
-indirect prompt injection). This is the lethal-trifecta "sensitive-data +
-exfiltration" pair at the sandbox layer, and it is **live in the current config**.
-More broadly: *anything the operator puts in the sandbox's environment (or a
-per-user daemon env) is reachable by every exec tool* — treat the sandbox env as
-readable-by-the-model.
+`os.environ`, even DuckDB's `SELECT getenv('X')`). So *anything the operator puts
+in the sandbox's environment is reachable by every exec tool* — treat the sandbox
+env as readable-by-the-model.
 
-**Mitigations (tracked — none fully implemented):**
-- **Restrict container egress** (allowlist/proxy) so a read key can't leave — the
-  single highest-leverage fix (breaks the exfiltration leg for env *and* files).
-- **Use a dedicated, low-blast-radius key for the sandbox** — a separate model
-  key with a hard spend cap / easy rotation, not the operator's primary
-  `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`, so a leak is bounded and rotatable.
-- **Keep model keys out of the shared container env** — inject them only into
-  OpenCode's own process/config rather than the container-wide environment every
-  shell inherits (harder; needs a sandbox-side change).
+**Status (2026-07): the default is now keyless.** Previously the compose passed
+`ANTHROPIC_API_KEY`/`OPENAI_API_KEY` into the container (for OpenCode), so those
+keys were readable + exfiltratable by a code-exec tool driven by untrusted content
+— a live lethal-trifecta pair. That was **fixed**: the coding-agent CLIs + the
+model keys were **removed from the sandbox image** (prax-sandbox #4), and the
+multi-round coding-session tools were **removed** from Prax entirely (#142). A
+**keyless container** is the default; a user who reinstalls a coding-agent CLI
+themselves adds a *dedicated, spend-capped* key.
+
+**Residual + stronger mitigations (tracked):**
+- **Secret-injecting egress proxy (strongest — the real wall).** Run Prax with NO
+  API keys at all; route external calls through a local proxy that holds the keys,
+  injects them, and returns the response. Prax can't exfiltrate a key it never
+  holds (this also removes the *host* `.env` from the model's reach, cf. the
+  `source_grep` fix). Prax already supports `OPENAI_BASE_URL` → the LLM half is a
+  small step (LiteLLM-proxy or a ~100-line reverse proxy); a transparent forward
+  proxy generalises it and adds the egress allowlist. Design: `secrets-proxy.md`
+  (planned). This is the concrete build of "make the secret unreachable" — the
+  boundary the OpenAI long-horizon-safety assessment names as the real wall (an
+  in-code guard the agent can edit is only a speed bump).
+- **Restrict container egress** (allowlist/proxy) so even a read secret / a
+  `/workspace` file can't leave — breaks the exfiltration leg for env *and* files.
+- **Dedicated, spend-capped, rotatable key** for any opted-in coding-agent CLI —
+  bounds the blast radius, never the operator's primary key.
 - Don't rely on the model "not looking" — assume untrusted content can drive it.
 
 ### The one elevated case: self-improvement mounts `/source`
 
 The **self-improvement** flow (`self_improve_agent`, opt-in, `@risk_tool` HIGH,
-human-gated) mounts the **Prax source tree at `/source`** so OpenCode can read and
-modify it. During that flow — and only then — code in the container can reach the
+human-gated) mounts the **Prax source tree at `/source`** so the native
+self-improve tools (`self_improve_read/write/patch/…`) can read and modify it.
+During that flow — and only then — code in the container can reach the
 repo, **including the on-disk gitignored `.env` (secrets)**. This is *by design*
 (the whole point is to let the agent edit Prax), and it is why the self-improve
 tools are HIGH-risk and gated. The everyday persistent sandbox (the one behind
@@ -88,22 +97,20 @@ with `docker inspect prax-sandbox-sandbox-1 --format '{{range .Mounts}}…'`.
 
 ## Residual risks & hardening (status)
 
-1. **Secrets in the container env + unrestricted egress = a live exfiltration
-   path.** The container carries `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` (for
-   OpenCode) and has open outbound network, so a code-exec tool driven by
-   *untrusted content* (indirect prompt injection in a fetched page, a poisoned
-   CSV) could read those keys (or `/workspace` data) and POST them out (`curl`,
-   DuckDB `httpfs`/`getenv`, a `COPY … TO` then upload). This is the
-   **lethal-trifecta "sensitive-data + exfiltrate" pair** at the sandbox layer,
-   and it is **present in the default config**. The perimeter trifecta guard +
-   provenance taint (`UntrustedContentTaint`) reduce the *"untrusted-in →
-   sensitive-tool"* path, but neither the keys-in-env nor the raw egress is itself
-   restricted. **Status: not implemented — tracked** (adopt-tracker). Ranked
-   options: **(a)** restrict container egress (allowlist/proxy) — kills the leg for
-   both env *and* files; **(b)** give the sandbox a **dedicated, spend-capped,
-   rotatable** model key, not the operator's primary one, so a leak is bounded;
-   **(c)** keep model keys out of the shared container env (inject only into
-   OpenCode's process); **(d)** a no-network / read-only DuckDB compute mode.
+1. **Unrestricted container egress → data-exfiltration leg.** The model keys are
+   no longer in the container by default (removed 2026-07), but the container
+   still has **open outbound network**, so a code-exec tool driven by *untrusted
+   content* (indirect prompt injection in a fetched page, a poisoned CSV) could
+   still POST `/workspace` data — or any secret a user opted back in — outward
+   (`curl`, DuckDB `httpfs`/`getenv`, a `COPY … TO` then upload). The perimeter
+   trifecta guard + provenance taint (`UntrustedContentTaint`) reduce the
+   *"untrusted-in → sensitive-tool"* path; the raw egress itself isn't restricted.
+   **Status: tracked.** Ranked options: **(a)** the **secret-injecting egress
+   proxy** (keyless Prax; keys live only in the proxy) — the strongest fix, and it
+   removes the *host* `.env` from reach too; **(b)** restrict container egress
+   (allowlist/proxy) — kills the leg for env *and* files; **(c)** a dedicated,
+   spend-capped, rotatable key for any opted-in coding-agent CLI; **(d)** a
+   no-network / read-only DuckDB compute mode.
 2. **`/source` mount exposes secrets during self-improvement** — mitigated by
    keeping that flow HIGH-risk + human-gated (do not relax that).
 3. **The container overlay IS the host disk** — a runaway in-container process can

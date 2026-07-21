@@ -82,7 +82,7 @@
 - **`dependency failed to start: container is unhealthy`:**
   Check which container is unhealthy: `docker inspect --format='{{json .State.Health}}' prax-CONTAINER-1 | python3 -m json.tool`. Common causes:
   - **Ollama:** The image doesn't have `curl` or `wget`. The healthcheck uses bash's `/dev/tcp`. Ensure the compose file has the correct healthcheck.
-  - **Sandbox:** OpenCode requires auth if `OPENCODE_SERVER_PASSWORD` is set but the healthcheck doesn't pass credentials. Check that the entrypoint seeds the OpenCode config on first run.
+  - **Sandbox:** the image is a pure-execution environment (no OpenCode/coding-agent server). If it reports unhealthy, check the container's own healthcheck (shell/exec reachability, desktop processes) — the coding-agent server is no longer part of the image.
 
 - **Desktop / Browser tabs stuck or `Connection closed (code: 1006)` in the console:**
   The sandbox's `websockify` (port 6080) and CDP socat bridge (9223) stay listening even when the underlying Xvfb / x11vnc / Chromium processes die at startup — the sandbox entrypoint backgrounds them with `&>/dev/null`, so failures are silent and the container still reports healthy. Verify the desktop processes are actually running:
@@ -105,7 +105,12 @@
   A healthy response starts with the RFB protocol version (`RFB 003.008`). `ConnectionClosedError ... 1011 Failed to connect to downstream server` means websockify is up but x11vnc (port 5900) is not.
 
 - **`.env` visible inside sandbox at `/source/.env`:**
-  The full repo is bind-mounted at `/source/` for coding agents. Secrets are passed via environment variables, not `.env`. The `.env` file inside the sandbox is a copy of the host file — coding agents can read it but API keys are already in the environment anyway.
+  The full repo is bind-mounted at `/source/` **only** during the gated, HIGH-risk
+  self-improvement flow (Prax editing its own code natively). The everyday
+  persistent sandbox mounts only `/workspace`. During self-improvement the `.env`
+  file is visible inside the sandbox — see
+  [sandbox-execution-boundary](../security/sandbox-execution-boundary.md) for the
+  `/source`-mount exposure and its mitigations.
 
 - **Neo4j telemetry warning:**
   Set `NEO4J_dbms_usage__report_enabled=false` in the Neo4j environment in `docker-compose.yml` (already done in the default config).
@@ -113,19 +118,26 @@
 - **Data lost after `docker compose down`:**
   All persistent data (memory, models, agent configs) is stored in `WORKSPACE_DIR` (default: `../workspaces/`), not Docker volumes. Only observability data (Tempo, Loki, Prometheus, Grafana) uses Docker volumes. Copy the workspace directory to migrate to a new machine.
 
-## Coding Agents (Claude Code / Codex / OpenCode)
+## Coding (native — no external coding agent)
 
-- **Claude Code / Codex not installed in sandbox:**
-  Rebuild the sandbox: `docker compose up --build sandbox`. The Dockerfile installs all three via npm.
+Prax codes **natively**: `run_python`, `workspace_save`/`workspace_patch`
+(syntax-linted), `source_read`/`source_grep`, and `sandbox_shell`. The
+self-improvement flow is likewise native (`self_improve_read/write/patch/test/
+verify/deploy`). **The sandbox image no longer ships the OpenCode / Claude-Code /
+Codex CLIs or a coding-agent server**, and takes no model API keys.
 
-- **Claude Code asks for permission in sandbox:**
-  The tools run with `--permission-mode bypassPermissions`. If you're using Claude Code interactively via the terminal, you may need to approve once or run with the same flag.
+- **Where did the coding-session tools go?**
+  The multi-round OpenCode coding-session tools (`sandbox_start`/`message`/
+  `review`/`finish`/`abort`/`search`/`execute`) and the `SANDBOX_CODING_AGENT_ENABLED`
+  flag were **removed** (2026-07). `delegate_sandbox` is still here, but it's now a
+  headless sub-agent that writes and runs code **directly** in the container via
+  `sandbox_shell` — no session lifecycle, no rounds, no archive/replay. It's
+  registered whenever `SANDBOX_ENABLED`. Prax also codes natively on the host
+  (`run_python`, `workspace_save`/`workspace_patch`, `source_read`/`source_grep`).
 
-- **Coding agent config lost after restart:**
-  Agent configs are stored in `WORKSPACE_DIR`: `.claude/`, `.codex/`, `.opencode/`. These are bind-mounted into the sandbox. If the workspace directory was deleted or moved, reconfigure via TeamWork terminal (`cd /source && claude login`).
-
-- **`SELF_IMPROVE_ENABLED` is set but coding agent tools don't appear:**
-  The tools are registered at import time. Restart the app after changing `.env`: `docker compose restart prax`.
+- **`SELF_IMPROVE_ENABLED` is set but the self-improve tools don't appear:**
+  Tools are registered at import time. Restart the app after changing `.env`:
+  `docker compose restart prax`.
 
 ## Memory System
 

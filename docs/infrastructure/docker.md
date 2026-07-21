@@ -34,7 +34,7 @@ This starts two core services (the `prax` container is all-in-one):
 | Service | Description |
 |---------|-------------|
 | **prax** | All-in-one container that bundles the Flask app (port 5001), the TeamWork web UI (port 3000) + API (port 8000), Qdrant, Neo4j, and ngrok (dashboard on 4040). `.env` injected, Docker socket for sandbox management. ngrok forwards the Twilio webhook routes (`/transcribe`, `/sms`) and the gated `/shared/<token>` endpoint to the public internet — only files/courses/notes registered in `workspaces/{user}/.shares.json` are reachable through it. |
-| **sandbox** | Always-on OpenCode sandbox with Python, LaTeX, ffmpeg, poppler, pandoc, headless Chrome. Shares `./workspaces` volume. |
+| **sandbox** | Always-on **pure-execution** sandbox with Python + scientific stack, DuckDB, Lean, LaTeX, ffmpeg, poppler, pandoc, headless Chrome, and desktop. Ships **no coding-agent server** (no OpenCode/Claude-Code/Codex) and takes no model API keys — Prax codes natively. Shares `./workspaces` volume. |
 | **tailscale** *(opt-in)* | Userspace `tailscaled` sidecar that joins your tailnet and serves TeamWork (`:443`) + Grafana (`:3001`) over MagicDNS HTTPS. Activated by setting `TS_AUTHKEY` + `COMPOSE_PROFILES=tailscale` in `.env`; silently skipped otherwise. State persists in a Docker volume so the node identity survives restarts. |
 
 The app waits for the sandbox and TeamWork health checks before starting. Environment detection is automatic — `RUNNING_IN_DOCKER=true` and `SANDBOX_HOST=sandbox` are set by compose.

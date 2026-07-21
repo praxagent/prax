@@ -296,7 +296,7 @@ Returns recent health events from the telemetry store. Supports filtering.
 
 ## Rollback awareness
 
-When health degrades, the monitor checks whether Prax's code was recently modified (e.g., by a coding agent via self-improvement). If a new commit appeared in the last 30 minutes AND any subsystem is unhealthy, the monitor adds a **Recent Changes** subsystem alert:
+When health degrades, the monitor checks whether Prax's code was recently modified (e.g., by the native self-improvement flow). If a new commit appeared in the last 30 minutes AND any subsystem is unhealthy, the monitor adds a **Recent Changes** subsystem alert:
 
 ```
 Code changed 12.5min ago (fix: update search tool parsing). Health degradation may be related -- consider rollback.

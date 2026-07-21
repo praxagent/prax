@@ -35,7 +35,7 @@ the *pattern*, not as a validated result.
 | matrix.build | Prax equivalent |
 |---|---|
 | Each agent has its own browser/tools/files/memory | **prax-sandbox** (per-agent containers + browser + desktop) + memory spoke + workspace |
-| Orchestrates Claude Code / Codex agents | The sandbox already drives claude-code / codex / opencode coding agents |
+| Orchestrates Claude Code / Codex agents | `delegate_sandbox` codes directly in the container (headless direct execution) + the native `self_improve` codegen loop |
 | Tiered, continuous autonomous loops | **task-runner** (autonomous Kanban pickups) + proactivity initiative + self-regeneration (#29) |
 | "From direction to proof" | Execution-graph observability + scrubbed receipts + LGTM/Grafana |
 
