@@ -16,6 +16,7 @@ see docs/security/secrets-proxy.md.
 from __future__ import annotations
 
 import logging
+import os
 
 from prax.secrets_proxy.app import build_proxy_app
 from prax.secrets_proxy.config import ProxyConfig
@@ -24,6 +25,16 @@ from prax.secrets_proxy.config import ProxyConfig
 def main() -> None:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s [secrets-proxy] %(message)s")
+    # Load the proxy's OWN env file (default .env-proxy) — the ONE place the real
+    # keys live, SEPARATE from Prax's .env. Existing os.environ wins (override=False)
+    # so an explicit `OPENAI_KEY=… make secrets-proxy` still works.
+    env_file = os.environ.get("PROXY_ENV_FILE", ".env-proxy")
+    try:
+        from dotenv import load_dotenv
+        if load_dotenv(env_file, override=False):
+            logging.getLogger("prax.secrets_proxy").info("loaded env from %s", env_file)
+    except Exception:  # noqa: BLE001 — dotenv is best-effort; env vars still work
+        logging.getLogger("prax.secrets_proxy").debug("no %s loaded", env_file)
     cfg = ProxyConfig.from_env()
     app = build_proxy_app(cfg)
     have = [n for n, up in cfg.upstreams.items() if up.real_key()]

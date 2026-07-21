@@ -45,22 +45,31 @@ Code: `prax/secrets_proxy/` (`config.py`, `app.py`, `__main__.py`). Tests:
 `tests/test_secrets_proxy.py` (keyless; pins injection, auth-stripping, the
 allowlist, streaming, and that the key/body never appear in the audit log).
 
-## Run it
+## Run it — TWO env files
+
+The whole point is separation, so the real keys and Prax's config live in
+**different files** (and different processes):
+
+| File | Loaded by | Holds |
+|---|---|---|
+| **`.env-proxy`** (from `.env-proxy-example`, **gitignored**) | the secrets proxy only | the **REAL** `OPENAI_KEY`/`ANTHROPIC_KEY` + proxy config |
+| **`.env`** (from `.env-example`) | Prax only | Prax config + **placeholder** keys + the `*_BASE_URL`s |
 
 **1. Start the proxy** — the ONLY place the real keys live:
 
 ```bash
-OPENAI_KEY=sk-real...  ANTHROPIC_KEY=sk-ant-real...  \
-  uv run python -m prax.secrets_proxy          # listens on 127.0.0.1:8785
+cp .env-proxy-example .env-proxy      # then put the REAL keys in .env-proxy
+make secrets-proxy                    # loads .env-proxy; listens 127.0.0.1:8785
 ```
 
-Env the proxy reads: `OPENAI_KEY`, `ANTHROPIC_KEY` (the real ones);
+`.env-proxy` keys: `OPENAI_KEY`, `ANTHROPIC_KEY` (the real ones);
 `PROXY_HOST`/`PROXY_PORT` (default `127.0.0.1:8785`); `PROXY_OPENAI_BASE_URL` /
 `PROXY_ANTHROPIC_BASE_URL` (default the real providers — set the OpenAI one to a
 third-party like OpenRouter/DeepSeek if you route there); `PROXY_AUDIT_LOG` (a
-file path for the audit trail); `PROXY_TIMEOUT_S`.
+file path for the audit trail); `PROXY_TIMEOUT_S`; `PROXY_ENV_FILE` (override which
+file to load). Explicit shell env still wins, e.g. `OPENAI_KEY=… make secrets-proxy`.
 
-**2. Point a keyless Prax at it** — Prax's `.env` has *placeholders*, not real keys:
+**2. Point a keyless Prax at it** — in Prax's `.env`, *placeholders* + the base URLs:
 
 ```bash
 OPENAI_BASE_URL=http://127.0.0.1:8785/openai
