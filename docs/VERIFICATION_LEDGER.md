@@ -76,6 +76,13 @@ This ledger is the honest complement to
 | **Reverse proxy** (model keys via base-URL: `OPENAI_BASE_URL`/`ANTHROPIC_BASE_URL`) | ✅ | **Verified live 2026-07-22** — the container runs over TLS on `127.0.0.1:8785`, `/healthz` returns provider readiness, the token gate rejects un-tokened calls (401), and the combined CA bundle trusts both the self-signed proxy *and* real endpoints (system CAs preserved). | A full keyless round-trip *through Prax* to a real model completion wasn't run in CI (needs a real key in the proxy `.env`); the operator confirms it. |
 | **Forward (MITM) proxy** (all REST egress via `HTTPS_PROXY`, registry-driven injection) | 🧪 | The generic injector (bearer/header/basic/query, per host, client-auth-stripped, multi-rule-per-host) is **unit-tested** (10 tests); the forward-map is generated from the credential registry with a never-drift test. | A live end-to-end MITM run against each real third-party provider (Twilio, Tavily, ElevenLabs, …) has **not** been done — no keys held, and it needs the mitmproxy CA trusted in a real deployment. Verify per-provider with a real key; see [deployment-topology.md](security/deployment-topology.md). |
 
+## Multi-turn eval suite (`prax/eval/multiturn.py`, `make eval-multiturn`)
+
+| Surface | Status | Verified | Not verified / needs |
+|---|---|---|---|
+| **Framework** (conversation loop, deterministic final-state grading, pass^k, YAML loading) | ✅ | Unit-tested keyless with injected agent/user-sim stubs (11 tests): alternation, done-signal early-exit, max-turns bound, content-on-final-turn vs tool/spoke-on-union grading, executor-error handling, flaky pass^k, suite aggregation. | — (pure logic; nothing external) |
+| **Live executors** (`orchestrator_agent`, `bare_agent`, `llm_user_simulator`) | 🧪 | Wiring implemented (threads history through `agent.run(conversation=…)`; a cheap LLM plays the user). | **Never run live** — no `make eval-multiturn` pass against a real model yet. Needs one live run (real user-simulator + full orchestrator) to confirm the persona loop resolves and the seed cases grade sensibly. Verify with a cheap model, then move this to ✅. |
+
 ## Tier system (orchestrator)
 
 | Mechanism | Status | Verified | Not verified / needs |

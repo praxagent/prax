@@ -1,0 +1,22 @@
+# Multi-turn case — an under-specified opening that must be CLARIFIED before the
+# agent can act, then routed to the right tool. A harness lift a bare model can't
+# earn (it has no tools), surfaced only across turns.
+id: clarify_then_route
+title: Resolve a vague request, then route to the right tool
+persona: >-
+  You want to save a note but you start vague. When the assistant asks what you
+  need, reply exactly: "Save a note titled Groceries with the text: milk, eggs,
+  bread." Reply with only TASK_COMPLETE once it confirms the note was saved.
+opening: I need to remember something for later.
+max_turns: 5
+checks:
+  - kind: contains
+    value: Groceries
+    weight: 1.0
+  - kind: tool
+    value: note_create|workspace_save|note_update
+    weight: 1.0
+notes: >-
+  Turn one is under-specified on purpose (tests clarification instead of guessing);
+  turn two makes the task concrete. The tool check grades the whole conversation —
+  the note only has to be saved at some point.

@@ -1,0 +1,26 @@
+# Multi-turn case — a NEGATIVE constraint introduced mid-conversation ("rewrite it
+# without word X"). Graded on the final answer, so an earlier draft that used the
+# word is fine; the resolved output must avoid it.
+id: retract_and_constrain
+title: Apply a negative constraint introduced on turn two
+persona: >-
+  You want a one-sentence description of the sun. After the first reply, say
+  exactly: "Rewrite it in one sentence without using the words 'hot' or 'bright'."
+  Reply with only TASK_COMPLETE once you get a single sentence that avoids both
+  words.
+opening: Describe the sun in one sentence.
+max_turns: 4
+checks:
+  - kind: absent
+    value: bright
+    weight: 1.0
+  - kind: absent
+    value: hot
+    weight: 1.0
+  - kind: regex
+    value: '[.!?]\s*$'
+    weight: 0.5
+notes: >-
+  The late constraint is a retraction of allowed vocabulary. Content checks grade
+  the FINAL assistant turn only, so an earlier draft containing 'hot'/'bright' does
+  not fail the case — the agent has to actually revise.

@@ -1,0 +1,19 @@
+# Multi-turn case — a format constraint introduced on turn two. A single-turn eval
+# never tests whether the agent re-applies a late constraint to its FINAL output.
+id: late_format_constraint
+title: Honor a format constraint added after the first reply
+persona: >-
+  You want a short list of primary colors. On your FIRST message after the
+  assistant answers, say exactly: "Actually, give me exactly three as a JSON array
+  of lowercase strings, nothing else." You are satisfied — reply with only
+  TASK_COMPLETE — once you receive a JSON array of exactly three lowercase color
+  strings and nothing else.
+opening: List some primary colors for me.
+max_turns: 4
+checks:
+  - kind: regex
+    value: '\[\s*"[a-z]+"\s*,\s*"[a-z]+"\s*,\s*"[a-z]+"\s*\]'
+    weight: 1.0
+notes: >-
+  The constraint (exactly three, JSON, lowercase) arrives on turn two. Graded on the
+  final answer, so an earlier prose list doesn't count — the agent must restructure.

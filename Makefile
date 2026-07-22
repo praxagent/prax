@@ -1,4 +1,4 @@
-.PHONY: secrets-proxy lint layers test actions ci eval eval-capability eval-harness-lift eval-benchmark eval-matrix eval-gaia eval-self-regen tailscale-up tailscale-down tailscale-status sandbox-gpu sandbox-gpu-check \
+.PHONY: secrets-proxy lint layers test actions ci eval eval-capability eval-harness-lift eval-multiturn eval-benchmark eval-matrix eval-gaia eval-self-regen tailscale-up tailscale-down tailscale-status sandbox-gpu sandbox-gpu-check \
         run-local-min run-local-all run-local-all-dev run-local-all-tail-dev shutdown restart-prax restart-teamwork restart-sandbox local-status local-logs smoke integration \
         _local-qdrant _local-neo4j _local-observability _local-teamwork _local-teamwork-prod _local-teamwork-dev _local-sandbox _local-prax _tailscale-local
 
@@ -75,6 +75,13 @@ eval-capability:
 eval-harness-lift:
 	FLASK_SECRET_KEY=$${FLASK_SECRET_KEY:-ci-test-key} uv run --python 3.13 \
 		python scripts/eval_suite.py harness-lift --tier $(EVAL_TIER)
+
+# Multi-turn persona conversations, graded deterministically on the final state and
+# reported as pass^k (all K trials must pass — reliability, not one lucky shot).
+# K=<n> sets trials per case (default 3). A cheap LLM plays the user simulator.
+eval-multiturn:
+	FLASK_SECRET_KEY=$${FLASK_SECRET_KEY:-ci-test-key} uv run --python 3.13 \
+		python scripts/eval_suite.py multiturn --tier $(EVAL_TIER) --k $(or $(K),3)
 
 # Standard benchmark adapters through the full harness — deterministic scoring.
 # BENCH=ifeval|injecagent|sycophancy|bfcl|halueval|truthfulqa|gsm8k|mmlu_pro|
