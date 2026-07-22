@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.33.0](https://github.com/praxagent/prax/compare/v0.32.0...v0.33.0) (2026-07-22)
+
+
+### Features
+
+* **security:** forward-map generator + endorsed multi-container topology ([#148](https://github.com/praxagent/prax/issues/148)) ([e0a3aaa](https://github.com/praxagent/prax/commit/e0a3aaa61a18c0a9958d1d04ab5cff0c1968a4be))
+
 ## [0.32.0](https://github.com/praxagent/prax/compare/v0.31.0...v0.32.0) (2026-07-22)
 
 
