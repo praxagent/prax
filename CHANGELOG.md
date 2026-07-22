@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.35.1](https://github.com/praxagent/prax/compare/v0.35.0...v0.35.1) (2026-07-22)
+
+
+### Bug Fixes
+
+* **secrets-proxy:** make forward mode actually work end-to-end + verify ([#157](https://github.com/praxagent/prax/issues/157)) ([1c02289](https://github.com/praxagent/prax/commit/1c02289e0a971f1d7801b7198930454bbba7057e))
+
 ## [0.35.0](https://github.com/praxagent/prax/compare/v0.34.0...v0.35.0) (2026-07-22)
 
 
