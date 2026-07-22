@@ -31,6 +31,9 @@ Everything here feeds [IDEAS_BACKLOG #29](../IDEAS_BACKLOG.md) (close the recurs
 | **"Verifiable beats judgeable"** (deterministic regex criteria) | [edge-bench](edge-bench-learning-curves.md) | ✅ | `RubricCriterion.verify` |
 | **P1 plugin micro-loop** (notice→propose→isolate→verify→canary→rollback) | [autoresearch](autoresearch-labless.md) + [aide2](aide2-recursive-self-improvement.md) | ⏸ TJ | #29 P1 — de-risked by aide2 evidence; ~3–5 days; **gate ready after the split lands** |
 | **Failure-provenance diagnosis** (classify bad-plan vs bad-execution before retry → replan vs retry) | [arts](arts-agentic-tree-search.md) | 📋 | flag-gated orchestrator/#29 heuristic (more surgical than auto-tier-escalation) + an eval-scoring lens ("don't punish a correct plan for flaky execution") |
+| **Textual-gradient proposer for self-regen** (turn the eval failure into a *directed* NL "gradient" telling the proposer what to change — TextGrad) | [self-improving-survey](self-improving-agents-survey.md) + [aide2](aide2-recursive-self-improvement.md) | 📋 | a more sample-efficient proposer inside the UNCHANGED propose→verify→accept gate (safe by construction); experiment on `self_regen.py` |
+| **Population/evolutionary search over overlays** (a population of candidates + selection > single-shot iterate) | [self-improving-survey](self-improving-agents-survey.md) + [aide2](aide2-recursive-self-improvement.md) | 📋 | natural extension once #29 P1 lands; `accept_change` already scores candidates — wire a small population loop on top |
+| **Self-improvement taxonomy as a recurring self-audit** (re-map Prax onto the two-branch/8-cell taxonomy each time #29 moves) | [self-improving-survey](self-improving-agents-survey.md) | 📋 | cheapest gap-finder; Prax occupies every scaffolding cell — the least-developed is **memory *processing*/consolidation** (the next cell to look at) |
 
 ## Capability candidates
 
