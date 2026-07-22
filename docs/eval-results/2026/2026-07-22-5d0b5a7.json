@@ -1,0 +1,120 @@
+{
+  "timestamp": "2026-07-22T18:30:50+00:00",
+  "git_commit": "5d0b5a7",
+  "model": "deepseek/deepseek-v4-flash",
+  "provider": "openrouter",
+  "matrix_limit": 10,
+  "aggregate": {
+    "n_benchmarks": 15,
+    "avg_pass_rate": 0.436,
+    "total_tokens": 3015199,
+    "estimated_cost_usd": 0.278
+  },
+  "benchmarks": {
+    "ifeval": {
+      "pass_rate": 0.444,
+      "n": 9,
+      "total_tokens": 267196,
+      "dataset": "real",
+      "variant": null
+    },
+    "injecagent": {
+      "pass_rate": 1.0,
+      "n": 6,
+      "total_tokens": 283684,
+      "dataset": "real",
+      "variant": null
+    },
+    "sycophancy": {
+      "pass_rate": 1.0,
+      "n": 6,
+      "total_tokens": 701097,
+      "dataset": "real",
+      "variant": null
+    },
+    "bfcl": {
+      "pass_rate": 0.167,
+      "n": 6,
+      "total_tokens": 179739,
+      "dataset": "real",
+      "variant": null
+    },
+    "halueval": {
+      "pass_rate": 1.0,
+      "n": 6,
+      "total_tokens": 176031,
+      "dataset": "real",
+      "variant": null
+    },
+    "truthfulqa": {
+      "pass_rate": 0.333,
+      "n": 15,
+      "total_tokens": 345280,
+      "dataset": "real",
+      "variant": "MC1 (single-correct multiple-choice; NOT generation/MC2)"
+    },
+    "gsm8k": {
+      "pass_rate": 0.0,
+      "n": 15,
+      "total_tokens": 146978,
+      "dataset": "real",
+      "variant": "test split, exact final-answer match"
+    },
+    "mmlu_pro": {
+      "pass_rate": 0.562,
+      "n": 16,
+      "total_tokens": 176710,
+      "dataset": "real",
+      "variant": "test split, 10-option letter exact-match"
+    },
+    "gpqa": {
+      "pass_rate": 0.333,
+      "n": 15,
+      "total_tokens": 147689,
+      "dataset": "real",
+      "variant": "GPQA-Diamond (198q), letter exact-match, deterministic choice shuffle"
+    },
+    "math": {
+      "pass_rate": 0.375,
+      "n": 16,
+      "total_tokens": 266388,
+      "dataset": "real",
+      "variant": "MATH-500 subset, exact/equivalent final answer"
+    },
+    "simpleqa": {
+      "pass_rate": 1.0,
+      "n": 6,
+      "total_tokens": 175318,
+      "dataset": "real",
+      "variant": null
+    },
+    "humaneval": {
+      "pass_rate": 0.333,
+      "n": 15,
+      "total_tokens": 149089,
+      "dataset": "real",
+      "variant": "hidden-unit-test execution in sandbox"
+    },
+    "arc_agi_2": {
+      "pass_rate": 0.0,
+      "n": 10,
+      "total_tokens": 0,
+      "dataset": "real",
+      "variant": "public evaluation split, exact grid match"
+    },
+    "longcontext": {
+      "pass_rate": 0.0,
+      "n": 8,
+      "total_tokens": 0,
+      "dataset": "real",
+      "variant": "synthetic needle-in-haystack; exact-substring retrieval; multiple lengths"
+    },
+    "agentsafety": {
+      "pass_rate": 0.0,
+      "n": 7,
+      "total_tokens": 0,
+      "dataset": "real",
+      "variant": "harmful-request refusal; deterministic refusal-proxy scoring (heuristic, not LLM-judge)"
+    }
+  }
+}

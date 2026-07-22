@@ -78,6 +78,34 @@ def cmd_harness_lift(args) -> int:
     return 0
 
 
+def _record_scorecard(report: dict) -> None:
+    """Distil a matrix report into the committed aggregates-only scorecard record."""
+    import datetime
+    import os
+    import subprocess
+
+    from prax.eval.scorecard import write_dashboard, write_record
+    try:
+        commit = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"],
+                                         text=True).strip()
+    except Exception:
+        commit = "unknown"
+    model = report.get("cost_model") or os.environ.get("LOW_MODEL") or "unknown"
+    ts = datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat()
+    from prax.eval.scorecard import build_record
+    record = build_record(
+        report, git_commit=commit, model=model,
+        provider=os.environ.get("LLM_PROVIDER", "unknown"),
+        matrix_limit=int(os.environ.get("PRAX_EVAL_DATASET_LIMIT", "0")),
+        timestamp=ts,
+    )
+    run_id = commit if commit != "unknown" else ts.replace(":", "").replace("-", "")[:12]
+    path = write_record(record, run_id=run_id)
+    write_dashboard()
+    print(f"\n>>> Scorecard record written: {path}")
+    print("    Dashboard updated: docs/eval-results/MATRIX.md (aggregates only, committable)")
+
+
 def cmd_multiturn(args) -> int:
     from prax.eval.multiturn import run_multiturn_suite
     summary = run_multiturn_suite(tier=args.tier, model_override=args.model, k=args.k)
@@ -125,6 +153,8 @@ def cmd_benchmark(args) -> int:
                   f"  {agg.get('total_tokens', 0):>8} tok  {format_cost(agg.get('estimated_cost_usd'))}")
         print(f"    {'TOTAL':12} {'':>25} {report.get('total_tokens', 0):>8} tok  "
               f"{format_cost(report.get('estimated_cost_usd'))} (estimate)")
+        if getattr(args, "record", False):
+            _record_scorecard(report)
         return 0
     if args.lift:
         from prax.eval.benchmarks import run_benchmark_lift
@@ -210,6 +240,9 @@ def main() -> int:
     sp_bench.add_argument("--no-resume", action="store_true", help="start fresh")
     sp_bench.add_argument("--lift", action="store_true",
                           help="full harness vs bare model (same model) → harness lift")
+    sp_bench.add_argument("--record", action="store_true",
+                          help="(name=all only) write an aggregates-only scorecard record "
+                               "to docs/eval-results/ + update MATRIX.md")
     sp_bench.set_defaults(func=cmd_benchmark)
 
     args = p.parse_args()
