@@ -86,3 +86,54 @@ def test_the_two_shipped_model_providers_are_present():
     """OPENAI_KEY + ANTHROPIC_KEY are the Tier-1 providers the proxy handles today."""
     model_envs = {c.env for c in reg.model_credentials()}
     assert {"OPENAI_KEY", "ANTHROPIC_KEY"} <= model_envs
+
+
+# --- forward-map generation (the never-drift link to the MITM proxy) ---------
+
+def test_forward_map_covers_every_injectable_forward_cred():
+    """Every FORWARD cred with a fixed host and a simple injection scheme must
+    appear in the generated map; the only omissions are the honest exceptions
+    (OAuth exchange / site login / no host)."""
+    rules, skipped = reg.build_forward_map()
+    skipped_envs = {env for env, _ in skipped}
+
+    rule_envs: set[str] = set()
+    for r in rules:
+        for k in ("key_env", "user_env", "pass_env"):
+            if r.get(k):
+                rule_envs.add(r[k])
+
+    for c in reg.forward_credentials():
+        covered = c.env in rule_envs
+        excused = c.env in skipped_envs
+        assert covered != excused, (  # exactly one must be true
+            f"{c.env} is neither in the forward-map nor honestly skipped"
+        )
+
+
+def test_forward_map_skips_are_the_known_hard_cases():
+    _, skipped = reg.build_forward_map()
+    assert {env for env, _ in skipped} == {
+        "VISION_API_KEY",       # no fixed host
+        "AMADEUS_API_KEY",      # OAuth2 token exchange
+        "AMADEUS_API_SECRET",
+        "NYT_PASSWORD",         # site login
+    }
+
+
+def test_forward_map_pairs_basic_auth():
+    """Twilio's SID + token collapse into ONE basic rule with user+pass envs."""
+    rules, _ = reg.build_forward_map()
+    twilio = [r for r in rules if r["host"] == "api.twilio.com"]
+    assert len(twilio) == 1
+    assert twilio[0]["scheme"] == "basic"
+    assert twilio[0]["user_env"] == "TWILIO_ACCOUNT_SID"
+    assert twilio[0]["pass_env"] == "TWILIO_AUTH_TOKEN"
+
+
+def test_forward_map_rules_are_well_formed():
+    rules, _ = reg.build_forward_map()
+    for r in rules:
+        assert r.get("host") and r.get("scheme")
+        assert (r["scheme"] in ("bearer", "basic")
+                or r["scheme"].startswith(("header:", "query:")))
