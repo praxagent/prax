@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.35.0](https://github.com/praxagent/prax/compare/v0.34.0...v0.35.0) (2026-07-22)
+
+
+### Features
+
+* **eval:** LoCoMo (long-term memory) + HotpotQA (multi-hop RC) adapters ([#155](https://github.com/praxagent/prax/issues/155)) ([82d0a43](https://github.com/praxagent/prax/commit/82d0a43386f8232026a18e5c19c3ef0b74d1d809))
+
 ## [0.34.0](https://github.com/praxagent/prax/compare/v0.33.1...v0.34.0) (2026-07-22)
 
 
