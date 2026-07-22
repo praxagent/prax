@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.32.0](https://github.com/praxagent/prax/compare/v0.31.0...v0.32.0) (2026-07-22)
+
+
+### Features
+
+* **security:** canonical credential registry — Prax and the proxy never drift ([#146](https://github.com/praxagent/prax/issues/146)) ([b2877c2](https://github.com/praxagent/prax/commit/b2877c2f3bc7e89565dde6555dc597999e47e368))
+
 ## [0.31.0](https://github.com/praxagent/prax/compare/v0.30.0...v0.31.0) (2026-07-21)
 
 
