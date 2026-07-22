@@ -78,6 +78,17 @@ def cmd_harness_lift(args) -> int:
     return 0
 
 
+def cmd_multiturn(args) -> int:
+    from prax.eval.multiturn import run_multiturn_suite
+    summary = run_multiturn_suite(tier=args.tier, model_override=args.model, k=args.k)
+    _print_summary(summary)
+    agg = summary.get("aggregate") or {}
+    print(f"\n>>> Multi-turn pass^{agg.get('k')}: {agg.get('pass_hat_k')} "
+          f"(avg per-trial pass rate {agg.get('avg_trial_pass_rate')})")
+    print("    pass^k = fraction of cases that passed ALL k trials — reliability, not one lucky shot.")
+    return 0
+
+
 def cmd_self_regen(args) -> int:
     from prax.eval.self_regen import run_self_regen
     summary = run_self_regen(rounds=args.rounds, apply=args.apply, tier=args.tier)
@@ -161,6 +172,12 @@ def main() -> int:
     sp_lift = sub.add_parser("harness-lift", help="full harness vs bare model, same model")
     _common(sp_lift)
     sp_lift.set_defaults(func=cmd_harness_lift)
+
+    sp_mt = sub.add_parser("multiturn",
+                           help="multi-turn persona conversations, graded on final state, reported as pass^k")
+    _common(sp_mt)
+    sp_mt.add_argument("--k", type=int, default=3, help="trials per case for pass^k (default 3)")
+    sp_mt.set_defaults(func=cmd_multiturn)
 
     sp_sr = sub.add_parser("self-regen",
                            help="self-regeneration loop (#29): propose→verify→keep a system-prompt overlay")
