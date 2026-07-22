@@ -93,22 +93,27 @@ REGISTRY: tuple[Credential, ...] = (
     Credential("ELEVENLABS_API_KEY", "ElevenLabs", "Text-to-speech / voice",
                PROXY_FORWARD, host="api.elevenlabs.io", inject="header:xi-api-key"),
     Credential("AMADEUS_API_KEY", "Amadeus", "Travel/flight search (OAuth client id)",
-               PROXY_FORWARD, host="api.amadeus.com", inject="basic"),
+               PROXY_FORWARD, host="api.amadeus.com", inject="oauth2",
+               caveat="OAuth2 token exchange (POST id+secret → bearer), not header "
+                      "injection — a transparent proxy can't do the exchange; skipped by the map."),
     Credential("AMADEUS_API_SECRET", "Amadeus", "Travel/flight search (OAuth client secret)",
-               PROXY_FORWARD, host="api.amadeus.com", inject="basic"),
+               PROXY_FORWARD, host="api.amadeus.com", inject="oauth2",
+               caveat="See AMADEUS_API_KEY — OAuth2 exchange, not simple injection."),
     Credential("TWITTER_API", "X / Twitter API v2", "Fetch tweets/threads",
                PROXY_FORWARD, host="api.twitter.com", inject="bearer"),
     Credential("THREADS_API", "Meta Threads Graph API", "Fetch Threads posts",
                PROXY_FORWARD, host="graph.threads.net", inject="bearer"),
     Credential("NYT_PASSWORD", "New York Times", "News/login-gated article access",
-               PROXY_FORWARD, host="www.nytimes.com", inject="basic"),
+               PROXY_FORWARD, host="www.nytimes.com", inject="login",
+               caveat="A site login (cookie session), not header auth — a transparent "
+                      "proxy can't inject it; skipped by the map."),
     Credential("HF_TOKEN_RO", "Hugging Face (read-only)", "Download gated eval datasets",
                PROXY_FORWARD, host="huggingface.co", inject="bearer",
                caveat="Used at dataset-fetch time (scripts), NOT agent runtime — low priority."),
     Credential("TWILIO_ACCOUNT_SID", "Twilio", "SMS/voice (account id, basic-auth user)",
-               PROXY_FORWARD, host="api.twilio.com", inject="basic"),
+               PROXY_FORWARD, host="api.twilio.com", inject="basic:user"),
     Credential("TWILIO_AUTH_TOKEN", "Twilio", "SMS/voice (basic-auth password)",
-               PROXY_FORWARD, host="api.twilio.com", inject="basic"),
+               PROXY_FORWARD, host="api.twilio.com", inject="basic:pass"),
     Credential("DISCORD_BOT_TOKEN", "Discord", "Discord bot channel",
                PROXY_FORWARD, host="discord.com", inject="header:Authorization",
                caveat="REST is forward-proxyable, but the bot GATEWAY is a persistent "
@@ -170,3 +175,78 @@ def forward_credentials() -> tuple[Credential, ...]:
 def local_credentials() -> tuple[Credential, ...]:
     """Not proxyable by design (in-process / inbound / own-infra)."""
     return tuple(c for c in REGISTRY if c.proxy == PROXY_LOCAL)
+
+
+# ── forward-map generation (the never-drift link to the MITM proxy) ─────────
+# The transparent forward proxy (prax-secrets-proxy, forward mode) injects
+# credentials by destination host from a JSON map. We GENERATE that map from this
+# registry so the proxy config can't drift from Prax's own list of credentials.
+
+def build_forward_map() -> tuple[list[dict], list[tuple[str, str]]]:
+    """Return (rules, skipped) for the forward proxy.
+
+    ``rules`` is the JSON the proxy's ForwardInjector loads. ``skipped`` is
+    ``[(env, reason)]`` for FORWARD creds that a transparent proxy *can't* inject
+    (OAuth token-exchange, site login, or no fixed host) — kept honest, not hidden.
+    """
+    rules: list[dict] = []
+    skipped: list[tuple[str, str]] = []
+    basic_user: dict[str, str] = {}
+    basic_pass: dict[str, str] = {}
+
+    for c in forward_credentials():
+        scheme = c.inject or ""
+        if not c.host:
+            skipped.append((c.env, "no fixed host"))
+            continue
+        if scheme in ("oauth2", "login"):
+            skipped.append((c.env, scheme))
+            continue
+        if scheme == "basic:user":
+            basic_user[c.host] = c.env
+        elif scheme == "basic:pass":
+            basic_pass[c.host] = c.env
+        elif scheme == "bearer":
+            rules.append({"host": c.host, "scheme": "bearer", "key_env": c.env})
+        elif scheme == "x-api-key":
+            rules.append({"host": c.host, "scheme": "header:x-api-key", "key_env": c.env})
+        elif scheme.startswith(("header:", "query:")):
+            rules.append({"host": c.host, "scheme": scheme, "key_env": c.env})
+        else:
+            skipped.append((c.env, f"unknown-scheme:{scheme}"))
+
+    for host in sorted(set(basic_user) | set(basic_pass)):
+        rules.append({"host": host, "scheme": "basic",
+                      "user_env": basic_user.get(host), "pass_env": basic_pass.get(host)})
+    return rules, skipped
+
+
+def export_forward_map(path: str) -> tuple[int, list[tuple[str, str]]]:
+    """Write the forward-map JSON to *path*. Returns (rule_count, skipped)."""
+    import json
+    rules, skipped = build_forward_map()
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(rules, fh, indent=2)
+        fh.write("\n")
+    return len(rules), skipped
+
+
+def _main() -> None:  # pragma: no cover - thin CLI
+    import argparse
+    p = argparse.ArgumentParser(description="Prax credential registry tools")
+    p.add_argument("--export-forward-map", metavar="PATH",
+                   help="Write the secrets-proxy forward-map JSON from the registry")
+    args = p.parse_args()
+    if args.export_forward_map:
+        n, skipped = export_forward_map(args.export_forward_map)
+        print(f"Wrote {n} forward-map rules to {args.export_forward_map}")
+        if skipped:
+            print("Skipped (a transparent proxy can't inject these — they stay in Prax):")
+            for env, reason in skipped:
+                print(f"  - {env}: {reason}")
+    else:
+        p.print_help()
+
+
+if __name__ == "__main__":  # pragma: no cover
+    _main()

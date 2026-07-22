@@ -69,6 +69,13 @@ This ledger is the honest complement to
 |---|---|---|---|
 | **`lean_check`** (compile + axiom-audit trust gate, in the sandbox) | ✅ | **Verified live 2026-07-14** against Lean 4.31.0 installed in the running sandbox container, driving the real tool through the sandbox client on 5 known-result theorems: `1+1=2` and `p∧q→q∧p` verify clean (no axioms); `1+1=3` fails with the correct type-mismatch diagnostic; a `sorry` hole compiles but the trust gate + axiom audit both catch it (`sorryAx`); an injected `axiom cheat` is flagged non-standard. | mathlib-dependent proofs (need a lake project + `lake exe cache get`) are out of scope — toolchain-only. The durable toolchain lives in the prax-sandbox image (Dockerfile `ENV ELAN_HOME=/opt/elan`); a from-clean **image rebuild** installing Lean has not been run yet (the live container was provisioned in place) — verify on the next sandbox rebuild. |
 
+## Secrets proxy (`prax-secrets-proxy`)
+
+| Surface | Status | Verified | Not verified / needs |
+|---|---|---|---|
+| **Reverse proxy** (model keys via base-URL: `OPENAI_BASE_URL`/`ANTHROPIC_BASE_URL`) | ✅ | **Verified live 2026-07-22** — the container runs over TLS on `127.0.0.1:8785`, `/healthz` returns provider readiness, the token gate rejects un-tokened calls (401), and the combined CA bundle trusts both the self-signed proxy *and* real endpoints (system CAs preserved). | A full keyless round-trip *through Prax* to a real model completion wasn't run in CI (needs a real key in the proxy `.env`); the operator confirms it. |
+| **Forward (MITM) proxy** (all REST egress via `HTTPS_PROXY`, registry-driven injection) | 🧪 | The generic injector (bearer/header/basic/query, per host, client-auth-stripped, multi-rule-per-host) is **unit-tested** (10 tests); the forward-map is generated from the credential registry with a never-drift test. | A live end-to-end MITM run against each real third-party provider (Twilio, Tavily, ElevenLabs, …) has **not** been done — no keys held, and it needs the mitmproxy CA trusted in a real deployment. Verify per-provider with a real key; see [deployment-topology.md](security/deployment-topology.md). |
+
 ## Tier system (orchestrator)
 
 | Mechanism | Status | Verified | Not verified / needs |
