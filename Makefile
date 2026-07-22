@@ -85,7 +85,7 @@ eval-multiturn:
 
 # Standard benchmark adapters through the full harness — deterministic scoring.
 # BENCH=ifeval|injecagent|sycophancy|bfcl|halueval|truthfulqa|gsm8k|mmlu_pro|
-#       gpqa|math|simpleqa|humaneval|arc_agi_2|longcontext|agentsafety
+#       gpqa|math|simpleqa|humaneval|arc_agi_2|longcontext|agentsafety|locomo|hotpotqa
 #       (default ifeval). Most are keyless;
 # humaneval EXECUTES code in the sandbox, so it needs the container up.
 # LIFT=1 → full harness vs bare model (same model): "does the scaffold help THIS
