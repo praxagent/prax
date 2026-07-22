@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.34.0](https://github.com/praxagent/prax/compare/v0.33.1...v0.34.0) (2026-07-22)
+
+
+### Features
+
+* **eval:** multi-turn persona evals graded on final state, reported as pass^k ([#152](https://github.com/praxagent/prax/issues/152)) ([5d0b5a7](https://github.com/praxagent/prax/commit/5d0b5a7fab5ff85dfc28350b971e0e7025fbc771))
+
 ## [0.33.1](https://github.com/praxagent/prax/compare/v0.33.0...v0.33.1) (2026-07-22)
 
 
