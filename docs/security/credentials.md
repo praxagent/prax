@@ -70,8 +70,8 @@ upstream; needs Prax's openrouter base URL pointed at the proxy.
 | `TAVILY_API_KEY` | Tavily | web search | api.tavily.com | bearer |
 | `SERPER_DEV_API_KEY` | Serper.dev | web search | google.serper.dev | `X-API-KEY` |
 | `JINA_API_KEY` | Jina AI | URL reader + search | r.jina.ai | bearer (reader works keyless) |
-| `GOOGLE_API_KEY` | Google | programmable search / APIs | www.googleapis.com | `?key=` |
-| `GOOGLE_CSE_ID` | Google CSE | search engine id | www.googleapis.com | `?cx=` |
+| `GOOGLE_API_KEY` | Google | programmable search / Gemini vision | www.googleapis.com | `?key=` ⚠️ |
+| `GOOGLE_CSE_ID` | Google CSE | search engine id | www.googleapis.com | `?cx=` ⚠️ |
 | `VISION_API_KEY` | Vision provider | image analysis | — | bearer |
 | `ELEVENLABS_API_KEY` | ElevenLabs | text-to-speech | api.elevenlabs.io | `xi-api-key` |
 | `AMADEUS_API_KEY` | Amadeus | travel search (OAuth id) | api.amadeus.com | basic |
@@ -84,6 +84,15 @@ upstream; needs Prax's openrouter base URL pointed at the proxy.
 | `TWILIO_AUTH_TOKEN` | Twilio | SMS/voice (basic pass) | api.twilio.com | basic |
 
 ² Used at dataset-fetch time (scripts), not agent runtime — low priority.
+
+⚠️ **Google keys are deliberately UNSET (2026-07-22).** They remain classified
+`PROXY_FORWARD` (forward-proxyable in principle), but we hold **no** Google key.
+Google Cloud billing is **not** a hard-capped pay-as-you-go product — a runaway loop
+or a prompt-injected agent could run up **unbounded** charges with no ceiling to stop
+it, which is a categorically worse failure mode than a metered per-call API. So the
+safe default is to hold no Google key at all: Prax degrades to the keyless search
+providers and non-Google vision. Only set `GOOGLE_API_KEY` behind a Google Cloud
+budget/quota cap you have configured yourself.
 
 _Verified live 2026-07-22: Serper, OpenAI, and **Twilio** (basic auth) all inject +
 work through the forward proxy; **ElevenLabs** injects correctly but the held key is
@@ -102,11 +111,28 @@ stale (401 → rotate)._
 | `GPU_POWER_BROKER_TOKEN` | infra control token (reclassify FORWARD if it ever calls a third party) |
 | `PRAX_SSH_KEY_B64` / `PLUGIN_REPO_SSH_KEY_B64` | git-over-SSH — not an HTTP API the egress proxy can inject |
 
+### `DISCORD_BOT_TOKEN` — on Prax by necessity: less risky, not risk-free
+
+This is the one third-party credential the keyless-Prax invariant genuinely **does
+not cover**, so be honest about it. It can't move to the proxy (the bot needs the
+token locally to open its gateway websocket — see the table), so a prompt-injected or
+compromised Prax *can* read it from its own env.
+
+Why that's **less** dangerous than a leaked cloud/model key: a stolen bot token
+**can't spend money** and **can't reach any other provider** — its blast radius is
+bounded to the Discord guilds the bot is already in. Why it's **still** dangerous:
+within that radius it grants **full impersonation of the bot** — read and send in
+every channel it can see, DM users — until the token is regenerated. So treat it with
+care: give the bot **minimal permissions/intents**, and **rotate the token** the
+moment Prax is suspected of compromise. "Keyless except Discord" is the accurate
+claim, not "keyless."
+
 ## Honest status
 
 **Today, keyless covers the 3 model keys** (the highest-value theft target) — that's
-real and worth doing. The 17 Tier-2 REST keys can only *all* move to the proxy once
-the transparent forward proxy is built; `DISCORD_BOT_TOKEN`'s gateway and the 9
-local credentials fundamentally can't. So "Prax holds zero secrets" is the goal, and
-this registry is the honest, enforced map of how far along the path each credential
-is — with a test making sure the map never lies.
+real and worth doing. The 16 Tier-2 REST keys can all move to the proxy via the
+transparent forward proxy (built, unit-tested, first providers verified live — see
+the ledger); the 10 local credentials — `DISCORD_BOT_TOKEN` and the 9 in-process /
+inbound / own-infra keys above — fundamentally can't. So "Prax holds zero secrets" is
+the direction, and this registry is the honest, enforced map of how far along the
+path each credential is — with a test making sure the map never lies.

@@ -83,11 +83,19 @@ REGISTRY: tuple[Credential, ...] = (
     Credential("JINA_API_KEY", "Jina AI", "URL reader + Jina search",
                PROXY_FORWARD, host="r.jina.ai", inject="bearer",
                caveat="Reader works keyless; the key only raises quota / enables Jina search."),
-    Credential("GOOGLE_API_KEY", "Google", "Programmable Search / other Google APIs",
-               PROXY_FORWARD, host="www.googleapis.com", inject="query:key"),
+    Credential("GOOGLE_API_KEY", "Google", "Programmable Search / Gemini vision / other Google APIs",
+               PROXY_FORWARD, host="www.googleapis.com", inject="query:key",
+               caveat="Deliberately left UNSET (2026-07-22): Google Cloud billing is NOT a "
+                      "hard-capped pay-as-you-go product — a runaway loop or prompt-injected "
+                      "agent could run up unbounded charges with no ceiling to stop it. "
+                      "Forward-proxyable in principle, but the safer default is to hold no "
+                      "Google key at all; Prax degrades to the keyless search providers and "
+                      "non-Google vision. Only set it behind a Google Cloud budget/quota cap "
+                      "you have configured yourself."),
     Credential("GOOGLE_CSE_ID", "Google Custom Search Engine", "CSE engine id (paired with GOOGLE_API_KEY)",
                PROXY_FORWARD, host="www.googleapis.com", inject="query:cx",
-               caveat="Not strictly secret (an engine id), but travels with GOOGLE_API_KEY."),
+               caveat="Not strictly secret (an engine id), but travels with GOOGLE_API_KEY — "
+                      "which is deliberately unset (unbounded-billing risk). See GOOGLE_API_KEY."),
     Credential("VISION_API_KEY", "Vision provider", "Image analysis (analyze_image)",
                PROXY_FORWARD, host=None, inject="bearer"),
     Credential("ELEVENLABS_API_KEY", "ElevenLabs", "Text-to-speech / voice",
@@ -118,12 +126,19 @@ REGISTRY: tuple[Credential, ...] = (
     # ── Not proxyable — in-process signing, INBOUND auth, own infra, or non-HTTP ──
     Credential("DISCORD_BOT_TOKEN", "Discord", "Discord bot channel",
                PROXY_LOCAL,
-               caveat="Verified NOT proxyable (2026-07-22): the bot GATEWAY is a persistent "
+               caveat="Stays in Prax by necessity (2026-07-22): the bot GATEWAY is a persistent "
                       "websocket (wss://gateway.discord.gg) that carries the token INSIDE the "
                       "IDENTIFY payload, not an HTTP header — nothing for a header-injecting "
                       "proxy to touch; and even Discord's REST wants 'Authorization: Bot <token>' "
                       "(a prefix generic injection doesn't add → 401). The bot needs the token "
-                      "locally for the gateway regardless, so it stays in Prax."),
+                      "locally for the gateway regardless. RISK: this is a LOWER blast radius "
+                      "than a cloud or model key — a stolen bot token can't spend money or reach "
+                      "any other provider; it's scoped to the guilds the bot is already in — but "
+                      "it is NOT harmless: it grants full impersonation of the bot (read/send in "
+                      "every server it's in, DM users) until the token is regenerated. So the "
+                      "keyless-Prax invariant genuinely does not cover this one; mitigate with "
+                      "minimal bot permissions/intents and rotate the token if Prax is ever "
+                      "suspected of compromise."),
     Credential("FLASK_SECRET_KEY", "Flask", "Session cookie signing (in-process)",
                PROXY_LOCAL, caveat="Never leaves the process; not an external-exfil target."),
     Credential("MCP_BEARER_TOKEN", "Prax MCP server", "INBOUND: authenticates other agents TO Prax",
