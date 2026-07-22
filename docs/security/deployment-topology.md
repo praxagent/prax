@@ -85,8 +85,12 @@ HTTP_PROXY=http://secrets-proxy:8786
 NO_PROXY=localhost,127.0.0.1        # don't route Prax's own loopback/UI through it
 SSL_CERT_FILE=/abs/path/prax-proxy-ca-bundle.pem
 REQUESTS_CA_BUNDLE=/abs/path/prax-proxy-ca-bundle.pem
-# Set EVERY proxied key (OPENAI_KEY, TAVILY_API_KEY, …) to a placeholder here — the
-# real keys live only in the proxy's .env, and the proxy injects them by host.
+# Set EVERY proxied key (OPENAI_KEY, SERPER_DEV_API_KEY, ELEVENLABS_API_KEY, …) to a
+# NON-EMPTY placeholder here — the real keys live only in the proxy's .env, and the
+# proxy strips the placeholder + injects the real key by host. The placeholder must
+# be non-empty: several Prax REST clients presence-guard on the key (e.g. serper
+# returns "SERPER_DEV_API_KEY isn't configured" if it's blank) and short-circuit
+# BEFORE the request reaches the proxy. Any non-empty string works (e.g. "proxied").
 ```
 
 **Verify one provider round-trips** before trusting it: with the proxy up, make a
