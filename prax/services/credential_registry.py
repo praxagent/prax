@@ -185,16 +185,19 @@ def local_credentials() -> tuple[Credential, ...]:
 def build_forward_map() -> tuple[list[dict], list[tuple[str, str]]]:
     """Return (rules, skipped) for the forward proxy.
 
-    ``rules`` is the JSON the proxy's ForwardInjector loads. ``skipped`` is
-    ``[(env, reason)]`` for FORWARD creds that a transparent proxy *can't* inject
-    (OAuth token-exchange, site login, or no fixed host) — kept honest, not hidden.
+    Covers BOTH the model providers and the REST APIs, so forward mode alone
+    proxies *all* injectable egress in one box (HTTPS_PROXY, no base-URL needed) —
+    the model keys are ordinary bearer/x-api-key-by-host injections too. ``rules``
+    is the JSON the proxy's ForwardInjector loads. ``skipped`` is ``[(env,
+    reason)]`` for creds a transparent proxy *can't* inject (OAuth token-exchange,
+    site login, or no fixed host) — kept honest, not hidden.
     """
     rules: list[dict] = []
     skipped: list[tuple[str, str]] = []
     basic_user: dict[str, str] = {}
     basic_pass: dict[str, str] = {}
 
-    for c in forward_credentials():
+    for c in (*model_credentials(), *forward_credentials()):
         scheme = c.inject or ""
         if not c.host:
             skipped.append((c.env, "no fixed host"))
