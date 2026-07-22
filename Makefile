@@ -93,7 +93,7 @@ eval-multiturn:
 eval-benchmark:
 	FLASK_SECRET_KEY=$${FLASK_SECRET_KEY:-ci-test-key} uv run --python 3.13 \
 		python scripts/eval_suite.py benchmark $(or $(BENCH),ifeval) --tier $(EVAL_TIER) \
-		$(if $(LIFT),--lift,)
+		$(if $(LIFT),--lift,) $(if $(filter 1 true yes,$(RECORD)),--record,)
 
 # ── The full accountability MATRIX — every benchmark on its REAL dataset ──
 # One command to reproduce the public scorecard: runs all benchmark adapters
@@ -111,7 +111,12 @@ MATRIX_LIMIT ?= 40
 eval-matrix:
 	SANDBOX_ENABLED=true PRAX_EVAL_FULL_DATASETS=1 \
 	PRAX_EVAL_DATASET_LIMIT=$(MATRIX_LIMIT) PRAX_EVAL_TASK_TIMEOUT_S=120 \
-	$(MAKE) eval-benchmark BENCH=all CHEAP=1 EVAL_TIER=low
+	$(MAKE) eval-benchmark BENCH=all CHEAP=1 EVAL_TIER=low RECORD=$(or $(RECORD),1)
+
+# RECORD=1 (default for eval-matrix) distils the run into an aggregates-only record
+# under docs/eval-results/ + updates the public MATRIX.md scorecard. Set RECORD=0 to
+# skip. The scorecard NEVER contains questions/answers (contamination firewall,
+# enforced by prax/eval/scorecard.py:assert_no_leak).
 
 # External scoreboard — resumable GAIA batch (set LIMIT=N for a quick smoke batch)
 eval-gaia:
