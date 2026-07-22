@@ -1054,4 +1054,6 @@ def _export_proxy_env_from_dotenv(env_file: str = ".env") -> None:
         pass
 
 
-_export_proxy_env_from_dotenv(AppSettings.model_config.get("env_file") or ".env")
+# NOTE: not called here. Exporting HTTPS_PROXY at settings-import time would route
+# egress for EVERY process that imports settings (tests, CLI, eval runs) through the
+# proxy — wrong. Only the live server should. app.py calls this at startup.
