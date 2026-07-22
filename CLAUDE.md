@@ -51,6 +51,16 @@ profiles for the proxy). Prax's only coupling to the proxy is the `OPENAI_BASE_U
 degrades to keys-in-`.env` when unset. Integration doc:
 `docs/security/secrets-proxy.md` (proxy internals live in that repo's README).
 
+**Credential registry — the never-drift contract.** Every credential Prax
+supports lives in ONE canonical place: `prax/services/credential_registry.py`
+(mirror doc: `docs/security/credentials.md`), classified `PROXY_MODEL` (proxied
+today via base-URL), `PROXY_FORWARD` (Tier-2 transparent forward proxy, planned),
+or `PROXY_LOCAL` (in-process/inbound/own-infra, never proxyable). A drift-guard
+test (`tests/test_credential_registry.py`) **fails CI** if a `*_KEY`/`*_TOKEN`/
+`*_SECRET`/`*_API` field is added to `settings.py` without a registry row — so
+Prax and the proxy can't silently diverge. When you add any credential, add its
+registry row in the same change.
+
 ## Docs placement — federate by ownership
 
 Prax, **TeamWork** (`../teamwork`), **prax-sandbox** (`../prax-sandbox`), and
