@@ -15,8 +15,15 @@ from prax.services.discord_service import start_bot as start_discord_bot
 from prax.services.identity_service import init_identity_db, migrate_legacy_users, reconcile_workspace_dir
 from prax.services.scheduler_service import init_scheduler
 from prax.services.state_paths import ensure_conversation_db
-from prax.settings import settings
+from prax.settings import _export_proxy_env_from_dotenv, settings
 from prax.token_management import get_encoding_for_model
+
+# Route the LIVE server's egress through the secrets-proxy when configured: export
+# the proxy/TLS vars (HTTPS_PROXY, CA bundle) from .env into os.environ before any
+# HTTP client is built. Only the server does this — NOT settings.py, which every
+# process (tests/CLI/eval) imports. Never exports a secret (allow-list only).
+# See docs/security/deployment-topology.md.
+_export_proxy_env_from_dotenv()
 
 
 def create_app():

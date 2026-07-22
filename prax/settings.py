@@ -1016,3 +1016,44 @@ def get_settings() -> AppSettings:
 
 
 settings = get_settings()
+
+
+# Non-secret OS-level networking vars that requests/httpx read from ``os.environ``
+# (NOT from Pydantic). Prax deliberately does not blanket-load ``.env`` into the
+# environment — that would leak API keys to child processes (the sandbox / agent
+# could ``printenv`` them, the opposite of keyless). But the secrets-proxy needs
+# these few to be process-level so egress routes through it. So export ONLY this
+# allowlist from ``.env`` — never a key.
+_PROXY_ENV_ALLOWLIST = (
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY",
+    "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+)
+
+
+def _export_proxy_env_from_dotenv(env_file: str = ".env") -> None:
+    """Export only the allow-listed proxy/TLS vars from ``.env`` into ``os.environ``.
+
+    Idempotent + safe: skips anything already set (so Docker's ``env_file`` wins),
+    and NEVER exports a secret — only the fixed networking allowlist. Makes the
+    secrets-proxy's ``HTTPS_PROXY`` setup work in host-process mode, not just Docker.
+    """
+    from pathlib import Path
+    p = Path(env_file)
+    if not p.exists():
+        return
+    try:
+        for raw in p.read_text().splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            ku = key.strip().upper()
+            if ku in _PROXY_ENV_ALLOWLIST and ku not in os.environ and ku.lower() not in os.environ:
+                os.environ[ku] = val.strip().strip('"').strip("'")
+    except Exception:  # noqa: BLE001 - best-effort; never break startup on a malformed .env
+        pass
+
+
+# NOTE: not called here. Exporting HTTPS_PROXY at settings-import time would route
+# egress for EVERY process that imports settings (tests, CLI, eval runs) through the
+# proxy — wrong. Only the live server should. app.py calls this at startup.
