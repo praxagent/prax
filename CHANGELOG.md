@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.36.0](https://github.com/praxagent/prax/compare/v0.35.1...v0.36.0) (2026-07-22)
+
+
+### Features
+
+* **eval:** committed public scorecard + first matrix baseline ([#159](https://github.com/praxagent/prax/issues/159)) ([5685569](https://github.com/praxagent/prax/commit/568556906f6cf8cb00948c963a48cb7bb0410709))
+
 ## [0.35.1](https://github.com/praxagent/prax/compare/v0.35.0...v0.35.1) (2026-07-22)
 
 
