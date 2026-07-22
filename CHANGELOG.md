@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.33.1](https://github.com/praxagent/prax/compare/v0.33.0...v0.33.1) (2026-07-22)
+
+
+### Bug Fixes
+
+* **security:** forward-map covers model keys too + GitGuardian config ([#150](https://github.com/praxagent/prax/issues/150)) ([e315c5f](https://github.com/praxagent/prax/commit/e315c5fa5898a000e90beccc5c9c575bb697bed6))
+
 ## [0.33.0](https://github.com/praxagent/prax/compare/v0.32.0...v0.33.0) (2026-07-22)
 
 
