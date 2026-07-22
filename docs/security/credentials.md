@@ -82,17 +82,18 @@ upstream; needs Prax's openrouter base URL pointed at the proxy.
 | `HF_TOKEN_RO` | Hugging Face | gated dataset fetch² | huggingface.co | bearer |
 | `TWILIO_ACCOUNT_SID` | Twilio | SMS/voice (basic user) | api.twilio.com | basic |
 | `TWILIO_AUTH_TOKEN` | Twilio | SMS/voice (basic pass) | api.twilio.com | basic |
-| `DISCORD_BOT_TOKEN` | Discord | bot channel | discord.com | `Authorization`³ |
 
 ² Used at dataset-fetch time (scripts), not agent runtime — low priority.
-³ REST is forward-proxyable, but the bot **gateway** is a persistent websocket
-(`wss://gateway.discord.gg`) that's hard to MITM cleanly — **effectively
-unproxyable** until the gateway path is solved.
+
+_Verified live 2026-07-22: Serper, OpenAI, and **Twilio** (basic auth) all inject +
+work through the forward proxy; **ElevenLabs** injects correctly but the held key is
+stale (401 → rotate)._
 
 ### Not proxyable — stays in Prax by design
 
 | Env | Why it stays local |
 |---|---|
+| `DISCORD_BOT_TOKEN` | **non-HTTP** — the bot gateway is a websocket carrying the token in its IDENTIFY payload (no header to inject), and REST wants `Authorization: Bot <token>` (prefix generic injection omits → 401). Verified 401 through the proxy 2026-07-22. |
 | `FLASK_SECRET_KEY` | in-process session signing; never egresses |
 | `MCP_BEARER_TOKEN` | **inbound** — authenticates other agents *to* Prax |
 | `SANDBOX_DAEMON_TOKEN` / `SANDBOX_CLIENT_KEY` | Prax's own remote-sandbox infra (bearer / mTLS key) |

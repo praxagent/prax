@@ -114,13 +114,16 @@ REGISTRY: tuple[Credential, ...] = (
                PROXY_FORWARD, host="api.twilio.com", inject="basic:user"),
     Credential("TWILIO_AUTH_TOKEN", "Twilio", "SMS/voice (basic-auth password)",
                PROXY_FORWARD, host="api.twilio.com", inject="basic:pass"),
-    Credential("DISCORD_BOT_TOKEN", "Discord", "Discord bot channel",
-               PROXY_FORWARD, host="discord.com", inject="header:Authorization",
-               caveat="REST is forward-proxyable, but the bot GATEWAY is a persistent "
-                      "websocket (wss://gateway.discord.gg) — hard to MITM cleanly. "
-                      "Treat as effectively unproxyable until the gateway path is solved."),
 
-    # ── Not proxyable — in-process signing, INBOUND auth, or Prax's own infra ──
+    # ── Not proxyable — in-process signing, INBOUND auth, own infra, or non-HTTP ──
+    Credential("DISCORD_BOT_TOKEN", "Discord", "Discord bot channel",
+               PROXY_LOCAL,
+               caveat="Verified NOT proxyable (2026-07-22): the bot GATEWAY is a persistent "
+                      "websocket (wss://gateway.discord.gg) that carries the token INSIDE the "
+                      "IDENTIFY payload, not an HTTP header — nothing for a header-injecting "
+                      "proxy to touch; and even Discord's REST wants 'Authorization: Bot <token>' "
+                      "(a prefix generic injection doesn't add → 401). The bot needs the token "
+                      "locally for the gateway regardless, so it stays in Prax."),
     Credential("FLASK_SECRET_KEY", "Flask", "Session cookie signing (in-process)",
                PROXY_LOCAL, caveat="Never leaves the process; not an external-exfil target."),
     Credential("MCP_BEARER_TOKEN", "Prax MCP server", "INBOUND: authenticates other agents TO Prax",
