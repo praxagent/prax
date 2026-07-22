@@ -1,0 +1,14 @@
+# GitGuardian / ggshield configuration.
+#
+# The credential *registry* (prax/services/credential_registry.py) NAMES every
+# secret Prax supports — the env-var name plus a human description — but holds NO
+# secret VALUES. That is its entire design, and tests/test_credential_registry.py
+# enforces it (entries are Credential(env="NAME", …); a value could never live
+# there). GitGuardian's generic-high-entropy detector false-positives on names
+# like `PRAX_SSH_KEY_B64` sitting next to the words "SSH deploy key", so we exclude
+# just that one values-free file from secret scanning. Nothing else is excluded —
+# real secrets live only in the gitignored .env files, which ARE scanned.
+version: 2
+secret:
+  ignored-paths:
+    - "prax/services/credential_registry.py"

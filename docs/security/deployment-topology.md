@@ -57,7 +57,12 @@ The map of exactly which credential is handled how is the
 | Mode | Covers | Mechanism | Cost |
 |---|---|---|---|
 | **Reverse** (default, shipped) | the 3 **model** keys | Prax points `OPENAI_BASE_URL`/`ANTHROPIC_BASE_URL` at the proxy; it swaps the token for the real key | simplest; no TLS interception |
-| **Forward** (opt-in) | **~12 REST keys** too | transparent MITM: Prax sets `HTTPS_PROXY` at the proxy, which terminates TLS and injects auth by destination host from the registry-generated forward-map | proxies almost everything, but **decrypts all egress** |
+| **Forward** (opt-in) | **all 15 injectable keys** (model **and** REST) | transparent MITM: Prax sets `HTTPS_PROXY` at the proxy, which terminates TLS and injects auth by destination host from the registry-generated forward-map | one box for *all* egress — no base-URL needed — but **decrypts all egress** |
+
+Forward mode is a superset: the forward-map includes the model providers too, so
+you do **not** also set `OPENAI_BASE_URL` — every outbound call, model or REST, is
+intercepted and injected by host. Reverse mode is just the lighter, no-MITM option
+when you only want the model keys off the box.
 
 Even with forward mode, **9 credentials structurally cannot move** (in-process
 signing, the inbound MCP token, Prax's own DB/sandbox/UI, git-over-SSH keys, and
@@ -73,14 +78,22 @@ cd ../prax-secrets-proxy && docker compose --profile forward up   # mitmproxy on
 # 3. Trust its CA in Prax's bundle (system CAs + the mitmproxy CA):
 cat "$(uv run python -m certifi)" ~/.mitmproxy/mitmproxy-ca-cert.pem > ~/PRAX/prax-proxy-ca-bundle.pem
 ```
-Then in Prax's env:
+Then in Prax's env (note: **no** `OPENAI_BASE_URL` — forward mode catches it too):
 ```bash
 HTTPS_PROXY=http://secrets-proxy:8786
 HTTP_PROXY=http://secrets-proxy:8786
+NO_PROXY=localhost,127.0.0.1        # don't route Prax's own loopback/UI through it
 SSL_CERT_FILE=/abs/path/prax-proxy-ca-bundle.pem
 REQUESTS_CA_BUNDLE=/abs/path/prax-proxy-ca-bundle.pem
-# and set every proxied service's key to a placeholder — the proxy injects the real one
+# Set EVERY proxied key (OPENAI_KEY, TAVILY_API_KEY, …) to a placeholder here — the
+# real keys live only in the proxy's .env, and the proxy injects them by host.
 ```
+
+**Verify one provider round-trips** before trusting it: with the proxy up, make a
+real call (e.g. a web search) and confirm the answer comes back — a `401` means the
+key isn't reaching that host (check the forward-map rule + the real key in the
+proxy's `.env`); a TLS error means Prax isn't trusting the mitmproxy CA (rebuild the
+bundle). The proxy logs one `injected <scheme> @ <host>` line per hit — never the key.
 
 ## 🔒 LOCK DOWN THE PROXY CONTAINER — HARD
 

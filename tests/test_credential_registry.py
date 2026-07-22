@@ -90,9 +90,9 @@ def test_the_two_shipped_model_providers_are_present():
 
 # --- forward-map generation (the never-drift link to the MITM proxy) ---------
 
-def test_forward_map_covers_every_injectable_forward_cred():
-    """Every FORWARD cred with a fixed host and a simple injection scheme must
-    appear in the generated map; the only omissions are the honest exceptions
+def test_forward_map_covers_every_injectable_cred():
+    """Every MODEL + FORWARD cred with a fixed host and a simple injection scheme
+    must appear in the generated map; the only omissions are the honest exceptions
     (OAuth exchange / site login / no host)."""
     rules, skipped = reg.build_forward_map()
     skipped_envs = {env for env, _ in skipped}
@@ -103,12 +103,19 @@ def test_forward_map_covers_every_injectable_forward_cred():
             if r.get(k):
                 rule_envs.add(r[k])
 
-    for c in reg.forward_credentials():
+    for c in (*reg.model_credentials(), *reg.forward_credentials()):
         covered = c.env in rule_envs
         excused = c.env in skipped_envs
         assert covered != excused, (  # exactly one must be true
             f"{c.env} is neither in the forward-map nor honestly skipped"
         )
+
+
+def test_forward_map_includes_model_keys():
+    """Forward mode alone must cover the model providers too (one box for all egress)."""
+    rules, _ = reg.build_forward_map()
+    envs = {r.get("key_env") for r in rules}
+    assert {"OPENAI_KEY", "ANTHROPIC_KEY"} <= envs
 
 
 def test_forward_map_skips_are_the_known_hard_cases():
