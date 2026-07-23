@@ -216,6 +216,23 @@ def _executor_failure(run) -> str | None:
     return None
 
 
+# A task/turn wall-clock timeout is NOT infra flakiness — it means the agent
+# genuinely couldn't finish the task in its time budget, which for a benchmark is a
+# real capability FAILURE (score 0), not an excludable error and not worth retrying
+# (a retry just times out again). Distinct from a network "connect timeout" (a real
+# transient blip), so we match the orchestrator/executor's own budget-timeout
+# phrasings specifically, never the bare word "timeout".
+_TASK_TIMEOUT_MARKERS = (
+    "turn timeout", "wall-clock", "maximum runtime", "maximum wall",
+    "task exceeded", "exceeded 120",
+)
+
+
+def _is_task_timeout(reason: str) -> bool:
+    low = (reason or "").lower()
+    return any(m in low for m in _TASK_TIMEOUT_MARKERS)
+
+
 def live_orchestrator_replay(*, tier: str = "low", model: str | None = None):
     """A ``replay_fn(prompt) -> str`` backed by the REAL Prax orchestrator (isolated
     workspace + telemetry), reusing the capability suite's executor. Needs API keys
@@ -237,8 +254,14 @@ def live_orchestrator_replay(*, tier: str = "low", model: str | None = None):
             fold_artifacts=False,  # benchmarks score the direct answer, not workspace files
         )
         reason = _executor_failure(run)
-        if reason is not None:
+        if reason is not None and not _is_task_timeout(reason):
+            # Auth/provider/internal failure → record as an error (excluded).
             raise ExecutorError(reason, transient=classify_transient(reason))
+        # A task-budget timeout (or a clean run) falls through: return the answer so
+        # the timeout scores an honest 0 (the timeout/empty text won't match any
+        # grader) rather than being retried-then-excluded — a hard benchmark the
+        # cheap model can't finish in budget is a real miss, and the scorecard should
+        # show it, not hide it.
         return run.answer or ""
 
     return _replay

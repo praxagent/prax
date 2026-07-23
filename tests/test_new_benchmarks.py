@@ -154,6 +154,49 @@ def test_resolved_dataset_reflects_actual_load(monkeypatch, tmp_path):
     assert ds.resolved_dataset("gsm8k") == "real"
 
 
+# ── Task-budget timeout scores 0 (real miss), auth failure is excluded ───────
+
+def test_is_task_timeout_distinguishes_budget_from_network():
+    from prax.eval.benchmarks import _is_task_timeout
+    # Orchestrator/executor budget-timeout phrasings → real capability failure.
+    assert _is_task_timeout("agent run exceeded 120s maximum runtime") is True
+    assert _is_task_timeout("I hit a turn timeout while working on that request") is True
+    assert _is_task_timeout("task exceeded 120.0s wall-clock limit") is True
+    # A bare network connect-timeout is NOT a task-budget timeout (stays transient).
+    assert _is_task_timeout("connect timeout") is False
+    assert _is_task_timeout("401 Missing Authentication header") is False
+
+
+def test_task_timeout_scores_zero_not_excluded(monkeypatch):
+    # A task-budget timeout must fall through as a (failing) answer — scored 0, NOT
+    # raised as an ExecutorError (which would exclude it and retry it 4x).
+    import prax.eval.benchmarks as bench
+    from prax.eval.capability import CaseRun
+
+    def fake_executor(prompt, **kw):
+        return CaseRun(answer="I hit a turn timeout while working on that request: "
+                              "agent run exceeded 120s maximum runtime.")
+    monkeypatch.setattr("prax.eval.capability.orchestrator_executor", fake_executor)
+    replay = bench.live_orchestrator_replay(tier="low")
+    # Must return (not raise) — the timeout text scores 0 on any grader.
+    out = replay("solve this")
+    assert "turn timeout" in out
+
+
+def test_auth_failure_still_raises_and_excludes(monkeypatch):
+    import prax.eval.benchmarks as bench
+    from prax.eval.capability import CaseRun
+    from prax.eval.rate_limit import ExecutorError
+
+    def fake_executor(prompt, **kw):
+        return CaseRun(answer="I hit an internal error while working on that request. "
+                              "Error: AuthenticationError: 401")
+    monkeypatch.setattr("prax.eval.capability.orchestrator_executor", fake_executor)
+    replay = bench.live_orchestrator_replay(tier="low")
+    with pytest.raises(ExecutorError):
+        replay("solve this")
+
+
 # ── Terminal-Bench adapter (sandbox-scored task completion) ──────────────────
 
 def _local_bash_executor(program, timeout=30):
