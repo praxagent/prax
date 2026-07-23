@@ -84,7 +84,18 @@ def _record_scorecard(report: dict) -> None:
     import os
     import subprocess
 
-    from prax.eval.scorecard import write_dashboard, write_record
+    from prax.eval.scorecard import (
+        UnhealthyRunError,
+        assert_run_healthy,
+        write_dashboard,
+        write_record,
+    )
+    # Refuse to publish a broken run (mass auth/infra failures scored as zeros).
+    try:
+        assert_run_healthy(report)
+    except UnhealthyRunError as exc:
+        print(f"\n>>> Scorecard NOT recorded: {exc}")
+        return
     try:
         commit = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"],
                                          text=True).strip()
@@ -178,6 +189,18 @@ def cmd_benchmark(args) -> int:
 
 
 def main() -> int:
+    # Route eval model calls through the keyless secrets-proxy the SAME way the
+    # server does: export ONLY the non-secret proxy allowlist (HTTPS_PROXY, CA
+    # paths) from .env. Without this the eval CLI runs no proxy env, so a keyless
+    # box (placeholder model keys, real keys in the forward proxy) 401s every call
+    # — the bug that voided the first matrix baseline. This is a trusted local
+    # CLI, and it never exports a secret (settings._PROXY_ENV_ALLOWLIST).
+    try:
+        from prax.settings import _export_proxy_env_from_dotenv
+        _export_proxy_env_from_dotenv()
+    except Exception:  # noqa: BLE001 — proxy env is optional; keys-in-.env still works
+        pass
+
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)

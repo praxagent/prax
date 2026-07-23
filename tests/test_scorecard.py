@@ -9,7 +9,9 @@ from __future__ import annotations
 import pytest
 
 from prax.eval.scorecard import (
+    UnhealthyRunError,
     assert_no_leak,
+    assert_run_healthy,
     build_record,
     load_records,
     render_dashboard,
@@ -22,11 +24,14 @@ _REPORT = {
     "avg_pass_rate": 0.8,
     "total_tokens": 1000,
     "estimated_cost_usd": 0.12,
+    "total_errors": 0,
+    "total_attempted": 45,
+    "error_rate": 0.0,
     "benchmarks": {
-        "gsm8k": {"benchmark": "gsm8k", "graded": 40, "pass_rate": 0.95,
+        "gsm8k": {"benchmark": "gsm8k", "graded": 40, "pass_rate": 0.95, "errors": 0,
                   "total_tokens": 600, "answer_preview": "the answer is 72",
                   "protocol": {"variant": "exact match", "dataset": "real"}},
-        "locomo": {"benchmark": "locomo", "graded": 5, "pass_rate": 0.6,
+        "locomo": {"benchmark": "locomo", "graded": 5, "pass_rate": 0.6, "errors": 0,
                    "total_tokens": 400, "protocol": {"variant": "recall", "dataset": "seed"}},
     },
 }
@@ -41,7 +46,7 @@ def test_build_record_is_aggregates_only():
     rec = _record()
     # per-benchmark keeps only aggregate fields — the answer_preview must be dropped
     assert rec["benchmarks"]["gsm8k"] == {
-        "pass_rate": 0.95, "n": 40, "total_tokens": 600,
+        "pass_rate": 0.95, "n": 40, "errors": 0, "total_tokens": 600,
         "dataset": "real", "variant": "exact match",
     }
     assert "answer_preview" not in str(rec)
@@ -92,3 +97,31 @@ def test_load_records_roundtrip(tmp_path):
 
 def test_dashboard_empty_is_graceful():
     assert "No runs recorded" in render_dashboard([])
+
+
+def test_healthy_run_passes_guard():
+    # 0% error rate → records fine.
+    assert_run_healthy(_REPORT)  # no raise
+
+
+def test_unhealthy_run_is_refused():
+    # The exact shape of the voided first baseline: most cases failed to execute.
+    broken = dict(_REPORT)
+    broken["total_errors"], broken["total_attempted"], broken["error_rate"] = 65, 100, 0.65
+    with pytest.raises(UnhealthyRunError, match="error-rate"):
+        assert_run_healthy(broken)
+
+
+def test_error_rate_ceiling_is_overridable(monkeypatch):
+    broken = dict(_REPORT)
+    broken["error_rate"] = 0.65
+    monkeypatch.setenv("PRAX_SCORECARD_MAX_ERROR_RATE", "0.9")
+    assert_run_healthy(broken)  # ceiling raised → no raise
+
+
+def test_record_carries_run_health():
+    rec = _record()
+    agg = rec["aggregate"]
+    assert agg["error_rate"] == 0.0 and agg["total_attempted"] == 45
+    # dashboard exposes the err% column so a broken run is visible at a glance
+    assert "err%" in render_dashboard([rec])

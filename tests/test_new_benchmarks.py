@@ -97,3 +97,58 @@ def test_simpleqa_numeric_format_robustness():
                  "about 299792458 metres per second",
                  "roughly 3.00e8 m/s"):
         assert ad.score(speed, resp)["passed"], resp
+
+
+# ── Infra-failure accounting: an executor failure must be EXCLUDED, not scored ──
+
+class _Run:
+    def __init__(self, answer="", error=""):
+        self.answer, self.error, self.tokens = answer, error, 0
+
+
+def test_executor_failure_detects_swallowed_orchestrator_error():
+    from prax.eval.benchmarks import _executor_failure
+    # The orchestrator swallows a provider error into a friendly answer — must be
+    # detected as a failure, not graded as the wrong-answer "401".
+    swallowed = _Run(answer="I hit an internal error while working on that request. "
+                            "Error: AuthenticationError: Error code: 401")
+    assert _executor_failure(swallowed) is not None
+    assert _executor_failure(_Run(error="Timeout")) == "Timeout"
+    # A real answer (even one containing a number) is NOT a failure.
+    assert _executor_failure(_Run(answer="The answer is 72.")) is None
+    # An honest empty answer is a real miss (score 0), not an infra error.
+    assert _executor_failure(_Run(answer="")) is None
+
+
+def test_failed_cases_are_excluded_from_pass_rate(monkeypatch):
+    # A run where every model call fails must NOT report pass_rate 0.0 — it must
+    # report the cases as errors and grade nothing. This is the fix for the voided
+    # first matrix (401s parsed as wrong answers → fake 0.00).
+    from prax.eval.benchmarks import get_adapter, run_benchmark
+    from prax.eval.rate_limit import ExecutorError
+
+    def always_fail(_prompt):
+        raise ExecutorError("401 Missing Authentication header", transient=False)
+
+    adapter = get_adapter("gsm8k")  # seed set, keyless
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        summary = run_benchmark(adapter, always_fail, out_dir=d, resume=False)
+    agg = summary["aggregate"]
+    assert agg["graded"] == 0            # nothing was scored
+    assert agg["errors"] == agg["attempted"] > 0   # all cases recorded as errors
+    assert agg["pass_rate"] == 0.0       # (0/0 → 0.0, but graded is 0 — not a real score)
+
+
+def test_resolved_dataset_reflects_actual_load(monkeypatch, tmp_path):
+    import prax.eval.benchmarks.datasets as ds
+    # Flag off → always "seed".
+    monkeypatch.delenv("PRAX_EVAL_FULL_DATASETS", raising=False)
+    assert ds.resolved_dataset("gsm8k") == "seed"
+    # Flag on but NO cache file → still "seed" (the honest label; the flag alone lied).
+    monkeypatch.setenv("PRAX_EVAL_FULL_DATASETS", "1")
+    monkeypatch.setattr(ds, "_cache_path", lambda name: tmp_path / f"{name}.jsonl")
+    assert ds.resolved_dataset("bfcl") == "seed"
+    # Flag on AND a cache exists → "real".
+    (tmp_path / "gsm8k.jsonl").write_text('{"id":"x","question":"q","answer":"1"}\n')
+    assert ds.resolved_dataset("gsm8k") == "real"

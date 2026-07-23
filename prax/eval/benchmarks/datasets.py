@@ -127,6 +127,21 @@ def fetch_and_cache(name: str, hf_id: str, split: str, map_row: Callable[[dict],
     return n
 
 
+def resolved_dataset(name: str) -> str:
+    """What a benchmark ACTUALLY ran on: ``"real"`` only when full datasets are
+    enabled *and* a cache file exists for *name*; otherwise ``"seed"``.
+
+    The honest label — distinct from the mere ``PRAX_EVAL_FULL_DATASETS`` flag. The
+    first matrix run stamped every benchmark ``"real"`` from the flag alone, even
+    the eight that silently fell back to their seed set because no cache was
+    fetched. This checks the file so the scorecard can't claim ``real`` on a
+    seed fallback.
+    """
+    if not full_datasets_enabled():
+        return "seed"
+    return "real" if _cache_path(name).exists() else "seed"
+
+
 def cases_for(name: str, seed_cases: list[dict], *, full: bool, limit: int | None = None) -> list[dict]:
     """Pick real cached cases when *full* (and available), else the seed set.
 
