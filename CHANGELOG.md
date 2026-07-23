@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.37.1](https://github.com/praxagent/prax/compare/v0.37.0...v0.37.1) (2026-07-23)
+
+
+### Bug Fixes
+
+* **eval:** a task-budget timeout scores an honest 0 ([#169](https://github.com/praxagent/prax/issues/169)) ([3848ef7](https://github.com/praxagent/prax/commit/3848ef7fa94d5fa5257c5ba8647f5c9233b122f9))
+
 ## [0.37.0](https://github.com/praxagent/prax/compare/v0.36.1...v0.37.0) (2026-07-23)
 
 
