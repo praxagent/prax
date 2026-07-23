@@ -64,10 +64,16 @@ you do **not** also set `OPENAI_BASE_URL` — every outbound call, model or REST
 intercepted and injected by host. Reverse mode is just the lighter, no-MITM option
 when you only want the model keys off the box.
 
-Even with forward mode, **9 credentials structurally cannot move** (in-process
+Even with forward mode, **10 credentials structurally cannot move** (in-process
 signing, the inbound MCP token, Prax's own DB/sandbox/UI, git-over-SSH keys, and
-Discord's websocket gateway) — see the registry. "Zero secrets in Prax" is the
-direction; this is the honest map of how far it reaches.
+**Discord's bot token** — its gateway is a websocket that carries the token in the
+IDENTIFY payload, not an injectable HTTP header) — see the registry. `DISCORD_BOT_TOKEN`
+is the one *third-party* secret keyless-Prax can't remove: lower blast radius than a
+cloud/model key (it can't spend money or reach other providers — only impersonate the
+bot in its own guilds) but not risk-free, so scope the bot minimally and rotate on any
+doubt. "Zero secrets in Prax" is the direction; this is the honest map of how far it
+reaches. (Some forward-capable keys are also deliberately *not held* — e.g. Google, whose
+Cloud billing has no hard spend cap; see [credentials.md](credentials.md).)
 
 ### Wiring forward mode
 ```bash
