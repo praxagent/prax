@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.36.1](https://github.com/praxagent/prax/compare/v0.36.0...v0.36.1) (2026-07-23)
+
+
+### Bug Fixes
+
+* **eval:** make the matrix authenticate + never score infra failures as answers ([#162](https://github.com/praxagent/prax/issues/162)) ([75c6aa0](https://github.com/praxagent/prax/commit/75c6aa030db909564bc51cb4684d70557ef46bc3))
+
 ## [0.36.0](https://github.com/praxagent/prax/compare/v0.35.1...v0.36.0) (2026-07-22)
 
 
