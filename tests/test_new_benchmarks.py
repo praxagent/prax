@@ -195,3 +195,57 @@ def test_auth_failure_still_raises_and_excludes(monkeypatch):
     replay = bench.live_orchestrator_replay(tier="low")
     with pytest.raises(ExecutorError):
         replay("solve this")
+
+
+# ── Terminal-Bench adapter (sandbox-scored task completion) ──────────────────
+
+def _local_bash_executor(program, timeout=30):
+    """Keyless test executor: run the assembled program on the host in bash instead
+    of the sandbox — the scoring logic is identical, no container needed."""
+    import subprocess
+    try:
+        r = subprocess.run(["bash", "-c", program], capture_output=True, text=True, timeout=timeout)
+    except Exception as exc:  # noqa: BLE001
+        return {"passed": False, "output": str(exc)}
+    out = (r.stdout or "") + (r.stderr or "")
+    return {"passed": "__TB_OK__" in out, "output": out[:500]}
+
+
+def test_terminal_bench_registered_and_canonical_solutions_pass():
+    from prax.eval.benchmarks import get_adapter
+    from prax.eval.benchmarks.terminal_bench import SEED_CASES
+    adapter = get_adapter("terminal_bench", executor=_local_bash_executor)
+    assert adapter.name == "terminal_bench"
+    assert len(adapter.cases()) >= 5
+    # Every seed task's own canonical solution must satisfy its hidden verify.
+    for case in SEED_CASES:
+        resp = f"```bash\n{case['canonical_solution']}\n```"
+        result = adapter.score(case, resp)
+        assert result["passed"] is True, f"canonical solution failed for {case['id']}: {result}"
+        assert result["score"] == 1.0
+
+
+def test_terminal_bench_wrong_solution_fails():
+    from prax.eval.benchmarks import get_adapter
+    from prax.eval.benchmarks.terminal_bench import SEED_CASES
+    adapter = get_adapter("terminal_bench", executor=_local_bash_executor)
+    case = SEED_CASES[0]  # tb_greeting
+    result = adapter.score(case, "```bash\necho definitely wrong > other.txt\n```")
+    assert result["passed"] is False and result["score"] == 0.0
+
+
+def test_terminal_bench_extracts_fenced_script():
+    from prax.eval.benchmarks.terminal_bench import extract_script
+    assert extract_script("Here you go:\n```bash\nls -la\n```\nDone.") == "ls -la"
+    assert extract_script("```\necho hi\n```") == "echo hi"
+    # No fence → raw text (best effort)
+    assert extract_script("echo raw").strip() == "echo raw"
+
+
+def test_terminal_bench_sandbox_absent_is_graceful(monkeypatch):
+    # With no injected executor and sandbox disabled, scoring must fail cleanly, not raise.
+    from prax.eval.benchmarks.terminal_bench import _sandbox_executor
+    from prax.settings import settings
+    monkeypatch.setattr(type(settings), "sandbox_available", property(lambda self: False))
+    result = _sandbox_executor("echo __TB_OK__")
+    assert result["passed"] is False and "sandbox" in result["output"].lower()
