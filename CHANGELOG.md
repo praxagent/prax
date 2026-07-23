@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.37.0](https://github.com/praxagent/prax/compare/v0.36.1...v0.37.0) (2026-07-23)
+
+
+### Features
+
+* **eval:** Terminal-Bench-style coding-agent benchmark adapter ([#167](https://github.com/praxagent/prax/issues/167)) ([aee5e35](https://github.com/praxagent/prax/commit/aee5e35b7b418264b152cb96f3da6932db3d3349))
+
 ## [0.36.1](https://github.com/praxagent/prax/compare/v0.36.0...v0.36.1) (2026-07-23)
 
 
