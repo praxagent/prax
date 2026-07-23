@@ -69,6 +69,12 @@ This ledger is the honest complement to
 |---|---|---|---|
 | **`lean_check`** (compile + axiom-audit trust gate, in the sandbox) | ✅ | **Verified live 2026-07-14** against Lean 4.31.0 installed in the running sandbox container, driving the real tool through the sandbox client on 5 known-result theorems: `1+1=2` and `p∧q→q∧p` verify clean (no axioms); `1+1=3` fails with the correct type-mismatch diagnostic; a `sorry` hole compiles but the trust gate + axiom audit both catch it (`sorryAx`); an injected `axiom cheat` is flagged non-standard. | mathlib-dependent proofs (need a lake project + `lake exe cache get`) are out of scope — toolchain-only. The durable toolchain lives in the prax-sandbox image (Dockerfile `ENV ELAN_HOME=/opt/elan`); a from-clean **image rebuild** installing Lean has not been run yet (the live container was provisioned in place) — verify on the next sandbox rebuild. |
 
+## Coding-agent benchmark (`terminal_bench`)
+
+| Surface | Status | Verified | Not verified / needs |
+|---|---|---|---|
+| **`terminal_bench` adapter** (agent → bash solution → sandbox execution → hidden verify) | 🟡 | **Verified live 2026-07-23**: full path exercised end-to-end through the real orchestrator (deepseek-v4-flash via the keyless proxy) on all 5 seed tasks — **5/5 pass, 0 errors**, each graded by running the solution + a hidden verify in the sandbox (`__TB_OK__` / exit 0). Keyless CI proves every canonical solution passes its own verify, wrong solutions fail, extraction handles fenced/raw, sandbox-absent degrades cleanly. | **NOT the official Terminal-Bench number.** This is 5 hand-authored seed tasks (easy: create/count/sort/parse/script), n=5 (95% CI 56.6–100%), Prax-run + sandbox-scored — NOT the official tbench Docker-per-task harness on the real ~100+ task set. A leaderboard-comparable figure needs the real task set + per-task environments loaded into `PRAX_EVAL_DIR` (tracked in `docs/research/adopt-tracker.md`). Do not compare this to model leaderboard scores. |
+
 ## Secrets proxy (`prax-secrets-proxy`)
 
 | Surface | Status | Verified | Not verified / needs |
