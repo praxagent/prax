@@ -54,6 +54,37 @@ _TRANSIENT_MARKERS = (
     "overloaded",
 )
 
+class ExecutorError(Exception):
+    """A case's executor failed (auth/config/timeout/provider error) — the run
+    produced no gradable answer. Raised by the eval executors so an infra failure
+    is recorded as an ``error`` (excluded from the score) instead of being parsed
+    as a wrong answer. ``transient=True`` failures (timeouts, 429s, 5xx) are
+    retried; ``transient=False`` (401/403/auth/quota/config) are re-raised at once
+    — retrying a bad key just wastes calls."""
+
+    def __init__(self, reason: str, *, transient: bool = False):
+        super().__init__(reason)
+        self.reason = reason
+        self.transient = transient
+
+
+# Markers in a failure reason that mean "don't bother retrying" — the call is
+# structurally broken (bad/missing key, forbidden, out of quota), not flaky.
+_PERMANENT_MARKERS = (
+    "401", "403", "unauthorized", "authentication", "missing authentication",
+    "invalid api key", "invalid_api_key", "no auth", "forbidden",
+    "quota", "insufficient", "permission", "invalid key",
+)
+
+
+def classify_transient(reason: str) -> bool:
+    """True if *reason* looks like a retryable blip; False for permanent failures."""
+    low = (reason or "").lower()
+    if any(m in low for m in _PERMANENT_MARKERS):
+        return False
+    return any(m in low for m in _TRANSIENT_MARKERS) or "timeout" in low or "timed out" in low
+
+
 _lock = threading.Lock()
 _last_call_ts = 0.0
 
@@ -146,6 +177,18 @@ def call_with_rate_limit(fn: Callable[[str], str], prompt: str, *,
         _throttle()
         try:
             resp = fn(prompt)
+        except ExecutorError as exc:
+            # A structurally-broken call (bad key, forbidden, quota) is pointless to
+            # retry — surface it now so it's recorded as an error, not a wrong answer.
+            if not exc.transient:
+                raise
+            last_exc = exc
+            if attempt < retries:
+                logger.warning("eval call %s transient executor error (%s), retry %d/%d",
+                               label, exc, attempt + 1, retries)
+                _sleep_backoff(attempt)
+                continue
+            raise
         except Exception as exc:  # noqa: BLE001 — any provider error is retryable here
             last_exc = exc
             if attempt < retries:

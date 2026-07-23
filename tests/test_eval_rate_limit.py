@@ -126,3 +126,40 @@ def test_throttle_spaces_calls(rl, monkeypatch):
     rl.call_with_rate_limit(lambda _p: "x", "q1")
     rl.call_with_rate_limit(lambda _p: "y", "q2")
     assert any(abs(s - 5.0) < 0.01 for s in slept)  # throttled ~5s
+
+
+def test_classify_transient(rl):
+    # Permanent auth/config failures are NOT retryable.
+    assert rl.classify_transient("AuthenticationError: 401 - Missing Authentication header") is False
+    assert rl.classify_transient("403 Forbidden") is False
+    assert rl.classify_transient("insufficient_quota") is False
+    # Flaky infra IS retryable.
+    assert rl.classify_transient("Connect timeout") is True
+    assert rl.classify_transient("429 Too Many Requests") is True
+    assert rl.classify_transient("503 service unavailable") is True
+
+
+def test_permanent_executor_error_is_not_retried(rl):
+    calls = {"n": 0}
+
+    def always_401(_prompt):
+        calls["n"] += 1
+        raise rl.ExecutorError("401 Missing Authentication header", transient=False)
+
+    with pytest.raises(rl.ExecutorError):
+        rl.call_with_rate_limit(always_401, "q")
+    assert calls["n"] == 1  # a bad key is surfaced at once — no wasted retries
+
+
+def test_transient_executor_error_is_retried(rl, monkeypatch):
+    monkeypatch.setenv("PRAX_EVAL_LLM_MAX_RETRIES", "3")
+    calls = {"n": 0}
+
+    def flaky(_prompt):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise rl.ExecutorError("Connect timeout", transient=True)
+        return "Answer: A"
+
+    assert rl.call_with_rate_limit(flaky, "q") == "Answer: A"
+    assert calls["n"] == 3  # retried through the transient blips

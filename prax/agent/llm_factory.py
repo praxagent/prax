@@ -243,12 +243,21 @@ def build_llm(
         # so we use plain chat-completions. Opt-in only (LLM_PROVIDER=openrouter
         # or `make eval CHEAP=1`) — production on `openai` is never redirected by
         # the key merely being present. See docs/guides/cheap-evals.md.
-        if not settings.openrouter_api_key:
-            raise ValueError("OPENROUTER_API_KEY is required for the openrouter provider")
+        # Two auth paths (configurable): a real OPENROUTER_API_KEY hitting OpenRouter
+        # direct, OR a placeholder key with OPENROUTER_BASE_URL pointed at the keyless
+        # secrets-proxy (which injects the real key by host). Either must be present —
+        # a blank key with no base-URL override is the exact misconfig that made the
+        # first eval-matrix run fail every fresh call with 401 (see docs/eval-results).
+        _or_base = getattr(settings, "openrouter_base_url", None) or "https://openrouter.ai/api/v1"
+        _or_direct = _or_base == "https://openrouter.ai/api/v1"
+        if _or_direct and not settings.openrouter_api_key:
+            raise ValueError(
+                "OPENROUTER_API_KEY is required for the openrouter provider (or set "
+                "OPENROUTER_BASE_URL to route through the secrets-proxy)")
         return ChatOpenAI(
             model=model_name,
-            api_key=settings.openrouter_api_key,
-            base_url="https://openrouter.ai/api/v1",
+            api_key=settings.openrouter_api_key or "proxy-injected",
+            base_url=_or_base,
             temperature=temp,
             callbacks=callbacks,
             timeout=settings.llm_request_timeout,

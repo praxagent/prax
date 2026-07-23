@@ -79,15 +79,21 @@ def run_benchmark(
     def _summarize(results: list[dict]) -> dict:
         from prax.eval.pricing import estimate_cost
         graded = [r for r in results if not r.get("error")]
+        errored = [r for r in results if r.get("error")]
         n = len(graded)
         passed = sum(1 for r in graded if r.get("passed"))
         pt = sum(int(r.get("prompt_tokens", 0)) for r in graded)
         ct = sum(int(r.get("completion_tokens", 0)) for r in graded)
-        from prax.eval.benchmarks.datasets import full_datasets_enabled, sample_seed
+        from prax.eval.benchmarks.datasets import resolved_dataset, sample_seed
         return {
             "benchmark": adapter.name,
             "graded": n,
             "passed": passed,
+            # Cases that failed to run (auth/timeout/provider). Excluded from
+            # pass_rate — an infra failure is not a wrong answer. A high count
+            # means the number is untrustworthy (the scorecard refuses to record).
+            "errors": len(errored),
+            "attempted": len(results),
             "pass_rate": round(passed / n, 3) if n else 0.0,
             "avg_score": round(sum(r.get("score", 0.0) for r in graded) / n, 3) if n else 0.0,
             "prompt_tokens": pt,
@@ -101,7 +107,9 @@ def run_benchmark(
             "protocol": {
                 "variant": getattr(adapter, "variant", None),
                 "attempts": getattr(adapter, "attempts", "pass@1"),
-                "dataset": ("real" if full_datasets_enabled() else "seed"),
+                # Honest per-benchmark label: "real" only if a cache actually
+                # loaded, not merely because the flag was set (datasets.py).
+                "dataset": resolved_dataset(adapter.name),
                 "sampling": f"seeded-random(seed={sample_seed()})",
             },
         }
@@ -178,13 +186,45 @@ def get_adapter(name: str, **kwargs) -> BenchmarkAdapter:
     raise ValueError(f"unknown benchmark {name!r} (have: {', '.join(ADAPTER_NAMES)})")
 
 
+# The orchestrator swallows a provider/runtime failure into a friendly answer
+# (orchestrator.py:~1439 "I hit an internal error…") instead of raising, so the
+# failure never reaches run.error. These stable, orchestrator-owned sentinels let
+# the eval detect that a case FAILED rather than answered — the fix for the first
+# matrix run, where 401s were parsed as the wrong-answer "401" and scored 0.0.
+_EXECUTOR_FAIL_SENTINELS = (
+    "I hit an internal error while working on that request",
+    "I hit a turn timeout while working on that request",
+)
+
+
+def _executor_failure(run) -> str | None:
+    """Return a failure reason if *run* produced no gradable answer, else None.
+
+    Checks both the structured ``error`` field and the orchestrator's swallowed-
+    error answer sentinels. An honest empty answer is NOT a failure (it's a real
+    miss and should score 0) — only explicit failure signals are excluded.
+    """
+    if getattr(run, "error", ""):
+        return run.error
+    head = (getattr(run, "answer", "") or "")[:120]
+    for s in _EXECUTOR_FAIL_SENTINELS:
+        if s in head:
+            return (run.answer or "")[:200]
+    return None
+
+
 def live_orchestrator_replay(*, tier: str = "low", model: str | None = None):
     """A ``replay_fn(prompt) -> str`` backed by the REAL Prax orchestrator (isolated
     workspace + telemetry), reusing the capability suite's executor. Needs API keys
     or a local model at run time — keyless CI never calls it. Pair with
     ``run_benchmark(adapter, live_orchestrator_replay(), ...)``.
+
+    Raises :class:`~prax.eval.rate_limit.ExecutorError` when the run failed (auth,
+    timeout, provider error) so the batch records it as an *error* — excluded from
+    the score — instead of grading the failure string as a wrong answer.
     """
     from prax.eval.capability import orchestrator_executor
+    from prax.eval.rate_limit import ExecutorError, classify_transient
     counter = {"n": 0}
 
     def _replay(prompt: str) -> str:
@@ -193,6 +233,9 @@ def live_orchestrator_replay(*, tier: str = "low", model: str | None = None):
             prompt, tier=tier, model_override=model, case_id=f"bench-{counter['n']}",
             fold_artifacts=False,  # benchmarks score the direct answer, not workspace files
         )
+        reason = _executor_failure(run)
+        if reason is not None:
+            raise ExecutorError(reason, transient=classify_transient(reason))
         return run.answer or ""
 
     return _replay
@@ -248,12 +291,17 @@ def run_benchmark_lift(name: str, *, tier: str = "low", model: str | None = None
                                      case_id=f"lift-{name}-{counter['n']}",
                                      fold_artifacts=False)  # score the direct answer
         bare = bare_executor(prompt, tier=tier, model_override=model)
-        gf, gb = adapter.score(case, full.answer or ""), adapter.score(case, bare.answer or "")
+        # Detect swallowed executor failures (auth/timeout) so a broken run is
+        # excluded, not scored as a wrong answer that fakes a lift signal.
+        full_err = _executor_failure(full)
+        bare_err = bare.error or _executor_failure(bare)
+        gf = adapter.score(case, full.answer or "") if not full_err else {}
+        gb = adapter.score(case, bare.answer or "") if not bare_err else {}
         return {
             "id": cid,
             "full_passed": bool(gf.get("passed")), "bare_passed": bool(gb.get("passed")),
             "full_tokens": full.tokens, "bare_tokens": bare.tokens,
-            "full_error": full.error or None, "bare_error": bare.error or None,
+            "full_error": full_err or None, "bare_error": bare_err or None,
         }
 
     def _summarize(results: list[dict]) -> dict:
@@ -288,7 +336,11 @@ def run_all_benchmarks(replay_fn=None, *, tier: str = "low", model: str | None =
         replay_fn = live_orchestrator_replay(tier=tier, model=model)
     if out_dir is None:
         from prax.eval import PRAX_EVAL_DIR
-        out_dir = PRAX_EVAL_DIR / "suites" / f"bench-all-{model or tier}"
+        # Commit-stamp the run dir: resume is safe WITHIN a commit (skip completed
+        # cases, save cost) but must NOT stitch results across code changes. The
+        # first matrix mixed week-old cases from a stable dir into a fresh run —
+        # the stamp makes each commit a clean slate.
+        out_dir = PRAX_EVAL_DIR / "suites" / f"bench-all-{model or tier}-{_short_commit()}"
     base = Path(out_dir)
     cost_model = _cost_model(tier, model)
     report: dict[str, dict] = {}
@@ -298,6 +350,8 @@ def run_all_benchmarks(replay_fn=None, *, tier: str = "low", model: str | None =
         report[name] = summary.get("aggregate") or {}
     rates = [a.get("pass_rate", 0.0) for a in report.values() if a]
     total_tokens = sum(int(a.get("total_tokens", 0)) for a in report.values() if a)
+    total_errors = sum(int(a.get("errors", 0)) for a in report.values() if a)
+    total_attempted = sum(int(a.get("attempted", 0)) for a in report.values() if a)
     costs = [a.get("estimated_cost_usd") for a in report.values() if a]
     known = [c for c in costs if isinstance(c, (int, float))]
     return {
@@ -306,6 +360,22 @@ def run_all_benchmarks(replay_fn=None, *, tier: str = "low", model: str | None =
         "avg_pass_rate": round(sum(rates) / len(rates), 3) if rates else 0.0,
         "cost_model": cost_model,
         "total_tokens": total_tokens,
+        # Run health: cases that failed to execute vs. total attempted. A high
+        # ratio means the scores are noise — the scorecard refuses to record it.
+        "total_errors": total_errors,
+        "total_attempted": total_attempted,
+        "error_rate": round(total_errors / total_attempted, 3) if total_attempted else 0.0,
         # None if NO benchmark had a known price; else the sum of the known ones.
         "estimated_cost_usd": round(sum(known), 4) if known else None,
     }
+
+
+def _short_commit() -> str:
+    """Best-effort short git commit of the harness, for run-dir stamping."""
+    import subprocess
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], text=True,
+            stderr=subprocess.DEVNULL).strip() or "nocommit"
+    except Exception:
+        return "nocommit"
