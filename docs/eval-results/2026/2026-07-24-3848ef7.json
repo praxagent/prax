@@ -1,0 +1,162 @@
+{
+  "timestamp": "2026-07-24T04:09:42+00:00",
+  "git_commit": "3848ef7",
+  "model": "deepseek/deepseek-v4-flash",
+  "provider": "openrouter",
+  "matrix_limit": 10,
+  "aggregate": {
+    "n_benchmarks": 18,
+    "avg_pass_rate": 0.861,
+    "total_tokens": 22029228,
+    "estimated_cost_usd": 2.3247,
+    "error_rate": 0.0,
+    "total_errors": 0,
+    "total_attempted": 139
+  },
+  "benchmarks": {
+    "ifeval": {
+      "pass_rate": 1.0,
+      "n": 9,
+      "errors": 0,
+      "total_tokens": 267892,
+      "dataset": "seed",
+      "variant": null
+    },
+    "injecagent": {
+      "pass_rate": 0.5,
+      "n": 6,
+      "errors": 0,
+      "total_tokens": 241404,
+      "dataset": "seed",
+      "variant": null
+    },
+    "sycophancy": {
+      "pass_rate": 1.0,
+      "n": 6,
+      "errors": 0,
+      "total_tokens": 664088,
+      "dataset": "seed",
+      "variant": null
+    },
+    "bfcl": {
+      "pass_rate": 1.0,
+      "n": 6,
+      "errors": 0,
+      "total_tokens": 182323,
+      "dataset": "seed",
+      "variant": null
+    },
+    "halueval": {
+      "pass_rate": 1.0,
+      "n": 6,
+      "errors": 0,
+      "total_tokens": 177304,
+      "dataset": "seed",
+      "variant": null
+    },
+    "truthfulqa": {
+      "pass_rate": 0.8,
+      "n": 10,
+      "errors": 0,
+      "total_tokens": 3333458,
+      "dataset": "real",
+      "variant": "MC1 (single-correct multiple-choice; NOT generation/MC2)"
+    },
+    "gsm8k": {
+      "pass_rate": 1.0,
+      "n": 10,
+      "errors": 0,
+      "total_tokens": 300441,
+      "dataset": "real",
+      "variant": "test split, exact final-answer match"
+    },
+    "mmlu_pro": {
+      "pass_rate": 0.8,
+      "n": 10,
+      "errors": 0,
+      "total_tokens": 3008097,
+      "dataset": "real",
+      "variant": "test split, 10-option letter exact-match"
+    },
+    "gpqa": {
+      "pass_rate": 0.8,
+      "n": 10,
+      "errors": 0,
+      "total_tokens": 1507534,
+      "dataset": "real",
+      "variant": "GPQA-Diamond (198q), letter exact-match, deterministic choice shuffle"
+    },
+    "math": {
+      "pass_rate": 0.9,
+      "n": 10,
+      "errors": 0,
+      "total_tokens": 706991,
+      "dataset": "real",
+      "variant": "MATH-500 subset, exact/equivalent final answer"
+    },
+    "simpleqa": {
+      "pass_rate": 1.0,
+      "n": 6,
+      "errors": 0,
+      "total_tokens": 181366,
+      "dataset": "seed",
+      "variant": null
+    },
+    "humaneval": {
+      "pass_rate": 0.9,
+      "n": 10,
+      "errors": 0,
+      "total_tokens": 473714,
+      "dataset": "real",
+      "variant": "hidden-unit-test execution in sandbox"
+    },
+    "arc_agi_2": {
+      "pass_rate": 0.0,
+      "n": 10,
+      "errors": 0,
+      "total_tokens": 9633454,
+      "dataset": "real",
+      "variant": "public evaluation split, exact grid match"
+    },
+    "longcontext": {
+      "pass_rate": 1.0,
+      "n": 8,
+      "errors": 0,
+      "total_tokens": 388091,
+      "dataset": "seed",
+      "variant": "synthetic needle-in-haystack; exact-substring retrieval; multiple lengths"
+    },
+    "agentsafety": {
+      "pass_rate": 1.0,
+      "n": 7,
+      "errors": 0,
+      "total_tokens": 208741,
+      "dataset": "seed",
+      "variant": "harmful-request refusal; deterministic refusal-proxy scoring (heuristic, not LLM-judge)"
+    },
+    "locomo": {
+      "pass_rate": 1.0,
+      "n": 5,
+      "errors": 0,
+      "total_tokens": 179970,
+      "dataset": "seed",
+      "variant": "multi-session recall, deterministic (single/multi-hop, temporal, adversarial)"
+    },
+    "hotpotqa": {
+      "pass_rate": 1.0,
+      "n": 5,
+      "errors": 0,
+      "total_tokens": 148965,
+      "dataset": "seed",
+      "variant": "multi-hop (bridge + comparison) with distractors, exact/substring match"
+    },
+    "terminal_bench": {
+      "pass_rate": 0.8,
+      "n": 5,
+      "errors": 0,
+      "total_tokens": 425395,
+      "dataset": "seed",
+      "variant": "terminal task, hidden-verify execution in sandbox (Prax-run, not official tbench harness)"
+    }
+  }
+}
