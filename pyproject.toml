@@ -1,6 +1,6 @@
 [project]
 name = "prax"
-version = "0.37.1"
+version = "0.37.2"
 description = "Multi-channel (Twilio + Discord) AI assistant with agentic workflows"
 readme = "README.md"
 requires-python = ">=3.13"
