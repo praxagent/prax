@@ -389,7 +389,27 @@ Then point Prax at it — add to **Prax's** `.env` and restart `app.py`:
 ```env
 TEAMWORK_ENABLED=true
 TEAMWORK_URL=http://localhost:8000
+TEAMWORK_API_KEY=<the shared key — see below>
 ```
+
+**The shared key is required.** TeamWork's external API refuses requests (503)
+when no credential is configured, so Prax can't post without it. Generate one:
+
+```bash
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+Put **the same value in both repos** — Prax sends it, TeamWork checks it:
+
+| File | Variable |
+|---|---|
+| `prax/.env` | `TEAMWORK_API_KEY=<value>` |
+| `teamwork/.env` | `EXTERNAL_API_KEY=<value>` |
+
+If they drift apart Prax gets `401 Invalid API key`; if neither is set, `503`.
+(TeamWork also supports a per-agent credential registry — one token bound to one
+agent identity plus its own capability set — which is what you want once more
+than one agent is posting. See TeamWork's README.)
 
 For frontend hot-reload during development, run `npm run dev` in `teamwork/frontend` (Vite on **:5173**, proxies `/api` and `/ws` to the backend on :8000) instead of building static assets.
 
