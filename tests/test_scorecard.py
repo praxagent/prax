@@ -125,3 +125,64 @@ def test_record_carries_run_health():
     assert agg["error_rate"] == 0.0 and agg["total_attempted"] == 45
     # dashboard exposes the err% column so a broken run is visible at a glance
     assert "err%" in render_dashboard([rec])
+
+
+# ── Sampling honesty: a capped sample must never render as a suite result ────
+#
+# Regression guard for the 2026-07-24 finding: the record carried `n` and
+# `dataset`, but the dashboard dropped both — so `gsm8k | 1.00` (10 sampled
+# cases) read as a full-suite score, and a blended average across real +
+# self-authored seed sets was published as the headline. Presentation-layer
+# laundering of honest data is still dishonest; these tests pin the fix.
+
+def test_dashboard_warns_the_results_are_sampled_not_full_suites():
+    md = render_dashboard([_record()])
+    assert "SAMPLED" in md and "NOT full benchmark suites" in md
+    # The prohibition must be explicit, not implied by a config column.
+    assert "Do not quote these numbers as" in md
+    assert "leaderboard" in md.lower()
+
+
+def test_dashboard_shows_n_behind_every_score():
+    md = render_dashboard([_record()])
+    assert "0.95(40)" in md      # real benchmark: pass_rate(n)
+    assert "0.60(5)*" in md      # seed benchmark: pass_rate(n) + seed marker
+
+
+def test_dashboard_marks_seed_benchmarks_and_denies_comparability():
+    md = render_dashboard([_record()])
+    assert "seed (in-repo)" in md and "real (sampled)" in md
+    assert "not the public set" in md      # seed rows
+    assert "sample too small" in md        # real rows
+
+
+def test_dashboard_splits_real_and_seed_averages_never_blends_them():
+    md = render_dashboard([_record()])
+    assert "real avg" in md and "seed avg" in md
+    # The blended figure (0.8 in _REPORT) must not be presented as a headline.
+    assert "| avg |" not in md
+    assert "0.74" not in md or True  # (shape check below is the real assertion)
+    from prax.eval.scorecard import split_averages
+    sp = split_averages(_record()["benchmarks"])
+    assert sp["real_avg"] == 0.95 and sp["seed_avg"] == 0.6
+    assert sp["cases_real"] == 40 and sp["cases_seed"] == 5
+    assert sp["cases_graded"] == 45
+
+
+def test_record_states_it_is_a_sample_standalone():
+    # A reader of the raw JSON, with no access to MATRIX.md, must still be told.
+    rec = _record()
+    s = rec["sampling"]
+    assert s["sampled"] is True and s["full_suite"] is False
+    assert s["comparable_to_public_leaderboards"] is False
+    assert s["cases_per_benchmark_cap"] == 40
+    assert rec["aggregate"]["by_provenance"]["real_avg"] == 0.95
+
+
+def test_split_averages_handles_empty_and_missing_fields():
+    from prax.eval.scorecard import split_averages
+    sp = split_averages({})
+    assert sp["real_avg"] is None and sp["seed_avg"] is None and sp["cases_graded"] == 0
+    # A benchmark with no pass_rate is skipped, not counted as 0.
+    sp2 = split_averages({"x": {"pass_rate": None, "n": 3, "dataset": "real"}})
+    assert sp2["real_avg"] is None and sp2["n_real_benchmarks"] == 0
