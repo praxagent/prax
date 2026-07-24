@@ -411,6 +411,15 @@ If they drift apart Prax gets `401 Invalid API key`; if neither is set, `503`.
 agent identity plus its own capability set — which is what you want once more
 than one agent is posting. See TeamWork's README.)
 
+**Branch channels.** `TeamWorkClient.ensure_branch_channel(branch)` gives a git
+branch its own channel, so the conversation about it, the patches and whatever CI
+reported live in one place instead of interleaving with another branch in
+`#general`. It's idempotent, so it's safe to call at the start of every turn that
+touches a branch, and it returns `None` (rather than raising) when TeamWork is
+disabled or unreachable — a branch channel is a convenience and must never block
+the actual work. `post_branch_update(branch, content)` ensures the channel and
+posts in one step.
+
 For frontend hot-reload during development, run `npm run dev` in `teamwork/frontend` (Vite on **:5173**, proxies `/api` and `/ws` to the backend on :8000) instead of building static assets.
 
 > **Note:** TeamWork's in-browser terminal `docker exec`s into the sandbox container, so it expects Docker. Running TeamWork without Docker gives you chat, Kanban, file browser, and execution graphs; the terminal/desktop/browser tabs need the sandbox (next caveat).

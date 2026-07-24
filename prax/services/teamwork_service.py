@@ -7,6 +7,7 @@ messages, creating agents, updating tasks — while remaining the orchestrator.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from typing import Any
 
@@ -350,6 +351,57 @@ class TeamWorkClient:
             logger.info("Ensured channels: %s", list(updated.keys()))
         except Exception:
             logger.debug("Failed to ensure channels", exc_info=True)
+
+    # ----- Branch channels -----
+
+    @staticmethod
+    def branch_channel_name(branch: str) -> str:
+        """Channel name for a git branch.
+
+        Slashes are the norm in branch names (``feat/foo``) and are not valid in
+        a channel name, so the whole thing is normalised rather than truncated at
+        the first separator — ``feat/foo`` and ``fix/foo`` must not collide.
+        """
+        slug = re.sub(r"[^a-z0-9]+", "-", branch.strip().lower()).strip("-")
+        return f"branch-{slug or 'unnamed'}"[:100]
+
+    def ensure_branch_channel(self, branch: str,
+                              description: str | None = None) -> str | None:
+        """Ensure a channel exists for *branch* and return its id.
+
+        Gives a branch's work one place to live: the conversation about it, the
+        patches, and whatever CI reported, instead of scattering them across a
+        general channel where two branches interleave. Idempotent — re-ensuring
+        an existing channel returns the same id, so this is safe to call at the
+        start of every turn that touches a branch.
+
+        Returns ``None`` when TeamWork is disabled or unreachable; a branch
+        channel is a convenience and must never block the actual work.
+        """
+        if not self._enabled or not self._project_id:
+            return None
+        name = self.branch_channel_name(branch)
+        existing = self.get_channel_id(name)
+        if existing:
+            return existing
+        self.ensure_channels([{
+            "name": name,
+            "description": description or f"Work on git branch `{branch}`",
+        }])
+        return self.get_channel_id(name)
+
+    def post_branch_update(self, branch: str, content: str,
+                           agent_name: str | None = None) -> bool:
+        """Post an update into a branch's channel, creating it if needed."""
+        channel_id = self.ensure_branch_channel(branch)
+        if not channel_id:
+            return False
+        try:
+            self.send_message(content, channel_id=channel_id, agent_name=agent_name)
+            return True
+        except Exception:
+            logger.debug("Failed to post branch update for %s", branch, exc_info=True)
+            return False
 
     def get_channel_message_count(self, channel_name: str) -> int:
         """Get the number of messages in a TeamWork channel."""
