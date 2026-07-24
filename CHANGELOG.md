@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.37.2](https://github.com/praxagent/prax/compare/v0.37.1...v0.37.2) (2026-07-24)
+
+
+### Bug Fixes
+
+* **eval-results:** stop publishing capped samples as if they were full suites ([#173](https://github.com/praxagent/prax/issues/173)) ([d3fd787](https://github.com/praxagent/prax/commit/d3fd787cfd61bb5d84a03e36508f601a54e4bf33))
+
 ## [0.37.1](https://github.com/praxagent/prax/compare/v0.37.0...v0.37.1) (2026-07-23)
 
 
