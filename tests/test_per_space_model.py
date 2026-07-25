@@ -196,3 +196,55 @@ def test_the_space_chat_endpoint_sets_its_own_space():
 
     body = inspect.getsource(tr.library_space_chat)
     assert "current_space_slug.set(space)" in body
+
+
+# ── The HTTP surface a picker talks to ───────────────────────────────────────
+
+@pytest.fixture
+def client(space, monkeypatch):
+    from app import create_app
+
+    monkeypatch.setattr(
+        "prax.blueprints.teamwork_routes._get_teamwork_user_id",
+        lambda: space["user"])
+    app = create_app()
+    app.config["TESTING"] = True
+    return app.test_client()
+
+
+def test_reading_a_space_reports_pin_and_fallback_separately(client):
+    """A picker cannot show "inherited" from the pin alone.
+
+    An empty pin and a pin that happens to equal the global default look the
+    same, and only one of them follows the default when it changes.
+    """
+    r = client.get(f"/teamwork/library/spaces/{"research"}/model")
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["pinned"] is None
+    assert body["inherited"] is True
+    assert "fallback" in body
+
+
+def test_pinning_then_reading_back_over_http(client):
+    slug = "research"
+    assert client.put(f"/teamwork/library/spaces/{slug}/model",
+                      json={"model": "gpt-5.4"}).status_code == 200
+    body = client.get(f"/teamwork/library/spaces/{slug}/model").get_json()
+    assert body["pinned"] == "gpt-5.4"
+    assert body["inherited"] is False
+
+
+def test_an_empty_model_clears_rather_than_pinning_a_blank(client):
+    slug = "research"
+    client.put(f"/teamwork/library/spaces/{slug}/model", json={"model": "gpt-5.4"})
+    client.put(f"/teamwork/library/spaces/{slug}/model", json={"model": ""})
+    body = client.get(f"/teamwork/library/spaces/{slug}/model").get_json()
+    assert body["pinned"] is None, "clearing must inherit, not store a blank"
+    assert body["inherited"] is True
+
+
+def test_pinning_an_unknown_space_is_a_404_not_a_silent_write(client):
+    r = client.put("/teamwork/library/spaces/no-such-space/model",
+                   json={"model": "gpt-5.4"})
+    assert r.status_code == 404

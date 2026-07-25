@@ -8,15 +8,31 @@ import uuid
 from nltk.tokenize import sent_tokenize
 from twilio.twiml.voice_response import VoiceResponse
 
+from prax import helpers_dictionaries
 from prax.convo_states import convo_states
 from prax.filter_input import preprocess_input
-from prax.helpers_dictionaries import num_to_names, voices
 from prax.helpers_functions import create_convo_state, gather_speech
 from prax.services.conversation_service import conversation_service
 from prax.settings import settings
 from prax.twilio_voice_utils import create_gather_instance
 
 logger = logging.getLogger(__name__)
+
+
+def _known_callers() -> dict:
+    """The phone→name map, read at CALL time rather than bound at import.
+
+    `num_to_names` is built from settings when `helpers_dictionaries` is first
+    imported. Binding it here with `from ... import num_to_names` captured
+    whichever mapping existed at *this module's* import — so a later reload of
+    the configuration (a settings change, or a test fixture rebuilding it)
+    produced a new dict that this module never saw, and it went on authorising
+    callers from a map nobody could observe.
+
+    Reading through the module makes a reload actually take effect, which is
+    what anyone reloading it already believes is happening.
+    """
+    return helpers_dictionaries.num_to_names
 
 
 class VoiceAccessError(Exception):
@@ -33,7 +49,7 @@ class VoiceService:
         self.base_model = base_model
 
     def _ensure_state(self, call_sid: str, from_num: str) -> tuple[str, bool]:
-        if from_num not in num_to_names:
+        if from_num not in _known_callers():
             raise VoiceAccessError()
 
         if hasattr(self.states, 'ensure'):
@@ -54,9 +70,10 @@ class VoiceService:
         response = VoiceResponse()
         if is_new:
             response.say(
-                voice=voices.get(language_code, voices['en']),
+                voice=helpers_dictionaries.voices.get(
+                    language_code, helpers_dictionaries.voices['en']),
                 message=(
-                    f"Hello {num_to_names[from_num]}. Please wait for the high pitch beep "
+                    f"Hello {_known_callers()[from_num]}. Please wait for the high pitch beep "
                     "before speaking, including after I answer your questions."
                 ),
             )

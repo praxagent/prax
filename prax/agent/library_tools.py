@@ -1072,6 +1072,33 @@ def build_library_tools() -> list:
         library_column_add,
         library_column_rename,
         library_column_remove,
+        *_space_repo_tools(),
+    ]
+
+
+def _space_repo_tools() -> list:
+    """The git-repo tools, or nothing when the feature is off.
+
+    Gated because attaching a repository hands the agent a credential and a
+    checkout — a capability a deployment should opt into rather than acquire by
+    upgrading. Off keeps the tools out of the toolset entirely rather than
+    letting them be called and refuse: a tool the agent can see is a tool it
+    will try, and spending a turn discovering a feature is disabled is worse
+    than never offering it.
+    """
+    from prax.settings import settings
+
+    if not getattr(settings, "space_repos_enabled", False):
+        return []
+    return [
+        space_repo_add,
+        space_repos_list,
+        space_repo_status,
+        space_repo_log,
+        space_repo_pull,
+        space_repo_set_write,
+        space_repo_commit,
+        space_repo_push,
     ]
 
 

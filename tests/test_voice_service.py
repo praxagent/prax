@@ -7,7 +7,10 @@ def test_handle_transcribe_greets_new_call(monkeypatch):
     module = importlib.reload(importlib.import_module('prax.services.voice_service'))
 
     states = {}
-    monkeypatch.setitem(module.num_to_names, '+10000000000', 'Tester')
+    # On helpers_dictionaries, not on the service: the service reads the map
+    # at call time so a config reload reaches it, leaving no local copy here.
+    import prax.helpers_dictionaries as hd
+    monkeypatch.setitem(hd.num_to_names, '+10000000000', 'Tester')
     captured = {}
 
     def fake_gather(resp, language_code):
@@ -34,7 +37,10 @@ def test_handle_transcribe_unauthorized(monkeypatch):
 
 def test_handle_response_redirect(monkeypatch):
     module = importlib.reload(importlib.import_module('prax.services.voice_service'))
-    monkeypatch.setitem(module.num_to_names, '+10000000000', 'Tester')
+    # On helpers_dictionaries, not on the service: the service reads the map
+    # at call time so a config reload reaches it, leaving no local copy here.
+    import prax.helpers_dictionaries as hd
+    monkeypatch.setitem(hd.num_to_names, '+10000000000', 'Tester')
     states = {'CS1': {'language': 'en', 'read_buffer': {}, 'buffer_redirect': None}}
 
     def fake_preprocess(voice_input, resp, gather, call_sid):

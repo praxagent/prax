@@ -8,12 +8,10 @@ import pytrie
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 
+from prax import helpers_dictionaries
 from prax.chatbot import askgpt
 from prax.convo_states import convo_states
-from prax.helpers_dictionaries import (
-    email_map,
-    transcription_mapping,
-)
+from prax.helpers_dictionaries import transcription_mapping
 from prax.readers.reader_function_mappings import reader_function_mappings
 from prax.readers.reader_source_mappings import article_option_mapping, reader_source_mappings
 from prax.settings import settings
@@ -324,7 +322,8 @@ def handle_in_article_state(call_sid, article_index, resp):
         elif article_index == 2:
             message = Mail(
                 from_email=os.environ.get('SENDGRID_FROM_EMAIL', 'noreply@example.com'),
-                to_emails=email_map[convo_states[call_sid]['from_num']],
+                to_emails=helpers_dictionaries.email_map[
+                    convo_states[call_sid]['from_num']],
                 subject=f"Requested link for article: {convo_states[call_sid]['buffer_title']}",
                 html_content=f"""
                 <b>Links:</b>

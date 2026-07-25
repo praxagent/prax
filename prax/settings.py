@@ -829,6 +829,14 @@ class AppSettings(BaseSettings):
     # Assessment: docs/research/cdc-lean-teach-prax-lean.md
     lean_tools_enabled: bool = Field(default=False, alias="LEAN_TOOLS_ENABLED")
 
+    # space_repo_* — attach git repositories to a Library space so Prax can read
+    # the code the work is about. Off by default because attaching one hands the
+    # agent a credential and a checkout: that is a capability a deployment should
+    # opt into, not acquire by upgrading. Pushing needs a *second* decision — the
+    # per-repo write toggle, which starts off no matter what this flag says.
+    # Docs: docs/security/space-git-repos.md
+    space_repos_enabled: bool = Field(default=False, alias="SPACE_REPOS_ENABLED")
+
     # data_query — DuckDB SQL / number-crunching over CSV/Parquet/JSON in the
     # sandbox. Needs duckdb + pandas in the sandbox image (/opt/prax-venv); the
     # tool degrades with a clear message when the libs or sandbox are absent.
