@@ -3092,12 +3092,23 @@ def get_model():
                 "model": tc.model,
             })
 
-        return jsonify({
+        payload = {
             "current_model": current_model,
             "current_tier": current_tier,
             "override": override,
             "available": available,
-        })
+        }
+        # Provider catalog: which providers this deployment can actually use,
+        # what serves each tier, and how the model is currently chosen. Additive
+        # — the pre-existing keys above are untouched so older UIs keep working.
+        try:
+            from prax.agent.model_catalog import catalog
+            payload.update(catalog(override))
+        except Exception:
+            # The picker degrades to the tier list rather than failing the whole
+            # endpoint — a catalog problem must not cost you the model badge.
+            logger.exception("Failed to build the model catalog")
+        return jsonify(payload)
     except Exception:
         logger.exception("Failed to get model info")
         return jsonify({"error": "Failed to get model info"}), 500
