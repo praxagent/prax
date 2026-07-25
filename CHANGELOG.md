@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.38.0](https://github.com/praxagent/prax/compare/v0.37.2...v0.38.0) (2026-07-25)
+
+
+### Features
+
+* **teamwork:** give a git branch its own channel ([#176](https://github.com/praxagent/prax/issues/176)) ([b03d19b](https://github.com/praxagent/prax/commit/b03d19bf8560460bd4516da336bc1aecc3b948af))
+
 ## [0.37.2](https://github.com/praxagent/prax/compare/v0.37.1...v0.37.2) (2026-07-24)
 
 
