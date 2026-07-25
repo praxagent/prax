@@ -1,0 +1,27 @@
+# TeamWork — the web UI. Started before Prax; see prax.service for why.
+[Unit]
+Description=TeamWork UI
+Documentation=https://github.com/praxagent/teamwork
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/PRAX/teamwork
+# Loopback only. The UI is published on the tailnet by `tailscale serve`, so
+# binding wider would expose it without adding anything.
+Environment=TEAMWORK_HOST=127.0.0.1
+Environment=DATABASE_URL=sqlite+aiosqlite:///./data/vteam.db
+# Without PRAX_URL the /api/prax/* proxy has no target and returns bodies with
+# no fields — which is what blanked the chat view before it was set.
+Environment=PRAX_URL=http://localhost:5001
+ExecStart=/home/ubuntu/.local/bin/uv run --python 3.13 python -m teamwork.cli
+Restart=always
+RestartSec=10
+TimeoutStartSec=300
+StandardOutput=append:/home/ubuntu/PRAX/teamwork.log
+StandardError=append:/home/ubuntu/PRAX/teamwork.log
+
+[Install]
+WantedBy=multi-user.target
