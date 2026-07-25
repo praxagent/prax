@@ -646,6 +646,51 @@ curl -s -o /dev/null -w '%{http_code}\n' localhost:8000/api/external/projects   
 curl -s -o /dev/null -w '%{http_code}\n' localhost:5001/health          # 200
 ```
 
+### 10. Survive a reboot
+
+Started by hand, Prax and TeamWork are ordinary foreground processes — a reboot
+(or an instance resize) leaves you with a box that answers on no ports. Most of
+the stack already self-heals and only these two need units:
+
+| | Restarts itself? | Why |
+|---|---|---|
+| Tailscale | ✅ | `tailscaled` is a systemd unit, enabled on install |
+| Swap | ✅ | the `/etc/fstab` line from step 1 |
+| Qdrant, secrets-proxy, sandbox | ✅ | Docker restart policies |
+| **Prax, TeamWork** | ❌ | nothing supervises them — install the units below |
+
+```bash
+sudo cp deploy/systemd/{prax,teamwork}.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now teamwork prax
+```
+
+Two things in [`deploy/systemd/`](deploy/systemd/) are deliberate rather than
+incidental:
+
+- **TeamWork starts before Prax.** Prax's startup reconnects to (or creates) its
+  TeamWork project and **silently skips if the UI is unreachable** — which
+  leaves you staring at an empty workspace wondering what broke. The ordering
+  is the difference between a wired-up workspace and a confusing one.
+- **No `EnvironmentFile`.** Prax reads `.env` from its working directory and
+  exports `HTTPS_PROXY` itself (`app.py` → `_export_proxy_env_from_dotenv`).
+  systemd's `EnvironmentFile` parser does not handle quoted values the way a
+  shell does, so pointing it at `.env` would silently mis-set variables.
+
+`Restart=always` with a 10s backoff means a crash recovers too, not only a
+reboot. Adjust `User=` and the paths if your layout differs from `~/PRAX`.
+
+**Prove it rather than assume it** — "it starts under systemd" and "it survives
+a reboot" are different claims:
+
+```bash
+sudo systemctl reboot
+# then, once it is back:
+systemctl is-active tailscaled docker teamwork prax     # all: active
+curl -s -o /dev/null -w '%{http_code}\n' localhost:5001/health   # 200
+sudo tailscale serve status                              # UI still published
+```
+
 ### ⚠️ Running a second Prax alongside an existing one
 
 **`DISCORD_ENABLED` defaults to ON.** Two Prax instances sharing a

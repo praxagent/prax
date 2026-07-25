@@ -1,0 +1,37 @@
+# Prax — the agent process.
+#
+# Install:
+#   sudo cp deploy/systemd/*.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now teamwork prax
+#
+# Assumes the sibling layout from the deploy guide (~/PRAX/{prax,teamwork,...})
+# and uv on PATH at ~/.local/bin. Adjust User/paths if yours differ.
+[Unit]
+Description=Prax agent
+Documentation=https://github.com/praxagent/prax
+# Qdrant and the secrets-proxy are containers with their own restart policies;
+# waiting for the daemon is enough. TeamWork first, because Prax's startup
+# reconnects to (or creates) its TeamWork project and silently skips if the UI
+# is unreachable — the ordering is the difference between a wired-up workspace
+# and a confusing empty one.
+After=network-online.target docker.service teamwork.service
+Wants=network-online.target teamwork.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/PRAX/prax
+# Prax reads .env from its working directory and exports HTTPS_PROXY itself
+# (app.py -> _export_proxy_env_from_dotenv), so no EnvironmentFile is needed —
+# and systemd's EnvironmentFile parser would mangle quoted values anyway.
+ExecStart=/home/ubuntu/.local/bin/uv run --python 3.13 python app.py
+Restart=always
+RestartSec=10
+# Survive a slow first boot: uv may resolve an environment before serving.
+TimeoutStartSec=300
+StandardOutput=append:/home/ubuntu/PRAX/prax.log
+StandardError=append:/home/ubuntu/PRAX/prax.log
+
+[Install]
+WantedBy=multi-user.target

@@ -154,10 +154,17 @@ class TestGraphInvokeTimeout:
             def invoke(self, payload, config=None):
                 while True:
                     heartbeat.touch("test", "still making progress")
-                    time.sleep(0.02)
+                    # 2ms against a 50ms idle timeout — a 25x margin, so a
+                    # scheduling hiccup cannot make a healthy run look idle.
+                    time.sleep(0.002)
 
         agent = object.__new__(ConversationAgent)
         agent.graph = EndlessHealthyGraph()
+        # Idle stays small: the max-runtime check is only evaluated when the
+        # idle poll wakes up, so a large idle timeout delays detection of the
+        # very thing under test. The flake came from too thin a margin between
+        # the heartbeat interval and this value (0.02s vs 0.05s), so the graph
+        # below touches far more often instead.
         monkeypatch.setattr(orchestrator_module.settings, "agent_run_timeout", 0.05)
         monkeypatch.setattr(orchestrator_module.settings, "agent_run_max_timeout", 0.15)
 
