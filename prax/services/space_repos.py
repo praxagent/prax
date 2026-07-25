@@ -49,6 +49,11 @@ _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 _GIT_TIMEOUT = 300
 
+# Who a Prax-made commit is attributed to. Overridable from the environment, but
+# never inherited silently — see _git_env.
+_COMMIT_NAME = "Prax"
+_COMMIT_EMAIL = "prax@localhost"
+
 
 class RepoError(Exception):
     """An attach/clone/write operation was refused or failed."""
@@ -140,10 +145,29 @@ def _git_env(user_id: str, slug: str, name: str) -> dict[str, str]:
             f"ssh -i {key} -o IdentitiesOnly=yes "
             "-o StrictHostKeyChecking=accept-new"
         )
+
     return env
 
 
 def _run_git(args: list[str], cwd: Path, env: dict[str, str] | None = None) -> str:
+    """Run one git command with Prax's authorship always applied.
+
+    The identity lives *here* rather than at the call sites that commit,
+    because a call site can forget — and one did: `commit` ran without any env
+    at all, so on a machine with no global `user.email` (a fresh deployment, a
+    container, CI) it failed with "Author identity unknown", while passing on
+    a dev box that happened to have a `~/.gitconfig`. Applying it in the one
+    place every git call goes through makes that class of miss impossible.
+
+    Attribution matters on its own too: a repo's history should say the agent
+    made these commits, not quietly sign them as the human who owns the box.
+    """
+    env = dict(env if env is not None else os.environ)
+    env.setdefault("GIT_AUTHOR_NAME", _COMMIT_NAME)
+    env.setdefault("GIT_AUTHOR_EMAIL", _COMMIT_EMAIL)
+    env.setdefault("GIT_COMMITTER_NAME", _COMMIT_NAME)
+    env.setdefault("GIT_COMMITTER_EMAIL", _COMMIT_EMAIL)
+
     r = subprocess.run(["git", *args], cwd=str(cwd), capture_output=True,
                        text=True, env=env, timeout=_GIT_TIMEOUT)
     if r.returncode != 0:

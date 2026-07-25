@@ -283,3 +283,55 @@ def test_tool_errors_are_returned_not_raised(space, monkeypatch):
     lt = _tool_env(space, monkeypatch)
     out = lt.space_repo_status.invoke({"space_slug": space["slug"], "name": "ghost"})
     assert "not attached" in out
+
+
+def test_commit_works_on_a_host_with_no_git_identity(space, tmp_path, monkeypatch):
+    """A fresh deployment has no global user.email, and must still commit.
+
+    This is what CI caught: the tests passed on a dev box because git found an
+    identity in ~/.gitconfig, and failed everywhere that had none — which is
+    every container and every newly-provisioned server. Pointing
+    GIT_CONFIG_GLOBAL at an empty file reproduces that machine here.
+    """
+    empty = tmp_path / "no-gitconfig"
+    empty.write_text("")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(empty))
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", str(empty))
+
+    sr.attach(space["user"], space["slug"], _origin(tmp_path), "demo")
+    sr.set_write(space["user"], space["slug"], "demo", True)
+    path = sr._resolved_repo_path(space["user"], space["slug"], "demo")
+    (path / "new.txt").write_text("hi")
+
+    out = sr.commit(space["user"], space["slug"], "demo", "add a file")
+    assert "nothing to commit" not in out
+
+    log = sr._run_git(["log", "-1", "--format=%an <%ae>"], cwd=path,
+                      env=sr._git_env(space["user"], space["slug"], "demo"))
+    assert log == "Prax <prax@localhost>", (
+        "commits should say the agent made them, not whoever owns the box")
+
+
+def test_authorship_is_applied_even_when_a_call_site_passes_no_env():
+    """The identity must come from _run_git, not from remembering to pass env.
+
+    `commit` forgot, which is exactly how the no-identity bug shipped. Reading
+    the env off a call with env=None is the check that it cannot recur.
+    """
+    import subprocess
+
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen.update(kwargs.get("env") or {})
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    orig = subprocess.run
+    subprocess.run = fake_run
+    try:
+        sr._run_git(["status"], cwd=Path("."))
+    finally:
+        subprocess.run = orig
+
+    assert seen["GIT_AUTHOR_EMAIL"] == "prax@localhost"
+    assert seen["GIT_COMMITTER_NAME"] == "Prax"
