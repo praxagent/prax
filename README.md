@@ -460,6 +460,216 @@ The [Tailscale / HTTPS](#remote-access-tailscale--https) options below also appl
 
 ---
 
+## Deploying the suite to a fresh server (keyless, single-tenant)
+
+A complete, reproducible install on a bare Ubuntu VM — the shape that runs Prax
+full-time with **no provider keys on the box**. Written from an actual 4 GB
+Lightsail deployment, including the traps that cost time.
+
+**Target shape.** Prax + TeamWork + sandbox + Qdrant + secrets-proxy. Neo4j and
+the LGTM observability stack are **left off**: they cost ~600 MB together and are
+what make the difference between 4 GB working and not. You keep Qdrant vector
+memory; you lose the graph layer.
+
+**Measured footprint** (idle, everything but a browsing sandbox): **~1 GB**.
+4 GB is enough; 8 GB is what you want if you also run Neo4j + observability.
+
+### 1. Host prep
+
+```bash
+# Swap FIRST — a 4 GB box running Chromium will OOM without it.
+sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile
+sudo mkswap /swapfile && sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+echo 'vm.swappiness=10' | sudo tee /etc/sysctl.d/99-prax-swap.conf   # swap late, not eagerly
+
+sudo apt-get update && sudo apt-get install -y make build-essential git jq ffmpeg
+#                                                                        ^^^^^^ audio/transcription
+curl -fsSL https://get.docker.com | sh && sudo usermod -aG docker "$USER"
+curl -LsSf https://astral.sh/uv/install.sh | sh          # provides Python 3.13; the system python is NOT used
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs
+```
+
+### 2. Clone the siblings
+
+They are consumed side by side, never vendored:
+
+```bash
+mkdir -p ~/PRAX && cd ~/PRAX
+for r in prax teamwork prax-sandbox prax-secrets-proxy; do
+  git clone https://github.com/praxagent/$r.git
+done
+```
+
+### 3. Secrets live in ONE place — the proxy
+
+This is the whole point of keyless Prax: the **real** keys go in
+`prax-secrets-proxy/.env` and nowhere else. Prax itself gets non-empty
+**placeholders** so its clients construct, and the proxy substitutes the real
+value in flight.
+
+```bash
+cd ~/PRAX/prax-secrets-proxy && cp .env-example .env   # then edit:
+#   OPENAI_KEY / ANTHROPIC_KEY   ← reverse proxy (:8785). NOTE: no "_API_"
+#   PROXY_AUTH_TOKEN             ← python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+#   OPENROUTER_API_KEY, ELEVENLABS_API_KEY, JINA_API_KEY, SERPER_DEV_API_KEY,
+#   TWILIO_AUTH_TOKEN, HF_TOKEN_RO …  ← forward proxy (:8786), injected BY HOST
+```
+
+> **Naming trap.** The reverse proxy wants `OPENAI_KEY`/`ANTHROPIC_KEY` (no
+> `_API_`); the forward map wants `OPENROUTER_API_KEY`, `ELEVENLABS_API_KEY`,
+> … **with** `_API_`. A typo means "no injection", which surfaces as a confusing
+> **401 from the provider**, not an error from the proxy.
+
+### 4. Generate the forward map — it is NOT in git
+
+`forward-map.json` is generated from [the credential registry](prax/services/credential_registry.py)
+and gitignored. If you skip this, Docker bind-mounts a *nonexistent* file and
+**creates a directory in its place**, and the forward proxy crash-loops with
+`IsADirectoryError: /config/forward-map.json`.
+
+```bash
+cd ~/PRAX/prax && uv sync --python 3.13
+FLASK_SECRET_KEY=bootstrap uv run --python 3.13 python -c "
+from prax.services.credential_registry import export_forward_map
+n, skipped = export_forward_map('$HOME/PRAX/prax-secrets-proxy/forward-map.json')
+print(f'{n} rules, {len(skipped)} skipped (no key set)')"
+```
+
+### 5. Start the proxy (both halves)
+
+The forward proxy is behind a compose **profile**, so a plain `up -d` starts only
+the reverse half:
+
+```bash
+cd ~/PRAX/prax-secrets-proxy
+bash scripts/gen-cert.sh                    # TLS cert for the reverse proxy
+chmod 644 certs/proxy.key                   # the container runs as `proxyapp` and
+                                            # cannot read a 0600 key → PermissionError
+docker compose --profile forward up -d      # :8785 reverse + :8786 forward
+```
+
+Then build the CA bundle Prax trusts — system CAs **plus** the mitmproxy CA, so
+the forward proxy can terminate TLS:
+
+```bash
+docker run --rm -v prax-secrets-proxy_mitm-ca:/ca alpine \
+  cat /ca/mitmproxy-ca-cert.pem > /tmp/mitmca.pem
+cat /etc/ssl/certs/ca-certificates.crt > ~/PRAX/prax-proxy-ca-bundle.pem
+sed -n '/BEGIN CERT/,/END CERT/p' /tmp/mitmca.pem >> ~/PRAX/prax-proxy-ca-bundle.pem
+```
+
+> **Both proxy ports must stay loopback-only.** The reverse proxy authenticates
+> callers with `PROXY_AUTH_TOKEN`; **the forward proxy currently does not
+> authenticate callers at all** — binding it to a LAN/tailnet address would let
+> anything on that network spend your keys. Run the proxy on the same host as
+> Prax until that gap is closed.
+
+### 6. Point Prax at the proxy (placeholders, not keys)
+
+In `prax/.env`:
+
+```env
+HTTPS_PROXY=http://127.0.0.1:8786
+HTTP_PROXY=http://127.0.0.1:8786
+NO_PROXY=localhost,127.0.0.1
+REQUESTS_CA_BUNDLE=/home/<user>/PRAX/prax-proxy-ca-bundle.pem
+SSL_CERT_FILE=/home/<user>/PRAX/prax-proxy-ca-bundle.pem
+OPENROUTER_API_KEY=<any non-empty placeholder>   # the proxy substitutes the real one
+DISCORD_ENABLED=false                            # see the warning below
+```
+
+**Verify keyless actually works** — this is the test that matters, not "the
+container is running":
+
+```bash
+cd ~/PRAX/prax && set -a && . ./.env && set +a
+uv run --python 3.13 python -c "
+import json,os,urllib.request
+r=urllib.request.Request('https://openrouter.ai/api/v1/chat/completions',
+  data=json.dumps({'model':'openai/gpt-4o-mini','max_tokens':12,
+    'messages':[{'role':'user','content':'Reply with exactly: KEYLESS_OK'}]}).encode(),
+  headers={'Authorization':f\"Bearer {os.environ['OPENROUTER_API_KEY']}\",
+           'Content-Type':'application/json'})
+print(json.load(urllib.request.urlopen(r,timeout=60))['choices'][0]['message']['content'])"
+```
+
+A real completion returned while the process holds only a placeholder ⇒ the
+invariant holds.
+
+### 7. TeamWork: frontend build + the credential pair
+
+```bash
+cd ~/PRAX/teamwork/frontend && npm ci && npx vite build   # else / 404s
+```
+
+TeamWork's external API **fails closed** — with no credential it returns `503`,
+and a wrong one `401`. The same value must appear on both sides under different
+names:
+
+```bash
+KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
+echo "EXTERNAL_API_KEY=$KEY" >> ~/PRAX/teamwork/.env   # TeamWork checks this
+echo "TEAMWORK_API_KEY=$KEY" >> ~/PRAX/prax/.env       # Prax sends it
+```
+
+Generate a **fresh** pair per deployment; don't reuse another box's. Check for
+duplicate `TEAMWORK_API_KEY=` lines afterwards — a stale empty one later in the
+file silently wins under dotenv "last one wins" semantics.
+
+### 8. Start everything
+
+```bash
+docker run -d --name prax-qdrant -p 127.0.0.1:6333:6333 --restart unless-stopped \
+  -v ~/PRAX/qdrant-data:/qdrant/storage qdrant/qdrant:latest
+cd ~/PRAX/teamwork && nohup uv run --python 3.13 python -m teamwork.cli &
+cd ~/PRAX/prax-sandbox && WORKSPACE_DIR=~/PRAX/workspaces/<user_id> docker compose up -d --build
+cd ~/PRAX/prax     && nohup uv run --python 3.13 python app.py &
+```
+
+Expose **only** the UI, and only on your tailnet:
+
+```bash
+sudo tailscale serve --bg --https=443 http://localhost:8000
+```
+
+> **Never expose the sandbox ports** (`:4096` OpenCode, `:9223` CDP, `:6080`
+> noVNC, `:6090` clipboard). They are **unauthenticated by design** and are safe
+> only because they bind to loopback. Once the tailnet works, close public SSH.
+
+### 9. Verify
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' localhost:8000/health          # 200
+curl -s -o /dev/null -w '%{http_code}\n' localhost:8000/                # 200 (UI built)
+curl -s -o /dev/null -w '%{http_code}\n' localhost:8000/api/external/projects   # 401 = fail-closed works
+curl -s -o /dev/null -w '%{http_code}\n' localhost:5001/health          # 200
+```
+
+### ⚠️ Running a second Prax alongside an existing one
+
+**`DISCORD_ENABLED` defaults to ON.** Two Prax instances sharing a
+`DISCORD_BOT_TOKEN` both connect to the gateway and **both reply to every
+message**. The same applies to Twilio/SMS. Exactly one instance may own each
+channel — set `DISCORD_ENABLED=false` (and omit `TWILIO_*`) on the other, and
+restart it: an `.env` edit alone does not take effect.
+
+The Discord token is the one credential that **cannot** be proxied: the gateway
+carries it inside a WebSocket IDENTIFY payload rather than an HTTP header, so
+there is nothing for a header-injecting proxy to rewrite. See its entry in
+[`credential_registry.py`](prax/services/credential_registry.py) for the full
+rationale and the blast-radius assessment.
+
+### Known limitation — single-tenant only
+
+The sandbox bind-mounts **one** workspace at a fixed path
+(`WORKSPACE_DIR:/workspace`) into **one** shared container, and nothing scopes
+execution per user. Every tenant's `run_shell`/`run_python` therefore shares one
+filesystem. **Deploy this as single-tenant until per-tenant sandbox isolation
+lands.**
+
+---
+
 ## Features
 
 Prax is a multi-channel AI assistant powered by a LangGraph ReAct agent. It connects through the **TeamWork** web UI and/or **Discord** and/or **Twilio** (voice + SMS), remembers everything in SQLite, and can modify its own tools at runtime.
