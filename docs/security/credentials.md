@@ -111,6 +111,19 @@ stale (401 → rotate)._
 | `GPU_POWER_BROKER_TOKEN` | infra control token (reclassify FORWARD if it ever calls a third party) |
 | `PRAX_SSH_KEY_B64` / `PLUGIN_REPO_SSH_KEY_B64` | git-over-SSH — not an HTTP API the egress proxy can inject |
 
+### Not in the registry: per-repo deploy keys
+
+Attaching a git repo to a Library space **generates** an ed25519 deploy key per
+repository (`~/.prax/git-keys/{user}/{space}/{repo}`, mode 0600). They are not
+registry rows because they are not env-var credentials — nothing in
+`settings.py` names them, so the drift-guard has nothing to check.
+
+They belong to the same class as `PRAX_SSH_KEY_B64`: **git-over-SSH, not
+proxyable.** The mitigation is scope rather than injection — a deploy key is
+registered on exactly one repository, so a leak exposes that repo and not
+everything the account can reach. Write access is off until a human toggles it,
+per repository. Full design: [`space-git-repos.md`](space-git-repos.md).
+
 ### `DISCORD_BOT_TOKEN` — on Prax by necessity: less risky, not risk-free
 
 This is the one third-party credential the keyless-Prax invariant genuinely **does

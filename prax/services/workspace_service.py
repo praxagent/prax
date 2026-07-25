@@ -108,6 +108,18 @@ Thumbs.db
 .sandbox/
 .services/
 
+# === Generated space cover images ===
+# ~2 MB each, decorative, and REGENERABLE. Committing them made .git larger than
+# the entire working tree, and every regeneration adds another permanent blob.
+# The user's history should hold what they wrote, not the card art.
+library/spaces/*/.cover.*
+
+# === Git repos attached to a Library space ===
+# Checkouts of OTHER repositories, cloned per space. They must never enter the
+# workspace's own history: `git add -A` would either swallow their contents or
+# record a broken gitlink. They have their own history already.
+library/spaces/*/repos/
+
 # === Rotated logs (kept as plain text for grep) ===
 # archive/trace_logs/ — tracked by git for searchability
 

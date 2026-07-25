@@ -66,7 +66,41 @@ def set_model_override(model: str | None) -> None:
 
 
 def get_model_override() -> str | None:
-    """Return the current runtime model override, or None if using config default."""
+    """Return the GLOBAL runtime model override, or None if using the config default.
+
+    Prefer :func:`effective_model_override` for anything that answers a user — a
+    space can pin its own model and this does not know about that.
+    """
+    return _model_override
+
+
+def effective_model_override(space_slug: str | None = None) -> str | None:
+    """The override that applies to this turn: space first, then global.
+
+    A space pins a model for the work that happens in it — a research space on a
+    big model, a scratch space on a cheap one — and the global override remains
+    the answer everywhere else. Falling back rather than copying means clearing a
+    space returns it to the deployment default instead of freezing it on whatever
+    happened to be set the day it was cleared.
+    """
+    if space_slug is None:
+        from prax.agent.user_context import current_space_slug
+
+        space_slug = current_space_slug.get()
+
+    if space_slug:
+        try:
+            from prax.agent.user_context import current_user_id
+            from prax.services import library_service
+
+            uid = current_user_id.get()
+            if uid:
+                pinned = library_service.get_space_model(uid, space_slug)
+                if pinned:
+                    return pinned
+        except Exception:  # noqa: BLE001 - a bad space must not break the turn
+            logger.debug("could not read the space model for %s", space_slug, exc_info=True)
+
     return _model_override
 
 
@@ -965,6 +999,36 @@ class ConversationAgent:
             except Exception:
                 pass
 
+    def _apply_turn_model_override(self) -> None:
+        """Point this turn at the model its space asks for, if that differs.
+
+        The agent resolves its model in __init__ and is then reused, so a space
+        pin has to be applied per TURN. Same mechanism tier escalation uses: swap
+        the llm and rebuild the loop. Only rebuilds when the resolved model
+        actually changed — the common case costs a comparison.
+        """
+        try:
+            resolved = effective_model_override()
+        except Exception:  # noqa: BLE001 - never lose a turn over model selection
+            logger.debug("could not resolve a per-turn model override", exc_info=True)
+            return
+
+        if resolved == getattr(self, "_applied_model_override", None):
+            return
+
+        self._applied_model_override = resolved
+        if not resolved:
+            # Cleared: fall back to the tier's model rather than staying on the
+            # last space's pin.
+            self.llm = build_llm(provider=self._active_provider,
+                                 tier=self._orchestrator_tier)
+        else:
+            self.llm = build_llm(provider=self._active_provider, model=resolved)
+        self.graph = build_agent_loop(
+            self.llm, self.tools, checkpointer=self.checkpoint_mgr.saver,
+        )
+        logger.info("Turn model override -> %s", resolved or "(tier default)")
+
     def run(self, conversation: Iterable[BaseMessage], user_input: str, workspace_context: str = "", trigger: str = "", source: str = "") -> str:
         """Execute the agent graph and return the final string response.
 
@@ -983,6 +1047,10 @@ class ConversationAgent:
         # Auto tier escalation is turn-local: start every turn back at the base
         # tier so a hard previous turn doesn't keep all later turns expensive.
         self._reset_tier_to_base()
+
+        # A space can pin its own model, and the agent is constructed once — so
+        # the pin has to be applied per TURN, not at __init__.
+        self._apply_turn_model_override()
 
         # Start a root span that wraps the entire orchestrator invocation.
         # This sets last_root_trace_id so callers can attach it to responses.

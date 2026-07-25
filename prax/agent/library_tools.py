@@ -1073,3 +1073,142 @@ def build_library_tools() -> list:
         library_column_rename,
         library_column_remove,
     ]
+
+
+# ---------------------------------------------------------------------------
+# Git repositories attached to a space
+# ---------------------------------------------------------------------------
+#
+# Two rules the tools must not paper over: write is OFF until a human turns it
+# on, per repository; and each attachment carries its own deploy key, scoped to
+# one repo.
+
+
+@tool
+def space_repo_add(space_slug: str, url: str, name: str) -> str:
+    """Attach a git repository to a Library space and clone it.
+
+    Attaches READ-ONLY. Use ``space_repo_set_write`` if the user asks for the
+    ability to commit — do not enable it on your own initiative.
+
+    Returns a deploy key the user must add to the repository (GitHub: Settings →
+    Deploy keys). A private repo cannot be cloned until they do.
+    """
+    from prax.services import space_repos
+
+    try:
+        result = space_repos.attach(_uid(), space_slug, url, name)
+    except space_repos.RepoError as exc:
+        return f"Could not attach: {exc}"
+    return (
+        f"Attached **{name}** to `{space_slug}` (read-only).\n\n"
+        f"If it is private, add this deploy key to the repository first "
+        f"(tick 'Allow write access' only if you want Prax to be able to push):\n\n"
+        f"```\n{result['public_key']}\n```"
+    )
+
+
+@tool
+def space_repos_list(space_slug: str) -> str:
+    """List the git repositories attached to a space, and whether write is on."""
+    from prax.services import space_repos
+
+    try:
+        repos = space_repos.list_repos(_uid(), space_slug)
+    except space_repos.RepoError as exc:
+        return str(exc)
+    if not repos:
+        return f"No repositories attached to `{space_slug}`."
+    lines = []
+    for r in repos:
+        state = "write" if r.get("write") else "read-only"
+        cloned = "" if r.get("cloned") else " — not cloned yet"
+        lines.append(f"- **{r['name']}** ({state}){cloned} — {r.get('url', '')}")
+    return "\n".join(lines)
+
+
+@tool
+def space_repo_status(space_slug: str, name: str) -> str:
+    """Current branch, uncommitted changes, and how far ahead/behind a repo is."""
+    from prax.services import space_repos
+
+    try:
+        st = space_repos.status(_uid(), space_slug, name)
+    except space_repos.RepoError as exc:
+        return str(exc)
+    head = (f"**{name}** on `{st['branch']}` "
+            f"({'write' if st['write'] else 'read-only'}) · "
+            f"{st['ahead']} ahead, {st['behind']} behind · "
+            f"{st['dirty_files']} uncommitted change(s)")
+    if st["changes"]:
+        return head + "\n" + "\n".join(f"  {c}" for c in st["changes"][:20])
+    return head
+
+
+@tool
+def space_repo_log(space_slug: str, name: str, limit: int = 10) -> str:
+    """Recent commits in an attached repository, newest first."""
+    from prax.services import space_repos
+
+    try:
+        commits = space_repos.log(_uid(), space_slug, name, limit)
+    except space_repos.RepoError as exc:
+        return str(exc)
+    if not commits:
+        return f"No commits found in **{name}**."
+    return "\n".join(
+        f"- `{c['sha']}` {c['subject']} — {c['author']}, {c['when']}" for c in commits)
+
+
+@tool
+def space_repo_pull(space_slug: str, name: str) -> str:
+    """Fetch and fast-forward an attached repository. Needs no write permission."""
+    from prax.services import space_repos
+
+    try:
+        return space_repos.pull(_uid(), space_slug, name) or "Already up to date."
+    except space_repos.RepoError as exc:
+        return f"Pull failed: {exc}"
+
+
+@tool
+def space_repo_set_write(space_slug: str, name: str, enabled: bool) -> str:
+    """Turn the ability to commit and push on or off for ONE repository.
+
+    Only call this when the user explicitly asks. Write is per-repository on
+    purpose: enabling it everywhere because it was needed in one place is how a
+    narrow permission quietly becomes a broad one.
+    """
+    from prax.services import space_repos
+
+    try:
+        entry = space_repos.set_write(_uid(), space_slug, name, enabled)
+    except space_repos.RepoError as exc:
+        return str(exc)
+    state = "ENABLED" if entry["write"] else "disabled"
+    note = ("\n\nThe deploy key also needs 'Allow write access' ticked on the "
+            "repository itself, or pushes will still be rejected."
+            if entry["write"] else "")
+    return f"Write {state} for **{name}** in `{space_slug}`.{note}"
+
+
+@tool
+def space_repo_commit(space_slug: str, name: str, message: str) -> str:
+    """Commit current changes in an attached repository. Requires write to be on."""
+    from prax.services import space_repos
+
+    try:
+        return space_repos.commit(_uid(), space_slug, name, message)
+    except space_repos.RepoError as exc:
+        return f"Commit refused: {exc}"
+
+
+@tool
+def space_repo_push(space_slug: str, name: str, branch: str = "") -> str:
+    """Push an attached repository. Requires write to be on for that repository."""
+    from prax.services import space_repos
+
+    try:
+        return space_repos.push(_uid(), space_slug, name, branch=branch or None) or "Pushed."
+    except space_repos.RepoError as exc:
+        return f"Push refused: {exc}"
