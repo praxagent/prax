@@ -3103,7 +3103,13 @@ def get_model():
         # — the pre-existing keys above are untouched so older UIs keep working.
         try:
             from prax.agent.model_catalog import catalog
-            payload.update(catalog(override))
+
+            # Discovery is opt-in per request: the badge polls this endpoint and
+            # only needs the current selection, whereas asking three providers
+            # what they serve costs round-trips. The picker asks for it when the
+            # user actually opens the dropdown.
+            want_discovery = request.args.get("discover") in ("1", "true", "yes")
+            payload.update(catalog(override, discover=want_discovery))
         except Exception:
             # The picker degrades to the tier list rather than failing the whole
             # endpoint — a catalog problem must not cost you the model badge.
