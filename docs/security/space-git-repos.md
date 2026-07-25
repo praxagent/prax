@@ -7,6 +7,20 @@ changed, and connect a task to the branch that implements it.
 It also hands an agent a credential and a checkout, so the interesting part is
 what it is **not** allowed to do.
 
+## Off by default
+
+```bash
+SPACE_REPOS_ENABLED=true
+```
+
+Until then the `space_repo_*` tools are not in the agent's toolset at all —
+absent rather than present-and-refusing. A tool the agent can see is a tool it
+will try, and spending a turn discovering a feature is disabled is worse than
+never offering it.
+
+Turning it on does **not** grant pushing. That is a second, per-repository
+decision, and it starts off no matter what this flag says.
+
 ## The three guarantees
 
 | Guarantee | Mechanism |

@@ -58,3 +58,27 @@ def test_sms_rejects_unknown_number(flask_client):
         'Body': 'hello',
     })
     assert response.status_code == 404
+
+
+def test_authorisation_reads_the_current_caller_map(monkeypatch):
+    """Authorisation must read the current map, not one captured at import.
+
+    voice_service used to do `from helpers_dictionaries import num_to_names`,
+    which binds whichever dict existed when *that module* was first imported.
+    Reloading the configuration then built a new dict the service never saw, so
+    it went on authorising callers from a map nobody could observe — and which
+    map it was depended on nothing more than import order.
+
+    Patching the attribute rather than reloading the module is deliberate. The
+    first version of this test reloaded `helpers_dictionaries` and restored it
+    in a `finally`, which runs *before* monkeypatch undoes the environment — so
+    it rebuilt the map from the still-patched env and left a fake phone map
+    installed for every later test. A monkeypatched attribute is undone after
+    the test, in the right order, by machinery that already exists.
+    """
+    from prax.services import voice_service as vs
+
+    monkeypatch.setattr("prax.helpers_dictionaries.num_to_names",
+                        {"+15550000001": "Late Arrival"})
+    assert "+15550000001" in vs._known_callers(), (
+        "the service is still reading a map captured at import time")

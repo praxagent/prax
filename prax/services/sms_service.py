@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 from openai import OpenAI
 
-from prax.helpers_dictionaries import num_to_names
+from prax import helpers_dictionaries
 from prax.services.conversation_service import conversation_service
 from prax.services.pdf_service import detect_pdf_url, process_pdf_url_with_paths
 from prax.services.workspace_service import save_binary, save_file
@@ -129,7 +129,7 @@ class SmsService:
         self.base_model = base_model
 
     def _ensure_authorized(self, from_number: str) -> None:
-        if from_number not in num_to_names:
+        if from_number not in helpers_dictionaries.num_to_names:
             raise SmsAccessError()
 
     def _reply_via_agent(self, from_number: str, text: str) -> None:

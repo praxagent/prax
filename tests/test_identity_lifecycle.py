@@ -491,7 +491,11 @@ class TestEntryPointWiring:
             "prax.services.teamwork_hooks.forward_to_channel",
             lambda *a, **kw: None,
         )
-        monkeypatch.setattr(module, "num_to_names", {"+10000000000": "Test"})
+        # Patched on helpers_dictionaries, not on sms_service: the service reads
+        # the map at call time so a config reload reaches it, which means there
+        # is no local copy to patch.
+        monkeypatch.setattr("prax.helpers_dictionaries.num_to_names",
+                            {"+10000000000": "Test"})
 
         payload = {
             "From": "+10000000000",

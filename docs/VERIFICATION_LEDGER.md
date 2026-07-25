@@ -96,6 +96,19 @@ This ledger is the honest complement to
 | Auto tier escalation (PR #62) | 🧪 | Ladder (low→medium→high, reset per turn, graceful stop at ceiling) unit-tested | A **live** recursion → escalate → recover-at-higher-tier has not been observed in production. The mechanism is proven; the real-world save is not yet witnessed. |
 | Session `self_upgrade_tier` boost (PR #68) | 🧪 | In-memory floor, no config write, reset-on-restart all unit-tested | Live agent-initiated boost + next-turn effect not observed in production. |
 
+## Git repositories attached to a space (`space_repos`, `SPACE_REPOS_ENABLED`)
+
+| Surface | Status | Verified | Not verified / needs |
+|---|---|---|---|
+| Clone / pull / commit / push over SSH with a per-repo deploy key | 🧪 | Path-traversal guards, the per-repo write gate, key generation and permissions, and the no-global-git-identity case are unit-tested against real local git repositories (`file://` origins) — including a regression test that reproduces a host with no `~/.gitconfig`. | **No key has ever been installed on GitHub.** The whole point of a deploy key is what the *remote* does with it, and that half is untested: whether `IdentitiesOnly=yes` behaves as intended against `github.com`, whether a read-only key is refused on push with a legible error, and whether host-key acceptance works on first contact. Needs one real repo: attach, add the printed key, pull, enable write, push. |
+
+## TeamWork MCP server (`MCP_ENABLED`, `teamwork/src/teamwork/mcp_server.py`)
+
+| Surface | Status | Verified | Not verified / needs |
+|---|---|---|---|
+| Authorisation (MCP grant, per-space scoping, capabilities, approval gates) | 🧪 | 41 tests, including that enabling the flag without granting a key changes nothing, that a scoped key naming no space is refused, and that a refused call never reaches Prax. | — (this is logic, and logic is what tests prove) |
+| The protocol itself, against a real client | ⚪ | — | **No MCP client has ever connected.** Claude Code and Codex have their own view of what the handshake and tool schemas should look like, and conformance to a spec on paper is not the same as working with an implementation. Needs: `MCP_ENABLED=true`, a registry key, `claude mcp add --transport http`, then `list_spaces` returning exactly the granted space. |
+
 ## Flagged for audit (not assessed this pass)
 
 | Surface | Status | Note |

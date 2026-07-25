@@ -118,6 +118,36 @@ def teamwork_webhook():
     return jsonify({"status": "accepted"}), 200
 
 
+def _models_from_trace() -> list[str]:
+    """Distinct models the last completed turn actually used, busiest first.
+
+    A turn is not one model: the orchestrator may escalate a tier mid-turn, and
+    a spoke can run on something else entirely. Reporting the list rather than a
+    single name keeps that honest — and ordering by use puts the model that did
+    most of the work first, which is the one a caller means by "what answered
+    me?".
+
+    Never raises: a missing model is a smaller problem than a reply that fails
+    to arrive because we could not label it.
+    """
+    try:
+        from prax.agent.trace import get_last_completed_graph
+
+        graph = get_last_completed_graph()
+        if not graph:
+            return []
+        counts: dict[str, int] = {}
+        for node in graph.to_dict().get("nodes") or []:
+            for entry in node.get("models_used") or []:
+                name = entry.get("model")
+                if name:
+                    counts[str(name)] = counts.get(str(name), 0) + 1
+        return sorted(counts, key=lambda m: (-counts[m], m))
+    except Exception:  # noqa: BLE001 - labelling must never break the reply
+        logger.debug("could not read models from the trace", exc_info=True)
+        return []
+
+
 def _build_trace_metadata() -> dict | None:
     """Build trace metadata to attach to the agent's response message.
 
@@ -142,6 +172,16 @@ def _build_trace_metadata() -> dict | None:
         return None
 
     metadata: dict = {"trace_id": trace_id}
+
+    # Which model actually answered. The trace has recorded this all along, per
+    # span, but nothing carried it to the message — so the one place a user
+    # looks to ask "what answered me?" could not say. It matters more now that
+    # a space can pin its own model: without it, a pin is unverifiable from the
+    # outside, and an unverifiable setting is one you have to take on faith.
+    models = _models_from_trace()
+    if models:
+        metadata["models"] = models
+        metadata["model"] = models[0]
 
     from prax.settings import settings
     if settings.observability_enabled and settings.grafana_url:
@@ -1061,6 +1101,56 @@ def library_space_chat(space: str):
     except Exception:
         logger.exception("Space chat failed for %s", space)
         return jsonify({"error": "Chat failed"}), 500
+
+
+@teamwork_routes.route("/teamwork/library/spaces/<space>/model", methods=["GET"])
+def library_space_model_get(space: str):
+    """What this space runs on, and what it would fall back to.
+
+    Both halves are returned because "inherited" is not a state a picker can
+    show from the pin alone: an empty pin and a pin that matches the global
+    default look identical, and only one of them follows the default when it
+    changes.
+    """
+    try:
+        from prax.agent.orchestrator import get_model_override
+        from prax.services import library_service
+
+        user_id = _get_teamwork_user_id()
+        pinned = library_service.get_space_model(user_id, space)
+        return jsonify({
+            "space": space,
+            "pinned": pinned,
+            "inherited": pinned is None,
+            "fallback": get_model_override(),
+        })
+    except Exception:
+        logger.exception("Could not read the model for space %s", space)
+        return jsonify({"error": "Could not read the space model"}), 500
+
+
+@teamwork_routes.route("/teamwork/library/spaces/<space>/model", methods=["PUT"])
+def library_space_model_set(space: str):
+    """Pin a model to this space, or clear the pin to inherit again.
+
+    An empty or absent model clears rather than pinning an empty string — the
+    UI's "use the default" and a deliberate pin must not collapse into the same
+    stored value, or clearing would freeze the space on whatever the default
+    happened to be that day.
+    """
+    try:
+        from prax.services import library_service
+
+        user_id = _get_teamwork_user_id()
+        data = request.get_json(silent=True) or {}
+        model = (data.get("model") or "").strip() or None
+        result = library_service.set_space_model(user_id, space, model)
+        if "error" in result:
+            return jsonify(result), 404
+        return jsonify(result)
+    except Exception:
+        logger.exception("Could not set the model for space %s", space)
+        return jsonify({"error": "Could not set the space model"}), 500
 
 
 @teamwork_routes.route("/teamwork/library/spaces/<space>", methods=["PATCH"])

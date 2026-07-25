@@ -335,3 +335,41 @@ def test_authorship_is_applied_even_when_a_call_site_passes_no_env():
 
     assert seen["GIT_AUTHOR_EMAIL"] == "prax@localhost"
     assert seen["GIT_COMMITTER_NAME"] == "Prax"
+
+
+# ── The feature has to be opted into ─────────────────────────────────────────
+
+def test_the_tools_are_absent_until_the_flag_is_on(monkeypatch):
+    """Off means the agent never sees them, not that they refuse when called.
+
+    A tool the agent can see is a tool it will try. Spending a turn discovering
+    that a feature is disabled is worse than never offering it — and attaching
+    a repo hands over a credential and a checkout, which a deployment should opt
+    into rather than acquire by upgrading.
+    """
+    from prax.agent import library_tools
+    from prax.settings import settings
+
+    monkeypatch.setattr(settings, "space_repos_enabled", False, raising=False)
+    assert library_tools._space_repo_tools() == []
+
+    names = {getattr(t, "name", "") for t in library_tools.build_library_tools()}
+    assert not any(n.startswith("space_repo") for n in names)
+
+
+def test_the_tools_appear_when_it_is_on(monkeypatch):
+    from prax.agent import library_tools
+    from prax.settings import settings
+
+    monkeypatch.setattr(settings, "space_repos_enabled", True, raising=False)
+    names = {getattr(t, "name", "") for t in library_tools.build_library_tools()}
+    assert {"space_repo_add", "space_repo_push", "space_repo_set_write"} <= names
+
+
+def test_write_still_starts_off_when_the_flag_is_on(space, tmp_path, monkeypatch):
+    """The flag opens the door; it does not also grant push."""
+    from prax.settings import settings
+
+    monkeypatch.setattr(settings, "space_repos_enabled", True, raising=False)
+    res = sr.attach(space["user"], space["slug"], _origin(tmp_path), "demo")
+    assert res["repo"]["write"] is False
