@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.39.0](https://github.com/praxagent/prax/compare/v0.38.0...v0.39.0) (2026-07-25)
+
+
+### Features
+
+* **model:** report which providers this deployment can actually use ([#179](https://github.com/praxagent/prax/issues/179)) ([e0478dd](https://github.com/praxagent/prax/commit/e0478ddbbc3cb0c689f5933ccee1856098f51ba4))
+
 ## [0.38.0](https://github.com/praxagent/prax/compare/v0.37.2...v0.38.0) (2026-07-25)
 
 
