@@ -39,6 +39,12 @@ current_component: ContextVar[str] = ContextVar("current_component", default="or
 # When "terminal", tools should execute in the shared terminal the user is watching.
 current_active_view: ContextVar[str] = ContextVar("current_active_view", default="")
 
+#: The Library space this turn originated in, when it originated in one.
+#: A space may pin its own model, so resolving "which model answers this" needs
+#: to know where the question came from — the chat in a space and the chat in
+#: the main view are different surfaces with potentially different answers.
+current_space_slug: ContextVar[str | None] = ContextVar("current_space_slug", default=None)
+
 
 @dataclass(frozen=True)
 class UserContextSnapshot:

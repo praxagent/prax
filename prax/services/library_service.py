@@ -337,12 +337,23 @@ def create_space(
     # Toggle via AUTO_GENERATE_COVER env var (default: true).
     import os
     auto_cover = os.environ.get("AUTO_GENERATE_COVER", "true").lower() not in ("false", "0", "no")
+    #
+    # In a BACKGROUND thread, deliberately. Generating the image takes ~18s and
+    # the space itself is on disk in milliseconds — blocking on a decorative
+    # picture made "create a space" look broken: the caller's 15s timeout fired,
+    # the UI showed an error, and the space appeared anyway on the next refresh.
     if auto_cover:
-        try:
-            generate_space_cover(user_id, slug)
-            logger.info("library: auto-generated cover for space %s", slug)
-        except Exception:
-            logger.debug("Auto-generate cover failed for %s (non-fatal)", slug, exc_info=True)
+        import threading
+
+        def _cover_in_background() -> None:
+            try:
+                generate_space_cover(user_id, slug)
+                logger.info("library: auto-generated cover for space %s", slug)
+            except Exception:
+                logger.debug("Auto-generate cover failed for %s (non-fatal)", slug, exc_info=True)
+
+        threading.Thread(target=_cover_in_background, name=f"cover-{slug}",
+                         daemon=True).start()
 
     return {"status": "created", "project": meta}
 
@@ -666,6 +677,49 @@ def create_learning_space(
     }
 
 
+def get_space_model(user_id: str, project: str) -> str | None:
+    """The model this space pins, or ``None`` to inherit the global setting.
+
+    Separate from :func:`get_space` because it is read on the hot path of
+    resolving a turn's model: it must be cheap and must never raise, since a
+    malformed space file should cost you the pin, not the conversation.
+    """
+    try:
+        meta_file = _space_path(user_id, project) / SPACE_META
+        if not meta_file.exists():
+            return None
+        meta = yaml.safe_load(meta_file.read_text(encoding="utf-8")) or {}
+        pinned = meta.get("model")
+        return pinned.strip() if isinstance(pinned, str) and pinned.strip() else None
+    except Exception:  # noqa: BLE001
+        logger.debug("could not read model for space %s", project, exc_info=True)
+        return None
+
+
+def set_space_model(user_id: str, project: str, model: str | None) -> dict:
+    """Pin a model to this space, or clear it to inherit the global setting.
+
+    ``None`` / ``""`` / ``"auto"`` all clear it. Clearing means *inherit* rather
+    than *pin the current default*, or a space would silently freeze on whatever
+    the deployment happened to be using the day it was cleared.
+    """
+    proj_dir = _space_path(user_id, project)
+    meta_file = proj_dir / SPACE_META
+    if not meta_file.exists():
+        return {"error": f"No such space: {project}"}
+
+    meta = yaml.safe_load(meta_file.read_text(encoding="utf-8")) or {}
+    cleared = not model or model.strip().lower() in ("", "auto")
+    if cleared:
+        meta.pop("model", None)
+    else:
+        meta["model"] = model.strip()
+    meta["updated_at"] = _now_iso()
+    meta_file.write_text(yaml.safe_dump(meta, sort_keys=False), encoding="utf-8")
+    logger.info("space %s model -> %s", project, "(inherit)" if cleared else meta["model"])
+    return {"slug": project, "model": meta.get("model")}
+
+
 def get_space(user_id: str, project: str) -> dict | None:
     """Return a single space's metadata (plus notebook + note counts)."""
     proj_dir = _space_path(user_id, project)
@@ -683,6 +737,9 @@ def get_space(user_id: str, project: str) -> dict | None:
     meta.setdefault("pinned", False)
     meta.setdefault("tasks_enabled", True)
     meta.setdefault("reminder_channel", "all")
+    # None means "inherit the global model" — deliberately indistinguishable
+    # from a space that was never configured.
+    meta.setdefault("model", None)
     # Cover image lives at ``.cover.{ext}`` inside the space dir.
     # The meta stores the filename so the frontend can bust caches.
     cover_name = _find_cover_filename(proj_dir)
@@ -744,6 +801,52 @@ def _find_cover_filename(space_dir: Path) -> str | None:
     return None
 
 
+# A cover renders as a card a few hundred pixels wide. The image API hands back
+# ~2 MB of 1024px PNG for that — roughly 75x more image than is ever displayed.
+_COVER_MAX_WIDTH = 1024
+_COVER_WEBP_QUALITY = 82
+
+
+def _downsize_cover(image_bytes: bytes, ext: str) -> tuple[bytes, str]:
+    """Shrink a cover to something proportionate to how it is shown.
+
+    WebP where available — dramatically smaller than PNG for this kind of soft
+    gradient art. Falls back to the original bytes on any failure: an oversized
+    cover is a much smaller problem than one that fails to save.
+    """
+    try:
+        import io
+
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(image_bytes))
+        img.load()
+        if img.width > _COVER_MAX_WIDTH:
+            ratio = _COVER_MAX_WIDTH / img.width
+            img = img.resize((_COVER_MAX_WIDTH, max(1, round(img.height * ratio))),
+                             Image.LANCZOS)
+        if img.mode not in ("RGB", "RGBA"):
+            img = img.convert("RGB")
+
+        buf = io.BytesIO()
+        try:
+            img.save(buf, format="WEBP", quality=_COVER_WEBP_QUALITY, method=6)
+            out_ext = "webp"
+        except Exception:  # noqa: BLE001 - no webp encoder; keep the original format
+            buf = io.BytesIO()
+            img.save(buf, format="PNG", optimize=True)
+            out_ext = "png"
+
+        shrunk = buf.getvalue()
+        # Only take it if it actually helped — re-encoding a small image can
+        # make it bigger, and shipping a worse file would be silly.
+        if shrunk and len(shrunk) < len(image_bytes):
+            return shrunk, out_ext
+    except Exception:  # noqa: BLE001
+        logger.debug("cover downsize failed; keeping the original", exc_info=True)
+    return image_bytes, ext
+
+
 def save_space_cover(
     user_id: str,
     project: str,
@@ -759,6 +862,9 @@ def save_space_cover(
     ext = (extension or "").lower().lstrip(".")
     if ext not in _COVER_EXTS:
         return {"error": f"Unsupported cover extension '{extension}'"}
+    # Every cover — generated or uploaded — funnels through here, so this is the
+    # one place that has to care about size.
+    image_bytes, ext = _downsize_cover(image_bytes, ext)
     proj_dir = _space_path(user_id, project)
     if not proj_dir.exists():
         return {"error": f"Space '{project}' not found"}
