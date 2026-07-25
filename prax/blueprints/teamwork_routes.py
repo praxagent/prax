@@ -91,6 +91,7 @@ def teamwork_webhook():
     project_id = data.get("project_id", "")
     message_id = data.get("message_id", "")
     active_view = data.get("active_view", "")
+    space_slug = data.get("space_slug", "")
     extra_data = data.get("extra_data") or {}
 
     if msg_type != "user_message" or not content:
@@ -108,7 +109,8 @@ def teamwork_webhook():
 
     thread = threading.Thread(
         target=_handle_message,
-        args=(app, project_id, channel_id, content, message_id, active_view, extra_data),
+        args=(app, project_id, channel_id, content, message_id, active_view,
+              extra_data, space_slug),
         daemon=True,
     )
     thread.start()
@@ -1041,6 +1043,13 @@ def library_space_chat(space: str):
 
         space_key = _space_conversation_key(space)
 
+        # A space's chat answers with the space's model when one is pinned. Set
+        # before the agent runs: the pin is applied per turn from this var, so a
+        # space chat that did not set it would silently use the global default
+        # even though the space clearly says otherwise.
+        from prax.agent.user_context import current_space_slug
+        current_space_slug.set(space)
+
         agent = ConversationAgent(tier="medium")
         svc = ConversationService(agent=agent)
         response = svc.reply(
@@ -1949,6 +1958,7 @@ def _handle_message(
     message_id: str,
     active_view: str = "",
     extra_data: dict | None = None,
+    space_slug: str = "",
 ) -> None:
     """Process a TeamWork user message through Prax's conversation service."""
     with app.app_context():
@@ -2165,6 +2175,13 @@ def _handle_message(
             from prax.agent.user_context import current_channel_name
             current_channel_id.set(channel_id)
             current_active_view.set(active_view)
+            # Which space the user is chatting from, if any. A space may pin
+            # its own model, and this is the only thing that says WHICH space
+            # — `active_view` says "library", not which one. Set every turn
+            # including the empty case, or a turn from the main chat would
+            # inherit the last space a previous turn happened to be in.
+            from prax.agent.user_context import current_space_slug
+            current_space_slug.set(space_slug or None)
             current_channel_name.set(channel_name or ("DM" if is_dm else ""))
 
             # Derive a per-channel conversation key so each TeamWork channel

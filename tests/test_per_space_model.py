@@ -142,3 +142,57 @@ def test_resolution_never_raises_on_a_bad_space(space):
     current_space_slug.set("does-not-exist")
     # A space that vanished must cost the pin, not the conversation.
     assert orchestrator.effective_model_override() == "global-model"
+
+
+# ── The plumbing: does the slug actually reach the resolver? ─────────────────
+
+def test_the_webhook_passes_the_space_through_to_the_worker():
+    """A pin is useless if the slug never leaves the HTTP layer.
+
+    Every unit above tests resolution given a slug. This tests the part that
+    was missing for a while: the webhook read `space_slug` and the ContextVar
+    existed, but nothing connected them, so every space silently used the
+    global model.
+    """
+    import inspect
+
+    from prax.blueprints import teamwork_routes as tr
+
+    src = inspect.getsource(tr.teamwork_webhook)
+    assert 'data.get("space_slug"' in src, "webhook must read space_slug"
+    assert "space_slug)" in src or "space_slug," in src, \
+        "webhook must pass space_slug to the worker thread"
+
+    worker = inspect.signature(tr._handle_message)
+    assert "space_slug" in worker.parameters, \
+        "the worker must accept the space, or the value dies at the thread boundary"
+
+    body = inspect.getsource(tr._handle_message)
+    assert "current_space_slug.set(" in body, \
+        "the worker must set the ContextVar the resolver reads"
+
+
+def test_the_worker_clears_the_space_on_a_turn_that_has_none():
+    """A main-chat turn must not inherit the last space someone was in.
+
+    Threads are reused, and a ContextVar that is only ever set when a space is
+    present would leave the previous turn's space in place — so a question
+    asked in the main chat would quietly answer on a space's pinned model.
+    """
+    import inspect
+
+    from prax.blueprints import teamwork_routes as tr
+
+    body = inspect.getsource(tr._handle_message)
+    assert "current_space_slug.set(space_slug or None)" in body, \
+        "set it unconditionally, mapping empty to None"
+
+
+def test_the_space_chat_endpoint_sets_its_own_space():
+    """The space's own chat panel is the most obvious place a pin should apply."""
+    import inspect
+
+    from prax.blueprints import teamwork_routes as tr
+
+    body = inspect.getsource(tr.library_space_chat)
+    assert "current_space_slug.set(space)" in body
