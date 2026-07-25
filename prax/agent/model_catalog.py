@@ -49,6 +49,25 @@ PROVIDERS: tuple[dict[str, str], ...] = (
      "env_key": "openrouter_api_key", "base_url_setting": "openrouter_base_url"},
 )
 
+# Where each provider publishes what it can serve. These are queried with the
+# ordinary egress path, so under keyless operation the forward proxy injects the
+# real credential and Prax discovers models holding only a placeholder — the
+# same mechanism that makes completions work.
+_DISCOVERY: dict[str, dict[str, Any]] = {
+    # Public catalogue: no credential needed at all.
+    "openrouter": {"url": "https://openrouter.ai/api/v1/models", "auth": None},
+    "openai": {"url": "https://api.openai.com/v1/models", "auth": "bearer",
+               "key_setting": "openai_key"},
+    "anthropic": {"url": "https://api.anthropic.com/v1/models", "auth": "x-api-key",
+                  "key_setting": "anthropic_key"},
+}
+
+# Discovered lists are cached: the UI polls this endpoint, and three provider
+# round-trips per poll would be both slow and rude. Model catalogues change on
+# the order of weeks.
+_DISCOVERY_TTL_SECONDS = 3600
+_discovery_cache: dict[str, tuple[float, list[str]]] = {}
+
 # Model-name prefixes/substrings that identify which provider serves a model.
 # Deliberately conservative: an unrecognised model is reported as provider
 # "unknown" rather than guessed into the wrong bucket.
@@ -76,6 +95,57 @@ def provider_for_model(model: str | None) -> str:
         if hint != "/" and name.startswith(hint):
             return provider
     return "unknown"
+
+
+def discover_models(provider_id: str, *, timeout: float = 6.0) -> list[str]:
+    """Ask a provider what it can serve. Empty list if it will not say.
+
+    Never raises and never blocks for long: this feeds a badge in the chat
+    header, and a slow or unreachable provider must cost the user a shorter list,
+    not a spinner or a stack trace.
+    """
+    import time
+
+    spec = _DISCOVERY.get(provider_id)
+    if not spec:
+        return []
+
+    cached = _discovery_cache.get(provider_id)
+    if cached and (time.time() - cached[0]) < _DISCOVERY_TTL_SECONDS:
+        return cached[1]
+
+    try:
+        import requests
+
+        from prax.settings import settings
+
+        headers = {}
+        if spec["auth"] == "bearer":
+            key = getattr(settings, spec["key_setting"], None)
+            if not key:
+                return []
+            headers["Authorization"] = f"Bearer {key}"
+        elif spec["auth"] == "x-api-key":
+            key = getattr(settings, spec["key_setting"], None)
+            if not key:
+                return []
+            headers["x-api-key"] = key
+            headers["anthropic-version"] = "2023-06-01"
+
+        resp = requests.get(spec["url"], headers=headers, timeout=timeout)
+        resp.raise_for_status()
+        payload = resp.json()
+        # All three answer {"data": [{"id": ...}, ...]}.
+        models = [m.get("id") for m in (payload.get("data") or []) if m.get("id")]
+        models = sorted({m for m in models if m})
+        _discovery_cache[provider_id] = (time.time(), models)
+        return models
+    except Exception as exc:  # noqa: BLE001 - a badge must not fail on a network blip
+        logger.debug("model discovery failed for %s: %s", provider_id, exc)
+        # Cache the failure briefly so a down provider is not retried on every
+        # poll, but recover sooner than a success would.
+        _discovery_cache[provider_id] = (time.time() - _DISCOVERY_TTL_SECONDS + 60, [])
+        return []
 
 
 def _egress_is_proxied() -> bool:
@@ -163,8 +233,13 @@ def selection_mode(override: str | None) -> str:
     return "tier" if override in {t.value for t in Tier} else "model"
 
 
-def catalog(override: str | None = None) -> dict[str, Any]:
-    """Everything the UI needs to render a model picker."""
+def catalog(override: str | None = None, *, discover: bool = False) -> dict[str, Any]:
+    """Everything the UI needs to render a model picker.
+
+    ``discover`` asks each configured provider what it can serve. Off by default
+    because the common call is a UI poll that only needs the current selection;
+    the picker requests it when the user actually opens the dropdown.
+    """
     providers = provider_status()
     tiers = tier_assignments()
 
@@ -177,6 +252,11 @@ def catalog(override: str | None = None) -> dict[str, Any]:
             by_provider[info["provider"]].append(info["model"])
     for p in providers:
         p.models = by_provider.get(p.id, [])
+        if discover and p.configured:
+            # Union: what the deployment is configured to use stays first-class
+            # even if discovery fails or omits it.
+            found = discover_models(p.id)
+            p.models = sorted({*p.models, *found}) if found else p.models
 
     return {
         "providers": [asdict(p) for p in providers],
