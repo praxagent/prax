@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.40.0](https://github.com/praxagent/prax/compare/v0.39.0...v0.40.0) (2026-07-25)
+
+
+### Features
+
+* **deploy:** systemd units, an update script, and a flaky-test fix ([#182](https://github.com/praxagent/prax/issues/182)) ([642538a](https://github.com/praxagent/prax/commit/642538af52553c22f6790f7c8747013efa05281c))
+* **spaces:** attach git repos, pin a model per space, stop covers bloating everything ([#183](https://github.com/praxagent/prax/issues/183)) ([b187559](https://github.com/praxagent/prax/commit/b187559c6ae25780f1fd15b06b47816666b6faaf))
+
+
+### Bug Fixes
+
+* **config:** stop reading caller maps that a reload can never update ([#185](https://github.com/praxagent/prax/issues/185)) ([f22d49d](https://github.com/praxagent/prax/commit/f22d49d9dd2f64affcccd95b28f40119c81b4b96))
+
 ## [0.39.0](https://github.com/praxagent/prax/compare/v0.38.0...v0.39.0) (2026-07-25)
 
 
