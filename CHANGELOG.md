@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.40.1](https://github.com/praxagent/prax/compare/v0.40.0...v0.40.1) (2026-07-26)
+
+
+### Bug Fixes
+
+* **library:** let a board card name the agent that filed it ([#186](https://github.com/praxagent/prax/issues/186)) ([8151824](https://github.com/praxagent/prax/commit/81518249e0c8be50ba18dc223af421adde8cb208))
+
 ## [0.40.0](https://github.com/praxagent/prax/compare/v0.39.0...v0.40.0) (2026-07-25)
 
 
