@@ -136,6 +136,33 @@ def _write(user_id: str, project: str, data: dict) -> None:
     path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
 
+# How wide an actor label may be. Long enough for "Claude Code (research)",
+# short enough that a board column stays readable.
+_MAX_ACTOR = 40
+
+
+def normalise_actor(actor: str) -> str | None:
+    """Canonical form of "who did this", or None if it is unusable.
+
+    Three kinds of actor exist, and for a long time the code admitted only two.
+    ``author`` was validated against ("human", "prax"), so a card filed by an
+    external agent — a coding agent over MCP, say — had to be labelled as the
+    user or as Prax. Both are false, and the board's whole value is that you can
+    tell at a glance who put something there. Attributing an agent's work to the
+    person reading the board is the specific failure worth naming.
+
+    So a third kind is allowed: any other label is taken as an external agent's
+    display name. It is trimmed, stripped of control characters and bounded,
+    because it is written by a caller and rendered in a UI.
+    """
+    if actor is None:
+        return None
+    cleaned = "".join(ch for ch in str(actor) if ch.isprintable()).strip()
+    if not cleaned:
+        return None
+    return cleaned[:_MAX_ACTOR]
+
+
 def _append_activity(task: dict, actor: str, action: str, **extra) -> None:
     """Append an entry to a task's activity log."""
     task.setdefault("activity", [])
@@ -352,8 +379,9 @@ def create_task(
     data = _read(user_id, project)
     if data is None:
         return {"error": f"Project '{project}' not found"}
-    if author not in ("human", "prax"):
-        return {"error": f"Invalid author '{author}'"}
+    author = normalise_actor(author)
+    if author is None:
+        return {"error": "Invalid author: must be a non-empty name"}
     if source not in _VALID_SOURCES:
         return {"error": f"Invalid source '{source}'. Use one of {sorted(_VALID_SOURCES)}"}
     if source == "tool_output" and not source_justification.strip():
