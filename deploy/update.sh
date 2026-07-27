@@ -73,7 +73,17 @@ if ! $CHECK_ONLY; then
     # because of that would be obstructive rather than careful.
     branch="$PRAX_BRANCH"
     git -C "$PRAX_ROOT/$repo" rev-parse --verify -q "origin/$branch" >/dev/null || branch=main
-    git -C "$PRAX_ROOT/$repo" checkout -q "$branch"
+
+    # A deployment is a clean checkout of a known commit, so local edits are
+    # drift and get discarded. But NAME them first: a hand-fix applied during an
+    # incident is exactly the kind of thing that gets thrown away silently and
+    # then puzzled over for an hour when the symptom returns.
+    dirty=$(git -C "$PRAX_ROOT/$repo" status --porcelain --untracked-files=no)
+    if [[ -n "$dirty" ]]; then
+      echo "    ! discarding local changes in $repo:"
+      sed 's/^/        /' <<<"$dirty"
+    fi
+    git -C "$PRAX_ROOT/$repo" checkout -q -f "$branch"
     git -C "$PRAX_ROOT/$repo" reset -q --hard "origin/$branch"
     printf '    %-20s [%s] %s\n' "$repo" "$branch" \
       "$(git -C "$PRAX_ROOT/$repo" log --oneline -1)"
