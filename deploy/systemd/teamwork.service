@@ -16,6 +16,18 @@ Environment=DATABASE_URL=sqlite+aiosqlite:///./data/vteam.db
 # Without PRAX_URL the /api/prax/* proxy has no target and returns bodies with
 # no fields — which is what blanked the chat view before it was set.
 Environment=PRAX_URL=http://localhost:5001
+# ── Sandbox wiring (uncomment when running the sandbox) ─────────────────────
+# The terminal, browser and desktop panels all reach into the sandbox
+# container. Without these the panels fail in a browser console rather than in
+# the UI, which is a long way from where anyone looks first.
+#
+# DESKTOP_VNC_URL in particular must be set HERE and not only in .env on older
+# builds: it was read straight from the environment rather than declared as a
+# setting, and pydantic loads .env into the settings object, not into
+# os.environ. So a .env line looked right and did nothing.
+#Environment=DESKTOP_VNC_URL=http://127.0.0.1:6080
+#Environment=SANDBOX_CONTAINER=prax-sandbox-sandbox-1
+#Environment=CHROME_CDP_HOST=127.0.0.1
 ExecStart=/home/ubuntu/.local/bin/uv run --python 3.13 python -m teamwork.cli
 Restart=always
 RestartSec=10
