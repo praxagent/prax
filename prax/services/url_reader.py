@@ -47,7 +47,7 @@ def _thread_fetch_enabled() -> bool:
 # and in_reply_to_user_id drive thread assembly.
 _TWEET_FIELDS = (
     "created_at,public_metrics,note_tweet,lang,conversation_id,"
-    "in_reply_to_user_id,entities,attachments"
+    "in_reply_to_user_id,entities,attachments,article"
 )
 # Media expansion: resolves attachments.media_keys to direct asset URLs
 # (photos get url; videos/GIFs carry a preview frame).  Requesting the extra
@@ -78,6 +78,31 @@ def _tweet_body(tweet: dict) -> str:
     if not _thread_fetch_enabled():
         return text
     return _expand_urls_in_text(text, entities)
+
+
+def _article_line(tweet: dict) -> str:
+    """The title of an X Article this post links to, when there is one.
+
+    A post that links an Article has almost no text of its own — the API returns
+    a bare t.co link — while carrying the Article's title in an `article`
+    object. We were not asking for that field and would not have rendered it, so
+    fetching such a post produced "here is a link" and nothing else: the one
+    piece of human-meaningful content the API handed us was dropped on the floor.
+
+    The Article BODY is not exposed by the v2 API, and the /i/article/<id> URL is
+    not a post id — `/2/tweets/<article id>` answers "Could not find post". So
+    the title is genuinely all there is through this route, which makes keeping
+    it the difference between a useless result and a usable one.
+    """
+    article = tweet.get("article") or {}
+    title = (article.get("title") or "").strip()
+    if not title:
+        return ""
+    return (
+        f"\n**Links an X Article:** {title}\n"
+        "*(title only — the X API v2 does not expose Article body text; open the "
+        "link in a browser session for the full piece.)*\n"
+    )
 
 
 def _tweet_metrics_line(tweet: dict, *, label: str = "") -> str:
@@ -133,7 +158,10 @@ def _format_tweet_markdown(tweet: dict, includes: dict) -> str:
     created = tweet.get("created_at", "")
     header = f"# Tweet by {name} (@{handle})" if handle else "# Tweet"
     date_line = f"\n\n*{created}*" if created else ""
-    return f"{header}{date_line}\n\n{text}{media}{_tweet_metrics_line(tweet)}\n"
+    return (
+        f"{header}{date_line}\n\n{text}{_article_line(tweet)}"
+        f"{media}{_tweet_metrics_line(tweet)}\n"
+    )
 
 
 def _format_thread_markdown(posts: list[dict], author: dict, truncated: bool,
