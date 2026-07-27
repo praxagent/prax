@@ -19,6 +19,11 @@
 set -euo pipefail
 
 PRAX_ROOT="${PRAX_ROOT:-$HOME/PRAX}"
+# Which branch to deploy. Defaults to main; PRAX_BRANCH=wip deploys work that
+# has not merged yet, which is how a change gets tested on the real box before
+# it becomes permanent. The branch is printed in the pull summary, so a box
+# running something other than main never does so invisibly.
+PRAX_BRANCH="${PRAX_BRANCH:-main}"
 BUILD_FRONTEND=false
 CHECK_ONLY=false
 case "${1:-}" in
@@ -63,9 +68,15 @@ if ! $CHECK_ONLY; then
   for repo in prax teamwork prax-sandbox prax-secrets-proxy; do
     [[ -d "$PRAX_ROOT/$repo/.git" ]] || continue
     git -C "$PRAX_ROOT/$repo" fetch -q origin
-    git -C "$PRAX_ROOT/$repo" checkout -q main
-    git -C "$PRAX_ROOT/$repo" pull -q origin main
-    printf '    %-20s %s\n' "$repo" "$(git -C "$PRAX_ROOT/$repo" log --oneline -1)"
+    # Fall back to main when the branch does not exist in this repo — a feature
+    # branch rarely spans all four, and refusing to deploy the other three
+    # because of that would be obstructive rather than careful.
+    branch="$PRAX_BRANCH"
+    git -C "$PRAX_ROOT/$repo" rev-parse --verify -q "origin/$branch" >/dev/null || branch=main
+    git -C "$PRAX_ROOT/$repo" checkout -q "$branch"
+    git -C "$PRAX_ROOT/$repo" reset -q --hard "origin/$branch"
+    printf '    %-20s [%s] %s\n' "$repo" "$branch" \
+      "$(git -C "$PRAX_ROOT/$repo" log --oneline -1)"
   done
 
   echo "==> python deps"
