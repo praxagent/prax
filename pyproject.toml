@@ -6,6 +6,10 @@ readme = "README.md"
 requires-python = ">=3.13"
 license = {text = "MIT"}
 dependencies = [
+    # PDF text extraction for files uploaded to a space. Pure Python, no system
+    # libraries — the tool has to work on a lite deployment with no sandbox,
+    # since "upload a PDF and ask about it" is a first-five-minutes action.
+    "pypdf>=4.2.0",
     "twilio==8.12.0",
     "openai>=1.104.2",
     "Flask[async]==3.0.1",

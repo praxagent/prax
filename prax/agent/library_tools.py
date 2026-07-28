@@ -1031,6 +1031,144 @@ def library_health_check() -> str:
     return "\n".join(lines)
 
 
+
+# ---------------------------------------------------------------------------
+# Files uploaded to a space
+# ---------------------------------------------------------------------------
+#
+# The Files tab writes to library/spaces/<slug>/files/, and until now NO agent
+# tool read it. So a PDF dropped into a space was invisible: asked about it,
+# Prax searched notebooks, notes, archive, outputs, repos and the inbox, found
+# nothing, and honestly reported that no PDF existed — while the file sat in a
+# directory it had no way to look in. The honesty was real; the blindness was
+# ours.
+
+_TEXTUAL_SUFFIXES = {
+    ".txt", ".md", ".markdown", ".rst", ".csv", ".tsv", ".json", ".yaml",
+    ".yml", ".toml", ".ini", ".cfg", ".log", ".py", ".js", ".ts", ".tsx",
+    ".sh", ".sql", ".html", ".css", ".xml",
+}
+
+
+def _extract_pdf_text(path, max_chars: int) -> str:
+    """Text from a PDF, page by page, with the page count stated.
+
+    Page markers stay in: an agent quoting a passage should be able to say
+    where it came from, and "page 12 of 40" is the difference between a
+    citation and a vague recollection.
+    """
+    try:
+        from pypdf import PdfReader
+    except Exception:  # noqa: BLE001
+        return "(PDF text extraction is unavailable — pypdf is not installed.)"
+
+    try:
+        reader = PdfReader(str(path))
+    except Exception as exc:  # noqa: BLE001
+        return f"(Could not open the PDF: {exc})"
+
+    if getattr(reader, "is_encrypted", False):
+        try:
+            reader.decrypt("")
+        except Exception:  # noqa: BLE001
+            return "(This PDF is password-protected, so its text cannot be read.)"
+
+    parts: list[str] = []
+    total = len(reader.pages)
+    used = 0
+    for i, page in enumerate(reader.pages, 1):
+        try:
+            text = page.extract_text() or ""
+        except Exception:  # noqa: BLE001
+            text = ""
+        if not text.strip():
+            continue
+        chunk = f"\n--- page {i} of {total} ---\n{text.strip()}"
+        if used + len(chunk) > max_chars:
+            parts.append(f"\n[truncated at page {i} of {total}]")
+            break
+        parts.append(chunk)
+        used += len(chunk)
+
+    body = "".join(parts).strip()
+    if not body:
+        return (
+            f"(No extractable text in this {total}-page PDF. It is most likely "
+            "scanned images — OCR would be needed, which this tool does not do.)"
+        )
+    return body
+
+
+@tool
+def library_files_list(space_slug: str) -> str:
+    """List files uploaded to a Library space (the space's Files tab).
+
+    Use this whenever the user mentions a file, document, PDF or upload "in
+    this space" — it is a separate store from notes, notebooks, the archive and
+    the inbox, and searching those will not find it.
+    """
+    from prax.services import library_service
+
+    try:
+        files = library_service.list_space_files(_uid(), space_slug)
+    except Exception as exc:  # noqa: BLE001
+        return f"Could not list files for space '{space_slug}': {exc}"
+    if not files:
+        return f"No files uploaded to space '{space_slug}'."
+
+    lines = [f"Files in `{space_slug}`:"]
+    for f in files:
+        kb = max(1, int(f.get("size", 0)) // 1024)
+        lines.append(
+            f"- `{f['name']}` — {f.get('mime_type', '?')}, {kb} KB, "
+            f"uploaded {f.get('uploaded_at', '')[:19]}"
+        )
+    lines.append("\nRead one with `library_file_read(space_slug, filename)`.")
+    return "\n".join(lines)
+
+
+@tool
+def library_file_read(space_slug: str, filename: str, max_chars: int = 20000) -> str:
+    """Read a file uploaded to a Library space as text (PDFs are extracted).
+
+    Handles PDFs and ordinary text formats. Binary formats that are not text
+    are reported as such rather than returned as mojibake — an agent shown
+    garbage will try to interpret it.
+    """
+    from prax.services import library_service
+
+    try:
+        found = library_service.get_space_file(_uid(), space_slug, filename)
+    except Exception as exc:  # noqa: BLE001
+        return f"Could not open '{filename}': {exc}"
+    if not found:
+        listing = library_files_list.invoke({"space_slug": space_slug})
+        return f"No file named '{filename}' in space '{space_slug}'.\n\n{listing}"
+
+    path, mime = found
+    suffix = path.suffix.lower()
+    max_chars = max(1000, min(int(max_chars or 20000), 200000))
+
+    if suffix == ".pdf" or mime == "application/pdf":
+        body = _extract_pdf_text(path, max_chars)
+        return f"# {path.name}\n\n{body}"
+
+    if suffix in _TEXTUAL_SUFFIXES or (mime or "").startswith("text/"):
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except Exception as exc:  # noqa: BLE001
+            return f"Could not read '{filename}': {exc}"
+        truncated = len(text) > max_chars
+        text = text[:max_chars]
+        note = "\n\n[truncated]" if truncated else ""
+        return f"# {path.name}\n\n{text}{note}"
+
+    return (
+        f"'{filename}' is {mime or 'an unknown type'}, which this tool cannot "
+        "read as text. Images can be described with the vision tools; other "
+        "binaries need a converter in the sandbox."
+    )
+
 def build_library_tools() -> list:
     """Return the library toolset for registration with the knowledge spoke."""
     return [
@@ -1072,6 +1210,10 @@ def build_library_tools() -> list:
         library_column_add,
         library_column_rename,
         library_column_remove,
+        # Files uploaded through the space's Files tab — a store nothing else
+        # here reaches, which is why an uploaded PDF used to be invisible.
+        library_files_list,
+        library_file_read,
         *_space_repo_tools(),
     ]
 
