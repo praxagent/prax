@@ -680,16 +680,37 @@ incidental:
 `Restart=always` with a 10s backoff means a crash recovers too, not only a
 reboot. Adjust `User=` and the paths if your layout differs from `~/PRAX`.
 
+**Running the sandbox?** The terminal, browser and desktop panels all reach into
+the sandbox container, and TeamWork needs to be told where it is. The unit file
+ships those three lines commented out — uncomment them:
+
+```ini
+Environment=DESKTOP_VNC_URL=http://127.0.0.1:6080
+Environment=SANDBOX_CONTAINER=prax-sandbox-sandbox-1
+Environment=CHROME_CDP_HOST=127.0.0.1
+```
+
+Setting `DESKTOP_VNC_URL` in `.env` alone is not enough on older builds: it was
+read from the environment rather than declared as a setting, and pydantic loads
+`.env` into the settings object, **not** into `os.environ` — so the line looks
+right and does nothing.
+
 **Prove it rather than assume it** — "it starts under systemd" and "it survives
-a reboot" are different claims:
+a reboot" are different claims, and so are "the services are up" and "the
+product works". Checking only the two processes is how a deployment with **no
+sandbox at all** passed as healthy while its terminal, browser and desktop
+panels had nothing behind them:
 
 ```bash
 sudo systemctl reboot
 # then, once it is back:
-systemctl is-active tailscaled docker teamwork prax     # all: active
-curl -s -o /dev/null -w '%{http_code}\n' localhost:5001/health   # 200
-sudo tailscale serve status                              # UI still published
+./deploy/update.sh --check      # every surface, including the sandbox
+sudo tailscale serve status     # UI still published
 ```
+
+`--check` changes nothing — it verifies the cross-service settings that fail
+silently when unset, then probes each surface a user can actually open, and
+exits non-zero if any of them is not serving.
 
 ### ⚠️ Running a second Prax alongside an existing one
 

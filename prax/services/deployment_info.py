@@ -110,14 +110,21 @@ def get_deployment_info() -> dict:
         public_via = "tailscale-sidecar"  # full FQDN not visible to this process
 
     # Effective base URL Prax should use when building shareable links:
-    #   1. an explicit, non-local TEAMWORK_BASE_URL always wins (operator intent);
-    #   2. else, if auto-detect is on and we found a public URL, use that
-    #      (so a Tailscale/ngrok deploy "just works" without editing .env);
-    #   3. else fall back to the configured value (may be localhost).
+    #   1. auto-detect on and a public URL found → use it;
+    #   2. else the configured TEAMWORK_BASE_URL (may be localhost).
+    #
+    # Detection outranks the configured value on purpose. The reverse ordering —
+    # "an explicit non-local TEAMWORK_BASE_URL always wins" — reads like respect
+    # for operator intent, but it loses to the thing that actually happens: a
+    # deployment moves and .env still names the old host. That URL is well-formed
+    # and not local, so it won every time and Prax sent people links to a machine
+    # it is not running on. Detection reads THIS machine's serve mappings and so
+    # cannot go stale; when the two disagree, the configured one has drifted.
+    #
+    # PUBLIC_URL_AUTODETECT=false pins the configured value, for a URL detection
+    # cannot see (a custom domain in front of the service).
     autodetect = bool(getattr(settings, "public_url_autodetect", True))
-    if teamwork_base and not _is_local_url(teamwork_base):
-        effective_base_url, effective_via = teamwork_base, "config"
-    elif autodetect and public_base_url:
+    if autodetect and public_base_url:
         effective_base_url, effective_via = public_base_url, f"auto:{public_via}"
     else:
         effective_base_url = teamwork_base or None
@@ -168,17 +175,38 @@ def effective_base_url() -> str:
     """
     from prax.settings import settings
     configured = (getattr(settings, "teamwork_base_url", "") or "").rstrip("/")
-    # Fast paths that need no deployment probe (the common cases):
-    #   - an explicit, non-local TEAMWORK_BASE_URL always wins;
-    #   - auto-detect off → use the configured value as-is.
-    if configured and not _is_local_url(configured):
-        return configured
+
+    # Auto-detect off → the configured value, as written.
     if not getattr(settings, "public_url_autodetect", True):
         return configured
+
+    # Otherwise DETECTION WINS over the configured value.
+    #
+    # It used to be the other way around: any explicit non-local
+    # TEAMWORK_BASE_URL took precedence, and detection only filled in for an
+    # empty or localhost setting. That is wrong for the case that actually
+    # happens — a deployment moves to a new host and `.env` still names the old
+    # one. The old URL is perfectly well-formed and not local, so it won every
+    # time, and Prax cheerfully sent people links to a machine it is not running
+    # on. A stale value is worse than no value, because nothing looks broken.
+    #
+    # Detection reads THIS machine's serve mappings, so it cannot be stale. When
+    # it disagrees with the configured value, the configured value is the one
+    # that has drifted.
+    #
+    # Deliberately pinning a URL detection cannot see — a custom domain in front
+    # of the service, say — is what PUBLIC_URL_AUTODETECT=false is for, and the
+    # log line below names it so the escape hatch is discoverable at the moment
+    # it matters.
     try:
-        url = get_deployment_info().get("effective_base_url")
+        url = (get_deployment_info().get("effective_base_url") or "").rstrip("/")
         if url:
-            return url.rstrip("/")
+            if configured and configured != url:
+                logger.info(
+                    "using the detected public URL %s rather than the configured "
+                    "TEAMWORK_BASE_URL %s — set PUBLIC_URL_AUTODETECT=false to "
+                    "force the configured value", url, configured)
+            return url
     except Exception:
         logger.debug("effective_base_url detection failed; using configured value", exc_info=True)
     return configured

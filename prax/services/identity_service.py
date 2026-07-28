@@ -166,15 +166,22 @@ def deterministic_user_id(provider: str, external_id: str) -> str:
 
 
 def _canonical_workspace(provider: str, external_id: str, user_id: str) -> str:
-    """Workspace dir for a canonical user. The PRIMARY user (the ``PRAX_USER_ID``
-    phone) keeps the ``PRAX_USER_ID`` dir so it matches the Docker mount /
-    TeamWork resolution / ``reconcile_workspace_dir``; everyone else gets a
-    stable ``usr_<id8>``.
+    """Workspace dir for a canonical user — always opaque.
+
+    Every user gets ``usr_<id8>``, derived from their UUID rather than from the
+    identifier they signed in with.
+
+    The primary user used to keep the raw ``PRAX_USER_ID`` value, which is a
+    PHONE NUMBER. That put it in the workspace path — so it appeared in the
+    shell prompt, in every ``cd`` and ``pwd``, in the sandbox mount, and in any
+    screen share or recorded demo. A personal phone number is not something a
+    tool should print on screen because of how someone happened to sign up.
+
+    The id is a uuid5 of the person anchor, so it is stable across an identity-DB
+    reset (which is what stops a wipe re-minting someone and orphaning their
+    workspace) while revealing nothing about the phone number or Discord id it
+    was derived from — a hash is opaque even though it is deterministic.
     """
-    prax_uid = (getattr(settings, "prax_user_id", "") or "").strip()
-    anchor_tail = _person_anchor(provider, external_id).split(":", 1)[-1]
-    if prax_uid and _digits(anchor_tail) and _digits(anchor_tail) == _digits(prax_uid):
-        return prax_uid
     return f"usr_{user_id[:8]}"
 
 

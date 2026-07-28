@@ -515,15 +515,34 @@ class SpanHandle:
                 from prax.agent.llm_factory import drain_tier_choices
                 all_choices = drain_tier_choices()
                 # Keep only choices that belong to this span
-                tier_choices = [
-                    c for c in all_choices if c.get("span_id") == self.span_id
-                ]
-                # Put back choices for other spans
-                if all_choices and len(tier_choices) < len(all_choices):
+                mine = [c for c in all_choices if c.get("span_id") == self.span_id]
+
+                # A choice with no span_id was made outside any span — which is
+                # the NORMAL case for the agent's own model. ConversationAgent
+                # resolves its LLM in __init__ and is then reused across turns,
+                # so build_llm runs when no span is open and the choice is filed
+                # under span_id=None. Every span then filtered it out, and
+                # `models_used` came back empty on every node of every trace:
+                # the trace knew which model answered and threw it away.
+                #
+                # The root span adopts them. It is the turn's own span, it ends
+                # last, and attributing an unowned choice to a random concurrent
+                # child would be a guess; attributing it to the turn is not.
+                is_root = self.ctx.parent_id is None
+                unowned = [c for c in all_choices if not c.get("span_id")]
+                if is_root:
+                    mine = mine + unowned
+                    unowned = []
+
+                tier_choices = mine
+                leftover = [
+                    c for c in all_choices
+                    if c.get("span_id") and c.get("span_id") != self.span_id
+                ] + unowned
+                if leftover:
                     from prax.agent.llm_factory import _tier_choice_log, _tier_lock
-                    others = [c for c in all_choices if c.get("span_id") != self.span_id]
                     with _tier_lock:
-                        _tier_choice_log.extend(others)
+                        _tier_choice_log.extend(leftover)
             except Exception:
                 tier_choices = None
 

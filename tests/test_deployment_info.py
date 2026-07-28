@@ -154,3 +154,64 @@ def test_format_report_and_tool(monkeypatch):
     # The agent tool returns the same report.
     from prax.agent.deployment_tools import deployment_info as tool
     assert "Deployment / reachability" in tool.invoke({})
+
+
+# ── A stale TEAMWORK_BASE_URL must not beat detection ────────────────────────
+
+def test_detection_wins_over_a_url_that_names_another_host(monkeypatch):
+    """The case that actually happens: the deployment moved, .env did not.
+
+    An old URL is well-formed and not local, so under the previous precedence it
+    won every time — and Prax sent people links to a machine it is not running
+    on. A stale value is worse than no value, because nothing looks broken.
+    """
+    _mock_tailscale(monkeypatch)
+    from prax.settings import settings
+
+    monkeypatch.setattr(settings, "teamwork_base_url",
+                        "https://old-box.tail9eb7b0.ts.net", raising=False)
+    monkeypatch.setattr(settings, "public_url_autodetect", True, raising=False)
+    di.clear_cache()
+
+    assert di.effective_base_url() == "https://ip-172-26-0-6.tail9eb7b0.ts.net"
+
+
+def test_turning_autodetect_off_still_pins_the_configured_url(monkeypatch):
+    """The escape hatch for a URL detection cannot see — a custom domain."""
+    _mock_tailscale(monkeypatch)
+    from prax.settings import settings
+
+    monkeypatch.setattr(settings, "teamwork_base_url",
+                        "https://prax.example.com", raising=False)
+    monkeypatch.setattr(settings, "public_url_autodetect", False, raising=False)
+    di.clear_cache()
+
+    assert di.effective_base_url() == "https://prax.example.com"
+
+
+def test_the_configured_url_is_used_when_detection_finds_nothing(monkeypatch):
+    """Fallback, not replacement — an undetectable deployment keeps its config."""
+    from prax.settings import settings
+
+    monkeypatch.setattr(di, "get_deployment_info",
+                        lambda: {"effective_base_url": ""}, raising=False)
+    monkeypatch.setattr(settings, "teamwork_base_url",
+                        "https://configured.example.com", raising=False)
+    monkeypatch.setattr(settings, "public_url_autodetect", True, raising=False)
+
+    assert di.effective_base_url() == "https://configured.example.com"
+
+
+def test_a_detection_failure_does_not_break_link_building(monkeypatch):
+    """Links are built on every share; a probe error must not raise."""
+    from prax.settings import settings
+
+    def boom():
+        raise RuntimeError("tailscale is not answering")
+
+    monkeypatch.setattr(di, "get_deployment_info", boom, raising=False)
+    monkeypatch.setattr(settings, "teamwork_base_url",
+                        "https://configured.example.com", raising=False)
+    monkeypatch.setattr(settings, "public_url_autodetect", True, raising=False)
+
+    assert di.effective_base_url() == "https://configured.example.com"
