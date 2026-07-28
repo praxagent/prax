@@ -3,12 +3,12 @@
 **Packer, Wooders, Lin, Fang, Patil, Stoica, Gonzalez (UC Berkeley), 2023.**
 "MemGPT: Towards LLMs as Operating Systems."
 
-**Verdict: document + adopt ONE mechanism.** Prax independently arrived at most
-of this architecture and, in the graph layer, went past it. The single thing
-MemGPT has that Prax genuinely lacks is **self-edited working memory that is
-always in the prompt** — and the reason that matters is not capacity, it is that
-Prax currently has the storage for it and does not put it where it would be
-used.
+**Verdict: document + adopt one small mechanism.** Prax independently arrived at
+this architecture — including the self-edited working context — and in the graph
+layer went past it. Reading the paper carefully enough to check the claim turned
+up a real defect in our own code: working memory was selected by recency alone,
+with the `importance` field written and never read. That is now fixed. The
+remaining candidate is memory *pressure* as a signal, which is unbuilt.
 
 ---
 
@@ -58,39 +58,44 @@ construction, compacted by an LLM when they overflow, with the detail demoted to
 
 ---
 
-## The one real gap
+## The gap — corrected
 
-`memory_stm_write` / `memory_stm_read` / `memory_stm_delete` exist. They are the
-storage half of MemGPT's working context: small, keyed, self-edited facts.
+**My first reading of this was wrong, and the correction is worth recording.**
 
-**They are never injected into the prompt.** The orchestrator reads STM in
-exactly one place — to hunt for a timezone string:
+I claimed Prax never injected `memory_stm_*` into the prompt, having grepped
+`orchestrator.py`, found it read only to hunt for a timezone string, and
+generalised from one file. In fact `memory_service.build_memory_context()` emits
+a `## Working Memory (Scratchpad)` block every turn and the orchestrator
+includes it. **Prax already had MemGPT's self-edited working context.** Checking
+one call site and concluding "never" is exactly the error this project asks
+itself not to make.
+
+The real gap was smaller and sharper:
 
 ```python
-stm_entries = stm_read(uid)
-for entry in stm_entries:
-    if "timezone" in entry.key.lower() or ...
+for entry in stm_entries[-5:]:                       # the five most RECENT
+    parts.append(f"- **{entry.key}**: {entry.content[:200]}")
 ```
 
-So Prax can *write* "the user prefers metric units" and will never see it again
-unless it thinks to call `memory_recall` — and an agent does not call recall for
-things it does not know it has forgotten. `agent_plan` is auto-injected but
-cleared every turn; STM persists but is invisible. Neither is what MemGPT's
-working context is: **persistent AND always present.**
+`importance` was accepted by `stm_write`, stored on every entry, and **never
+read**. So a fact deliberately saved at 0.9 dropped out of the prompt as soon as
+five pieces of trivia followed it — and nothing told the agent it had gone. The
+module's own docstring cites Park et al., *"relevance + recency + importance"*;
+only recency was implemented.
 
-That is a smaller change than it sounds — the storage, the tools and the
-injection point all exist. It is a wiring gap, not an architecture gap, which is
-also why it is worth doing.
+Fixed: selection ranks by importance with recency as the tie-break (so
+equal-importance entries behave exactly as before), truncation says it happened
+and names the tool to get the rest, and a count of hidden entries is shown so the
+block cannot be mistaken for the whole scratchpad. Silence was the common thread
+in all three.
 
-### Second, weaker candidate: memory pressure as a signal
+### Still open: memory pressure as a signal
 
 MemGPT tells the model how full its context is *before* truncation, so it can
-choose what to save. Prax truncates and compacts by size thresholds without ever
-telling the agent it is happening. Cheaper to add than it is to evaluate,
-though: it changes behaviour on every long turn, so it belongs behind a flag and
-an eval-gate run rather than being switched on because the paper is persuasive.
-
----
+choose what to save. Prax compacts by size thresholds without telling the agent.
+Cheap to build, expensive to validate — it changes behaviour on every long turn,
+so it belongs behind a flag and an eval-gate run rather than being switched on
+because the paper is persuasive.
 
 ## What not to take
 
@@ -104,6 +109,48 @@ forget. Prax treats memory writes as governed actions; a model that can silently
 delete its own history is a model whose audit trail it can edit. Self-editing
 working memory should be *additive and visible*, with deletion staying a
 governed operation.
+
+---
+
+## Letta — where the authors took it (letta.com)
+
+The MemGPT authors founded **Letta** (Berkeley Sky Computing lab), so the paper
+is now the research floor of a product rather than a standalone result. Worth
+reading for where they went, not for what to copy — it is a hosted commercial
+platform and a direct peer to the TeamWork/Prax shape.
+
+Two of their named concepts land on rows **already in our tracker**, which is
+the useful part:
+
+**Context repositories / MemFS — git-tracked memory.** They moved from opaque
+"memory blocks" to memory versioned in git. Prax's workspace is *already* a git
+repository that commits everything not ignored, and the Library lives inside it.
+So Prax has the substrate and does not use it as memory: nothing reads history,
+diffs a fact against its previous value, or can answer "when did I start
+believing this?". That is a genuinely interesting gap and it costs nothing to
+reach — the commits are already there.
+
+**Sleep-time compute** — agents reasoning while idle. Already parked as
+"scheduled sleep phase" (💤) from the [lm-sleep](lm-sleep-consolidation.md)
+assessment, gated on having a held-out retrieval metric first. Letta shipping it
+is evidence the idea is live, not evidence our gate was wrong: building a
+memory-maximiser before the metric that would catch it degrading is the mistake
+that gate exists to prevent.
+
+**Memory-native RL / "continual learning in token space"** — training memory
+models. Same GPU wall as [RLM](rlm-harness-lid.md), [lm-sleep](lm-sleep-consolidation.md)
+and [MORPHEUS](skyfall-morpheus-continual-learning.md). Document-don't-adopt, and
+by now that verdict is a pattern rather than a judgement call.
+
+**Not** to copy: the hosted stateful-agent server and its SDK surface. Prax's
+equivalent is the workspace plus the governed tool layer, and adopting someone
+else's agent-state protocol would mean giving up the audit boundary that is the
+point of the project.
+
+Honest limit: this is read from marketing pages and partial docs. Licence and
+self-host terms were not established, the V1→V2 SDK split is documented mainly
+against itself rather than against the paper, and none of it is verified by use.
+Treat the two adopt-adjacent rows above as leads, not findings.
 
 ---
 

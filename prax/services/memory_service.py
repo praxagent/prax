@@ -30,6 +30,13 @@ logger = logging.getLogger(__name__)
 _instance = None
 
 
+# How much of the scratchpad rides in the system prompt every turn. Small on
+# purpose: this is working memory, not storage, and everything else stays one
+# `memory_stm_read()` away.
+_STM_IN_PROMPT = 5
+_STM_PREVIEW_CHARS = 200
+
+
 class MemoryService:
     """Unified interface for Prax's memory system."""
 
@@ -321,11 +328,50 @@ class MemoryService:
             from prax.services.memory.stm import stm_read
             stm_entries = stm_read(user_id)
             if stm_entries:
+                # Select by IMPORTANCE first, then recency.
+                #
+                # This used to be `stm_entries[-5:]` — the five most recently
+                # written, full stop. `importance` was accepted by stm_write,
+                # stored on every entry, and never read: a fact deliberately
+                # saved at 0.9 dropped out of the prompt as soon as five pieces
+                # of trivia were written after it, and the agent had no way to
+                # know it had gone. This module's own docstring cites Park et
+                # al. — "relevance + recency + importance" — and only recency
+                # was actually implemented here.
+                #
+                # Ties break on recency, so equal-importance entries behave
+                # exactly as before.
+                ranked = sorted(
+                    stm_entries,
+                    key=lambda e: (getattr(e, "importance", 0.5) or 0.5, e.created_at),
+                    reverse=True,
+                )[:_STM_IN_PROMPT]
+                # Present oldest-first so the block reads as a narrative rather
+                # than a leaderboard.
+                ranked.reverse()
+
                 parts.append("\n## Working Memory (Scratchpad)")
-                for entry in stm_entries[-5:]:
+                for entry in ranked:
                     rel = format_relative_time(entry.created_at)
                     rel_str = f" ({rel})" if rel else ""
-                    parts.append(f"- **{entry.key}**{rel_str}: {entry.content[:200]}")
+                    body = entry.content
+                    if len(body) > _STM_PREVIEW_CHARS:
+                        # Say it was cut. A silently truncated fact reads as a
+                        # complete one, and the agent will act on the half it
+                        # can see instead of calling stm_read for the rest.
+                        body = (
+                            body[:_STM_PREVIEW_CHARS]
+                            + f"… [truncated — stm_read('{entry.key}') for the full value]"
+                        )
+                    parts.append(f"- **{entry.key}**{rel_str}: {body}")
+
+                hidden = len(stm_entries) - len(ranked)
+                if hidden > 0:
+                    parts.append(
+                        f"*({hidden} more scratchpad entr"
+                        f"{'y' if hidden == 1 else 'ies'} not shown — "
+                        "`memory_stm_read()` lists them all.)*"
+                    )
         except Exception:
             pass
 
