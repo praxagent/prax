@@ -102,6 +102,12 @@ This ledger is the honest complement to
 |---|---|---|---|
 | Clone / pull / commit / push over SSH with a per-repo deploy key | 🧪 | Path-traversal guards, the per-repo write gate, key generation and permissions, and the no-global-git-identity case are unit-tested against real local git repositories (`file://` origins) — including a regression test that reproduces a host with no `~/.gitconfig`. | **No key has ever been installed on GitHub.** The whole point of a deploy key is what the *remote* does with it, and that half is untested: whether `IdentitiesOnly=yes` behaves as intended against `github.com`, whether a read-only key is refused on push with a legible error, and whether host-key acceptance works on first contact. Needs one real repo: attach, add the printed key, pull, enable write, push. |
 
+## Keyless Responses API + retained reasoning (`OPENAI_BASE_URL_IS_OPENAI`, `OPENAI_RETAIN_REASONING`)
+
+| Surface | Status | Verified | Not verified / needs |
+|---|---|---|---|
+| `/v1/responses` through the secrets proxy + `previous_response_id` chaining | ✅ | 2026-07-30, dev box: `build_llm(model="o4-mini")` with both flags against the live proxy (`:8785`, TLS) — two sequential calls returned reasoning blocks; `use_responses_api`/`use_previous_response_id` wiring confirmed live, plus 6 keyless unit tests for every flag combination. | The **behavioral win** (better multi-step task performance from retained reasoning) is OpenAI's measured claim, not ours — needs an eval-gate A/B before the flags are recommended in `.env-example`. Third-party-base-URL demotion path unchanged and covered by existing tests. |
+
 ## TeamWork MCP server (`MCP_ENABLED`, `teamwork/src/teamwork/mcp_server.py`)
 
 | Surface | Status | Verified | Not verified / needs |
