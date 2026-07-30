@@ -58,11 +58,14 @@ full 89-task run at ≤40 steps — still cheap, but measure a 3-task
 
 - One-shot protocol (no feedback loop, TB 1.0 trivial-env subset, 26
   scored): **1/26** — a deliberate floor, not the number.
-- First live harbor trial (2026-07-30, qwen3-coder-30b, 20-step budget,
-  `break-filter-js-from-html`): pipeline verified end to end — 21 terminal
-  steps in the task container, verifier scored, reward 0.0. A 30B model on a
-  hard task at a tight budget failing is the expected outcome; the run's
-  purpose was proving the wiring.
+- Live harbor trials (2026-07-30, qwen3-coder-30b, 20-step budget,
+  `break-filter-js-from-html`): pipeline verified end to end — real terminal
+  steps in the task container, verifier scored, accounting intact
+  (16 steps, 69,831 in / 3,895 out, $0.0059). Reward **0.0** both times.
+  Worth knowing about the second run: the agent called `task_done` with a
+  confident, specific summary of a working exploit — and the hidden
+  verifier disagreed. Self-reported success is not a score; that gap is
+  exactly why the number comes from the task's own verifier.
 
 The harbor sweep above is the leaderboard-comparable path. History and
 runner-artifact lessons (network, `$TEST_DIR`):
