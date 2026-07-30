@@ -56,8 +56,23 @@ full 89-task run at ≤40 steps — still cheap, but measure a 3-task
 
 ## Honest baseline so far
 
-One-shot protocol (no feedback loop, TB 1.0 trivial-env subset, 26 scored):
-**1/26** — the floor, not the number. The harbor run above is the
-leaderboard-comparable path. History and runner-artifact lessons (network,
-`$TEST_DIR`): `docs/research/openai-arc3-harness-settings.md` and the
-adopt-tracker's coding-agent-benchmark row.
+- One-shot protocol (no feedback loop, TB 1.0 trivial-env subset, 26
+  scored): **1/26** — a deliberate floor, not the number.
+- First live harbor trial (2026-07-30, qwen3-coder-30b, 20-step budget,
+  `break-filter-js-from-html`): pipeline verified end to end — 21 terminal
+  steps in the task container, verifier scored, reward 0.0. A 30B model on a
+  hard task at a tight budget failing is the expected outcome; the run's
+  purpose was proving the wiring.
+
+The harbor sweep above is the leaderboard-comparable path. History and
+runner-artifact lessons (network, `$TEST_DIR`):
+`docs/research/openai-arc3-harness-settings.md` and the adopt-tracker's
+coding-agent-benchmark row.
+
+## Keyless on the dev box specifically
+
+The dev box routes OpenRouter through the **forward** MITM proxy — run
+harbor with `HTTPS_PROXY=http://127.0.0.1:8786`,
+`SSL_CERT_FILE=~/PRAX/prax-proxy-ca-bundle.pem`, and a `NO_PROXY` covering
+github/docker/pypi hosts (harbor clones the dataset from GitHub, and git
+does not trust the MITM CA).

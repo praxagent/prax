@@ -84,6 +84,15 @@ def _make_tools(execute: Callable[..., dict], state: dict) -> list:
             command: The shell command to run (non-interactive).
             timeout_sec: Kill the command after this many seconds.
         """
+        # The budget is enforced HERE, not via the graph recursion limit: a
+        # recursion abort discards the message history, which destroys token
+        # accounting and the final answer. Refusing in the tool lets the loop
+        # end normally with its state intact.
+        if state["steps"] >= state["max_steps"]:
+            return (
+                "[step budget exhausted — no more commands will run. "
+                "Call task_done now with an honest summary of where things stand.]"
+            )
         state["steps"] += 1
         try:
             result = execute(command, timeout_sec=timeout_sec)
@@ -130,7 +139,7 @@ def run_terminal_task(
     from prax.agent.llm_factory import build_llm
 
     llm = build_llm(provider=provider, model=model, tier=tier)
-    state: dict = {"steps": 0, "done": False, "summary": None}
+    state: dict = {"steps": 0, "done": False, "summary": None, "max_steps": max_steps}
     graph = build_agent_loop(llm, _make_tools(execute, state))
 
     started = time.monotonic()
@@ -144,10 +153,11 @@ def run_terminal_task(
                     ("human", f"Task:\n{instruction}"),
                 ]
             },
-            # Each agent step is (AI message, tool message); +2 for the
-            # opening exchange. Wall-clock budgeting belongs to harbor's own
-            # per-trial timeout; this bound stops runaway loops within it.
-            config={"recursion_limit": max_steps * 2 + 2},
+            # Generous backstop only — the real budget is enforced in the
+            # terminal tool (a recursion abort would discard the message
+            # history and with it the token accounting). The slack gives the
+            # model turns to call task_done after the tool starts refusing.
+            config={"recursion_limit": max_steps * 2 + 20},
         )
         messages = result.get("messages", [])
     except GraphRecursionError:
@@ -168,7 +178,12 @@ def run_terminal_task(
 
     from prax.eval.pricing import estimate_cost
 
-    cost = estimate_cost(model_seen or model or "", tokens_in, tokens_out)
+    # No usage observed (e.g. the loop died before returning messages) means
+    # the spend is UNKNOWN — never report a fabricated $0.00.
+    if tokens_in == 0 and tokens_out == 0:
+        cost = None
+    else:
+        cost = estimate_cost(model_seen or model or "", tokens_in, tokens_out)
     return {
         "done": bool(state["done"]),
         "summary": state["summary"],

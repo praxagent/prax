@@ -23,8 +23,8 @@ def _exec_recorder(replies=None):
 
 
 class TestTerminalTool:
-    def _tools(self, execute):
-        state = {"steps": 0, "done": False, "summary": None}
+    def _tools(self, execute, max_steps=40):
+        state = {"steps": 0, "done": False, "summary": None, "max_steps": max_steps}
         terminal, task_done = tb._make_tools(execute, state)
         return terminal, task_done, state
 
@@ -112,7 +112,7 @@ class TestRunTerminalTask:
         )
         assert r["cost_usd"] is None
 
-    def test_recursion_limit_becomes_step_budget_error(self, monkeypatch):
+    def test_recursion_backstop_becomes_step_budget_error(self, monkeypatch):
         class ExplodingGraph:
             def invoke(self, payload, config=None):
                 raise tb.GraphRecursionError("hit limit")
@@ -124,6 +124,23 @@ class TestRunTerminalTask:
         r = tb.run_terminal_task("task", lambda c, timeout_sec=180: {}, max_steps=3)
         assert "step budget exhausted" in r["error"]
         assert r["done"] is False
+        # Nothing came back from the loop, so spend is unknown — not $0.00.
+        assert r["cost_usd"] is None
+
+    def test_terminal_refuses_past_step_budget_without_executing(self):
+        execute, calls = _exec_recorder()
+        terminal, _, state = self._budget_tools(execute, max_steps=2)
+        terminal.invoke({"command": "a"})
+        terminal.invoke({"command": "b"})
+        out = terminal.invoke({"command": "c"})
+        assert "step budget exhausted" in out and "task_done" in out
+        assert [c for c, _ in calls] == ["a", "b"]  # third never executed
+        assert state["steps"] == 2
+
+    def _budget_tools(self, execute, max_steps):
+        state = {"steps": 0, "done": False, "summary": None, "max_steps": max_steps}
+        terminal, task_done = tb._make_tools(execute, state)
+        return terminal, task_done, state
 
     def test_system_prompt_is_benchmark_agnostic(self):
         """Anti-spike guard: the prompt must contain no benchmark vocabulary."""

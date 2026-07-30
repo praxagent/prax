@@ -108,6 +108,12 @@ This ledger is the honest complement to
 |---|---|---|---|
 | `/v1/responses` through the secrets proxy + `previous_response_id` chaining | ✅ | 2026-07-30, dev box: `build_llm(model="o4-mini")` with both flags against the live proxy (`:8785`, TLS) — two sequential calls returned reasoning blocks; `use_responses_api`/`use_previous_response_id` wiring confirmed live, plus 6 keyless unit tests for every flag combination. | The **behavioral win** (better multi-step task performance from retained reasoning) is OpenAI's measured claim, not ours — needs an eval-gate A/B before the flags are recommended in `.env-example`. Third-party-base-URL demotion path unchanged and covered by existing tests. |
 
+## Terminal-Bench 2.0 harbor adapter (`prax/eval/tb_agent.py`)
+
+| Surface | Status | Verified | Not verified / needs |
+|---|---|---|---|
+| PraxAgent end-to-end under harbor (container exec bridge, keyless model path, metadata population, hidden-verifier scoring) | ✅ | 2026-07-30, dev box: `harbor run -a prax.eval.tb_agent:PraxAgent -i break-filter-js-from-html` — 21 real terminal steps in the task container via the forward proxy (qwen3-coder-30b), trial completed 0 errors, verifier scored (reward 0.0 — an honest fail for a 30B), metadata (harness label/steps/error) landed in the trial record. | The live run exposed a token-accounting gap (recursion abort discarded messages → 0 tokens, $0.00) — fixed same day (budget enforced in-tool; no-usage ⇒ cost `None`), fix is unit-tested but **not yet re-verified in a live harbor run**. Full 89-task sweep not yet run. |
+
 ## TeamWork MCP server (`MCP_ENABLED`, `teamwork/src/teamwork/mcp_server.py`)
 
 | Surface | Status | Verified | Not verified / needs |
