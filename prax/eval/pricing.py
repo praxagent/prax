@@ -32,6 +32,11 @@ MODEL_PRICING: dict[str, tuple[float, float]] = {
     "gpt-5.4-nano": (0.05, 0.40),
     "gpt-5.4-mini": (0.15, 0.60),
     "gpt-5.5": (1.25, 10.0),
+    # GPT-5.6 family — the 2026-07-30 reprice (Luna −80%, Terra −20%)
+    "gpt-5.6-luna": (0.20, 1.20),
+    "gpt-5.6-terra": (2.00, 12.00),
+    # OpenRouter stress-test floor for coding evals (live models-endpoint rate)
+    "qwen/qwen3-coder-30b-a3b-instruct": (0.07, 0.27),
 }
 
 
