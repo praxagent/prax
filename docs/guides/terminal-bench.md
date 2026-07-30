@@ -35,12 +35,13 @@ export PRAX_TB_MODEL=qwen/qwen3-coder-30b-a3b-instruct
 export PRAX_TB_MAX_STEPS=40                 # per-task step budget
 
 ~/PRAX/tb-venv/bin/harbor run \
-  --dataset terminal-bench@2.0 \
-  --agent-import-path prax.eval.tb_agent:PraxAgent \
-  --n-concurrent 2                          # 2-core box: keep this low
+  -d terminal-bench@2.0 \
+  -a prax.eval.tb_agent:PraxAgent \
+  -m "$PRAX_TB_MODEL" \
+  -n 2                                      # 2-core box: keep concurrency low
 ```
 
-Useful additions: `--task-name <slug>` for a single task; `--n-attempts k`
+Useful additions: `-i <task-name>` to run a single task; `--n-attempts k`
 for pass^k. Results land in harbor's output dir; per-trial metadata carries
 steps/tokens/cost (cost is `None` when the model has no known rate — unknown
 is never rendered as $0.00).

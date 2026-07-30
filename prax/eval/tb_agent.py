@@ -12,7 +12,7 @@ own hidden verifier. This module is the Prax side of that contract:
 - ``PraxAgent`` (built lazily via PEP-562 ``__getattr__`` so prax never
   imports harbor at module load; harbor is not a prax dependency) adapts that
   core to harbor's ``BaseAgent`` interface:
-  ``harbor run --agent-import-path prax.eval.tb_agent:PraxAgent ...``.
+  ``harbor run -a prax.eval.tb_agent:PraxAgent ...``.
   Setup + run instructions: ``docs/guides/terminal-bench.md``.
 
 What this deliberately is NOT: the 97-tool orchestrator. A benchmark task
