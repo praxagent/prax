@@ -130,6 +130,18 @@ class OTelLLMCallback(BaseCallbackHandler):
         # Record Prometheus metrics
         _record_metrics(model, input_tokens, output_tokens, elapsed)
 
+        # Attribute the usage to the active trace span, so the trace itself can
+        # answer "what did this turn cost" — Prometheus aggregates can't be
+        # joined back to one conversation after the fact.
+        try:
+            from prax.agent.trace import get_current_trace
+            ctx = get_current_trace()
+            if ctx:
+                ctx.graph.add_llm_usage(ctx.span_id, model,
+                                        input_tokens, output_tokens)
+        except Exception:  # noqa: BLE001 - accounting must never break a call
+            pass
+
         # Circuit breaker: record success.  Prefer the provider captured at
         # start; fall back to model-name inference for older call paths.
         try:

@@ -127,3 +127,6 @@ checkpoint.md
 
 # LLM routing runtime overrides — agent-driven (self_upgrade_tier etc.), seed is committed
 prax/plugins/configs/llm_routing.runtime.yaml
+
+# prereg log falls back to repo root when PRAX_EVAL_DIR is unset — never commit it
+eval_preregistrations.jsonl

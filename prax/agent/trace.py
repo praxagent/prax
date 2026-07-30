@@ -40,6 +40,29 @@ logger = logging.getLogger(__name__)
 # Data structures
 # ---------------------------------------------------------------------------
 
+def _usage_cost(usage_by_model: dict) -> float | None:
+    """Estimated USD across models, or None when any model's rate is unknown.
+
+    Partial pricing is treated as no pricing: summing the models we know and
+    silently dropping the ones we don't would produce a number that LOOKS
+    complete and is quietly smaller than the truth — the scorecard-laundering
+    mistake in miniature.
+    """
+    if not usage_by_model:
+        return None
+    try:
+        from prax.eval.pricing import estimate_cost
+    except Exception:  # noqa: BLE001
+        return None
+    total = 0.0
+    for model, u in usage_by_model.items():
+        c = estimate_cost(model, u.get("in", 0), u.get("out", 0))
+        if c is None:
+            return None
+        total += c
+    return round(total, 4)
+
+
 @dataclass
 class SpanNode:
     """A single node in the execution graph -- one agent invocation."""
@@ -55,6 +78,14 @@ class SpanNode:
     tool_calls: int = 0
     summary: str = ""
     tier_choices: list[dict] = field(default_factory=list)
+    # Real token usage, accumulated by the LLM callback as calls complete under
+    # this span. Usage used to flow to Prometheus and OTel and STOP there — the
+    # trace, the one artifact a person actually opens, never carried what the
+    # turn cost.
+    llm_calls: int = 0
+    tokens_in: int = 0
+    tokens_out: int = 0
+    usage_by_model: dict = field(default_factory=dict)
 
 
 class ExecutionGraph:
@@ -67,6 +98,21 @@ class ExecutionGraph:
         self.trigger: str = ""  # User message or cron/event that started this trace
         self.session_id: str = ""  # Groups related traces into a session
         self.source: str = ""  # Origin channel: discord | sms | voice | teamwork | scheduler | task_runner
+
+    def add_llm_usage(self, span_id: str, model: str,
+                      tokens_in: int, tokens_out: int) -> None:
+        """Attribute one completed LLM call's usage to a span."""
+        with self._lock:
+            node = self._nodes.get(span_id)
+            if node is None:
+                return
+            node.llm_calls += 1
+            node.tokens_in += int(tokens_in or 0)
+            node.tokens_out += int(tokens_out or 0)
+            per = node.usage_by_model.setdefault(model or "unknown",
+                                                 {"in": 0, "out": 0})
+            per["in"] += int(tokens_in or 0)
+            per["out"] += int(tokens_out or 0)
 
     def add_node(self, node: SpanNode) -> None:
         with self._lock:
@@ -134,7 +180,14 @@ class ExecutionGraph:
                         "model": tc.get("model"),
                         "tier": tc.get("tier_resolved") or tc.get("tier_requested"),
                     })
+                node_cost = _usage_cost(n.usage_by_model)
                 nodes.append({
+                    "tokens_in": n.tokens_in,
+                    "tokens_out": n.tokens_out,
+                    "llm_calls": n.llm_calls,
+                    # None means "no rate known", which is reported as unknown
+                    # rather than as $0.00 — unknown and free are different claims.
+                    "cost_estimate_usd": node_cost,
                     "span_id": n.span_id,
                     "name": n.name,
                     "parent_id": n.parent_id,
@@ -165,10 +218,22 @@ class ExecutionGraph:
                 overall_status = "running"
             else:
                 overall_status = "completed"
+            total_in = sum(n.tokens_in for n in self._nodes.values())
+            total_out = sum(n.tokens_out for n in self._nodes.values())
+            merged: dict[str, dict] = {}
+            for n in self._nodes.values():
+                for m, u in n.usage_by_model.items():
+                    agg = merged.setdefault(m, {"in": 0, "out": 0})
+                    agg["in"] += u["in"]
+                    agg["out"] += u["out"]
             result: dict = {
                 "trace_id": self.trace_id,
                 "status": overall_status,
                 "node_count": len(nodes),
+                "tokens_in": total_in,
+                "tokens_out": total_out,
+                # None = "no rate known", reported as unknown rather than $0.00.
+                "cost_estimate_usd": _usage_cost(merged),
                 "nodes": nodes,
             }
             if self.trigger:
