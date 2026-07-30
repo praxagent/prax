@@ -13,11 +13,11 @@ dependencies = [
     "twilio==8.12.0",
     "openai>=1.104.2",
     "Flask[async]==3.0.1",
-    "python-dotenv==1.0.1",
+    "python-dotenv>=1.0.1,<2",  # loosened for harbor co-install (see pydantic note)
     "pyngrok==7.0.5",
     "pydub==0.25.1",
     "tiktoken>=0.9",
-    "pydantic==2.10.4",
+    "pydantic>=2.10.4,<3",  # exact-pin loosened so harbor (Terminal-Bench 2.0) can co-install with prax; uv.lock still holds 2.10.4 for this venv
     "pydantic-settings==2.11.0",
     "langchain>=1.3.11",
     "langchain-openai>=1.3.3",

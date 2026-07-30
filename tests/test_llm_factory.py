@@ -269,3 +269,80 @@ def test_build_llm_requires_keys(monkeypatch):
 
     with pytest.raises(ValueError):
         llm_module.build_llm(provider='unknown')
+
+
+def _mk(monkeypatch, llm_module, **overrides):
+    base = dict(
+        default_llm_provider='openai', base_model='gpt-test', agent_temperature=0.2,
+        llm_request_timeout=300, openai_key='proxy-token',
+    )
+    base.update(overrides)
+    monkeypatch.setattr(llm_module, 'settings', SimpleNamespace(**base), raising=False)
+    monkeypatch.setattr(llm_module, 'ChatOpenAI', lambda **kwargs: ('openai', kwargs))
+
+
+def test_base_url_is_openai_restores_responses_api_for_responses_only_models(monkeypatch):
+    """Keyless mode (secrets proxy fronting real OpenAI) must not demote
+    responses-only models to chat-completions — that 404s them."""
+    llm_module = importlib.reload(importlib.import_module('prax.agent.llm_factory'))
+    _mk(monkeypatch, llm_module,
+        openai_base_url='https://127.0.0.1:8785/openai',
+        openai_base_url_is_openai=True)
+    _, kw = llm_module.build_llm(model='o3-mini')
+    assert kw['use_responses_api'] is True
+    assert kw['base_url'] == 'https://127.0.0.1:8785/openai'
+    # Responses-family models still reject logprobs regardless of routing.
+    assert kw['model_kwargs'] == {}
+
+
+def test_base_url_is_openai_restores_logprobs_for_chat_models(monkeypatch):
+    llm_module = importlib.reload(importlib.import_module('prax.agent.llm_factory'))
+    _mk(monkeypatch, llm_module,
+        openai_base_url='https://127.0.0.1:8785/openai',
+        openai_base_url_is_openai=True)
+    _, kw = llm_module.build_llm(model='gpt-5.4-mini')
+    assert kw['model_kwargs'] == {"logprobs": True, "top_logprobs": 5}
+    assert kw['use_responses_api'] is False
+
+
+def test_third_party_base_url_still_demotes_even_with_retain_flag(monkeypatch):
+    """OpenRouter-style endpoints have no Responses API: the retain flag must
+    not force chaining onto a provider that cannot honour it."""
+    llm_module = importlib.reload(importlib.import_module('prax.agent.llm_factory'))
+    _mk(monkeypatch, llm_module,
+        openai_base_url='https://openrouter.ai/api/v1',
+        openai_base_url_is_openai=False,
+        openai_retain_reasoning=True)
+    _, kw = llm_module.build_llm(model='o3-mini')
+    assert kw['use_responses_api'] is False
+    assert kw['use_previous_response_id'] is False
+    assert kw['model_kwargs'] == {}
+
+
+def test_retain_reasoning_chains_previous_response_id(monkeypatch):
+    llm_module = importlib.reload(importlib.import_module('prax.agent.llm_factory'))
+    _mk(monkeypatch, llm_module,
+        openai_base_url='https://127.0.0.1:8785/openai',
+        openai_base_url_is_openai=True,
+        openai_retain_reasoning=True)
+    _, kw = llm_module.build_llm(model='gpt-5.5-pro')
+    assert kw['use_responses_api'] is True
+    assert kw['use_previous_response_id'] is True
+
+
+def test_retain_reasoning_defaults_off(monkeypatch):
+    """Prior behavior with no flags: direct OpenAI, responses-only model,
+    Responses API on, NO previous_response_id chaining."""
+    llm_module = importlib.reload(importlib.import_module('prax.agent.llm_factory'))
+    _mk(monkeypatch, llm_module, openai_base_url=None)
+    _, kw = llm_module.build_llm(model='o3-mini')
+    assert kw['use_responses_api'] is True
+    assert kw['use_previous_response_id'] is False
+
+
+def test_retain_reasoning_works_without_base_url(monkeypatch):
+    """The retain flag is independent of keyless mode — direct OpenAI too."""
+    llm_module = importlib.reload(importlib.import_module('prax.agent.llm_factory'))
+    _mk(monkeypatch, llm_module, openai_base_url=None, openai_retain_reasoning=True)
+    _, kw = llm_module.build_llm(model='o3-mini')
+    assert kw['use_previous_response_id'] is True

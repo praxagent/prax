@@ -130,16 +130,20 @@ class TestGraphInvokeTimeout:
 
         class HealthySlowGraph:
             def invoke(self, payload, config=None):
-                end = time.monotonic() + 0.18
+                end = time.monotonic() + 0.6
                 while time.monotonic() < end:
                     heartbeat.touch("test", "still making progress")
-                    time.sleep(0.02)
+                    # 2ms touches against a 0.3s idle timeout (150x margin):
+                    # on a loaded 2-core box a scheduling stall of >100ms is
+                    # routine, and at the old 0.05s window it made this healthy
+                    # run look idle even after the touch cadence was tightened.
+                    time.sleep(0.002)
                 return {"messages": ["ok"]}
 
         agent = object.__new__(ConversationAgent)
         agent.graph = HealthySlowGraph()
-        monkeypatch.setattr(orchestrator_module.settings, "agent_run_timeout", 0.05)
-        monkeypatch.setattr(orchestrator_module.settings, "agent_run_max_timeout", 1)
+        monkeypatch.setattr(orchestrator_module.settings, "agent_run_timeout", 0.3)
+        monkeypatch.setattr(orchestrator_module.settings, "agent_run_max_timeout", 5)
 
         result = agent._invoke_graph_once([], {}, USER, heartbeat)
 
@@ -160,19 +164,19 @@ class TestGraphInvokeTimeout:
 
         agent = object.__new__(ConversationAgent)
         agent.graph = EndlessHealthyGraph()
-        # Idle stays small: the max-runtime check is only evaluated when the
-        # idle poll wakes up, so a large idle timeout delays detection of the
-        # very thing under test. The flake came from too thin a margin between
-        # the heartbeat interval and this value (0.02s vs 0.05s), so the graph
-        # below touches far more often instead.
-        monkeypatch.setattr(orchestrator_module.settings, "agent_run_timeout", 0.05)
-        monkeypatch.setattr(orchestrator_module.settings, "agent_run_max_timeout", 0.15)
+        # The max-runtime check is only evaluated when the idle poll wakes
+        # up, so the idle timeout stays well under the max — but both are
+        # sized so a loaded box's >100ms scheduling stall can neither fake an
+        # idle agent (2ms touches vs 0.3s window) nor delay the poll past the
+        # elapsed assertion below.
+        monkeypatch.setattr(orchestrator_module.settings, "agent_run_timeout", 0.3)
+        monkeypatch.setattr(orchestrator_module.settings, "agent_run_max_timeout", 0.6)
 
         started = time.monotonic()
         with pytest.raises(TimeoutError, match="maximum runtime"):
             agent._invoke_graph_once([], {}, USER, heartbeat)
 
-        assert time.monotonic() - started < 0.5
+        assert time.monotonic() - started < 3.0
 
 
 class TestAutoCompleteGuard:

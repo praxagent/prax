@@ -1088,6 +1088,23 @@ Distilled from reading these customer stories + cookbook recipes against the bug
   - **Framing**: adopt the falsifiable **RSI ladder** (delegation → net-positive → ignition
     → inflection) as roadmap language, replacing binary "did we achieve RSI." AIDE² reached
     net-positive, explicitly **not** ignition.
+- **What the grounding gap adds (2026-07-29, [assessment](research/ilands-grounding-gap.md))**:
+  the AIDE² split above is **authored selection with hidden instances** — the rubric, task
+  distribution and scorer are still ours, and under the optimization pressure this loop
+  applies, hiding raises the cost of gaming without changing who wrote the exam. Two
+  consequences now part of the design:
+  1. **Grounded signal alongside the authored gate.** The gate's long-run defence is
+     adding consequences we don't control, not more hiding. Prax already has the channel:
+     the live box + deploy-every-change is grounded selection at n=1 — the user refuses
+     (rejects self-proposed changes), leaves (stops using a feature), remembers (the task
+     list), reprices (demands cheaper models). Wire real-usage acceptance/rejection of
+     self-proposed changes into the accept gate as a signal beside `avg_private`; do NOT
+     rebuild it as an agent economy (that's iLands' business model, not the insight).
+  2. **Pre-registered kill conditions** (`prax/eval/prereg.py`): every gate experiment
+     writes its refutation standard BEFORE the run — a disappointing result cannot quietly
+     become "inconclusive, keep the flag" when the words that count it as disproof were
+     committed first. The mechanism refuses an empty kill condition: "nothing would change
+     my mind" is a decision wearing an experiment's clothes.
 
 ### 30. Voice / realtime evals — the yardstick for the day Prax goes to live voice chat
 

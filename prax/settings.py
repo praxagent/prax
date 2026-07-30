@@ -41,6 +41,24 @@ class AppSettings(BaseSettings):
     # bill-shock. Default None = OpenAI. Set OPENAI_KEY to that provider's key.
     # See docs/guides/cheap-evals.md.
     openai_base_url: str | None = Field(default=None, alias="OPENAI_BASE_URL")
+    # Declare that OPENAI_BASE_URL fronts the REAL OpenAI API — i.e. the keyless
+    # secrets-proxy with api.openai.com behind it — rather than a third-party
+    # OpenAI-compatible provider. Without this, any custom base URL forces plain
+    # chat-completions, which silently discards private reasoning after every
+    # tool call (the harness failure mode OpenAI measured at ~3x score / 6x
+    # output tokens on ARC-AGI-3) and 404s the responses-only -pro/o-series
+    # models. Default False = prior behavior. See
+    # docs/research/openai-arc3-harness-settings.md.
+    openai_base_url_is_openai: bool = Field(
+        default=False, alias="OPENAI_BASE_URL_IS_OPENAI"
+    )
+    # Retain private reasoning across tool calls/turns for models routed through
+    # the Responses API (previous_response_id chaining — the setting OpenAI ships
+    # in ChatGPT/Codex). Default False = prior behavior; flip is governed by the
+    # eval gate like every reliability flag.
+    openai_retain_reasoning: bool = Field(
+        default=False, alias="OPENAI_RETAIN_REASONING"
+    )
     # Point the Anthropic client at a base URL — used to route Claude calls through
     # the KEYLESS secrets-proxy (the separate praxagent/prax-secrets-proxy service).
     # When set, Prax needs only a

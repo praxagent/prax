@@ -177,7 +177,17 @@ def build_llm(
         # evals (docs/guides/cheap-evals.md). Those endpoints do NOT implement
         # OpenAI's proprietary Responses API or `logprobs`, so when a custom base
         # URL is set we force plain chat-completions and skip the logprob machinery.
+        #
+        # EXCEPT: keyless Prax sets OPENAI_BASE_URL to the secrets proxy with the
+        # REAL OpenAI API behind it (path-agnostic pass-through). Treating that
+        # like a third-party provider silently discarded reasoning after every
+        # tool call and 404'd the responses-only models, so
+        # OPENAI_BASE_URL_IS_OPENAI declares the difference. `_third_party` is
+        # the demotion condition everywhere below.
         _base_url = getattr(settings, "openai_base_url", None) or None
+        _third_party = bool(_base_url) and not getattr(
+            settings, "openai_base_url_is_openai", False
+        )
         # The "pro"/reasoning models route through OpenAI's **Responses API**,
         # which (a) rejects `logprobs`/`top_logprobs` — raising
         # `Responses.create() got an unexpected keyword argument 'logprobs'` and
@@ -209,7 +219,7 @@ def build_llm(
         )
         # Phase 3: logprobs for entropy analysis — Chat Completions models only.
         # The LogprobCallbackHandler silently no-ops if there's no logprob data.
-        if not _responses_api and not _base_url:
+        if not _responses_api and not _third_party:
             try:
                 from prax.agent.logprob_analyzer import get_logprob_callback
                 callbacks = list(callbacks) + [get_logprob_callback()]
@@ -228,13 +238,21 @@ def build_llm(
             # though agent_run_timeout exists (that timeout is only
             # checked AFTER graph.invoke returns).
             timeout=settings.llm_request_timeout,
-            model_kwargs=({} if (_responses_api or _base_url) else {"logprobs": True, "top_logprobs": 5}),
+            model_kwargs=({} if (_responses_api or _third_party) else {"logprobs": True, "top_logprobs": 5}),
             # Reasoning/"pro" models (gpt-5.5-pro, o-series) are served ONLY by the
             # Responses API — calling them on /v1/chat/completions 404s with "not a
             # chat model" (this is what failed the professor spoke). Route ONLY
             # those through /v1/responses; plain gpt-5.5 and chat models keep
             # chat-completions (string content, no list-block downstream crashes).
-            use_responses_api=(_needs_responses_endpoint and not _base_url),
+            use_responses_api=(_needs_responses_endpoint and not _third_party),
+            # Retain private reasoning across tool calls/turns by chaining
+            # previous_response_id — the ChatGPT/Codex production setting.
+            # Only meaningful on the Responses API; harmless (and off) elsewhere.
+            use_previous_response_id=(
+                _needs_responses_endpoint
+                and not _third_party
+                and getattr(settings, "openai_retain_reasoning", False)
+            ),
         )
 
     if provider_name == "openrouter":
