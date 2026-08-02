@@ -22,6 +22,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 
 from prax.agent.agent_loop import build_agent_loop
 from prax.agent.llm_factory import build_llm
+from prax.agent.message_text import message_text
 
 logger = logging.getLogger(__name__)
 
@@ -280,24 +281,9 @@ def _tool_message_text(msg: ToolMessage) -> str:
     form produces ``"[{'type': 'text', ...}]"`` — which silently broke the
     prefix-startswith check used to preserve VERIFIED_WEATHER evidence.
     """
-    raw = msg.content
-    if raw is None:
-        return ""
-    if isinstance(raw, str):
-        return raw
-    if isinstance(raw, list):
-        parts: list[str] = []
-        for block in raw:
-            if isinstance(block, str):
-                parts.append(block)
-            elif isinstance(block, dict):
-                # Common shapes: {"type": "text", "text": "..."} (Anthropic),
-                # {"text": "..."} (some providers), or just {"content": "..."}.
-                text = block.get("text") or block.get("content") or ""
-                if isinstance(text, str):
-                    parts.append(text)
-        return "\n".join(p for p in parts if p)
-    return str(raw)
+    # Delegates to the shared normalizer so a new provider content shape is
+    # one edit. The orchestrator hit the same bug class with a hard crash.
+    return message_text(msg)
 
 
 def _append_preserved_tool_results(

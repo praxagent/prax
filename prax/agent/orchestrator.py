@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from prax.agent.agent_loop import build_agent_loop
 from prax.agent.checkpoint import CheckpointManager
 from prax.agent.llm_factory import build_llm
+from prax.agent.message_text import message_text
 from prax.agent.tool_registry import get_registered_tools
 from prax.agent.user_context import current_user_id
 from prax.plugins.prompt_manager import get_prompt_manager
@@ -820,7 +821,7 @@ class ConversationAgent:
     def _last_ai_content(messages: list) -> str:
         for msg in reversed(messages or []):
             if isinstance(msg, AIMessage) and msg.content:
-                return str(msg.content)
+                return message_text(msg)
         return ""
 
     @classmethod
@@ -1546,7 +1547,10 @@ class ConversationAgent:
         response = ""
         for msg in reversed(result.get("messages", [])):
             if isinstance(msg, AIMessage) and msg.content:
-                response = msg.content
+                # NEVER `msg.content` raw: providers on the Responses API
+                # return a list of content blocks, which crashes the string
+                # concatenations downstream (see prax/agent/message_text.py).
+                response = message_text(msg)
                 break
 
         # Deterministic claim audit: check for ungrounded numeric claims
@@ -1733,7 +1737,7 @@ class ConversationAgent:
 
         for msg in reversed(result.get("messages", [])):
             if isinstance(msg, AIMessage) and msg.content:
-                return str(msg.content) + self._drain_denylist_notice()
+                return message_text(msg) + self._drain_denylist_notice()
         return self._drain_denylist_notice().lstrip("\n")
 
     def _invoke_with_retry(
