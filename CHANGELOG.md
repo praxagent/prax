@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.40.2](https://github.com/praxagent/prax/compare/v0.40.1...v0.40.2) (2026-08-02)
+
+
+### Bug Fixes
+
+* **agent:** normalize provider content blocks — Responses API crashed every orchestrator turn ([#195](https://github.com/praxagent/prax/issues/195)) ([e0ada13](https://github.com/praxagent/prax/commit/e0ada134c3abfc6a367c025c2a917d28b290f3f0))
+
 ## [0.40.1](https://github.com/praxagent/prax/compare/v0.40.0...v0.40.1) (2026-07-26)
 
 
