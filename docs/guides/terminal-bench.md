@@ -54,23 +54,36 @@ count (each step re-reads history); budget **single-digit dollars** for a
 full 89-task run at ≤40 steps — still cheap, but measure a 3-task
 `--task-name` sample before a full sweep.
 
-## Honest baseline so far
+## Measured result — full Terminal-Bench 2.0 sweep (2026-08-02)
 
-- One-shot protocol (no feedback loop, TB 1.0 trivial-env subset, 26
-  scored): **1/26** — a deliberate floor, not the number.
-- Live harbor trials (2026-07-30, qwen3-coder-30b, 20-step budget,
-  `break-filter-js-from-html`): pipeline verified end to end — real terminal
-  steps in the task container, verifier scored, accounting intact
-  (16 steps, 69,831 in / 3,895 out, $0.0059). Reward **0.0** both times.
-  Worth knowing about the second run: the agent called `task_done` with a
-  confident, specific summary of a working exploit — and the hidden
-  verifier disagreed. Self-reported success is not a score; that gap is
-  exactly why the number comes from the task's own verifier.
+**Prax's agent loop + terminal tool, `qwen/qwen3-coder-30b-a3b-instruct`,
+40-step budget, all 89 tasks, `-n 2` on a 2-core box.**
 
-The harbor sweep above is the leaderboard-comparable path. History and
-runner-artifact lessons (network, `$TEST_DIR`):
-`docs/research/openai-arc3-harness-settings.md` and the adopt-tracker's
-coding-agent-benchmark row.
+| | |
+|---|---|
+| **Pass rate** | **13.5%** (12/89 attempted) · **15.6%** (12/77 excluding infra errors) |
+| **Total cost** | **$0.46** — $0.0051 per attempted task |
+| Tokens | 5,860,785 in / 165,221 out (35:1 — agentic loops re-read history every step) |
+| Wall clock | 9h 30m |
+| Infra errors | 16 of 89: 6 environment-start timeouts, 4 verifier timeouts, 4 agent timeouts, 2 runtime errors |
+
+**Read the two pass rates as a range, not a choice.** 16 trials never produced
+a score, and most of those are this box rather than the model: environment-start
+and verifier timeouts are a 2-core machine losing races that a bigger one
+wins. The 4 *agent* timeouts are arguably genuine failures (too slow inside the
+allotted budget). A faster host would score somewhere at or above 13.5%, and
+the honest statement is "13.5–15.6% on this hardware", not a single number.
+
+**What this is not.** It is not the 97-tool orchestrator — spoke tools point at
+surfaces a benchmark container doesn't have. It is Prax's loop, middleware and
+model plumbing driving a terminal, which is what the `harness` field records
+per trial. And it is a **30B open model**: for scale, the NOOA paper reports
+73.0% on this benchmark with GPT-5.5. The interesting result here is not the
+rank, it is that **a full agentic sweep of a marquee coding benchmark costs
+under fifty cents**, which makes it repeatable rather than an event.
+
+Earlier, weaker measurement kept for contrast: a one-shot protocol (no
+feedback loop) on the TB 1.0 trivial-env subset scored 1/26.
 
 ## Keyless on the dev box specifically
 
