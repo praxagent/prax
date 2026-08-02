@@ -113,19 +113,27 @@ class OTelLLMCallback(BaseCallbackHandler):
     ) -> None:
         elapsed = time.monotonic() - self._start_times.pop(run_id, time.monotonic())
 
-        # Extract token usage from response
+        # Extract token usage from response.
+        #
+        # `.get(key, default)` returns None when the key EXISTS with value
+        # None — the default only covers an ABSENT key — and some providers
+        # send an explicit `"token_usage": null`. That made `usage` None and
+        # the next line raise, aborting this callback BEFORE both the
+        # Prometheus metrics and the trace cost attribution below: the call's
+        # accounting vanished silently, because LangChain swallows callback
+        # errors. Hence the `or {}` on every extraction.
         usage = {}
-        if hasattr(response, "llm_output") and response.llm_output:
-            usage = response.llm_output.get("token_usage", {})
-        elif response.generations:
+        llm_output = getattr(response, "llm_output", None) or {}
+        if llm_output:
+            usage = llm_output.get("token_usage") or {}
+        elif getattr(response, "generations", None):
             gen = response.generations[0][0] if response.generations[0] else None
-            if gen and hasattr(gen, "generation_info") and gen.generation_info:
-                usage = gen.generation_info.get("token_usage", {})
+            info = getattr(gen, "generation_info", None) or {}
+            usage = info.get("token_usage") or {}
 
-        input_tokens = usage.get("prompt_tokens", 0)
-        output_tokens = usage.get("completion_tokens", 0)
-        model = usage.get("model_name") or \
-                (response.llm_output or {}).get("model_name", "unknown")
+        input_tokens = usage.get("prompt_tokens") or 0
+        output_tokens = usage.get("completion_tokens") or 0
+        model = usage.get("model_name") or llm_output.get("model_name") or "unknown"
 
         # Record Prometheus metrics
         _record_metrics(model, input_tokens, output_tokens, elapsed)
