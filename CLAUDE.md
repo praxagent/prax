@@ -251,6 +251,15 @@ same brain, no independence):
   with the **`test` check required** and **0 required approvals** — self-merge
   the moment CI is green.  Auto-merge is enabled; the normal flow is
   `gh pr create` → `gh pr merge --auto --squash`.
+- **⚠️ The PR TITLE must be a conventional commit** — squash-merge uses the PR
+  title as the commit subject on `main`, so that title (not the branch's
+  individual commits) is what release-please parses.  A descriptive title like
+  "Trace cost accounting, keyless retained reasoning, …" contains `feat:`
+  commits on the branch but lands on `main` as **non-conventional → no release
+  is staged, and the work never reaches the changelog**.  This bites the
+  batch-PR convention specifically (big batches invite prose titles): PRs #188
+  and #189 both shipped features that release-please ignored.  Title batch PRs
+  `feat: <the headline change>` and put the rest in the body.
 - Before merging anything non-trivial, run **`/code-review`** on the diff
   (`/code-review ultra` for substantive changes) — the PR template's checklist
   reminds you.  This is the review; treat its confirmed findings like a
