@@ -62,12 +62,47 @@ class TestTerminalTool:
         out = terminal.invoke({"command": "ls"})
         assert "execution error" in out and "container gone" in out
 
-    def test_task_done_records_summary_and_flags_state(self):
+    def test_task_done_runs_the_verification_and_shows_its_output(self):
+        """A claim of success is not evidence of it: the tool executes the
+        agent's own check and hands back the result."""
+        execute, calls = _exec_recorder(
+            {"test -f /app/out": {"stdout": "", "stderr": "", "return_code": 0}}
+        )
+        _, task_done, state = self._tools(execute)
+        out = task_done.invoke({"summary": "wrote the file",
+                                "verification": "test -f /app/out",
+                                "confidence": 0.8})
+        assert ("test -f /app/out", 120) in calls      # the check actually ran
+        assert "exited 0" in out
+        assert state["done"] is True
+        assert state["confidence"] == 0.8
+        assert state["verification"]["command"] == "test -f /app/out"
+
+    def test_failing_verification_is_surfaced_not_hidden(self):
+        execute, _ = _exec_recorder(
+            {"grep needle /app/f": {"stdout": "", "stderr": "no match",
+                                    "return_code": 1}}
+        )
+        _, task_done, _ = self._tools(execute)
+        out = task_done.invoke({"summary": "done", "verification": "grep needle /app/f",
+                                "confidence": 0.9})
+        assert "exited 1" in out and "no match" in out
+        assert "keep working" in out.lower()
+
+    def test_verification_that_cannot_run_does_not_mark_done(self):
+        def execute(command, timeout_sec=180):
+            raise ConnectionError("container gone")
+        _, task_done, state = self._tools(execute)
+        out = task_done.invoke({"summary": "s", "verification": "true",
+                                "confidence": 0.5})
+        assert "could not run" in out
+        assert state["done"] is False        # no evidence ⇒ no completion
+
+    def test_confidence_is_recorded_for_calibration_scoring(self):
         execute, _ = _exec_recorder()
         _, task_done, state = self._tools(execute)
-        task_done.invoke({"summary": "built and verified the binary"})
-        assert state["done"] is True
-        assert state["summary"] == "built and verified the binary"
+        task_done.invoke({"summary": "s", "verification": "true", "confidence": 0.35})
+        assert state["confidence"] == 0.35
 
 
 class TestRunTerminalTask:

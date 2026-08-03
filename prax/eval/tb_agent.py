@@ -57,7 +57,12 @@ output before building on it.
 same command hoping for a different result.
 - Before declaring the task done, verify the required end state yourself \
 (run the binary, re-read the file, query the service).
-- Call task_done exactly once, when the end state is verified."""
+- task_done makes you name a verification command and runs it. Choose a check \
+that would FAIL if your work were wrong — a command that passes regardless \
+proves nothing and wastes the step.
+- State your confidence honestly. An accurate 0.4 is worth more than a \
+reflexive 0.95 — overconfidence that turns out wrong misleads whoever reads \
+your answer, which is worse than admitting doubt."""
 
 
 def _bound(text: str | None) -> str:
@@ -107,16 +112,49 @@ def _make_tools(execute: Callable[..., dict], state: dict) -> list:
         return reply
 
     @tool
-    def task_done(summary: str) -> str:
-        """Declare the task complete. Call exactly once, AFTER verifying the
-        required end state yourself.
+    def task_done(summary: str, verification: str, confidence: float) -> str:
+        """Declare the task complete. Call exactly once.
+
+        This tool RUNS your verification command and shows you its output
+        before accepting the claim. If the output does not actually
+        demonstrate the required end state, keep working — do not re-declare.
 
         Args:
-            summary: One or two sentences: what was done and how it was verified.
+            summary: What was done, in one or two sentences.
+            verification: A shell command that CHECKS the required end state
+                (run the binary, re-read the file, query the service). It must
+                be a check, not the work itself.
+            confidence: Your probability from 0.0 to 1.0 that an independent
+                grader will judge this task correctly completed. Be honest:
+                a well-calibrated 0.4 is worth more than a reflexive 0.95.
         """
+        # An assertion of success is not evidence of it. On a full
+        # Terminal-Bench sweep, 85% of scored failures (55/65) called this
+        # tool claiming success and were overruled by the hidden verifier —
+        # the agent had no calibrated model of the bar. So the claim now
+        # costs one command and its output, and carries a probability we can
+        # score against the real outcome afterwards.
+        state["confidence"] = confidence
+        try:
+            result = execute(verification, timeout_sec=120)
+        except Exception as exc:
+            return (f"[verification could not run: {type(exc).__name__}: {exc}] "
+                    "Fix the check and call task_done again.")
+        state["steps"] += 1
+        out = _bound(result.get("stdout"))
+        err = _bound(result.get("stderr"))
+        rc = result.get("return_code")
+        state["verification"] = {"command": verification, "return_code": rc}
         state["done"] = True
         state["summary"] = summary
-        return "Recorded. Stop now."
+        reply = (f"Verification `{verification}` exited {rc}.\n"
+                 f"stdout:\n{out}")
+        if err:
+            reply += f"\nstderr:\n{err}"
+        reply += ("\n\nRecorded. If this output does NOT show the task is "
+                  "complete, keep working and call task_done again once it "
+                  "does. Otherwise stop now.")
+        return reply
 
     return [terminal, task_done]
 
@@ -139,7 +177,9 @@ def run_terminal_task(
     from prax.agent.llm_factory import build_llm
 
     llm = build_llm(provider=provider, model=model, tier=tier)
-    state: dict = {"steps": 0, "done": False, "summary": None, "max_steps": max_steps}
+    state: dict = {"steps": 0, "done": False, "summary": None,
+                   "max_steps": max_steps, "confidence": None,
+                   "verification": None}
     graph = build_agent_loop(llm, _make_tools(execute, state))
 
     started = time.monotonic()
@@ -187,6 +227,10 @@ def run_terminal_task(
     return {
         "done": bool(state["done"]),
         "summary": state["summary"],
+        # Kept so completion claims can be scored against the real verdict —
+        # a calibration record, not decoration.
+        "confidence": state.get("confidence"),
+        "verification": state.get("verification"),
         "steps": state["steps"],
         "elapsed_s": round(time.monotonic() - started, 1),
         "tokens_in": tokens_in,
@@ -269,6 +313,10 @@ def _build_harbor_agent_class() -> type:
                 "harness": "prax build_agent_loop + terminal tool",
                 "steps": result["steps"],
                 "done": result["done"],
+                # Scored against the verifier's verdict afterwards: the point
+                # is whether the agent KNEW, not whether it claimed.
+                "confidence": result["confidence"],
+                "verification": result["verification"],
                 "summary": result["summary"],
                 "error": result["error"],
                 "model": result["model"],
