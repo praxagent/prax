@@ -85,6 +85,45 @@ under fifty cents**, which makes it repeatable rather than an event.
 Earlier, weaker measurement kept for contrast: a one-shot protocol (no
 feedback loop) on the TB 1.0 trivial-env subset scored 1/26.
 
+## The baseline that makes the number readable (2026-08-03)
+
+A pass rate in isolation measures **the model far more than the harness**. So
+the same 30-task subset was re-run with harbor's own reference agent,
+**terminus-2**, on the *same model, same box, same tasks*:
+
+| agent | scored rate | no-score | cost/task |
+|---|---|---|---|
+| **PraxAgent** | **8.0%** (2/25 scored) | 5/30 | **$0.0051** |
+| terminus-2 (reference) | 5.6% (1/18 scored) | 11/29 | $0.053 |
+
+**What this does NOT show: that Prax's harness is better.** Two passes versus
+one is not a difference — at this n it is noise, and reading it as a win would
+repeat the mistake the [retained-reasoning A/B](../research/retained-reasoning-ab-2026-08-02.md)
+caught (one run said +1 case; replication said identical means).
+
+**What it does show, and why it is recorded:**
+
+1. **The harness is not the bottleneck.** The official reference
+   implementation scores the same, within noise, on the same model. 13.5% is
+   near what this *model* yields on this benchmark, so the dominant lever for
+   a higher score is a stronger model — not harness tuning.
+2. **Cost differs by ~10×, and that is not noise.** $0.0051 vs $0.053 per
+   task, consistent across the subset: the whole 89-task Prax sweep cost less
+   than a third of a 30-task reference run.
+3. **The non-scoring trials are the box, not the agent.** terminus-2 lost
+   11/29 to timeouts where Prax lost 12/89 — infrastructure hits both, and
+   hits the reference agent harder.
+
+Publish the pass rate with this baseline attached. A score with no same-model
+comparison says almost nothing about the harness that produced it.
+
+**The measured failure signature** (from the 89-task sweep, worth fixing
+independently of score): of 65 scored failures, **55 (85%) called `task_done`
+claiming success** and were overruled by the verifier. Note also that no
+passing run used more than 33 of its 40 steps (median 22), so raising the step
+budget is not the fix the numbers suggest — failures wander rather than run
+out of room.
+
 ## Disk: a sweep will fill it
 
 harbor **pulls a prebuilt environment image per task** from the registry
