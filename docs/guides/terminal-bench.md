@@ -85,6 +85,41 @@ under fifty cents**, which makes it repeatable rather than an event.
 Earlier, weaker measurement kept for contrast: a one-shot protocol (no
 feedback loop) on the TB 1.0 trivial-env subset scored 1/26.
 
+## Disk: a sweep will fill it
+
+harbor **pulls a prebuilt environment image per task** from the registry
+(`alexgshaw/<task>:<date>`, ~6 GB each — verified: the images carry registry
+digests and predate our run by months, so nothing is built locally). Across 89
+tasks that took this box from comfortable to **97% full** — the 2026-07-08
+outage mode, where at 100% the sandbox and every Prax tool call start failing.
+
+**Between runs, use harbor's own cleanup.** It targets exactly these artifacts
+and is the supported path:
+
+```bash
+harbor cache clean    # removes alexgshaw/*, hb__*, sb__* images + ~/.cache/harbor
+```
+
+**During a run, don't** — `cache clean` also clears `~/.cache/harbor`, which a
+job in flight is using. Prune first, then keep a plain `docker rmi` loop
+alongside the sweep:
+
+```bash
+docker container prune -f && docker image prune -f    # before starting
+
+while pgrep -f "[h]arbor run" >/dev/null; do          # during
+  for img in $(docker images --format '{{.Repository}}:{{.Tag}}' | grep '^alexgshaw/'); do
+    docker rmi "$img" >/dev/null 2>&1    # refuses images backing a live container
+  done
+  sleep 240
+done &
+```
+
+`docker rmi` will not remove an image a running container depends on, so a
+task in flight can never be reaped out from under itself. On the real sweep
+this held free space steady (it recovered 5 GB → 51 GB mid-run). Budget
+**~15 GB of headroom** even with the reaper running.
+
 ## Keyless on the dev box specifically
 
 The dev box routes OpenRouter through the **forward** MITM proxy — run
