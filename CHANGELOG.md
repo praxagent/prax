@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.41.0](https://github.com/praxagent/prax/compare/v0.40.2...v0.41.0) (2026-08-03)
+
+
+### Features
+
+* **eval:** completion claims must carry evidence and a calibrated probability ([#202](https://github.com/praxagent/prax/issues/202)) ([acbbb59](https://github.com/praxagent/prax/commit/acbbb59778894b8bedc59a0e7f8ba666cb555797))
+
+
+### Bug Fixes
+
+* **observability:** token-usage extraction crashed on an explicit null ([#198](https://github.com/praxagent/prax/issues/198)) ([7bacfbd](https://github.com/praxagent/prax/commit/7bacfbd23910ec6df8e25e15242aa6951ca709d9))
+
 ## [0.40.2](https://github.com/praxagent/prax/compare/v0.40.1...v0.40.2) (2026-08-02)
 
 
