@@ -68,7 +68,10 @@ Storage
 """
 from __future__ import annotations
 
+import functools
 import logging
+import os
+import threading
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -111,6 +114,42 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+# Every mutation below is a read-modify-write of the WHOLE board file, so two
+# concurrent writers each read the same state, append their own item, and the
+# second write erases the first. That is not theoretical: an agent turn that
+# emitted 12 parallel `library_task_add` calls persisted **2 tasks**, while
+# each call had truthfully reported success — the storage layer lied to the
+# agent, which then relayed it to the user. Hence a per-board lock held across
+# the whole critical section.
+#
+# Scope: threading.Lock serialises writers *within this process*, which is
+# where the concurrency comes from (LangGraph runs a turn's tool calls as
+# threads). It does NOT protect against a second Prax process writing the same
+# workspace; that would need file locking, and is not the situation today.
+_board_locks: dict[tuple[str, str], threading.Lock] = {}
+_board_locks_guard = threading.Lock()
+
+
+def _board_lock(user_id: str, project: str) -> threading.Lock:
+    key = (str(user_id), str(project))
+    with _board_locks_guard:
+        lock = _board_locks.get(key)
+        if lock is None:
+            lock = _board_locks[key] = threading.Lock()
+        return lock
+
+
+def _serialised(fn):
+    """Hold the board lock across a mutator's read-modify-write."""
+
+    @functools.wraps(fn)
+    def wrapper(user_id, project, *args, **kwargs):
+        with _board_lock(user_id, project):
+            return fn(user_id, project, *args, **kwargs)
+
+    return wrapper
+
+
 def _read(user_id: str, project: str) -> dict[str, Any] | None:
     """Read .tasks.yaml if the project exists. Returns None if the project
     is missing; seeds the default columns if the file is missing."""
@@ -132,8 +171,12 @@ def _read(user_id: str, project: str) -> dict[str, Any] | None:
 
 
 def _write(user_id: str, project: str, data: dict) -> None:
+    # Write-then-rename: `write_text` truncates first, so a reader (or a crash)
+    # mid-write sees a half-empty board. os.replace is atomic on POSIX.
     path = _tasks_path(user_id, project)
-    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    tmp = path.with_name(f".{path.name}.tmp{os.getpid()}")
+    tmp.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    os.replace(tmp, path)
 
 
 # How wide an actor label may be. Long enough for "Claude Code (research)",
@@ -244,6 +287,7 @@ def list_columns(user_id: str, project: str) -> list[dict] | dict:
     return data["columns"]
 
 
+@_serialised
 def add_column(user_id: str, project: str, name: str) -> dict:
     data = _read(user_id, project)
     if data is None:
@@ -257,6 +301,7 @@ def add_column(user_id: str, project: str, name: str) -> dict:
     return {"status": "added", "column": col}
 
 
+@_serialised
 def rename_column(user_id: str, project: str, column_id: str, new_name: str) -> dict:
     data = _read(user_id, project)
     if data is None:
@@ -269,6 +314,7 @@ def rename_column(user_id: str, project: str, column_id: str, new_name: str) -> 
     return {"error": f"Column '{column_id}' not found"}
 
 
+@_serialised
 def remove_column(user_id: str, project: str, column_id: str) -> dict:
     """Delete a column.  Refuses if any tasks are still in it."""
     data = _read(user_id, project)
@@ -290,6 +336,7 @@ def remove_column(user_id: str, project: str, column_id: str) -> dict:
     return {"status": "removed", "column": column_id}
 
 
+@_serialised
 def reorder_columns(user_id: str, project: str, order: list[str]) -> dict:
     data = _read(user_id, project)
     if data is None:
@@ -338,6 +385,7 @@ _VALID_SOURCES = {"user_request", "agent_derived", "tool_output"}
 _VALID_CONFIDENCE = {"low", "medium", "high"}
 
 
+@_serialised
 def create_task(
     user_id: str,
     project: str,
@@ -433,6 +481,7 @@ def create_task(
     return {"status": "created", "task": task}
 
 
+@_serialised
 def update_task(
     user_id: str,
     project: str,
@@ -506,6 +555,7 @@ def update_task(
     return {"status": "updated", "task": task, "changed": changed}
 
 
+@_serialised
 def move_task(
     user_id: str,
     project: str,
@@ -542,6 +592,7 @@ def move_task(
     return {"status": "moved", "task": task}
 
 
+@_serialised
 def delete_task(
     user_id: str,
     project: str,
@@ -560,6 +611,7 @@ def delete_task(
     return {"status": "deleted", "task_id": task_id}
 
 
+@_serialised
 def add_comment(
     user_id: str,
     project: str,
