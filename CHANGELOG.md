@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.42.0](https://github.com/praxagent/prax/compare/v0.41.0...v0.42.0) (2026-08-04)
+
+
+### Features
+
+* **eval,agent:** score self-reported confidence, and stop plans reporting failed steps as done ([#203](https://github.com/praxagent/prax/issues/203)) ([c1e0bba](https://github.com/praxagent/prax/commit/c1e0bbac44ce5a7b3629396a6c8ca3298e0d7a2e))
+
 ## [0.41.0](https://github.com/praxagent/prax/compare/v0.40.2...v0.41.0) (2026-08-03)
 
 
