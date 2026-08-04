@@ -251,6 +251,12 @@ same brain, no independence):
   with the **`test` check required** and **0 required approvals** — self-merge
   the moment CI is green.  Auto-merge is enabled; the normal flow is
   `gh pr create` → `gh pr merge --auto --squash`.
+- **⚠️ Work accumulates on the standing `wip` branch; ONE PR at end of day.**
+  Push to `wip` freely and often — it is the crash backup, and pushes are
+  free — but do NOT open a PR per change. Multiple MRs a day spam the public
+  repo's watchers, which is why this convention exists. Open the day's PR from
+  `wip` when the work is done, then reset `wip` onto the new `main`. (Drifted
+  back to PR-per-change twice; written down so it stops happening.)
 - **⚠️ The PR TITLE must be a conventional commit** — squash-merge uses the PR
   title as the commit subject on `main`, so that title (not the branch's
   individual commits) is what release-please parses.  A descriptive title like
