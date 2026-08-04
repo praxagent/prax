@@ -1075,10 +1075,18 @@ def agent_plan(goal: str, steps: list[str], confidence: str = "medium") -> str:
 
 
 @tool
-def agent_step_done(step: int) -> str:
-    """Mark a plan step as completed after you finish it."""
+def agent_step_done(step: int, outcome: str = "done") -> str:
+    """Record how a plan step ended.
+
+    Args:
+        step: The step number.
+        outcome: "done" if it actually succeeded, "failed" if you could not
+            complete it, "skipped" if it turned out to be unnecessary. Marking
+            a failed step "done" makes the plan lie to whoever reads it next —
+            say what happened.
+    """
     user_id = _get_user_id()
-    result = workspace_service.complete_plan_step(user_id, step)
+    result = workspace_service.complete_plan_step(user_id, step, outcome=outcome)
     if "error" in result:
         return result["error"]
     s = result["step"]
@@ -1089,7 +1097,7 @@ def agent_step_done(step: int) -> str:
         from prax.services.task_board import update_plan_task_progress
         update_plan_task_progress(plan["id"], plan["steps"])
 
-    return f"Step {s['step']} done: {s['description']}"
+    return f"Step {s['step']} {s.get('outcome', 'done')}: {s['description']}"
 
 
 @tool
@@ -1100,8 +1108,10 @@ def agent_plan_status() -> str:
         return "No active plan."
     lines = [f"Goal: {plan['goal']} (confidence: {plan.get('confidence', 'medium')})"]
     for s in plan["steps"]:
-        check = "x" if s["done"] else " "
-        lines.append(f"  {s['step']}. [{check}] {s['description']}")
+        # A failed step must not render identically to a successful one.
+        mark = {"done": "x", "failed": "!", "skipped": "-"}.get(
+            s.get("outcome", "done") if s["done"] else "", " ")
+        lines.append(f"  {s['step']}. [{mark}] {s['description']}")
     done = sum(1 for s in plan["steps"] if s["done"])
     lines.append(f"\nProgress: {done}/{len(plan['steps'])}")
     return "\n".join(lines)
