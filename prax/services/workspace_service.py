@@ -1053,19 +1053,31 @@ def read_plan(user_id: str) -> dict | None:
         return yaml.safe_load(f)
 
 
-def complete_plan_step(user_id: str, step: int) -> dict:
-    """Mark a plan step as done."""
+def complete_plan_step(user_id: str, step: int,
+                       outcome: str = "done") -> dict:
+    """Record how a plan step ended: done, failed, or skipped.
+
+    Previously every call marked the step ``done`` regardless of what actually
+    happened, so a plan whose steps all failed still read as fully completed.
+    ``outcome`` keeps the record honest; ``done`` stays the default so old
+    call sites are unchanged.
+    """
+    if outcome not in {"done", "failed", "skipped"}:
+        return {"error": f"outcome must be done/failed/skipped, got {outcome!r}"}
     with get_lock(user_id):
         plan = read_plan(user_id)
         if not plan:
             return {"error": "No active plan"}
         for s in plan["steps"]:
             if s["step"] == step:
+                # `done` stays truthy for any resolved step so existing
+                # progress maths keeps working; `outcome` carries the truth.
                 s["done"] = True
+                s["outcome"] = outcome
                 root = ensure_workspace(user_id)
                 _write_plan(root, plan)
-                git_commit(root, f"Step {step} done: {s['description'][:30]}")
-                return {"status": "completed", "step": s}
+                git_commit(root, f"Step {step} {outcome}: {s['description'][:30]}")
+                return {"status": outcome, "step": s}
         return {"error": f"Step {step} not found"}
 
 
