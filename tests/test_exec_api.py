@@ -30,32 +30,63 @@ def _spec(**over):
 
 
 class FakeClient:
-    """Stands in for the sandbox. Records what it was asked to do."""
+    """Stands in for the sandbox, matching how the real one actually behaves.
 
-    def __init__(self, *, healthy=True, exit_code=0, files=None, raises=None):
+    Two shapes matter and both were learned from live runs:
+      * `run_command` returns `subprocess.CompletedProcess`, not a dict.
+      * Artifacts are collected by running `tar czf - . | base64` in the
+        sandbox, so the fake answers that command with a real tar stream —
+        an earlier fake served the file API instead, which is a channel the
+        collector no longer uses.
+    """
+
+    def __init__(self, *, healthy=True, exit_code=0, files=None, raises=None,
+                 mkdir_rc=0):
         self._healthy, self._exit = healthy, exit_code
         self._files = files or {}
         self._raises = raises
+        self._mkdir_rc = mkdir_rc
         self.calls = []
 
     def health(self):
         return self._healthy
 
+    def _tar_b64(self) -> str:
+        import base64
+        import io
+        import tarfile
+
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+            for name, data in self._files.items():
+                info = tarfile.TarInfo(name=f"./{name}")
+                info.size = len(data)
+                tf.addfile(info, io.BytesIO(data))
+        return base64.b64encode(buf.getvalue()).decode()
+
     def run_command(self, cmd, cwd=None, env=None, timeout=None):
         self.calls.append({"cmd": cmd, "cwd": cwd, "env": env, "timeout": timeout})
+        joined = " ".join(cmd)
+        if "mkdir -p" in joined:
+            return subprocess.CompletedProcess(args=cmd, returncode=self._mkdir_rc,
+                                               stdout="", stderr="")
+        if "tar czf" in joined:                      # the collection channel
+            return subprocess.CompletedProcess(args=cmd, returncode=0,
+                                               stdout=self._tar_b64(), stderr="")
         if self._raises:
             raise self._raises
-        # The real client returns subprocess.CompletedProcess, not a dict. An
-        # earlier version of this fake returned a dict, the tests passed, and a
-        # live run crashed on `.get` — so the fake now matches production.
-        return subprocess.CompletedProcess(
-            args=cmd, returncode=self._exit, stdout="ran\n", stderr="")
+        return subprocess.CompletedProcess(args=cmd, returncode=self._exit,
+                                           stdout="ran\n", stderr="")
 
-    def file_list(self, user_id, path="", recursive=False):
-        return list(self._files)
 
-    def file_read(self, user_id, path, max_bytes=None):
-        return self._files[path]
+
+def _job_call(client):
+    """The call that ran the job itself — not the mkdir or the tar collection."""
+    for c in client.calls:
+        joined = " ".join(c["cmd"])
+        if "mkdir -p" not in joined and "tar czf" not in joined:
+            return c
+    raise AssertionError("no job command was issued")
 
 
 class TestValidationRefusesBeforeRunning:
@@ -152,14 +183,15 @@ class TestSuccessfulRun:
     def test_command_and_workdir_reach_the_sandbox(self):
         c = FakeClient()
         execute(_spec(), client=c)
-        assert c.calls[0]["cmd"] == ["python", "run.py"]
-        assert c.calls[0]["cwd"] == "/work"
-        assert c.calls[0]["timeout"] == 600
+        job = _job_call(c)
+        assert job["cmd"] == ["python", "run.py"]
+        assert job["cwd"] == "/work"
+        assert job["timeout"] == 600
 
     def test_egress_allowlist_is_passed_through_as_declared_intent(self):
         c = FakeClient()
         execute(_spec(egress_allowlist=["huggingface.co"]), client=c)
-        assert c.calls[0]["env"]["PRAX_EGRESS_ALLOWLIST"] == "huggingface.co"
+        assert _job_call(c)["env"]["PRAX_EGRESS_ALLOWLIST"] == "huggingface.co"
 
     def test_artifacts_are_hashed_and_classified(self):
         c = FakeClient(files={"results.csv": b"a,b\n1,2\n", "run.log": b"hello"})
@@ -251,6 +283,11 @@ class TestResultShapeMatchesProduction:
     def test_dict_shape_still_works_for_test_doubles(self):
         class DictClient(FakeClient):
             def run_command(self, cmd, cwd=None, env=None, timeout=None):
+                joined = " ".join(cmd)
+                if "mkdir -p" in joined:
+                    return {"exit_code": 0, "stdout": ""}
+                if "tar czf" in joined:
+                    return {"exit_code": 0, "stdout": self._tar_b64()}
                 return {"exit_code": 5, "stdout": "x"}
 
         assert execute(_spec(), client=DictClient())["exit_code"] == 5
@@ -261,12 +298,15 @@ class TestArtifactCollectionIsHonest:
 
     def test_collection_failure_is_reported_not_swallowed(self):
         class BrokenFS(FakeClient):
-            def file_list(self, user_id, path="", recursive=False):
-                raise OSError("workspace not found")
+            def run_command(self, cmd, cwd=None, env=None, timeout=None):
+                if "tar czf" in " ".join(cmd):
+                    return subprocess.CompletedProcess(args=cmd, returncode=2,
+                                                       stdout="", stderr="no such dir")
+                return super().run_command(cmd, cwd=cwd, env=env, timeout=timeout)
 
         r = execute(_spec(), client=BrokenFS())
         assert r["artifacts"] == []
-        assert "workspace not found" in r["artifact_collection_error"]
+        assert "could not be read back" in r["artifact_collection_error"]
         # The job itself still succeeded — that must not be overwritten.
         assert r["exit_code"] == 0
 
@@ -274,15 +314,36 @@ class TestArtifactCollectionIsHonest:
         r = execute(_spec(), client=FakeClient(files={"a.log": b"x"}))
         assert r["artifact_collection_error"] is None
 
-    def test_collection_is_scoped_to_the_job(self):
-        """Two concurrent jobs must not read each other's outputs."""
-        seen = {}
+    def test_collection_reads_the_declared_workdir(self):
+        """Collection must target the job's own workdir, not a shared root."""
+        c = FakeClient(files={"a.log": b"x"})
+        execute(_spec(workdir="/work/job-7"), client=c)
+        tar_call = [x for x in c.calls if "tar czf" in " ".join(x["cmd"])][0]
+        assert "/work/job-7" in " ".join(tar_call["cmd"])
 
-        class ScopeSpy(FakeClient):
-            def file_list(self, user_id, path="", recursive=False):
-                seen["user_id"] = user_id
-                return list(self._files)
 
-        spec = _spec()
-        execute(spec, client=ScopeSpy(files={"a.log": b"x"}))
-        assert seen["user_id"] == spec["job_id"]
+class TestWorkdirIsProvisioned:
+    """The schema calls workdir 'a scoped write dir' — Prax creates it.
+
+    Without this the first command fails with a bare exit 2 (chdir into a
+    missing directory), which reads like the job's fault and is actually ours.
+    Found by a live run.
+    """
+
+    def test_workdir_is_created_before_the_command(self):
+        c = FakeClient()
+        execute(_spec(workdir="/work/job-1"), client=c)
+        assert "mkdir -p" in " ".join(c.calls[0]["cmd"])
+        assert "/work/job-1" in " ".join(c.calls[0]["cmd"])
+
+    def test_failure_to_create_workdir_is_reported_not_run_anyway(self):
+        class NoMkdir(FakeClient):
+            def run_command(self, cmd, cwd=None, env=None, timeout=None):
+                self.calls.append({"cmd": cmd, "cwd": cwd, "env": env,
+                                   "timeout": timeout})
+                return subprocess.CompletedProcess(args=cmd, returncode=1,
+                                                   stdout="", stderr="denied")
+
+        r = execute(_spec(), client=NoMkdir())
+        assert "could not create workdir" in r["error"]
+        assert r["exit_code"] == -1

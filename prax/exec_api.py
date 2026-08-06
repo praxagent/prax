@@ -36,6 +36,7 @@ import json
 import logging
 import mimetypes
 import re
+import shlex
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -304,6 +305,20 @@ def execute(job_spec: dict, *, client=None) -> dict:
         # reading the trace) can see what the job was permitted to reach.
         env["PRAX_EGRESS_ALLOWLIST"] = ",".join(egress)
 
+    # The schema calls workdir "a scoped write dir inside sandbox" — so Prax
+    # provisions it. Without this the very first command fails with a bare
+    # exit 2 (chdir into a missing directory), which reads like the job's fault
+    # and is actually ours.
+    try:
+        mk = client.run_command(
+            ["sh", "-c", f"mkdir -p {shlex.quote(spec['workdir'])}"], timeout=60)
+        if int(_field(mk, "returncode", "exit_code", default=1)) != 0:
+            return _failure(spec, timeline,
+                            f"could not create workdir {spec['workdir']!r}")
+    except Exception as exc:  # noqa: BLE001
+        return _failure(spec, timeline,
+                        f"could not create workdir ({type(exc).__name__}: {exc})")
+
     timeline.emit("job_running", target=spec["target"]["kind"])
     try:
         result = client.run_command(
@@ -324,28 +339,25 @@ def execute(job_spec: dict, *, client=None) -> dict:
     if stdout:
         timeline.emit("log_chunk", stream="stdout", text=stdout[-4000:])
 
-    # Collect whatever the job wrote. The sandbox filesystem API is *scoped by
-    # user*, not addressed by absolute path — `file_list(user_id, path)` reads
-    # within that user's workspace. So each job collects from its own scope
-    # (user_id = job_id, path relative to it), which is also what keeps two
-    # concurrent jobs from reading each other's outputs.
+    # Collect whatever the job wrote — through the SAME channel it ran in.
     #
-    # An output that cannot be read back is reported as an empty artifact list
-    # with the reason recorded — never as a silent success.
+    # The obvious approach (client.file_list / file_read) is wrong here, and a
+    # live run is what proved it: `run_command` executes inside the sandbox
+    # container, while the file API resolves per-user paths on the *host* under
+    # a different workspace root. The job writes to one filesystem and the
+    # collector reads another, so artifacts silently came back empty.
+    #
+    # Reading the workdir back over the exec channel has no such split: whatever
+    # the command could write, this can read. tar+base64 keeps binary artifacts
+    # (checkpoints, parquet, plots) byte-exact rather than mangling them through
+    # a text stdout.
     files: dict[str, bytes] = {}
     collect_error: str | None = None
     try:
-        listing = client.file_list(job_id, path="", recursive=True) or []
-        for entry in listing:
-            rel = entry if isinstance(entry, str) else entry.get("path", "")
-            if not rel:
-                continue
-            try:
-                files[Path(rel).name] = client.file_read(job_id, rel)
-            except Exception:  # noqa: BLE001 — one unreadable file is not fatal
-                logger.warning("execute: could not read artifact %s", rel)
+        files, collect_error = _collect_workdir(client, spec["workdir"])
     except Exception as exc:  # noqa: BLE001
         collect_error = f"{type(exc).__name__}: {exc}"
+    if collect_error:
         logger.warning("execute: artifact collection failed: %s", collect_error)
 
     artifacts = _collect_artifacts(files, job_id=job_id, experiment_id=experiment_id,
@@ -374,6 +386,53 @@ def execute(job_spec: dict, *, client=None) -> dict:
         "artifact_collection_error": collect_error,
     }
 
+
+
+
+# Cap what a single job can hand back in one response. A job that produces more
+# than this is not silently truncated — it is reported as a collection error, so
+# the caller knows the artifact list is incomplete rather than assuming it is all.
+MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
+
+
+def _collect_workdir(client, workdir: str) -> tuple[dict[str, bytes], str | None]:
+    """Read a job's output directory back out of the sandbox.
+
+    Returns ``(files, error)``. A non-None error means the file map is
+    incomplete or empty for a reason the caller should see.
+    """
+    import base64
+    import io
+    import tarfile
+
+    cmd = ["sh", "-c",
+           f"cd {shlex.quote(workdir)} 2>/dev/null && tar czf - . 2>/dev/null | base64 -w0"]
+    result = client.run_command(cmd, cwd=workdir, timeout=120)
+    rc = int(_field(result, "returncode", "exit_code", default=1))
+    payload = (_field(result, "stdout", default="") or "").strip()
+    if rc != 0 or not payload:
+        return {}, f"workdir {workdir!r} could not be read back (exit {rc})"
+
+    try:
+        raw = base64.b64decode(payload)
+    except Exception as exc:  # noqa: BLE001
+        return {}, f"artifact stream was not decodable: {type(exc).__name__}: {exc}"
+    if len(raw) > MAX_ARTIFACT_BYTES:
+        return {}, (f"artifacts exceed {MAX_ARTIFACT_BYTES} bytes "
+                    f"({len(raw)}) — refusing to return a partial set")
+
+    files: dict[str, bytes] = {}
+    with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as tf:
+        for member in tf.getmembers():
+            if not member.isfile():
+                continue
+            fh = tf.extractfile(member)
+            if fh is None:
+                continue
+            # Flat by basename: the artifact contract keys on s3_key, which is
+            # already scoped by experiment and job.
+            files[Path(member.name).name] = fh.read()
+    return files, None
 
 
 def _field(result: Any, *names: str, default: Any = None) -> Any:
