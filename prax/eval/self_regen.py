@@ -299,10 +299,86 @@ def _weak_signal_from_baseline(tier: str) -> str:
 # The loop
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# The three structural invariants (2026-08 research cluster)
+#
+# The loop's safety used to rest on convention: the docstring said the verifier
+# and overseer live outside the editable surface, and nothing enforced it. Three
+# independent sources in one week said to make that a *property* instead:
+#
+#   - scorer read-only      — Weng / AHE: make the runs dir, tracer, verifier and
+#                             LLM config unwritable, which "disables a set of
+#                             reward hacking" (docs/research/weng-harness-engineering.md)
+#   - agent frozen          — Harness-R1: only the harness changes, so a
+#                             regression is reverted by dropping a patch
+#                             (docs/research/harness-r1.md)
+#   - patch task-agnostic   — HarnessCompass: constrain what may be PROPOSED,
+#                             rather than reviewing it after the fact
+#                             (docs/research/harness-compass.md)
+#
+# Two are already true here by construction: the only editable surface is the
+# prompt overlay (agent frozen), and `_deterministic_spike_veto` + the LLM
+# auditor enforce task-agnosticism. The missing one was the scorer, so it is
+# enforced below by fingerprinting the eval surface and refusing to keep
+# anything if it moved mid-run.
+# ---------------------------------------------------------------------------
+
+def _scorer_fingerprint() -> str:
+    """Hash the files that decide the score.
+
+    If the loop can reach its own verifier, "improve the score" and "edit the
+    scorer" are the same action — the DGM failure this module's docstring
+    describes. Prax cannot mount a read-only filesystem mid-process, so it does
+    the next best verifiable thing: record what the scorer WAS, and check it is
+    unchanged before keeping anything. Tampering does not get vetoed quietly —
+    it invalidates the whole run.
+    """
+    import hashlib
+
+    here = Path(__file__).resolve().parent
+    targets = sorted(
+        [here / "capability.py", here / "goldens.py", here / "self_regen.py"]
+        + list((here / "capability_cases").glob("*.yaml"))
+        + list((here / "goldens").glob("*.yaml"))
+    )
+    h = hashlib.sha256()
+    for f in targets:
+        try:
+            h.update(f.name.encode())
+            h.update(f.read_bytes())
+        except OSError:
+            h.update(b"<unreadable>")
+    return h.hexdigest()
+
+
+def _gate_on_private_holdout(patch: str, *, tier: str, gate_fn=None) -> dict:
+    """Select on the HELD-OUT private score, never the score we optimized.
+
+    `accept_change` has existed since the AIDE² assessment with no caller. This
+    is the caller. The loop optimizes against the capability suite, so keeping a
+    patch on that same number is selection on the training signal — exactly what
+    the public/private split exists to prevent. Here the winning patch is graded
+    on the golden suite, which carries the visibility split, and `accept_change`
+    decides.
+
+    Fail-closed by inheritance: with no private goldens, `accept_change` refuses,
+    so the loop proposes nothing rather than adopting on an untrustworthy signal.
+    """
+    if gate_fn is not None:
+        return gate_fn(patch)
+    from prax.eval.goldens import accept_change, run_golden_suite
+
+    baseline_run = run_golden_suite(replay=True, tier=tier)
+    with override_system_prompt(_apply_overlay(_base_system_prompt(), patch)):
+        candidate_run = run_golden_suite(replay=True, tier=tier)
+    return accept_change(baseline_run, candidate_run)
+
+
 def run_self_regen(*, rounds: int = 3, apply: bool = False,
                    proposer=None, evaluator=None, auditor=None,
                    weak_signal: str | None = None, min_margin: float = 0.02,
-                   out_dir: Path | None = None, tier: str = "high") -> dict:
+                   out_dir: Path | None = None, tier: str = "high",
+                   gate: bool = True, gate_fn=None) -> dict:
     """Run the propose → verify → keep loop over the system-prompt overlay.
 
     Args:
@@ -329,6 +405,8 @@ def run_self_regen(*, rounds: int = 3, apply: bool = False,
     run_id = uuid.uuid4().hex[:8]
     out_dir = out_dir or (PRAX_EVAL_DIR / "self_regen" / run_id)
     (out_dir / "variants").mkdir(parents=True, exist_ok=True)
+    # Snapshot the scorer BEFORE anything runs, so a mid-run edit is detectable.
+    scorer_before = _scorer_fingerprint()
 
     baseline = float(ev(""))
     best_score = baseline
@@ -376,8 +454,41 @@ def run_self_regen(*, rounds: int = 3, apply: bool = False,
             best_score = max(best_score, score)
             best_patch, best_id = patch, v.id
 
+    # --- Invariant 1: the scorer must not have moved. -----------------------
+    # Checked before the gate so a tampered run cannot be rescued by a good
+    # private score: if the ruler changed, every measurement taken with it is
+    # void, including the gate's.
+    scorer_after = _scorer_fingerprint()
+    tampered = scorer_after != scorer_before
+    if tampered:
+        logger.error("self_regen: SCORER CHANGED during the run — discarding all "
+                     "candidates (before=%s after=%s)", scorer_before[:12],
+                     scorer_after[:12])
+        best_patch, best_id = "", "baseline"
+        best_score = baseline
+
+    # --- Invariant 2: select on the HELD-OUT private score. ------------------
+    # The loop optimized against the capability suite; keeping on that same
+    # number is selection on the training signal. accept_change decides from the
+    # golden suite's private split, and is fail-closed without one.
+    gate_result = None
+    if best_patch and gate:
+        try:
+            gate_result = _gate_on_private_holdout(best_patch, tier=tier,
+                                                   gate_fn=gate_fn)
+        except Exception as exc:  # noqa: BLE001 — a broken gate must not adopt
+            gate_result = {"accept": False,
+                           "reason": f"gate failed to run: {type(exc).__name__}: {exc}"}
+        if not gate_result.get("accept"):
+            logger.info("self_regen: private-holdout gate REJECTED the winner (%s)",
+                        gate_result.get("reason"))
+            best_patch, best_id = "", "baseline"
+
     applied = _finalize(out_dir, base_prompt, best_patch, best_score, baseline, apply)
     summary = {
+        "scorer_fingerprint": scorer_before,
+        "scorer_tampered": tampered,
+        "gate": gate_result,
         "run_id": run_id, "out_dir": str(out_dir),
         "baseline": round(baseline, 4), "best": round(best_score, 4),
         "improvement": round(best_score - baseline, 4),

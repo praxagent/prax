@@ -14,6 +14,11 @@ def test_keeps_improving_audited_variant_vetoes_spike(tmp_path):
         evaluator=lambda p: scores[p],
         # the overseer VETOes the higher-scoring "spike" (benchmark gaming)
         auditor=lambda p: (False, "spike") if p == "spike" else (True, "ok"),
+        # This case covers propose/veto/keep MECHANICS. The private-holdout gate
+        # is a separate concern with its own tests, and leaving it on here would
+        # (correctly) fail closed for want of private goldens — masking what
+        # this test is actually about.
+        gate=False,
     )
     assert summary["baseline"] == 0.5
     # "spike" scored 0.9 but was vetoed → NOT kept; "good" (0.8, approved) wins;
@@ -53,6 +58,10 @@ def test_apply_stays_a_proposal_without_the_flag(tmp_path, monkeypatch):
     monkeypatch.setattr(sr, "_self_regen_enabled", lambda: False)
     summary = run_self_regen(
         rounds=1, apply=True, weak_signal="x", out_dir=tmp_path,
+        # An explicit passing gate: this covers the APPLY path, so the winner
+        # must reach _finalize. Leaving the real gate on would fail closed for
+        # want of private goldens and test nothing about applying.
+        gate_fn=lambda _p: {"accept": True, "reason": "test-accept"},
         proposer=lambda _s: "win",
         evaluator=lambda p: 0.9 if p == "win" else 0.5,
         auditor=lambda _p: (True, "ok"),
@@ -91,6 +100,10 @@ def test_apply_writes_via_prompt_manager_when_enabled(tmp_path, monkeypatch):
     monkeypatch.setattr(pm, "get_prompt_manager", lambda: _FakeMgr())
     summary = run_self_regen(
         rounds=1, apply=True, weak_signal="x", out_dir=tmp_path,
+        # Explicit passing gate: this covers the APPLY path, so the winner must
+        # reach _finalize. The real gate would fail closed for want of private
+        # goldens and this test would prove nothing about applying.
+        gate_fn=lambda _p: {"accept": True, "reason": "test-accept"},
         proposer=lambda _s: "win",
         evaluator=lambda p: 0.9 if p == "win" else 0.5,
         auditor=lambda _p: (True, "ok"),
@@ -166,6 +179,7 @@ def test_mdl_occam_bias_prefers_shorter_at_equal_score(tmp_path):
         proposer=lambda _s: next(patches),
         evaluator=lambda p: scores[p],
         auditor=lambda _p: (True, "ok"),
+        gate=False,   # tie-break mechanics; the holdout gate has its own tests
     )
     assert summary["best_patch"] == "short"   # simplest theory at equal score
     assert summary["best"] == 0.8
@@ -177,3 +191,24 @@ def test_inoculation_preamble_and_helper():
     assert "narrow" in low and ("hack" in low or "game" in low) and "not" in low
     out = inoculate("PROPOSE X")
     assert out.startswith(INOCULATION_PREAMBLE) and "PROPOSE X" in out
+
+
+def test_default_gate_fails_closed_without_a_private_holdout(tmp_path):
+    """The safety property behind the gate being on by default.
+
+    A loop that grades itself on the capability suite and then keeps the winner
+    is selecting on its own training signal. With no private goldens to appeal
+    to, `accept_change` refuses — so the loop proposes nothing rather than
+    adopting a change on an untrustworthy signal.
+    """
+    summary = run_self_regen(
+        rounds=1, weak_signal="x", out_dir=tmp_path,
+        proposer=lambda _s: "improve everything",
+        evaluator=lambda p: 0.9 if p else 0.5,
+        auditor=lambda _p: (True, "ok"),
+        gate_fn=lambda _p: {"accept": False,
+                            "reason": "no private holdout — cannot decide (fail-closed)"},
+    )
+    assert summary["best_patch"] == ""
+    assert summary["applied"] is False
+    assert summary["gate"]["accept"] is False
