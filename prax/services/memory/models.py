@@ -28,6 +28,11 @@ class ConsolidationResult:
     memories_decayed: int = 0
     memories_forgotten: int = 0
     daily_summary: str = ""
+    # Symbolic consistency pass (MEMORY_CONSISTENCY_ENABLED): conflicts a
+    # single-valued relation write had with existing current edges, and how
+    # many of those stale edges were closed (0 unless auto-supersede is on).
+    conflicts_detected: int = 0
+    conflicts_superseded: int = 0
 
 
 @dataclass

@@ -213,6 +213,37 @@ def add_relation(
         return False
 
 
+def current_targets(user_id: str, source_name: str, relation_type: str) -> list[str]:
+    """Return target names of CURRENT (valid_until IS NULL) edges of one type.
+
+    Used by the consistency pass to answer, symbolically, "does this source
+    already have a current target for this single-valued relation?" — the
+    question the extraction LLM was previously trusted to answer on its own.
+    """
+    src = source_name.strip().lower()
+    try:
+        with _session() as session:
+            result = session.run(
+                """
+                MATCH (s:Entity {user_id: $uid, name: $src})
+                      -[r:RELATES_TO {type: $rtype}]->
+                      (t:Entity {user_id: $uid})
+                WHERE r.valid_until IS NULL
+                RETURN t.name AS name
+                """,
+                uid=user_id,
+                src=src,
+                rtype=relation_type,
+            )
+            return [record["name"] for record in result]
+    except Exception:
+        logger.debug(
+            "Failed to list current targets for %s -[%s]-> (user %s)",
+            source_name, relation_type, user_id, exc_info=True,
+        )
+        return []
+
+
 def supersede_relation(
     user_id: str,
     source_name: str,
