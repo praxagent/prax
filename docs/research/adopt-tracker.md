@@ -122,6 +122,8 @@ Everything here feeds [IDEAS_BACKLOG #29](../IDEAS_BACKLOG.md) (close the recurs
 | **Anthropic prompt caching** (`cache_control` on the system prompt) | [opencode-critique](opencode-critique-eval.md) | 📋 | real gap — Claude path caches nothing today. Seam `orchestrator.py:1191`; apply AFTER `prepare_context` (list-vs-string), **verify live cache hits** before flip |
 | **Measure cache-hit rate + re-weigh `PROMPT_SELECTIVITY` cross-turn** | [opencode-critique](opencode-critique-eval.md) | 📋 | selectivity (recommended-on) likely defeats cross-turn OpenAI caching; the flag campaign measured per-call tokens, NOT cache reuse — instrument, then A/B on *total* cost |
 | **System-prompt ordering: stable-first, volatile-last** (extend cached prefix) | [opencode-critique](opencode-critique-eval.md) | 📋 | hints sit after volatile temporal/memory; reorder is behavior-adjacent → flag+eval |
+| **Train/serve weight-sharing is a ceiling on the finetune pipeline** — name it, don't patch it | [tinker](tinker-training-api.md) | 📋 | `finetune_service` (unsloth subprocess) and vLLM adapter-load hand off a *directory*; adequate for SFT-on-corrections, **structurally incapable of on-policy RL**. Recorded so "add RL" is scoped as a seam rebuild, not a feature |
+| **GPU executor goes in `prax-sandbox` behind the existing `JobSpec` target — NOT a new `prax-infra` repo, NOT in prax-lab** | [tinker](tinker-training-api.md) | ⏸ | architectural decision, recorded so it isn't re-litigated. Precondition: actual hardware (or a rented trainer). `exec_api.py:141` already refuses `gpu > 0` honestly; the contract is done, the executor isn't |
 
 ## The standing structural gaps (tracked in depth elsewhere — pointer, not a re-list)
 

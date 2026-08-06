@@ -135,6 +135,7 @@ This ledger is the honest complement to
 | Sandbox **browser tools** (Chromium/CDP, browser spoke) | 🔍 | Named by the maintainer as unverified. Real navigate/extract/screenshot flows through the sandbox have not been confirmed end-to-end in this pass. |
 | Sandbox **desktop / noVNC** | 🔍 | Not assessed. |
 | **MCP server** (`prax/mcp/`, default-off) | 🔍 | Real external-agent-over-MCP usage not confirmed here (has unit tests). |
+| **LoRA fine-tune pipeline** (`services/finetune_service.py`, `scripts/finetune_train.py`, 8 tools, `FINETUNE_ENABLED` off) | 🔍 | **Never run end to end.** Neither box has a GPU, so harvest → unsloth train → verify → vLLM adapter load → promote → rollback has not been exercised past the harvest step. Recorded 2026-08-06 while assessing [Tinker](research/tinker-training-api.md), which also names a **structural** ceiling on it: training (unsloth subprocess) and serving (vLLM) are separate processes handing off a directory, so no on-policy/RL method is reachable regardless of hardware. |
 
 ## Process — keep this honest
 
