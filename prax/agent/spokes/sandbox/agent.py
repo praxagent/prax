@@ -16,6 +16,74 @@ from langchain_core.tools import tool
 from prax.agent.spokes._runner import run_spoke
 from prax.settings import settings
 
+
+def _container_user_workspace(uid: str) -> str:
+    """The CURRENT USER's directory as seen inside the sandbox container.
+
+    The sandbox bind-mounts the whole ``workspaces/`` directory at
+    ``/workspace``, so the user's root is ``/workspace/<their-dir>`` — NOT
+    ``/workspace`` itself, and NOT ``/workspace/active`` (which resolves to a
+    directory belonging to no user; artifacts written there are invisible to
+    ``workspace_send_file`` and were observed stranded, root-owned, on the
+    live box).
+    """
+    import os
+
+    try:
+        from prax.services import workspace_service
+
+        return "/workspace/" + os.path.basename(workspace_service.workspace_root(uid))
+    except Exception:
+        return f"/workspace/{uid}"
+
+
+def _append_delivery_hint(result: str, uid: str) -> str:
+    """Deterministically flag deliverable artifacts on the delegate result.
+
+    When the spoke's report mentions container paths that exist inside this
+    user's workspace, append a system note telling the orchestrator exactly
+    which ``workspace_send_file`` call delivers them. Observed live: a spoke
+    produced a valid MP3 and the orchestrator then spent two turns answering
+    "link please" with a bare filename in backticks — the affordance exists
+    but a low-tier model does not reach for it. The hint is computed by
+    code (paths verified on disk), so it cannot assert a deliverable that
+    is not there.
+
+    Flag-gated (``ARTIFACT_DELIVERY_HINT_ENABLED``, default off).
+    """
+    if not getattr(settings, "artifact_delivery_hint_enabled", False):
+        return result
+    import os
+    import re
+
+    try:
+        from prax.services import workspace_service
+
+        root = workspace_service.workspace_root(uid)
+    except Exception:
+        return result
+    user_dir = os.path.basename(root)
+    deliverable: list[str] = []
+    for path in re.findall(r"/workspace/[^\s`'\"]+", result or ""):
+        rel = path.removeprefix(f"/workspace/{user_dir}/")
+        if rel == path:  # not under this user's directory
+            continue
+        try:
+            host = workspace_service.safe_join(root, rel)
+        except Exception:
+            continue
+        if os.path.isfile(host) and rel not in deliverable:
+            deliverable.append(rel)
+    if not deliverable:
+        return result
+    calls = ", ".join(f"workspace_send_file('{r}')" for r in deliverable[:5])
+    return (
+        f"{result}\n\n"
+        f"[SYSTEM: verified deliverable artifact(s) in the user's workspace — "
+        f"if the user should receive them, send with: {calls}. A file path or "
+        f"name in a chat message is NOT a delivery.]"
+    )
+
 logger = logging.getLogger(__name__)
 
 # Track active delegation tasks per user to deduplicate identical parallel
@@ -53,11 +121,13 @@ the one writing the commands and code.
 
 ## Workflow
 1. **Plan** the steps, then **write** code/files with sandbox_shell (e.g.
-   `tee /workspace/active/foo.py <<'EOF' ... EOF`).
+   `tee {user_workspace}/active/foo.py <<'EOF' ... EOF`).
 2. **Run** it with sandbox_shell and read the output.
 3. **Iterate** — fix errors and re-run until it works.
-4. **Deliver** any artifact the user should receive under /workspace/active/
-   (the app's shared workspace), then report the filename.
+4. **Deliver** any artifact the user should receive under
+   {user_workspace}/active/ — this user's OWN directory in the shared mount.
+   Do NOT write user artifacts to /workspace/active/ (that path belongs to no
+   user and the app cannot deliver files from it). Report the full path.
 5. **Report** honestly what you did, what was produced, and whether it succeeded.
 
 ## Rules
@@ -120,8 +190,11 @@ def delegate_sandbox(task: str) -> str:
         _active_tasks[uid] = normalised
 
     try:
-        prompt = SYSTEM_PROMPT.format(agent_name=settings.agent_name)
-        return run_spoke(
+        prompt = SYSTEM_PROMPT.format(
+            agent_name=settings.agent_name,
+            user_workspace=_container_user_workspace(uid),
+        )
+        result = run_spoke(
             task=task,
             system_prompt=prompt,
             tools=build_tools(),
@@ -130,6 +203,7 @@ def delegate_sandbox(task: str) -> str:
             channel="engineering",
             recursion_limit=80,
         )
+        return _append_delivery_hint(result, uid)
     finally:
         with _active_tasks_lock:
             _active_tasks.pop(uid, None)

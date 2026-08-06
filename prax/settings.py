@@ -972,6 +972,23 @@ class AppSettings(BaseSettings):
             "Log-only unless MEMORY_CONSISTENCY_AUTO_SUPERSEDE is also set."
         ),
     )
+    delegation_pinned_inputs_enabled: bool = Field(
+        default=False, alias="DELEGATION_PINNED_INPUTS_ENABLED",
+        description=(
+            "Append this turn's auto-captured library/raw/ artifacts to "
+            "delegated spoke tasks, so a spoke reads the file the user just "
+            "shared instead of searching the workspace for look-alikes."
+        ),
+    )
+    artifact_delivery_hint_enabled: bool = Field(
+        default=False, alias="ARTIFACT_DELIVERY_HINT_ENABLED",
+        description=(
+            "After delegate_sandbox, verify on disk which reported artifacts "
+            "exist in the user's workspace and append the exact "
+            "workspace_send_file call to the result — a deterministic nudge "
+            "for models that answer 'link please' with a bare filename."
+        ),
+    )
     memory_consistency_auto_supersede: bool = Field(
         default=False, alias="MEMORY_CONSISTENCY_AUTO_SUPERSEDE",
         description=(

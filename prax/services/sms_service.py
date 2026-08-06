@@ -157,6 +157,9 @@ class SmsService:
                 )
 
             current_channel_name.set("sms")
+            if captured:
+                from prax.agent.user_context import current_turn_captures
+                current_turn_captures.set((captured,))
             response = conversation_service.reply(user.id, prompt, source="sms")
             send_sms(response, from_number)
 
