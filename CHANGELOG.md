@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.5](https://github.com/praxagent/prax/compare/v0.43.4...v0.43.5) (2026-08-07)
+
+
+### Bug Fixes
+
+* **security:** banner pre-stamp captures too — kind: raw is an untrusted marker ([#221](https://github.com/praxagent/prax/issues/221)) ([3d6c22f](https://github.com/praxagent/prax/commit/3d6c22f73a9f7aec66a7c8a0e0e7726eef8ddccf))
+
 ## [0.43.4](https://github.com/praxagent/prax/compare/v0.43.3...v0.43.4) (2026-08-07)
 
 
