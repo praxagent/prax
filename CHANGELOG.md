@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.4](https://github.com/praxagent/prax/compare/v0.43.3...v0.43.4) (2026-08-07)
+
+
+### Bug Fixes
+
+* **security:** the provenance-marker taint has no off switch ([#219](https://github.com/praxagent/prax/issues/219)) ([135acc2](https://github.com/praxagent/prax/commit/135acc2c03b8b1ed30138de964d52ad09d2aebc1))
+
 ## [0.43.3](https://github.com/praxagent/prax/compare/v0.43.2...v0.43.3) (2026-08-07)
 
 
