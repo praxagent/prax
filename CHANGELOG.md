@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.3](https://github.com/praxagent/prax/compare/v0.43.2...v0.43.3) (2026-08-07)
+
+
+### Bug Fixes
+
+* **security:** provenance follows the content, not the tool that returned it ([#217](https://github.com/praxagent/prax/issues/217)) ([29c83bd](https://github.com/praxagent/prax/commit/29c83bd2766ed1b34e00530532d101b894aec82f))
+
 ## [0.43.2](https://github.com/praxagent/prax/compare/v0.43.1...v0.43.2) (2026-08-07)
 
 
