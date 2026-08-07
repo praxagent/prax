@@ -49,10 +49,10 @@ def _append_delivery_hint(result: str, uid: str) -> str:
     code (paths verified on disk), so it cannot assert a deliverable that
     is not there.
 
-    Flag-gated (``ARTIFACT_DELIVERY_HINT_ENABLED``, default off).
+    Unconditional: the hint is computed from the filesystem, appended only when
+    a reported path really exists under this user's workspace, and says nothing
+    when it doesn't — so there is no behaviour to gate, only a fact to report.
     """
-    if not getattr(settings, "artifact_delivery_hint_enabled", False):
-        return result
     import os
     import re
 

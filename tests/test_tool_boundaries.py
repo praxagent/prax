@@ -27,24 +27,16 @@ def _reset():
 # Deny-by-default risk classification
 # --------------------------------------------------------------------------- #
 
-class TestDenyByDefault:
-    def test_unknown_tool_defaults_medium(self, monkeypatch):
+class TestUnknownToolRisk:
+    def test_unknown_tool_defaults_medium(self):
+        """Deny-by-default (unknown → HIGH) was measured and REGRESSED — it
+        blocked a needed tool and the agent gave up. MEDIUM is the decision,
+        not a default awaiting a flag."""
         from prax.agent.action_policy import RiskLevel, get_risk_level
-        from prax.settings import settings
-        monkeypatch.setattr(settings, "unknown_tool_high_risk", False)
         assert get_risk_level("totally_unclassified_tool_xyz") == RiskLevel.MEDIUM
 
-    def test_unknown_tool_high_when_enabled(self, monkeypatch):
+    def test_static_classification_still_wins(self):
         from prax.agent.action_policy import RiskLevel, get_risk_level
-        from prax.settings import settings
-        monkeypatch.setattr(settings, "unknown_tool_high_risk", True)
-        assert get_risk_level("totally_unclassified_tool_xyz") == RiskLevel.HIGH
-
-    def test_static_classification_unaffected_by_flag(self, monkeypatch):
-        from prax.agent.action_policy import RiskLevel, get_risk_level
-        from prax.settings import settings
-        monkeypatch.setattr(settings, "unknown_tool_high_risk", True)
-        # A statically-LOW tool stays LOW even with deny-by-default on.
         assert get_risk_level("get_current_datetime") == RiskLevel.LOW
 
 

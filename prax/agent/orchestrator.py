@@ -609,45 +609,6 @@ class ConversationAgent:
             logger.debug("answering-model check failed", exc_info=True)
 
     @staticmethod
-    def _maybe_clarify(user_input: str) -> str | None:
-        """Return one clarifying question if the request is ambiguous AND risky.
-
-        Opt-in via ``settings.intent_clarification_enabled``.  Uses a cheap
-        LOW-tier model and is biased strongly toward proceeding; returns None
-        (proceed) on any uncertainty, system/scheduled inputs, or error.
-        """
-        if not settings.intent_clarification_enabled:
-            return None
-        stripped = user_input.lstrip()
-        if stripped.startswith("[SCHEDULED_TASK") or stripped.startswith("[SYSTEM"):
-            return None
-        try:
-            from langchain_core.messages import HumanMessage
-
-            from prax.agent.llm_factory import build_llm
-            llm = build_llm(default_tier="low", config_key="intent_clarifier")
-            prompt = (
-                "You are a pre-flight intent checker for an autonomous assistant. "
-                "Decide whether the user's request is BOTH genuinely ambiguous AND "
-                "potentially irreversible or costly to get wrong — such that asking "
-                "exactly ONE clarifying question first is clearly better than guessing. "
-                "Bias STRONGLY toward proceeding: only ask when a wrong guess would "
-                "waste real effort or do something hard to undo. "
-                "If the assistant should proceed, reply with exactly 'PROCEED'. "
-                "Otherwise reply with the single clarifying question and nothing else.\n\n"
-                f"Request: {user_input}"
-            )
-            resp = llm.invoke([HumanMessage(content=prompt)])
-            text = (getattr(resp, "content", "") or "").strip()
-            if not text or text.upper().startswith("PROCEED"):
-                return None
-            # Keep it to a single question.
-            return text.split("\n")[0].strip()
-        except Exception:
-            logger.debug("Intent clarification check failed; proceeding", exc_info=True)
-            return None
-
-    @staticmethod
     def _classify_complexity(user_input: str) -> bool:
         """Return True if the user input looks complex enough to warrant a plan.
 
@@ -1098,14 +1059,6 @@ class ConversationAgent:
         from prax.agent.user_context import current_component, current_user_message
         current_user_message.set(user_input)
         current_component.set("orchestrator")
-
-        # Intent clarification pre-flight (opt-in): on an ambiguous AND
-        # potentially irreversible request, ask ONE question instead of
-        # burning the full agent loop on a guess.
-        clarification = self._maybe_clarify(user_input)
-        if clarification:
-            root_span.end(status="completed", summary="Asked a clarifying question")
-            return clarification
 
         # Initialize tool-call budget for this turn.
         from prax.agent.autonomy import get_recursion_limit

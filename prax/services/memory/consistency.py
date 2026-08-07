@@ -12,15 +12,18 @@ most one current target), "does a current edge with a different target already
 exist?" is one graph query at write time. Detection is symbolic; what to do
 about it stays configurable:
 
-* **log-only** (default when the flag is on): conflicts are counted on the
-  ``ConsolidationResult`` and logged, nothing is changed. This mode exists
-  because the single-valued declaration is itself authored — a wrong entry in
-  ``SINGLE_VALUED_TYPES`` would turn auto-supersession into a fact-deleter, so
-  the allowlist must earn trust from logs before it is allowed to act.
-* **auto-supersede** (``MEMORY_CONSISTENCY_AUTO_SUPERSEDE=true``): the older
-  edge is marked ``valid_until = now`` before the new one lands — the same
-  operation the LLM-volunteered path performs, minus the reliance on the LLM
-  noticing.
+``MEMORY_CONSISTENCY_MODE`` selects one of three behaviours:
+
+* ``off`` (default) — prior behaviour: supersession happens only when the
+  extractor LLM volunteers it.
+* ``log`` — conflicts are counted on the ``ConsolidationResult`` and logged,
+  nothing is changed. This mode exists because the single-valued declaration is
+  itself authored: a wrong entry in ``SINGLE_VALUED_TYPES`` would turn
+  supersession into a fact-deleter, so the allowlist must earn trust from logs
+  before it is allowed to act.
+* ``enforce`` — the older edge is marked ``valid_until = now`` before the new
+  one lands: the same operation the LLM-volunteered path performs, minus the
+  reliance on the LLM noticing.
 
 Deliberately NOT here: any notion of semantic conflict between targets of a
 multi-valued relation ("prefers dark_mode" vs "prefers light_mode" — both
@@ -65,8 +68,18 @@ PROMPT_ADDENDUM = (
 )
 
 
+def _mode() -> str:
+    return str(getattr(settings, "memory_consistency_mode", "off") or "off").lower()
+
+
 def enabled() -> bool:
-    return bool(getattr(settings, "memory_consistency_enabled", False))
+    """True when the pass should run at all (log or enforce)."""
+    return _mode() in {"log", "enforce"}
+
+
+def enforcing() -> bool:
+    """True when detected conflicts should actually close the stale edge."""
+    return _mode() == "enforce"
 
 
 def find_conflicts(user_id: str, source: str, relation_type: str,
@@ -108,7 +121,7 @@ def enforce(user_id: str, rel: dict, result) -> None:
         return
 
     result.conflicts_detected += len(conflicts)
-    auto = bool(getattr(settings, "memory_consistency_auto_supersede", False))
+    auto = enforcing()
     logger.warning(
         "memory consistency: %s -[%s]-> %s conflicts with current target(s) %s (%s)",
         source, rtype, target, conflicts,

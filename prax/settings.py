@@ -214,12 +214,11 @@ class AppSettings(BaseSettings):
     # autonomous: also relaxes recursion limits, lets agent self-upgrade tier
     autonomy: str = Field(default="guided", alias="PRAX_AUTONOMY")
 
-    # Active Inference — Semantic Entropy Gate (Phase 4)
-    # When enabled, HIGH-risk tool calls are re-queried k=3 times at T=0.7
-    # to detect divergence.  Expensive (3x LLM cost) — off by default.
-    semantic_entropy_enabled: bool = Field(
-        default=False, alias="ACTIVE_INFERENCE_SEMANTIC_GATE",
-    )
+    # NOTE: the semantic-entropy gate is NOT declared here. Its only consumer
+    # (agent/semantic_entropy.py) reads ACTIVE_INFERENCE_SEMANTIC_GATE from
+    # os.environ directly, so a settings field for it was dead config that
+    # nothing consulted — two declarations of one switch, the more confusing of
+    # which won by being invisible. The env var still works.
 
     # Agent guardrails
     agent_max_tool_calls: int = Field(
@@ -631,18 +630,6 @@ class AppSettings(BaseSettings):
             "to discard all pending resumes."
         ),
     )
-    unknown_tool_high_risk: bool = Field(
-        default=False, alias="UNKNOWN_TOOL_HIGH_RISK",
-        description=(
-            "Deny-by-default: when true, a tool with no static risk "
-            "classification (and not an imported plugin) defaults to HIGH risk "
-            "— requiring confirmation — instead of MEDIUM-and-run. "
-            "Eval gate 2026-07-08 (docs/research/flag-eval-campaign-2026-07-08.md): REJECTED — measured "
-            "correctness regression (blocked a needed tool; a capability "
-            "case failed). Keep off until tuned; don't flip without new "
-            "evidence."
-        ),
-    )
     high_risk_scoped_confirm: bool = Field(
         default=False, alias="HIGH_RISK_SCOPED_CONFIRM",
         description=(
@@ -667,7 +654,14 @@ class AppSettings(BaseSettings):
         ),
     )
     agent_middleware_enabled: bool = Field(
-        default=False, alias="AGENT_MIDDLEWARE_ENABLED",
+        # Default TRUE since 2026-08-07: the 2026-07-08 eval gate FLIPPED this
+        # (5/6 pass, -7% tokens, injection defence-in-depth) and .env-example
+        # has recommended it since — but the code default stayed False, so the
+        # recommended configuration differed from the default configuration and
+        # a deployment's behaviour was unguessable. Kept as a flag (not made
+        # unconditional) because turning middleware OFF is a legitimate
+        # debugging move. See docs/guides/flag-audit.md.
+        default=True, alias="AGENT_MIDDLEWARE_ENABLED",
         description=(
             "When true, agent loops are built with in-loop LangChain middleware "
             "(prax/agent/loop_middleware.py): untrusted-source tool results are "
@@ -796,20 +790,12 @@ class AppSettings(BaseSettings):
             "capability suite."
         ),
     )
-    intent_clarification_enabled: bool = Field(
-        default=False, alias="INTENT_CLARIFICATION_ENABLED",
-        description=(
-            "When true, a cheap LOW-tier pre-flight gate runs before the main "
-            "agent loop: if a request is BOTH ambiguous AND potentially "
-            "irreversible/costly, it returns a single clarifying question "
-            "instead of guessing. Biased strongly toward proceeding. "
-            "Eval gate 2026-07-08 (docs/research/flag-eval-campaign-2026-07-08.md): REJECTED — +11% tokens with "
-            "no pass-rate gain. Leave off unless traffic is "
-            "ambiguity-heavy; don't flip without new evidence."
-        ),
-    )
     prompt_selectivity_enabled: bool = Field(
-        default=False, alias="PROMPT_SELECTIVITY_ENABLED",
+        # Default TRUE since 2026-08-07 — same reasoning as
+        # agent_middleware_enabled above (eval gate flipped it; the code default
+        # lagged). Kept as a flag because prax/eval/self_regen.py switches it
+        # OFF while scoring, so the scorer always sees the full prompt.
+        default=True, alias="PROMPT_SELECTIVITY_ENABLED",
         description=(
             "When true, topic-specific optional sections of the orchestrator "
             "system prompt (e.g. document pipelines, math/LaTeX, teaching) are "
@@ -963,41 +949,32 @@ class AppSettings(BaseSettings):
         default=7.0, alias="MEMORY_DECAY_HALFLIFE_DAYS",
         description="Half-life in days for Ebbinghaus-style memory importance decay.",
     )
-    memory_consistency_enabled: bool = Field(
-        default=False, alias="MEMORY_CONSISTENCY_ENABLED",
+    memory_consistency_mode: str = Field(
+        default="off", alias="MEMORY_CONSISTENCY_MODE",
         description=(
-            "Symbolic consistency pass at consolidation: for single-valued "
-            "relation types, query the graph for conflicting current edges "
-            "instead of trusting the extractor LLM to volunteer 'supersedes'. "
-            "Log-only unless MEMORY_CONSISTENCY_AUTO_SUPERSEDE is also set."
+            "Symbolic consistency pass at memory consolidation. For relation "
+            "types declared single-valued (a source can have at most one "
+            "current target), ask the GRAPH whether a conflicting current edge "
+            "exists instead of trusting the extractor LLM to volunteer a "
+            "'supersedes' marker.  "
+            "'off' = prior behaviour (LLM-volunteered only). "
+            "'log' = detect and record conflicts, change nothing — run here "
+            "first, because the single-valued list is authored and a wrong "
+            "entry would make 'enforce' a fact-deleter. "
+            "'enforce' = also close the stale edge (valid_until=now)."
         ),
     )
-    delegation_pinned_inputs_enabled: bool = Field(
-        default=False, alias="DELEGATION_PINNED_INPUTS_ENABLED",
-        description=(
-            "Append this turn's auto-captured library/raw/ artifacts to "
-            "delegated spoke tasks, so a spoke reads the file the user just "
-            "shared instead of searching the workspace for look-alikes."
-        ),
-    )
-    artifact_delivery_hint_enabled: bool = Field(
-        default=False, alias="ARTIFACT_DELIVERY_HINT_ENABLED",
-        description=(
-            "After delegate_sandbox, verify on disk which reported artifacts "
-            "exist in the user's workspace and append the exact "
-            "workspace_send_file call to the result — a deterministic nudge "
-            "for models that answer 'link please' with a bare filename."
-        ),
-    )
-    memory_consistency_auto_supersede: bool = Field(
-        default=False, alias="MEMORY_CONSISTENCY_AUTO_SUPERSEDE",
-        description=(
-            "Act on detected conflicts by closing the stale edge "
-            "(valid_until=now). Keep off until log-only mode has shown the "
-            "single-valued allowlist doesn't misfire — a wrong declaration "
-            "here deletes facts."
-        ),
-    )
+
+    @field_validator("memory_consistency_mode")
+    @classmethod
+    def _validate_consistency_mode(cls, v: str) -> str:
+        allowed = {"off", "log", "enforce"}
+        val = (v or "off").strip().lower()
+        if val not in allowed:
+            raise ValueError(
+                f"MEMORY_CONSISTENCY_MODE must be one of {sorted(allowed)}, got {v!r}"
+            )
+        return val
 
     # Observability (OTel tracing, Prometheus metrics, Grafana dashboards)
     observability_enabled: bool = Field(default=False, alias="OBSERVABILITY_ENABLED")

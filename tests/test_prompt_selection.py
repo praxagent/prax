@@ -55,38 +55,3 @@ class TestSelectSections:
         assert select_sections(prompt, "anything") == prompt
 
 
-class TestIntentClarification:
-    def test_disabled_returns_none(self, monkeypatch):
-        from prax.agent.orchestrator import ConversationAgent
-        from prax.settings import settings
-        monkeypatch.setattr(settings, "intent_clarification_enabled", False)
-        assert ConversationAgent._maybe_clarify("delete everything") is None
-
-    def test_scheduled_input_skipped(self, monkeypatch):
-        from prax.agent.orchestrator import ConversationAgent
-        from prax.settings import settings
-        monkeypatch.setattr(settings, "intent_clarification_enabled", True)
-        assert ConversationAgent._maybe_clarify("[SCHEDULED_TASK] daily briefing") is None
-
-    def test_proceed_response_returns_none(self, monkeypatch):
-        from prax.agent.orchestrator import ConversationAgent
-        from prax.settings import settings
-        monkeypatch.setattr(settings, "intent_clarification_enabled", True)
-
-        class _Resp:
-            content = "PROCEED"
-        monkeypatch.setattr("prax.agent.llm_factory.build_llm",
-                            lambda **kw: type("L", (), {"invoke": lambda self, m: _Resp()})())
-        assert ConversationAgent._maybe_clarify("what time is it?") is None
-
-    def test_question_returned(self, monkeypatch):
-        from prax.agent.orchestrator import ConversationAgent
-        from prax.settings import settings
-        monkeypatch.setattr(settings, "intent_clarification_enabled", True)
-
-        class _Resp:
-            content = "Which database did you mean — staging or production?\n(extra)"
-        monkeypatch.setattr("prax.agent.llm_factory.build_llm",
-                            lambda **kw: type("L", (), {"invoke": lambda self, m: _Resp()})())
-        q = ConversationAgent._maybe_clarify("drop the users table")
-        assert q == "Which database did you mean — staging or production?"
