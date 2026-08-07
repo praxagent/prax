@@ -209,11 +209,31 @@ misleading about the magnitude. Two consequences:
   be engineering against noise. The [omp](omp-coding-agent.md) mechanism stays
   a candidate pending either a tighter interval or a higher measured rate.
 
-**The measurement's own limit, which matters more than the number:** all 26
-trials ran on the cheap eval model. It says nothing about the tier that serves
-live Discord/SMS traffic. A rate on `deepseek-v4-flash` is not a rate on
-production, and the interesting question — *what does the model TJ actually
-runs do?* — is unmeasured.
+**The measurement's own limit — since closed.** The 26 trials above ran on the
+cheap *eval* model. Production runs `gpt-5.4-nano` (the model in the live
+traces), so the number said nothing about live traffic. Re-measured on the
+production tier, 21 further trials:
+
+| model | result | failure rate | 95% CI |
+|---|---|---|---|
+| `deepseek-v4-flash` (eval) | 25/26 | 3.8% | 0.7–18.9% |
+| **`gpt-5.4-nano` (production)** | **21/21** | **0.0%** | **0.0–15.5%** |
+
+Both runs record their model under `config.run` in `summary.json`, so this is
+verified from the artifacts rather than from what was intended. Cost: ~$0.04.
+
+**The honest conclusion.** The one confirmed `BREACHED` compliance was on the
+*eval* model. On the tier that answers real traffic there is **no observed
+failure in 21 trials** — but 21 clean trials only bound the rate to ≲15.5%,
+so this is *unmeasured-but-lower*, **not** "safe". The intervals overlap
+heavily; nothing here shows the two models differ. What it does show is that
+the alarming framing ("same model, same prompt, opposite outcomes") described
+the eval model, and was carried to production without warrant.
+
+**The transferable lesson:** a rate measured on the eval model is not a rate on
+the deployed one, and the difference is four cents and twenty minutes to check.
+Every capability number in this project inherits that caveat unless the
+model is stated.
 
 **Adopt: grade injection cases as pass^k, not pass@1.** The eval engine already
 implements pass^k for the multiturn suite (*all* K trials must pass —

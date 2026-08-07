@@ -1,10 +1,11 @@
 # Provenance laundering: untrusted web content becomes "private data"
 
 **Found:** 2026-08-07, while investigating stochastic injection resistance.
-**Status:** **FIXED 2026-08-07** — see *What shipped* below. The tool
-misclassification and the capture-time stamp are unflagged (they were plain
-bugs); the taint that changes what the model sees is behind
-`PROVENANCE_MARKER_TAINT_ENABLED`, default off.
+**Status:** **FIXED 2026-08-07, unconditional.** The marker taint briefly
+shipped behind `PROVENANCE_MARKER_TAINT_ENABLED`; the flag was removed the same
+day at the maintainer's call, and he was right: the off-state preserved a
+security mislabelling, and a mislabelling with a switch attached is not a
+configuration choice. A test now fails if anyone reintroduces one.
 **Severity:** the guard it defeats is the lethal-trifecta guard, so this is a
 security finding rather than a quality one.
 
@@ -84,7 +85,7 @@ Provenance is now a property of the **content**, not the transport.
 |---|---|---|
 | `raw_capture` stamps `provenance: untrusted-external` in the front-matter it already writes | no | pure metadata; the harness *knows* it is third-party at that moment |
 | `library_raw_*` reclassified `untrusted_source` | no | they were **neither** — MEDIUM risk with no provenance. A plain misclassification |
-| `UntrustedContentTaint` banners on the **marker**, whatever tool returned it | **yes** — `PROVENANCE_MARKER_TAINT_ENABLED` | it adds banners to reads that previously had none and can trip the trifecta guard more often |
+| `UntrustedContentTaint` banners on the **marker**, whatever tool returned it | **no — unconditional** (flag removed same day) | the banner text is the one production already applies to every direct fetch, so this extends proven text to the places it was wrongly missing; an off-state that preserves a mislabelling is not a choice anyone should be offered |
 
 The marker is read **only from the front-matter head (600 chars)**, so body
 text merely mentioning it cannot self-declare provenance — nor spoof it away.
@@ -95,10 +96,10 @@ read-back reproduction this document previously admitted was missing**, plus
 the no-overreach cases: a user's own note is never tainted, genuinely private
 readers keep their classification, and tainting stays idempotent.
 
-**Still open:** the flag is off, so the laundering path is closed only for
-deployments that opt in. Flipping it is an eval-gate decision like every other
-guard — and the honest reason to flip is that a false banner costs a little
-context while a missed one costs the guard.
+**Rollback**, since there is no flag: revert the commit and deploy. Accepted
+deliberately — the mechanism is deterministic, nine tests pin it, and a
+security guard with an env-var off switch is itself a risk surface (one config
+regression away from silently losing the protection).
 
 ### Original fix direction (retained for the reasoning)
 

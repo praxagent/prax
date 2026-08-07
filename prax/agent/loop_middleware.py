@@ -113,19 +113,19 @@ _UNTRUSTED_BANNER = (
 def _carries_untrusted_marker(content: str) -> bool:
     """True when the content itself declares untrusted-external provenance.
 
-    Flag-gated: this makes previously-untagged reads (workspace_read of a
-    captured page, say) start carrying a banner, which changes what the model
-    sees AND can trip the lethal-trifecta guard. Default off preserves prior
-    behaviour; the eval gate governs the flip like every other guard.
+    Unconditional, on purpose. This briefly shipped behind a flag
+    (PROVENANCE_MARKER_TAINT_ENABLED) and the flag was removed the same day:
+    the off-state preserved a security mislabelling — attacker-controlled
+    captures re-entering the context as the user's private data — and a
+    mislabelling with a switch attached is not a configuration choice. The
+    banner text itself is the one production already applies to every direct
+    fetch, so this extends proven text to the places it was wrongly missing
+    rather than introducing anything new.
 
     Deliberately a fixed marker written by the harness at capture time — NOT a
     heuristic over the text. Sniffing for "SYSTEM OVERRIDE"-ish phrasing or
     `---` fences would fit the eval case rather than the problem class.
     """
-    from prax.settings import settings
-
-    if not getattr(settings, "provenance_marker_taint_enabled", False):
-        return False
     from prax.services.library_service import PROVENANCE_UNTRUSTED
 
     # The marker lives in YAML front-matter, so only look at the head.
