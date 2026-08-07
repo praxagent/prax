@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.43.0](https://github.com/praxagent/prax/compare/v0.42.0...v0.43.0) (2026-08-07)
+
+
+### Features
+
+* **eval,api:** close the self-regen loop and expose prax.execute(JobSpec) ([#208](https://github.com/praxagent/prax/issues/208)) ([c033cd7](https://github.com/praxagent/prax/commit/c033cd74ec18824a2baeccb2c0595533e54b9b5b))
+* symbolic memory consistency, deliverable sandbox artifacts, and honest token accounting ([#210](https://github.com/praxagent/prax/issues/210)) ([e6aff54](https://github.com/praxagent/prax/commit/e6aff5454ac9fde52edd23684ee0708e5a832cd5))
+
 ## [0.42.0](https://github.com/praxagent/prax/compare/v0.41.0...v0.42.0) (2026-08-04)
 
 
