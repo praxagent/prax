@@ -133,10 +133,37 @@ move as the scorer fingerprint: put the discipline in the tool.
 
 Worth noting for its own sake: search was verified healthy before launch (a
 direct `ddgs` call returned real results in 1.0s), and still wedged under
-campaign load. A single liveness probe does not establish that a flaky
-backend will stay up for an hour, and `ddgs` remains the known-fragile path
-(no key, scrapes a frontend, rate-limits). A campaign that depends on it should
-either use a keyed provider or exclude the search case and say so.
+campaign load. A single liveness probe does not establish that a flaky backend
+will stay up for an hour.
+
+### Defect 4b — a per-call timeout does not bound a turn
+
+Adding `PRAX_EVAL_TASK_TIMEOUT_S=300` did **not** stop it: the case ran ~14
+minutes past its own deadline. The dev box already had `WEB_SEARCH_TIMEOUT_S=60`
+and the research subagent uses the *same* wrapped `background_search_tool`, so
+each individual search was bounded correctly — **and the agent simply retried**.
+Sixty seconds per call times N retries is not a bound on the turn.
+
+This is the same shape as every other defect in this document: **a limit
+enforced at the wrong layer**. `agent_max_tool_calls` (40) is the only real
+ceiling, and 40 × 60s is forty minutes.
+
+*(Not a production risk on the live box: it runs `SEARCH_PROVIDER=serper` — a
+keyed API — with `WEB_SEARCH_TIMEOUT_S=60`. The failure needs the keyless
+`ddgs` backend, which is the dev box's configuration. Checked before claiming
+otherwise.)*
+
+**Remedy used:** the project already added `--skip` (PR #53) for precisely this
+— "a case with a dead external dependency can be excluded campaign-wide instead
+of invalidating arms unevenly." The runner now passes it through as a
+**campaign-level** flag, never per-arm, and prints the exclusion at launch.
+`research_grounded_citation` is excluded from the campaign, so the effective
+suite is **n=6**, which widens the confidence interval further — an argument
+for growing the suite, not for trusting the number more.
+
+**Still open** (filed, not fixed): a turn-level wall-clock budget, so retries of
+a slow tool cannot consume an unbounded turn. Per-call timeouts plus a call
+count are not equivalent to a deadline.
 
 ## The finding that outlives all of this
 
