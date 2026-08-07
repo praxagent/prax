@@ -159,6 +159,16 @@ class AppSettings(BaseSettings):
     medium_model: str = Field(default="gpt-5.4-mini", alias="MEDIUM_MODEL")
     high_model: str = Field(default="gpt-5.5", alias="HIGH_MODEL")
     pro_model: str = Field(default="gpt-5.5-pro", alias="PRO_MODEL")
+    # Deprecated per-tier switches. Declared as REAL pydantic fields (not read
+    # from os.environ) because pydantic loads .env itself and does NOT export
+    # to the process environment — an os.environ shim silently sees nothing for
+    # a value that lives only in .env, which is how the first version of this
+    # back-compat path failed on the live box. `None` means "not set".
+    low_enabled_legacy: bool | None = Field(default=None, alias="LOW_ENABLED")
+    medium_enabled_legacy: bool | None = Field(default=None, alias="MEDIUM_ENABLED")
+    high_enabled_legacy: bool | None = Field(default=None, alias="HIGH_ENABLED")
+    pro_enabled_legacy: bool | None = Field(default=None, alias="PRO_ENABLED")
+    teamwork_enabled_legacy: bool | None = Field(default=None, alias="TEAMWORK_ENABLED")
     enabled_tiers: str = Field(
         default="low,medium,high", alias="ENABLED_TIERS",
         description=(
@@ -190,10 +200,8 @@ class AppSettings(BaseSettings):
         upgrade — but it warns, because carrying two spellings of one setting
         is exactly the drift this consolidation removed.
         """
-        import os
-
         name = tier_name.strip().lower()
-        legacy = os.environ.get(f"{name.upper()}_ENABLED")
+        legacy = getattr(self, f"{name}_enabled_legacy", None)
         if legacy is not None:
             # Warn ONCE per var, not per lookup: this runs on every tier
             # resolution (i.e. every LLM build), and a deprecation notice that
@@ -207,7 +215,7 @@ class AppSettings(BaseSettings):
                     "(currently %r). The legacy var still wins for now.",
                     name.upper(), self.enabled_tiers,
                 )
-            return legacy.strip().lower() in {"1", "true", "yes", "on"}
+            return bool(legacy)
         return name in {t for t in self.enabled_tiers.split(",")}
 
     # Vision / image understanding.  ``vision_provider`` selects the routing:
@@ -1077,12 +1085,9 @@ class AppSettings(BaseSettings):
         but the boolean is no longer *required* to turn it on, so a set URL can
         no longer be silently ignored.
         """
-        import os
-
         if not self.teamwork_url:
             return False
-        legacy = os.environ.get("TEAMWORK_ENABLED")
-        if legacy is not None and legacy.strip().lower() in {"0", "false", "no", "off"}:
+        if self.teamwork_enabled_legacy is False:
             return False
         return True
     teamwork_user_phone: str = Field(default="", alias="TEAMWORK_USER_PHONE")

@@ -118,6 +118,26 @@ before the first arm, re-checks before each subsequent arm, aborts on change,
 and records `scorer_stable` in `summary.json`. The principle was already
 written down; it is now enforced by the tool rather than by my remembering it.
 
+## Defect 4 — the suite has an unbounded case (FIXED in the runner)
+
+The relaunched campaign stalled: six of seven cases finished in ~90 seconds
+total, then `research_grounded_citation` hung for **23 minutes** on the keyless
+`ddgs` search backend before I killed it. `PRAX_EVAL_TASK_TIMEOUT_S` defaults to
+`0` (no per-case timeout) — deliberate for overnight benchmark runs on a slow
+local model, wrong for a campaign.
+
+The 2026-07-08 campaign set `PRAX_EVAL_TASK_TIMEOUT_S=300` and
+`WEB_SEARCH_TIMEOUT_S=60`; my runner silently did not. They are now **defaults
+inside `flag_ab.py`** rather than something to remember at launch — the same
+move as the scorer fingerprint: put the discipline in the tool.
+
+Worth noting for its own sake: search was verified healthy before launch (a
+direct `ddgs` call returned real results in 1.0s), and still wedged under
+campaign load. A single liveness probe does not establish that a flaky
+backend will stay up for an hour, and `ddgs` remains the known-fragile path
+(no key, scrapes a frontend, rate-limits). A campaign that depends on it should
+either use a keyed provider or exclude the search case and say so.
+
 ## The finding that outlives all of this
 
 **The capability suite cannot resolve single-flag effects on pass rate.** n=7

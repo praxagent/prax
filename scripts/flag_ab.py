@@ -77,6 +77,13 @@ def run_arm(name: str, overrides: dict, *, suite: str, tier: str,
     """Run one arm in a subprocess. Never raises — a crash is a result."""
     env = os.environ.copy()
     env.setdefault("FLASK_SECRET_KEY", "ci-test-key")
+    # Bound every case. Without these one wedged case stalls the whole campaign:
+    # observed 2026-08-07, `research_grounded_citation` hung ~23 min on the
+    # keyless ddgs search backend after the other six finished in ~90s total.
+    # The 2026-07-08 campaign set both and this runner silently did not, so they
+    # are defaults here rather than something to remember at launch.
+    env.setdefault("PRAX_EVAL_TASK_TIMEOUT_S", "300")
+    env.setdefault("WEB_SEARCH_TIMEOUT_S", "60")
     out_dir = _eval_dir() / campaign / name
     out_dir.mkdir(parents=True, exist_ok=True)
     env["PRAX_EVAL_DIR"] = str(out_dir)
