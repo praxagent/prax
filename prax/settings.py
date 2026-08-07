@@ -5,6 +5,10 @@ from functools import lru_cache
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Tier names whose deprecated <TIER>_ENABLED var has already been warned about.
+# Module-level so the notice fires once per process, not once per LLM build.
+_WARNED_LEGACY_TIERS: set[str] = set()
+
 
 class AppSettings(BaseSettings):
     """Central configuration object loaded from environment or .env file."""
@@ -143,16 +147,68 @@ class AppSettings(BaseSettings):
     agent_temperature: float = Field(default=0.7, alias="AGENT_TEMPERATURE")
 
     # Model tiers — provider-agnostic intelligence levels.
-    # Each tier maps to a concrete model name.  Set *_ENABLED=false to disable.
-    # The agent sees which tiers are available and can upgrade/downgrade as needed.
+    # Each tier maps to a concrete model name; ENABLED_TIERS says which are
+    # available to the agent, which can then upgrade/downgrade within that set.
+    #
+    # This was four booleans (LOW_ENABLED/MEDIUM_ENABLED/HIGH_ENABLED/
+    # PRO_ENABLED) expressing membership in a set — the shape that should have
+    # been a set from the start. The old vars are still honoured (see the
+    # validator below) so an existing .env keeps working, but they are
+    # deprecated and log a warning.
     low_model: str = Field(default="gpt-5.4-nano", alias="LOW_MODEL")
-    low_enabled: bool = Field(default=True, alias="LOW_ENABLED")
     medium_model: str = Field(default="gpt-5.4-mini", alias="MEDIUM_MODEL")
-    medium_enabled: bool = Field(default=True, alias="MEDIUM_ENABLED")
     high_model: str = Field(default="gpt-5.5", alias="HIGH_MODEL")
-    high_enabled: bool = Field(default=True, alias="HIGH_ENABLED")
     pro_model: str = Field(default="gpt-5.5-pro", alias="PRO_MODEL")
-    pro_enabled: bool = Field(default=False, alias="PRO_ENABLED")
+    enabled_tiers: str = Field(
+        default="low,medium,high", alias="ENABLED_TIERS",
+        description=(
+            "Comma-separated tiers the agent may use, from: low, medium, high, "
+            "pro. Replaces LOW_ENABLED/MEDIUM_ENABLED/HIGH_ENABLED/PRO_ENABLED "
+            "(still honoured, deprecated)."
+        ),
+    )
+
+    @field_validator("enabled_tiers")
+    @classmethod
+    def _validate_enabled_tiers(cls, v: str) -> str:
+        allowed = {"low", "medium", "high", "pro"}
+        names = [t.strip().lower() for t in (v or "").split(",") if t.strip()]
+        bad = [t for t in names if t not in allowed]
+        if bad:
+            raise ValueError(
+                f"ENABLED_TIERS contains unknown tier(s) {bad}; allowed: {sorted(allowed)}"
+            )
+        if not names:
+            raise ValueError("ENABLED_TIERS must name at least one tier")
+        return ",".join(names)
+
+    def tier_enabled(self, tier_name: str) -> bool:
+        """Whether *tier_name* is available, honouring the deprecated vars.
+
+        A legacy ``<TIER>_ENABLED`` env var still wins if it is set explicitly,
+        so an existing deployment does not silently change behaviour on
+        upgrade — but it warns, because carrying two spellings of one setting
+        is exactly the drift this consolidation removed.
+        """
+        import os
+
+        name = tier_name.strip().lower()
+        legacy = os.environ.get(f"{name.upper()}_ENABLED")
+        if legacy is not None:
+            # Warn ONCE per var, not per lookup: this runs on every tier
+            # resolution (i.e. every LLM build), and a deprecation notice that
+            # floods the log teaches people to ignore the log.
+            if name not in _WARNED_LEGACY_TIERS:
+                _WARNED_LEGACY_TIERS.add(name)
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "%s_ENABLED is deprecated — set ENABLED_TIERS instead "
+                    "(currently %r). The legacy var still wins for now.",
+                    name.upper(), self.enabled_tiers,
+                )
+            return legacy.strip().lower() in {"1", "true", "yes", "on"}
+        return name in {t for t in self.enabled_tiers.split(",")}
 
     # Vision / image understanding.  ``vision_provider`` selects the routing:
     # ``openai`` works against the real OpenAI API *and* any OpenAI-compatible
@@ -999,11 +1055,36 @@ class AppSettings(BaseSettings):
         default=5, alias="TASK_RUNNER_INTERVAL_MINUTES",
     )
 
-    # TeamWork integration (web UI) — disabled by default for standalone use.
-    # Docker Compose sets TEAMWORK_ENABLED=true automatically.
-    teamwork_enabled: bool = Field(default=False, alias="TEAMWORK_ENABLED")
+    # TeamWork integration (web UI) — the URL IS the switch: set it and the
+    # integration is on, leave it empty and Prax runs standalone.
+    #
+    # This used to be gated twice: a TEAMWORK_ENABLED boolean AND a non-empty
+    # URL, while teamwork_service.enabled was already just bool(base_url). Two
+    # spellings of one setting is precisely the "TEAMWORK_URL is empty and Prax
+    # silently skips connecting" trap documented in CLAUDE.md — the symptom was
+    # an empty workspace and an onboarding wizard instead of an error. The
+    # legacy boolean is still honoured as an explicit OFF switch (see
+    # teamwork_active) so an existing .env cannot suddenly start connecting.
     teamwork_url: str = Field(default="", alias="TEAMWORK_URL")  # e.g. "http://teamwork:8000"
     teamwork_api_key: str = Field(default="", alias="TEAMWORK_API_KEY")
+
+    @property
+    def teamwork_active(self) -> bool:
+        """True when Prax should connect to TeamWork.
+
+        A configured URL is the signal. ``TEAMWORK_ENABLED=false`` still forces
+        it off for deployments that set it — an explicit opt-out keeps working —
+        but the boolean is no longer *required* to turn it on, so a set URL can
+        no longer be silently ignored.
+        """
+        import os
+
+        if not self.teamwork_url:
+            return False
+        legacy = os.environ.get("TEAMWORK_ENABLED")
+        if legacy is not None and legacy.strip().lower() in {"0", "false", "no", "off"}:
+            return False
+        return True
     teamwork_user_phone: str = Field(default="", alias="TEAMWORK_USER_PHONE")
     # User-facing base URL for TeamWork — what Prax pastes into chat when
     # surfacing course/note links.  Defaults to the local Docker port mapping;

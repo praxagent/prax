@@ -18,6 +18,17 @@ Usage
 ``arms.json`` maps arm name → {ENV: value}. The ``baseline`` arm is implicit
 (empty overrides) unless you define it.
 
+Scorer must be frozen for the whole campaign
+--------------------------------------------
+Every arm is graded by ``prax/eval/capability.py`` and the case YAMLs. If those
+change between arms, the arms are not comparable and the campaign is void — the
+read-only-scorer property (Weng/AHE, ``docs/guides/flag-audit.md``). This script
+fingerprints the scorer before the first arm and re-checks it after each one;
+a change ABORTS rather than producing numbers that look comparable and are not.
+
+(Learned the hard way on 2026-08-07: a scorer fix landed mid-campaign and the
+first two arms had to be discarded.)
+
 Honesty rules baked in
 ----------------------
 * An arm that CRASHES is reported as crashed, never as a score of zero — a
@@ -36,6 +47,22 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+
+def _scorer_fingerprint() -> str:
+    """sha256 over the grading code + every capability case."""
+    import hashlib
+
+    root = Path(__file__).resolve().parents[1]
+    h = hashlib.sha256()
+    targets = [root / "prax" / "eval" / "capability.py"]
+    targets += sorted((root / "prax" / "eval" / "capability_cases").glob("*.yaml"))
+    for t in targets:
+        try:
+            h.update(t.read_bytes())
+        except OSError:
+            h.update(b"<missing>")
+    return h.hexdigest()
 
 
 def _eval_dir() -> Path:
@@ -103,8 +130,16 @@ def main() -> int:
     # baseline first, so a broken harness is obvious before spending on arms
     order = ["baseline"] + [k for k in arms if k != "baseline"]
 
+    scorer = _scorer_fingerprint()
+    print(f"scorer fingerprint: {scorer[:16]}", flush=True)
+
     results = []
     for name in order:
+        if _scorer_fingerprint() != scorer:
+            print("SCORER CHANGED MID-CAMPAIGN — aborting. Arms graded by "
+                  "different scorers are not comparable; rerun from scratch.",
+                  flush=True)
+            break
         results.append(run_arm(
             name, arms[name], suite=args.suite, tier=args.tier,
             campaign=args.campaign, cheap=args.cheap, timeout_s=args.timeout_s))
@@ -116,11 +151,15 @@ def main() -> int:
             break
 
     summary = _eval_dir() / args.campaign / "summary.json"
+    results.append({"arm": "_meta", "scorer_fingerprint": scorer,
+                    "scorer_stable": _scorer_fingerprint() == scorer})
     summary.parent.mkdir(parents=True, exist_ok=True)
     summary.write_text(json.dumps(results, indent=2), encoding="utf-8")
 
     print("\n" + "=" * 60)
     for r in results:
+        if r["arm"] == "_meta":
+            continue
         print(f"{r['arm']:32} {r['status']:12} {r['seconds']:>7}s")
     print("=" * 60)
     print(f"raw: {summary.parent}")

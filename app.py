@@ -154,7 +154,7 @@ def create_app():
     # Initialize TeamWork integration if configured.
     # In lite mode all services share a container and TeamWork may still
     # be starting when Prax reaches this point.  Retry with backoff.
-    if settings.teamwork_enabled and settings.teamwork_url:
+    if settings.teamwork_active:
         try:
             import time as _time
 
