@@ -194,7 +194,10 @@ def main() -> int:
     print("\nNOTE: read the per-case grids in each arm's stdout.log before "
           "concluding anything. A one-case difference is noise, not a verdict — "
           "and compare every token delta against the baseline-vs-replicate "
-          "spread, which is this campaign's measured noise floor.")
+          "spread, which is this campaign's measured noise floor.\n"
+          "Do NOT compare arms on avg_tokens: one oversized case can dominate "
+          "the mean and its variance then reads as a flag effect (2026-08-07). "
+          "Use per-case deltas.")
     return 0
 
 
