@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.43.2](https://github.com/praxagent/prax/compare/v0.43.1...v0.43.2) (2026-08-07)
+
+
+### Bug Fixes
+
+* **eval:** campaign verdicts and the statistic that was hiding them ([#216](https://github.com/praxagent/prax/issues/216)) ([444c344](https://github.com/praxagent/prax/commit/444c34401ff2eced5f28fdc10deaa3db6fb40666))
+* **settings:** legacy tier/TeamWork switches must be read from .env, not os.environ ([#214](https://github.com/praxagent/prax/issues/214)) ([539a3b0](https://github.com/praxagent/prax/commit/539a3b0e76c65a95508a42e0ac2327f7333630f6))
+
 ## [0.43.1](https://github.com/praxagent/prax/compare/v0.43.0...v0.43.1) (2026-08-07)
 
 
