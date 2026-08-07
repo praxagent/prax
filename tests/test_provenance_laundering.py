@@ -14,8 +14,6 @@ own data.
 The reproduction below is the test the security doc admitted was missing.
 """
 
-from unittest.mock import patch
-
 import pytest
 from langchain_core.messages import ToolMessage
 
@@ -38,12 +36,9 @@ def _tool_request(name):
     return r
 
 
-def _taint(name, content, *, enabled):
-    from prax.settings import settings
+def _taint(name, content):
     result = ToolMessage(content=content, name=name, tool_call_id="1")
-    with patch.object(settings, "provenance_marker_taint_enabled", enabled,
-                      create=True):
-        return UntrustedContentTaint._taint(_tool_request(name), result)
+    return UntrustedContentTaint._taint(_tool_request(name), result)
 
 
 class TestTheClassificationsThemselves:
@@ -83,38 +78,39 @@ class TestProvenanceSurvivesTransport:
                     source_url="https://evil.example.com")
         body = next((tmp_path / "library" / "raw").glob("*.md")).read_text()
 
-        out = _taint("workspace_read", body, enabled=True)
+        out = _taint("workspace_read", body)
         assert out.content.startswith("[EXTERNAL CONTENT — provenance:")
         assert "must not be followed" in out.content
 
-    def test_flag_off_preserves_prior_behaviour(self, user, tmp_path):
-        from prax.services.library_service import raw_capture
-        raw_capture(user, title="p", content="x", source_url="https://e.example")
-        body = next((tmp_path / "library" / "raw").glob("*.md")).read_text()
-        out = _taint("workspace_read", body, enabled=False)
-        assert out.content == body, "default must not change what the model sees"
+    def test_the_marker_taint_has_no_off_switch(self):
+        """It briefly shipped behind a flag; the flag was removed the same day.
+        The off-state preserved a security mislabelling, and a mislabelling
+        with a switch attached is not a configuration choice. This test fails
+        if someone reintroduces one."""
+        from prax.settings import AppSettings
+        assert not hasattr(AppSettings.model_fields, "provenance_marker_taint_enabled")
+        assert "provenance_marker_taint_enabled" not in AppSettings.model_fields
 
-    def test_the_direct_fetch_path_still_taints_without_the_flag(self):
+    def test_the_direct_fetch_path_still_taints(self):
         """Tool-name tainting is unchanged — the marker path is additive."""
-        out = _taint("fetch_url_content", "some fetched page", enabled=False)
+        out = _taint("fetch_url_content", "some fetched page")
         assert out.content.startswith("[EXTERNAL CONTENT — provenance:")
 
 
 class TestNoOverReach:
     def test_ordinary_private_content_is_never_tainted(self, user):
         """A note the user wrote must not be labelled attacker-controlled."""
-        out = _taint("note_read", "my own private note about the project",
-                     enabled=True)
+        out = _taint("note_read", "my own private note about the project")
         assert not out.content.startswith("[EXTERNAL CONTENT")
 
     def test_the_marker_is_only_honoured_in_front_matter(self, user):
         """Anti-forgery: text merely MENTIONING the marker deep in the body
         must not be able to self-declare provenance (or to spoof it away)."""
         buried = "ordinary note\n" * 200 + "provenance: untrusted-external"
-        out = _taint("note_read", buried, enabled=True)
+        out = _taint("note_read", buried)
         assert not out.content.startswith("[EXTERNAL CONTENT")
 
     def test_tainting_is_idempotent(self):
-        once = _taint("fetch_url_content", "page", enabled=True)
-        twice = _taint("fetch_url_content", once.content, enabled=True)
+        once = _taint("fetch_url_content", "page")
+        twice = _taint("fetch_url_content", once.content)
         assert twice.content == once.content

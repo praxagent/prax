@@ -1013,18 +1013,6 @@ class AppSettings(BaseSettings):
         default=7.0, alias="MEMORY_DECAY_HALFLIFE_DAYS",
         description="Half-life in days for Ebbinghaus-style memory importance decay.",
     )
-    provenance_marker_taint_enabled: bool = Field(
-        default=False, alias="PROVENANCE_MARKER_TAINT_ENABLED",
-        description=(
-            "Taint tool results whose CONTENT declares untrusted-external "
-            "provenance, not just those returned by an untrusted-source tool. "
-            "Closes the laundering path where a fetched page auto-captured to "
-            "library/raw/ and read back through the workspace is reclassified "
-            "as private data (docs/security/provenance-laundering.md). Off by "
-            "default: it adds banners to reads that previously had none and "
-            "can trip the lethal-trifecta guard more often."
-        ),
-    )
     memory_consistency_mode: str = Field(
         default="off", alias="MEMORY_CONSISTENCY_MODE",
         description=(
