@@ -2038,6 +2038,12 @@ def write_schema(user_id: str, content: str) -> dict[str, Any]:
 # Raw captures — the junk drawer
 # ---------------------------------------------------------------------------
 
+# Front-matter marker meaning "this content came from outside and is
+# attacker-controllable". Read by the in-loop provenance taint so the label
+# survives a change of transport.
+PROVENANCE_UNTRUSTED = "untrusted-external"
+
+
 def raw_capture(
     user_id: str,
     title: str,
@@ -2063,6 +2069,17 @@ def raw_capture(
         "source_url": source_url or "",
         "captured_at": _now_iso(),
         "kind": "raw",
+        # Provenance travels with the CONTENT, not with whichever tool later
+        # reads it. Everything in the inbox came from outside — a fetched page,
+        # a shared link, an attachment — so it is attacker-controllable no
+        # matter which tool hands it back to the model.
+        #
+        # Without this stamp the classification INVERTS on the way out: the
+        # same bytes are `untrusted_source` when fetched and `private_data`
+        # when read back through the workspace, which can arm the
+        # lethal-trifecta guard instead of tripping it.
+        # See docs/security/provenance-laundering.md.
+        "provenance": PROVENANCE_UNTRUSTED,
     }
     path.write_text(_serialize_frontmatter(meta, content), encoding="utf-8")
     logger.info("library: captured raw item %s for user %s", slug, user_id)

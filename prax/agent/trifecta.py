@@ -32,6 +32,13 @@ _SRC_NAMES = (
     # transcripts, fetched PDFs, page/feed summaries.  Anything that turns a
     # URL or external medium into model-visible text belongs here.
     "youtube", "transcribe", "web_summary", "pdf_summary", "news",
+    # The library inbox (library/raw/) holds AUTO-CAPTURED external pages —
+    # shared links, attachments, fetched articles. Reading it is reading
+    # attacker-controllable text, so it belongs here and not among the
+    # private-data readers. It was previously classified as NEITHER, which
+    # meant MEDIUM risk with no provenance at all.
+    # See docs/security/provenance-laundering.md.
+    "library_raw", "raw_capture", "raw_promote",
 )
 _PRIVATE_NAMES = (
     "memory_search", "memory_recall", "memory_get", "knowledge_search",
