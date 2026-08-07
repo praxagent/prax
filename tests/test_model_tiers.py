@@ -117,6 +117,11 @@ def test_tier_for_system_prompt():
 class TestEnabledTiersConsolidation:
     """ENABLED_TIERS replaced four booleans; the old vars must still work.
 
+    NOTE `_env_file=None` on every construction: without it these read the
+    DEVELOPER'S OWN `.env`, so the result depended on whose machine ran the
+    suite. That was invisible until the legacy switches became real pydantic
+    fields — a settings test must not inherit ambient config.
+
     Four booleans expressing membership in a set is the shape that should have
     been a set. But an existing deployment's .env still says LOW_ENABLED=false,
     and silently changing its behaviour on upgrade would be worse than the
@@ -125,7 +130,7 @@ class TestEnabledTiersConsolidation:
 
     def test_the_set_is_parsed(self, monkeypatch):
         from prax.settings import AppSettings
-        s = AppSettings(FLASK_SECRET_KEY="x", ENABLED_TIERS="low, HIGH ")
+        s = AppSettings(FLASK_SECRET_KEY="x", ENABLED_TIERS="low, HIGH ", _env_file=None)
         assert s.enabled_tiers == "low,high"
         monkeypatch.delenv("HIGH_ENABLED", raising=False)
         monkeypatch.delenv("LOW_ENABLED", raising=False)
@@ -139,29 +144,30 @@ class TestEnabledTiersConsolidation:
 
         from prax.settings import AppSettings
         with _pytest.raises(Exception, match="unknown tier"):
-            AppSettings(FLASK_SECRET_KEY="x", ENABLED_TIERS="low,ultra")
+            AppSettings(FLASK_SECRET_KEY="x", ENABLED_TIERS="low,ultra", _env_file=None)
 
     def test_an_empty_set_fails_loudly(self):
         import pytest as _pytest
 
         from prax.settings import AppSettings
         with _pytest.raises(Exception, match="at least one tier"):
-            AppSettings(FLASK_SECRET_KEY="x", ENABLED_TIERS=" ")
+            AppSettings(FLASK_SECRET_KEY="x", ENABLED_TIERS=" ", _env_file=None)
 
     def test_a_legacy_var_still_wins(self, monkeypatch):
         """An existing .env must not silently change behaviour on upgrade."""
         from prax.settings import AppSettings
-        s = AppSettings(FLASK_SECRET_KEY="x", ENABLED_TIERS="low,medium,high")
         monkeypatch.setenv("HIGH_ENABLED", "false")
-        assert s.tier_enabled("high") is False
+        assert AppSettings(FLASK_SECRET_KEY="x", ENABLED_TIERS="low,medium,high",
+                           _env_file=None).tier_enabled("high") is False
         monkeypatch.setenv("PRO_ENABLED", "true")
-        assert s.tier_enabled("pro") is True
+        assert AppSettings(FLASK_SECRET_KEY="x", ENABLED_TIERS="low,medium,high",
+                           _env_file=None).tier_enabled("pro") is True
 
     def test_legacy_absent_means_the_set_decides(self, monkeypatch):
         from prax.settings import AppSettings
-        s = AppSettings(FLASK_SECRET_KEY="x", ENABLED_TIERS="low")
         for v in ("LOW_ENABLED", "MEDIUM_ENABLED", "HIGH_ENABLED", "PRO_ENABLED"):
             monkeypatch.delenv(v, raising=False)
+        s = AppSettings(FLASK_SECRET_KEY="x", ENABLED_TIERS="low", _env_file=None)
         assert s.tier_enabled("low") is True
         assert s.tier_enabled("medium") is False
 
@@ -177,7 +183,7 @@ class TestTeamWorkSingleGate:
 
     def _s(self, **kw):
         from prax.settings import AppSettings
-        return AppSettings(FLASK_SECRET_KEY="x", **kw)
+        return AppSettings(FLASK_SECRET_KEY="x", _env_file=None, **kw)
 
     def test_a_url_alone_turns_it_on(self, monkeypatch):
         monkeypatch.delenv("TEAMWORK_ENABLED", raising=False)
@@ -213,3 +219,48 @@ def test_legacy_tier_warning_fires_once_per_process(monkeypatch, caplog):
         for _ in range(5):
             assert s.tier_enabled("pro") is True
     assert sum("PRO_ENABLED is deprecated" in r.message for r in caplog.records) == 1
+
+
+class TestLegacyShimReadsDotEnvNotJustProcessEnv:
+    """The shim's first version read os.environ and saw nothing.
+
+    Pydantic loads `.env` ITSELF and does not export to the process
+    environment. So a deployment whose .env said PRO_ENABLED=true — as the live
+    box's did — had the pro tier silently DISABLED by the consolidation, which
+    is precisely what the back-compat path existed to prevent. Caught on the
+    box, not by a test, because every test set the variable via monkeypatch.
+
+    Same root cause as the EMBEDDING_BASE_URL gap found the same day: settings
+    live in pydantic, not in os.environ.
+    """
+
+    def _settings_from_env_file(self, tmp_path, body):
+        from prax.settings import AppSettings
+        f = tmp_path / ".env"
+        f.write_text(body, encoding="utf-8")
+        return AppSettings(FLASK_SECRET_KEY="x", _env_file=str(f))
+
+    def test_a_dot_env_legacy_tier_var_is_honoured(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("PRO_ENABLED", raising=False)
+        s = self._settings_from_env_file(
+            tmp_path, "ENABLED_TIERS=low,medium,high\nPRO_ENABLED=true\n")
+        assert s.tier_enabled("pro") is True, "the live-box regression"
+
+    def test_a_dot_env_legacy_off_switch_is_honoured(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("HIGH_ENABLED", raising=False)
+        s = self._settings_from_env_file(
+            tmp_path, "ENABLED_TIERS=low,medium,high\nHIGH_ENABLED=false\n")
+        assert s.tier_enabled("high") is False
+
+    def test_a_dot_env_teamwork_off_switch_is_honoured(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("TEAMWORK_ENABLED", raising=False)
+        s = self._settings_from_env_file(
+            tmp_path, "TEAMWORK_URL=http://tw:8000\nTEAMWORK_ENABLED=false\n")
+        assert s.teamwork_active is False
+
+    def test_absent_legacy_keys_leave_the_new_setting_in_charge(self, tmp_path, monkeypatch):
+        for v in ("LOW_ENABLED", "MEDIUM_ENABLED", "HIGH_ENABLED", "PRO_ENABLED"):
+            monkeypatch.delenv(v, raising=False)
+        s = self._settings_from_env_file(tmp_path, "ENABLED_TIERS=low\n")
+        assert s.tier_enabled("low") is True
+        assert s.tier_enabled("pro") is False
