@@ -27,6 +27,49 @@ from prax.agent.message_text import message_text
 logger = logging.getLogger(__name__)
 
 
+def _apply_pinned_inputs(task: str) -> str:
+    """Append this turn's captured artifacts to a delegated task.
+
+    The channel handlers auto-capture attachments/shared URLs into
+    ``library/raw/`` and tell the ORCHESTRATOR so in a ``[SYSTEM: captured…]``
+    note — but a delegated spoke never sees the trigger, so it re-derives
+    "the document" by searching the workspace. Observed live: a narrate-this-
+    report delegation found 22 candidate .md files and narrated the wrong one,
+    front-matter and all. Pinning the capture into the task removes the guess.
+
+    Flag-gated (``DELEGATION_PINNED_INPUTS_ENABLED``, default off) and a no-op
+    when nothing was captured this turn.
+    """
+    from prax.settings import settings
+
+    if not getattr(settings, "delegation_pinned_inputs_enabled", False):
+        return task
+    from prax.agent.user_context import current_turn_captures, current_user_id
+
+    captures = current_turn_captures.get()
+    if not captures:
+        return task
+    try:
+        import os
+
+        from prax.services import workspace_service
+
+        uid = current_user_id.get() or ""
+        user_dir = os.path.basename(workspace_service.workspace_root(uid))
+    except Exception:
+        user_dir = "<user_id>"
+    lines = "\n".join(
+        f"- library/raw/{slug}.md  (in the sandbox: /workspace/{user_dir}/library/raw/{slug}.md)"
+        for slug in captures)
+    return (
+        f"{task}\n\n"
+        "[PINNED INPUTS — file(s) captured from the user's message THIS turn. "
+        "If the task refers to an attached or shared document, it is one of "
+        "these. Read them directly; do not search the workspace for "
+        "look-alikes:\n" + lines + "]"
+    )
+
+
 def run_spoke(
     *,
     task: str,
@@ -78,6 +121,8 @@ def run_spoke(
         away.
     """
     import time as _time
+
+    task = _apply_pinned_inputs(task)
 
     from prax.agent.trace import (
         GraphCallbackHandler,

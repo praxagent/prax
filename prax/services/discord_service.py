@@ -290,6 +290,9 @@ def _build_bot():
 
         def _reply_with_channel() -> str:
             current_channel_name.set("discord")
+            if captured:
+                from prax.agent.user_context import current_turn_captures
+                current_turn_captures.set((captured,))
             return conversation_service.reply(user_id, prompt_input, source="discord")
 
         try:

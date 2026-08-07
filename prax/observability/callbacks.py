@@ -122,18 +122,35 @@ class OTelLLMCallback(BaseCallbackHandler):
         # Prometheus metrics and the trace cost attribution below: the call's
         # accounting vanished silently, because LangChain swallows callback
         # errors. Hence the `or {}` on every extraction.
-        usage = {}
+        # Three shapes carry usage, and which one arrives depends on the
+        # provider and the LangChain integration version:
+        #
+        #   1. `AIMessage.usage_metadata`  {input_tokens, output_tokens}
+        #      — the MODERN, provider-normalised shape. Checked FIRST.
+        #   2. `llm_output["token_usage"]` {prompt_tokens, completion_tokens}
+        #      — the legacy OpenAI-completions shape.
+        #   3. `generation_info["token_usage"]` — same legacy keys, older path.
+        #
+        # The previous branch structure lost shape 1 entirely: `llm_output` is
+        # commonly a truthy `{"model_name": ...}` with NO `token_usage`, so the
+        # first branch matched, produced `{}`, and the `elif` never ran — a
+        # call carrying 1200 in / 40 out was recorded as 0/0 while still
+        # counting as an LLM call. Observed live as an orchestrator span
+        # reporting 159 in / 24 out across a 12-tool-call turn, with every
+        # `cost_estimate_usd` null.
         llm_output = getattr(response, "llm_output", None) or {}
-        if llm_output:
+        input_tokens, output_tokens = _usage_from_message(response)
+        if not (input_tokens or output_tokens):
             usage = llm_output.get("token_usage") or {}
-        elif getattr(response, "generations", None):
-            gen = response.generations[0][0] if response.generations[0] else None
-            info = getattr(gen, "generation_info", None) or {}
-            usage = info.get("token_usage") or {}
-
-        input_tokens = usage.get("prompt_tokens") or 0
-        output_tokens = usage.get("completion_tokens") or 0
-        model = usage.get("model_name") or llm_output.get("model_name") or "unknown"
+            if not usage and getattr(response, "generations", None):
+                gen = response.generations[0][0] if response.generations[0] else None
+                info = getattr(gen, "generation_info", None) or {}
+                usage = info.get("token_usage") or {}
+            input_tokens = usage.get("prompt_tokens") or 0
+            output_tokens = usage.get("completion_tokens") or 0
+            model = usage.get("model_name") or llm_output.get("model_name") or "unknown"
+        else:
+            model = llm_output.get("model_name") or _response_model(response) or "unknown"
 
         # Record Prometheus metrics
         _record_metrics(model, input_tokens, output_tokens, elapsed)
@@ -274,6 +291,36 @@ def _infer_tier_for_model(model: str) -> str:
     except Exception:
         pass
     return "unknown"
+
+
+def _first_message(response: Any):
+    """The AIMessage of the first generation, or None."""
+    gens = getattr(response, "generations", None)
+    if not gens or not gens[0]:
+        return None
+    return getattr(gens[0][0], "message", None)
+
+
+def _usage_from_message(response: Any) -> tuple[int, int]:
+    """Read ``AIMessage.usage_metadata`` — the provider-normalised shape.
+
+    Returns ``(0, 0)`` when absent, so callers can fall back to the legacy
+    ``token_usage`` dicts. Never raises: accounting must not break a call.
+    """
+    try:
+        meta = getattr(_first_message(response), "usage_metadata", None) or {}
+        return int(meta.get("input_tokens") or 0), int(meta.get("output_tokens") or 0)
+    except Exception:  # noqa: BLE001 - accounting is best-effort
+        return 0, 0
+
+
+def _response_model(response: Any) -> str:
+    """Model name from response metadata, when the shape carries one."""
+    try:
+        meta = getattr(_first_message(response), "response_metadata", None) or {}
+        return str(meta.get("model_name") or meta.get("model") or "")
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def _infer_provider(serialized: dict) -> str:

@@ -328,17 +328,22 @@ def workspace_send_file(filename: str, message: str = "") -> str:
     uid = _get_user_id()
     root = workspace_service._workspace_root(uid)
 
-    # The sandbox mounts the user's workspace ROOT at /workspace, so the agent
-    # may pass a sandbox-absolute path (/workspace/foo.mp3) or a root-level name.
-    # Normalize, then resolve from active/ (the app's own save location) OR the
-    # workspace root (where the sandbox writes) — so sandbox-generated files are
-    # deliverable regardless of which the agent used.
+    # The sandbox mounts the whole workspaces/ directory at /workspace, so THIS
+    # user's root is /workspace/<their-dir> in the container — NOT /workspace
+    # itself. The agent may pass a container-absolute path
+    # (/workspace/usr_abc/active/foo.mp3), or a root-relative one. Normalize by
+    # stripping the mount prefix AND the caller's own directory (never another
+    # user's — the per-user boundary stays intact), then resolve from active/
+    # or the workspace root.
     name = filename
     for prefix in ("/workspace/", "workspace/"):
         if name.startswith(prefix):
             name = name[len(prefix):]
             break
     name = name.lstrip("/")
+    own_dir = os.path.basename(root)
+    if own_dir and name.startswith(own_dir + "/"):
+        name = name[len(own_dir) + 1:]
 
     file_path = None
     for rel in (os.path.join("active", name), name):
@@ -1012,11 +1017,16 @@ def progress_append(
 
 @tool
 def progress_detail(space_slug: str, date: str) -> str:
-    """Read the per-session detail file(s) for a given date in a space.
+    """Read the per-session detail notes behind a progress entry.
 
-    `date` must be YYYY-MM-DD. Use this only when the one-line outcome
-    in progress_read is not enough and you need the fuller notes from
-    that session. Not auto-loaded — progressive disclosure.
+    `date` is either `YYYY-MM-DD` (every session that day) or
+    `YYYY-MM-DD-{session_id}` for ONE session. Entry bullets end in that
+    session id, and the archive paragraph keeps a `Sessions: ...` list of
+    the ids it summarised — so when a summary is too thin, pass its id here
+    to read exactly the notes it came from rather than a whole day's worth.
+
+    Use only when the one-line outcome in progress_read is not enough.
+    Not auto-loaded — progressive disclosure.
     """
     try:
         from prax.services import progress_service

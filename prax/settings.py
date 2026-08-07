@@ -939,6 +939,14 @@ class AppSettings(BaseSettings):
     neo4j_password: str = Field(default="prax-memory", alias="NEO4J_PASSWORD")
     embedding_model: str = Field(default="text-embedding-3-small", alias="EMBEDDING_MODEL")
     embedding_provider: str = Field(default="openai", alias="EMBEDDING_PROVIDER")
+    embedding_base_url: str | None = Field(
+        default=None, alias="EMBEDDING_BASE_URL",
+        description=(
+            "Point the 'openai' embedding provider at any OpenAI-compatible "
+            "/v1/embeddings server (vLLM, llama.cpp server, LM Studio, SIE). "
+            "Unset → api.openai.com (prior behaviour)."
+        ),
+    )
     ollama_base_url: str = Field(
         default="http://localhost:11434", alias="OLLAMA_BASE_URL",
         description="Ollama endpoint for local embeddings (when EMBEDDING_PROVIDER=ollama).",
@@ -954,6 +962,41 @@ class AppSettings(BaseSettings):
     memory_decay_halflife_days: float = Field(
         default=7.0, alias="MEMORY_DECAY_HALFLIFE_DAYS",
         description="Half-life in days for Ebbinghaus-style memory importance decay.",
+    )
+    memory_consistency_enabled: bool = Field(
+        default=False, alias="MEMORY_CONSISTENCY_ENABLED",
+        description=(
+            "Symbolic consistency pass at consolidation: for single-valued "
+            "relation types, query the graph for conflicting current edges "
+            "instead of trusting the extractor LLM to volunteer 'supersedes'. "
+            "Log-only unless MEMORY_CONSISTENCY_AUTO_SUPERSEDE is also set."
+        ),
+    )
+    delegation_pinned_inputs_enabled: bool = Field(
+        default=False, alias="DELEGATION_PINNED_INPUTS_ENABLED",
+        description=(
+            "Append this turn's auto-captured library/raw/ artifacts to "
+            "delegated spoke tasks, so a spoke reads the file the user just "
+            "shared instead of searching the workspace for look-alikes."
+        ),
+    )
+    artifact_delivery_hint_enabled: bool = Field(
+        default=False, alias="ARTIFACT_DELIVERY_HINT_ENABLED",
+        description=(
+            "After delegate_sandbox, verify on disk which reported artifacts "
+            "exist in the user's workspace and append the exact "
+            "workspace_send_file call to the result — a deterministic nudge "
+            "for models that answer 'link please' with a bare filename."
+        ),
+    )
+    memory_consistency_auto_supersede: bool = Field(
+        default=False, alias="MEMORY_CONSISTENCY_AUTO_SUPERSEDE",
+        description=(
+            "Act on detected conflicts by closing the stale edge "
+            "(valid_until=now). Keep off until log-only mode has shown the "
+            "single-valued allowlist doesn't misfire — a wrong declaration "
+            "here deletes facts."
+        ),
     )
 
     # Observability (OTel tracing, Prometheus metrics, Grafana dashboards)

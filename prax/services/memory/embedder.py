@@ -98,7 +98,13 @@ def embed_text(text: str) -> list[float]:
 def _embed_openai(texts: list[str], model: str) -> list[list[float]]:
     from openai import OpenAI
 
-    client = OpenAI(api_key=settings.openai_key)
+    # EMBEDDING_BASE_URL points this path at any OpenAI-compatible /v1/embeddings
+    # server (vLLM, llama.cpp server, LM Studio, SIE, ...). Unset → SDK default
+    # (api.openai.com), exactly the prior behaviour. Local servers typically
+    # accept any key, so a placeholder keeps the keyless-local path working.
+    base_url = getattr(settings, "embedding_base_url", None) or None
+    api_key = settings.openai_key or ("sk-local-no-key" if base_url else None)
+    client = OpenAI(api_key=api_key, base_url=base_url)
     # OpenAI supports up to 2048 texts per batch
     all_vectors: list[list[float]] = []
     batch_size = 2048

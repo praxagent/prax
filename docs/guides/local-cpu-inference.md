@@ -132,8 +132,38 @@ HIGH_MODEL=Qwen3-30B-A3B
 
 > **Embeddings caveat.** Memory/knowledge retrieval uses a separate
 > `EMBEDDING_PROVIDER` (default OpenAI). For a fully-local stack set
-> `EMBEDDING_PROVIDER=ollama` + `OLLAMA_BASE_URL`, or leave embeddings on a cheap
-> API — they're not what the eval is measuring.
+> `EMBEDDING_PROVIDER=ollama` + `OLLAMA_BASE_URL`; point
+> `EMBEDDING_BASE_URL` at any OpenAI-compatible `/v1/embeddings` server
+> (llama.cpp server, vLLM, LM Studio, SIE — keyless, placeholder key sent
+> automatically); or leave embeddings on a cheap API — they're not what the
+> eval is measuring.
+
+## One server for everything: SIE
+
+Running a **full local stack** (chat + embeddings + OCR/vision) normally means
+assembling a patchwork — llama.cpp or ds4 for chat, Ollama or fastembed for
+embeddings, something else again for vision. If you have a GPU box,
+[superlinked/sie](https://github.com/superlinked/sie) (Apache-2.0) collapses
+that into **one OpenAI-compatible cluster**: 100+ pre-configured models
+(Qwen3/LLaMA generation, BGE-M3/SPLADE/Stella embeddings, GLiNER extraction,
+OCR, SigLIP vision) behind the same `/v1/chat/completions` + `/v1/embeddings`
+surface, with on-demand model loading and LRU eviction. Wiring is the same two
+lines as any other endpoint:
+
+```bash
+LLM_PROVIDER=vllm
+VLLM_BASE_URL=http://<sie-box>/v1
+EMBEDDING_BASE_URL=http://<sie-box>/v1
+EMBEDDING_MODEL=<an embedding model from the SIE catalog>
+```
+
+Honest scoping: SIE's *generation* path wants a real GPU (Apple-silicon needs
+their MLX runtime), so it complements rather than replaces the CPU path above —
+the natural split is this guide's llama.cpp/ds4 for the overnight CPU eval
+subject, SIE where a GPU box exists and you want the whole model zoo behind one
+URL. We have **not run SIE ourselves** (no GPU on either Prax box); this is a
+documented option, not a verified deployment — assessment in
+[`../research/sie-unified-local-inference.md`](../research/sie-unified-local-inference.md).
 
 ## Run the eval suites overnight
 

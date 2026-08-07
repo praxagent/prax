@@ -31,6 +31,15 @@ current_channel_name: ContextVar[str] = ContextVar("current_channel_name", defau
 # gate to detect when the user explicitly requested an action.
 current_user_message: ContextVar[str] = ContextVar("current_user_message", default="")
 
+# library/raw/ slugs auto-captured from THIS turn's user message (attachments,
+# shared URLs).  Set by the channel handlers (discord/sms) at capture time and
+# consumed by spoke delegation (DELEGATION_PINNED_INPUTS_ENABLED) so a spoke
+# receives the exact artifact the user just shared instead of re-deriving it
+# by searching the workspace — the failure mode where a "narrate this report"
+# delegation grepped 22 candidate files and narrated the wrong one.
+current_turn_captures: ContextVar[tuple[str, ...]] = ContextVar(
+    "current_turn_captures", default=())
+
 # The currently executing component (e.g., "orchestrator", "research", "browser")
 # — used by earned trust to look up per-component reliability.
 current_component: ContextVar[str] = ContextVar("current_component", default="orchestrator")

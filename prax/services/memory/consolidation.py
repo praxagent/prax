@@ -139,7 +139,7 @@ def consolidate_user(user_id: str) -> ConsolidationResult:
             low_conf_facts.append(fact)
 
     # 4. Upsert high-confidence entities to graph
-    from prax.services.memory import graph_store
+    from prax.services.memory import consistency, graph_store
 
     for ent in high_conf_entities:
         try:
@@ -161,6 +161,12 @@ def consolidate_user(user_id: str) -> ConsolidationResult:
         if conf < CONFIDENCE_THRESHOLD:
             continue
         try:
+            # Symbolic consistency pass (flag-gated): for single-valued
+            # relation types, ask the GRAPH whether a conflicting current
+            # edge exists, instead of trusting the extractor to have
+            # volunteered `supersedes`. Log-only unless auto-supersede is on.
+            if consistency.enabled():
+                consistency.enforce(user_id, rel, result)
             graph_store.add_relation(
                 user_id=user_id,
                 source_name=rel.get("source", ""),
@@ -316,6 +322,19 @@ def consolidate_user(user_id: str) -> ConsolidationResult:
     return result
 
 
+def _consistency_addendum() -> str:
+    """Extra prompt line teaching the single-valued relation types.
+
+    Only when the consistency flag is on — with it off, the extraction prompt
+    is byte-identical to prior behaviour.
+    """
+    from prax.services.memory import consistency
+
+    if not consistency.enabled():
+        return ""
+    return "\n" + consistency.PROMPT_ADDENDUM
+
+
 def _extract_entities_relations(text: str) -> dict:
     """Use LLM to extract structured entities, relations, and facts from text.
 
@@ -371,6 +390,7 @@ Rules:
 - Entity names should be canonical (lowercase, no articles)
 - temporal_events and causal_links can be empty arrays if none are present
 - Return ONLY valid JSON, no commentary"""
+                + _consistency_addendum()
             ),
             HumanMessage(content=f"Extract entities, relations, and facts from:\n\n{text[:4000]}"),
         ]
