@@ -56,16 +56,16 @@ the *measured recommendation*, so a deployment that set nothing behaved
 differently from the documented advice. Aligning the defaults fixes that without
 deleting anything real.
 
-Net: **61 → 54** boolean flags (39 off, 15 on), with no capability lost.
+Net after the first pass: **61 → 54** boolean flags. After the cluster pass below: **49**.
 
-## Recommended next — genuine clusters
+## Clusters — resolved in a follow-up pass
 
-| cluster | flags | proposal |
+| cluster | flags | outcome |
 |---|---|---|
-| Model tiers | `LOW_ENABLED`, `MEDIUM_ENABLED`, `HIGH_ENABLED`, `PRO_ENABLED` | one `ENABLED_TIERS=low,medium,high` list. Four booleans expressing membership in a set is the classic shape that should have been a set (`agent/model_tiers.py:56-71`) |
-| Retrieval | `RETRIEVAL_RERANK`, `RETRIEVAL_QUERY_EXPANSION`, `KNOWLEDGE_HYBRID_ENABLED` | both retrieval flags are *deferred pending a purpose-built retrieval eval* — same gate, same evidence, flipped together or not at all. One `RETRIEVAL_MODE=basic\|hybrid\|enhanced` ladder |
+| Model tiers | `LOW_ENABLED`, `MEDIUM_ENABLED`, `HIGH_ENABLED`, `PRO_ENABLED` | **DONE — 4 → 1.** Now `ENABLED_TIERS=low,medium,high`, validated (an unknown tier or an empty set fails at startup). Four booleans expressing membership in a set was the shape that should have been a set. Legacy `<TIER>_ENABLED` vars still win when explicitly set, and warn — an existing `.env` must not silently change behaviour on upgrade |
+| TeamWork | `TEAMWORK_ENABLED` + `TEAMWORK_URL` | **DONE — 2 → 1.** `settings.teamwork_active` makes the URL the switch. The redundancy *was* the documented "URL set but silently skipped" trap: `teamwork_service.enabled` was already `bool(base_url)` while `app.py` additionally demanded a boolean that defaulted false. An explicit `TEAMWORK_ENABLED=false` still forces it off |
+| Retrieval | `RETRIEVAL_RERANK`, `RETRIEVAL_QUERY_EXPANSION`, `KNOWLEDGE_HYBRID_ENABLED` | **still open.** Both retrieval flags are *deferred pending a purpose-built retrieval eval* — same gate, same evidence, flipped together or not at all. A `RETRIEVAL_MODE=basic\|hybrid\|enhanced` ladder is the shape, but collapsing them before the eval exists would bake in an ordering nobody has measured |
 | Browser | `BROWSER_SANDBOX_ONLY`, `BROWSER_VNC_ENABLED`, `BROWSER_HEADLESS` | genuinely independent (isolation / remote view / display) — **keep as three**. Listed here to record that it was checked, not overlooked |
-| TeamWork | `TEAMWORK_ENABLED` + `TEAMWORK_URL` | **two gates for one thing.** `teamwork_service.enabled` is `bool(base_url)`, while `app.py:157` also requires the boolean. `CLAUDE.md` already documents "TEAMWORK_URL empty → silently skips" as a trap — that trap *is* this redundancy. Make the URL the single source of truth |
 
 ## Keep — and why
 

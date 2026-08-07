@@ -53,22 +53,22 @@ def get_tier_configs() -> dict[Tier, TierConfig]:
         Tier.LOW: TierConfig(
             tier=Tier.LOW,
             model=settings.low_model,
-            enabled=settings.low_enabled,
+            enabled=settings.tier_enabled("low"),
         ),
         Tier.MEDIUM: TierConfig(
             tier=Tier.MEDIUM,
             model=settings.medium_model,
-            enabled=settings.medium_enabled,
+            enabled=settings.tier_enabled("medium"),
         ),
         Tier.HIGH: TierConfig(
             tier=Tier.HIGH,
             model=settings.high_model,
-            enabled=settings.high_enabled,
+            enabled=settings.tier_enabled("high"),
         ),
         Tier.PRO: TierConfig(
             tier=Tier.PRO,
             model=settings.pro_model,
-            enabled=settings.pro_enabled,
+            enabled=settings.tier_enabled("pro"),
         ),
     }
 

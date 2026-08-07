@@ -157,3 +157,48 @@ class TestGuardTypesCoverEveryCheck:
         src = Path("prax/agent/orchestrator.py").read_text(encoding="utf-8")
         appended = set(re.findall(r'_guard_types\.append\("([a-z_]+)"\)', src))
         assert {"tool_failure", "fabricated_link", "lethal_trifecta"} <= appended
+
+
+def test_usage_reaches_cost_end_to_end():
+    """The chain, not just the link I changed.
+
+    Fixing `_usage_from_message` proves the callback reads usage; it does not
+    prove a trace ends up with a cost. This walks the actual path — response
+    shape → callback extraction → graph attribution → `to_dict()` pricing —
+    because "verifying the layer you changed is not verifying the path the
+    caller takes" is how the original bug survived in the first place.
+
+    Before the fix this produced tokens 0/0 and `cost_estimate_usd: null`,
+    which is exactly what the 2026-08-06 live trace showed.
+    """
+    from prax.agent.trace import ExecutionGraph, SpanNode
+    from prax.observability.callbacks import _usage_from_message
+
+    r = _result(usage_metadata={"input_tokens": 1200, "output_tokens": 40,
+                                "total_tokens": 1240},
+                llm_output={"model_name": "gpt-5.4-nano"})
+    tin, tout = _usage_from_message(r)
+
+    g = ExecutionGraph("t1")
+    g.add_node(SpanNode(span_id="s1", name="orchestrator", parent_id=None,
+                        trace_id="t1", spoke_or_category="orchestrator"))
+    g.add_llm_usage("s1", "gpt-5.4-nano", tin, tout)
+
+    d = g.to_dict()
+    node = d["nodes"][0]
+    assert (node["tokens_in"], node["tokens_out"]) == (1200, 40)
+    assert node["cost_estimate_usd"] is not None and node["cost_estimate_usd"] > 0
+    assert d["cost_estimate_usd"] is not None
+
+
+def test_an_unpriced_model_nulls_the_cost_rather_than_undercounting():
+    """Partial pricing is treated as no pricing — a number that looks complete
+    and is quietly smaller than the truth is worse than an honest null."""
+    from prax.agent.trace import ExecutionGraph, SpanNode
+
+    g = ExecutionGraph("t2")
+    g.add_node(SpanNode(span_id="s1", name="orchestrator", parent_id=None,
+                        trace_id="t2", spoke_or_category="orchestrator"))
+    g.add_llm_usage("s1", "gpt-5.4-nano", 100, 10)
+    g.add_llm_usage("s1", "some-model-with-no-price", 100, 10)
+    assert g.to_dict()["nodes"][0]["cost_estimate_usd"] is None

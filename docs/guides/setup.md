@@ -6,7 +6,7 @@
 
 - Python 3.13 (managed via [uv](https://github.com/astral-sh/uv)).
 - **At least one messaging channel:**
-  - **TeamWork** (web UI) — the Slack-like web frontend and the primary channel. Requires the sibling [TeamWork](https://github.com/praxagent/teamwork) app running and `TEAMWORK_ENABLED=true` (Docker Compose sets this automatically). No external account or ngrok needed. User messages reach Prax over the TeamWork webhook.
+  - **TeamWork** (web UI) — the Slack-like web frontend and the primary channel. Requires the sibling [TeamWork](https://github.com/praxagent/teamwork) app running and `TEAMWORK_URL` pointed at it (Docker Compose sets this automatically). No external account or ngrok needed. User messages reach Prax over the TeamWork webhook.
   - **Discord** (text + attachments) — requires a Discord bot token (free). No ngrok needed — connects via WebSocket.
   - **Twilio** (Voice + SMS) — requires a Twilio account, verified phone number, and ngrok for webhooks (Twilio's servers must reach Prax from the public internet, which the local Tailscale sidecar can't provide). Paid per message/minute.
 - **Optional, recommended for remote access:** Tailscale account + a reusable, non-ephemeral auth key. Lets you reach TeamWork over HTTPS from your laptop without exposing the host's network or installing `tailscaled` on the server. See [Configuration → Remote access](../security/configuration.md#remote-access-tailscale-sidecar).
