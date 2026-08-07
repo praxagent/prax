@@ -73,7 +73,7 @@ def _eval_dir() -> Path:
 
 
 def run_arm(name: str, overrides: dict, *, suite: str, tier: str,
-            campaign: str, cheap: bool, timeout_s: int) -> dict:
+            campaign: str, cheap: bool, timeout_s: int, skip: str = "") -> dict:
     """Run one arm in a subprocess. Never raises — a crash is a result."""
     env = os.environ.copy()
     env.setdefault("FLASK_SECRET_KEY", "ci-test-key")
@@ -99,6 +99,10 @@ def run_arm(name: str, overrides: dict, *, suite: str, tier: str,
     env.update({k: str(v) for k, v in overrides.items()})
 
     cmd = [sys.executable, "scripts/eval_suite.py", suite, "--tier", tier]
+    if skip:
+        # Excluding a case must be UNIFORM across arms or the comparison is
+        # meaningless — hence a campaign-level flag, never a per-arm one.
+        cmd += ["--skip", skip]
     started = time.time()
     print(f"\n=== arm {name}: {overrides or '(baseline)'}", flush=True)
     try:
@@ -130,15 +134,31 @@ def main() -> int:
     ap.add_argument("--arms", required=True, help="path to arms JSON")
     ap.add_argument("--cheap", action="store_true")
     ap.add_argument("--timeout-s", type=int, default=3600)
+    ap.add_argument("--skip", default="",
+                    help="comma-separated case ids excluded from EVERY arm")
+    ap.add_argument("--no-replicate", action="store_true",
+                    help="skip the duplicate baseline arm (loses the noise floor)")
     args = ap.parse_args()
 
     arms: dict = json.loads(Path(args.arms).read_text(encoding="utf-8"))
     arms.setdefault("baseline", {})
+    # A SECOND identical baseline is not redundancy — it is the noise floor.
+    # The model is stochastic, so two runs of the same config differ by some
+    # unknown amount; without measuring it, an arm's token delta cannot be
+    # called a signal. The 2026-07-08 campaign reported -7%/-2%/+11% from
+    # single runs with no replicate, and so did this runner's first version.
+    # Any arm delta smaller than |baseline - baseline_replicate| is noise.
+    if not args.no_replicate:
+        arms.setdefault("baseline_replicate", dict(arms["baseline"]))
     # baseline first, so a broken harness is obvious before spending on arms
-    order = ["baseline"] + [k for k in arms if k != "baseline"]
+    order = (["baseline"]
+             + (["baseline_replicate"] if "baseline_replicate" in arms else [])
+             + [k for k in arms if k not in ("baseline", "baseline_replicate")])
 
     scorer = _scorer_fingerprint()
     print(f"scorer fingerprint: {scorer[:16]}", flush=True)
+    if args.skip:
+        print(f"EXCLUDED from every arm: {args.skip}", flush=True)
 
     results = []
     for name in order:
@@ -149,7 +169,8 @@ def main() -> int:
             break
         results.append(run_arm(
             name, arms[name], suite=args.suite, tier=args.tier,
-            campaign=args.campaign, cheap=args.cheap, timeout_s=args.timeout_s))
+            campaign=args.campaign, cheap=args.cheap, timeout_s=args.timeout_s,
+            skip=args.skip))
         r = results[-1]
         print(f"--- {r['arm']}: {r['status']} in {r['seconds']}s", flush=True)
         if name == "baseline" and r["status"] != "ok":
@@ -171,8 +192,12 @@ def main() -> int:
     print("=" * 60)
     print(f"raw: {summary.parent}")
     print("\nNOTE: read the per-case grids in each arm's stdout.log before "
-          "concluding anything. The capability suite is 7 cases — a one-case "
-          "difference is noise, not a verdict.")
+          "concluding anything. A one-case difference is noise, not a verdict — "
+          "and compare every token delta against the baseline-vs-replicate "
+          "spread, which is this campaign's measured noise floor.\n"
+          "Do NOT compare arms on avg_tokens: one oversized case can dominate "
+          "the mean and its variance then reads as a flag effect (2026-08-07). "
+          "Use per-case deltas.")
     return 0
 
 
