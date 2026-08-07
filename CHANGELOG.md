@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.1](https://github.com/praxagent/prax/compare/v0.43.0...v0.43.1) (2026-08-07)
+
+
+### Bug Fixes
+
+* **eval:** injection checks measure the action, not the mention ([#212](https://github.com/praxagent/prax/issues/212)) ([eab17bb](https://github.com/praxagent/prax/commit/eab17bbe064f0530a04dfaf069ae06e3a9f565eb))
+
 ## [0.43.0](https://github.com/praxagent/prax/compare/v0.42.0...v0.43.0) (2026-08-07)
 
 
