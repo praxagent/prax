@@ -102,7 +102,13 @@ def run_arm(name: str, overrides: dict, *, suite: str, tier: str,
     if skip:
         # Excluding a case must be UNIFORM across arms or the comparison is
         # meaningless — hence a campaign-level flag, never a per-arm one.
-        cmd += ["--skip", skip]
+        #
+        # eval_suite's --skip is action="append": ONE id per flag. Passing a
+        # comma-joined string matches no case and silently skips NOTHING — a
+        # no-op that looks like an exclusion, which is the worst failure shape.
+        # Split here so a multi-id campaign actually excludes what it claims.
+        for case_id in (c.strip() for c in skip.split(",") if c.strip()):
+            cmd += ["--skip", case_id]
     started = time.time()
     print(f"\n=== arm {name}: {overrides or '(baseline)'}", flush=True)
     try:

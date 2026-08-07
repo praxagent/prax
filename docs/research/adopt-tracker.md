@@ -142,6 +142,8 @@ Everything here feeds [IDEAS_BACKLOG #29](../IDEAS_BACKLOG.md) (close the recurs
 | **Every campaign needs a NULL ARM** (a flag that provably cannot affect the metric) | [eval-scorer-audit](eval-scorer-audit-2026-08-07.md) | ✅ | SHIPPED 2026-08-07 as the `baseline_replicate` arm in `flag_ab.py`. `MEMORY_CONSISTENCY_MODE=log` served as an accidental null arm and gave the 0.45% floor that made every other verdict interpretable |
 | **`PROMPT_SELECTIVITY_ENABLED` saves ~10.5% tokens (~25× noise floor)** — measured | [eval-scorer-audit](eval-scorer-audit-2026-08-07.md) | ✅ | default flipped ON in code 2026-08-07 and now confirmed on far stronger evidence than the flip was made with |
 | **`AGENT_MIDDLEWARE_ENABLED` has NO cost benefit** (costs ~0.5%) | [eval-scorer-audit](eval-scorer-audit-2026-08-07.md) | ✅ | July's −7% was an averaging artifact. Flip stands on no-regression + injection defence-in-depth only; `.env-example` corrected to stop citing a saving that does not exist |
+| **ADVISOR — a second model, own context, watching every turn inline** | [omp](omp-coding-agent.md) | 📋 | the structural version of `claim_audit`, which is post-hoc and advisory (runs after the reply exists, changes nothing by default). Theirs runs DURING, on an independent model — maker≠checker applied live rather than at grading time |
+| **Time-traveling stream rules — abort mid-token, inject, retry from the same point** | [omp](omp-coding-agent.md) | 📋 | EVERY Prax guard is post-hoc. This is a candidate answer to stochastic injection resistance: intervene at generation time rather than grade afterwards. Needs a trip budget + flag; aborting/resuming is provider-dependent |
 
 ## The standing structural gaps (tracked in depth elsewhere — pointer, not a re-list)
 
