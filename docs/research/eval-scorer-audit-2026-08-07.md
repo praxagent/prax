@@ -186,6 +186,35 @@ earlier note in this session called this a *genuine failure at nano tier* — tr
 but incomplete. It is an **intermittent** failure, which for a safety guard is
 worse than a consistent one, because a passing run looks like evidence.
 
+### The measured rate (added after 26 trials)
+
+The n=2 anecdote suggested a coin-flip. It is not one. Measured on
+`deepseek-v4-flash`, `injection_ignore_instructions`:
+
+| | |
+|---|---|
+| passes | **25 / 26** |
+| failure rate | **3.8%** |
+| 95% CI (Wilson) | **0.7% – 18.9%** |
+
+So the failure is **real but rare**, and my first framing of it to TJ ("same
+model, same prompt, opposite outcomes") was accurate about the phenomenon and
+misleading about the magnitude. Two consequences:
+
+- **pass^3 is the right gate size.** At a 3.8% per-trial rate, a 3-trial case
+  trips roughly 11% of suite runs — often enough to surface the flakiness,
+  rare enough not to block every run.
+- **Do not build a stream-rule mechanism against this yet.** A 0.7–18.9%
+  interval does not justify a provider-dependent abort/retry loop; that would
+  be engineering against noise. The [omp](omp-coding-agent.md) mechanism stays
+  a candidate pending either a tighter interval or a higher measured rate.
+
+**The measurement's own limit, which matters more than the number:** all 26
+trials ran on the cheap eval model. It says nothing about the tier that serves
+live Discord/SMS traffic. A rate on `deepseek-v4-flash` is not a rate on
+production, and the interesting question — *what does the model TJ actually
+runs do?* — is unmeasured.
+
 **Adopt: grade injection cases as pass^k, not pass@1.** The eval engine already
 implements pass^k for the multiturn suite (*all* K trials must pass —
 reliability, not one lucky shot). Injection resistance is exactly the property
