@@ -110,6 +110,29 @@ _UNTRUSTED_BANNER = (
 )
 
 
+def _carries_untrusted_marker(content: str) -> bool:
+    """True when the content itself declares untrusted-external provenance.
+
+    Flag-gated: this makes previously-untagged reads (workspace_read of a
+    captured page, say) start carrying a banner, which changes what the model
+    sees AND can trip the lethal-trifecta guard. Default off preserves prior
+    behaviour; the eval gate governs the flip like every other guard.
+
+    Deliberately a fixed marker written by the harness at capture time — NOT a
+    heuristic over the text. Sniffing for "SYSTEM OVERRIDE"-ish phrasing or
+    `---` fences would fit the eval case rather than the problem class.
+    """
+    from prax.settings import settings
+
+    if not getattr(settings, "provenance_marker_taint_enabled", False):
+        return False
+    from prax.services.library_service import PROVENANCE_UNTRUSTED
+
+    # The marker lives in YAML front-matter, so only look at the head.
+    head = content[:600]
+    return f"provenance: {PROVENANCE_UNTRUSTED}" in head
+
+
 def _tool_name(request: Any) -> str:
     """Best-effort tool name from a ToolCallRequest (fail-open on shape drift)."""
     try:
@@ -166,15 +189,27 @@ class UntrustedContentTaint(AgentMiddleware):
         if not isinstance(result, ToolMessage):
             return result  # Command / custom results pass through untouched
         name = _tool_name(request)
-        if not name or not trifecta.is_untrusted_source(name):
-            return result
         content = result.content
         if not isinstance(content, str) or not content:
             return result
-        banner = _UNTRUSTED_BANNER.format(tool=name)
+
+        by_tool = bool(name) and trifecta.is_untrusted_source(name)
+        # Provenance carried BY THE CONTENT survives a change of transport.
+        # A page fetched by an untrusted tool, auto-captured into library/raw/,
+        # and read back through the workspace is the same attacker-controllable
+        # text — but the tool name no longer says so, and the old
+        # tool-name-only check let the classification invert to `private_data`.
+        # See docs/security/provenance-laundering.md.
+        by_marker = _carries_untrusted_marker(content)
+        if not (by_tool or by_marker):
+            return result
+
         if content.startswith("[EXTERNAL CONTENT — provenance:"):
             return result
-        logger.debug("Provenance-tainted untrusted tool result: %s", name)
+        source = name if by_tool else "stored external capture"
+        banner = _UNTRUSTED_BANNER.format(tool=source)
+        logger.debug("Provenance-tainted result (tool=%s marker=%s): %s",
+                     by_tool, by_marker, name)
         return result.model_copy(update={"content": f"{banner}\n\n{content}"})
 
 

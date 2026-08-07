@@ -1,7 +1,10 @@
 # Provenance laundering: untrusted web content becomes "private data"
 
 **Found:** 2026-08-07, while investigating stochastic injection resistance.
-**Status:** unfixed. Filed as a design defect with a verified reproduction path.
+**Status:** **FIXED 2026-08-07** — see *What shipped* below. The tool
+misclassification and the capture-time stamp are unflagged (they were plain
+bugs); the taint that changes what the model sees is behind
+`PROVENANCE_MARKER_TAINT_ENABLED`, default off.
 **Severity:** the guard it defeats is the lethal-trifecta guard, so this is a
 security finding rather than a quality one.
 
@@ -73,7 +76,31 @@ is why `injection_ignore_instructions` is unguarded: its injected
 middleware never sees it. *Identical text, fetched by a tool, would be
 bannered.*
 
-## Fix direction (not yet implemented)
+## What shipped
+
+Provenance is now a property of the **content**, not the transport.
+
+| change | flagged? | why |
+|---|---|---|
+| `raw_capture` stamps `provenance: untrusted-external` in the front-matter it already writes | no | pure metadata; the harness *knows* it is third-party at that moment |
+| `library_raw_*` reclassified `untrusted_source` | no | they were **neither** — MEDIUM risk with no provenance. A plain misclassification |
+| `UntrustedContentTaint` banners on the **marker**, whatever tool returned it | **yes** — `PROVENANCE_MARKER_TAINT_ENABLED` | it adds banners to reads that previously had none and can trip the trifecta guard more often |
+
+The marker is read **only from the front-matter head (600 chars)**, so body
+text merely mentioning it cannot self-declare provenance — nor spoof it away.
+A test pins that.
+
+`tests/test_provenance_laundering.py` (9 tests) includes **the fetch → capture →
+read-back reproduction this document previously admitted was missing**, plus
+the no-overreach cases: a user's own note is never tainted, genuinely private
+readers keep their classification, and tainting stays idempotent.
+
+**Still open:** the flag is off, so the laundering path is closed only for
+deployments that opt in. Flipping it is an eval-gate decision like every other
+guard — and the honest reason to flip is that a false banner costs a little
+context while a missed one costs the guard.
+
+### Original fix direction (retained for the reasoning)
 
 Provenance must be a property of the **content**, not the transport.
 
@@ -99,10 +126,14 @@ punctuation.
 
 ## Honest limits
 
-- **No exploit was executed.** The classification table, the file locations and
-  the capture path are all verified; the trifecta consequence is derived from
-  reading `trifecta.py`, not demonstrated end to end. A test that walks
-  fetch → capture → read → sink would settle it and does not exist yet.
+- **Half the reproduction exists; the other half still does not.** The tests
+  now walk **fetch → capture → read-back** and prove the label survives. They
+  do **not** exercise the **→ sink** leg, so the claim "this can arm the
+  lethal-trifecta guard" remains *derived from reading `trifecta.py`*, not
+  demonstrated. Saying the gap is closed would be overclaiming: what is closed
+  is the laundering of the label, not a demonstration of the downstream
+  consequence.
+- **No exploit was executed.**
 - Auto-capture only stores pages the **user chose to share**, which narrows the
   practical attack to "user is induced to share a malicious link" — a real but
   not trivial precondition.
