@@ -114,3 +114,39 @@ class TestNoOverReach:
         once = _taint("fetch_url_content", "page")
         twice = _taint("fetch_url_content", once.content)
         assert twice.content == once.content
+
+
+class TestPreStampCaptures:
+    """Live verification found the gap: a REAL capture on the production box
+    was not bannered, because every existing capture predates the provenance
+    stamp. `kind: raw` is the front-matter those files have always carried,
+    and library/raw/ is by definition the external-content inbox — so it is
+    honoured as an untrusted marker too. No migration of user data needed.
+    """
+
+    OLD_FORMAT = (
+        "---\n"
+        "slug: 20260620-223821-github-com-example\n"
+        "title: github.com/example\n"
+        "source_url: https://github.com/example\n"
+        "captured_at: '2026-06-20T22:38:21+00:00'\n"
+        "kind: raw\n"
+        "---\n"
+        "> User message:\n> look at this\n\n## Fetched page content\n\nBody text."
+    )
+
+    def test_an_old_capture_without_the_stamp_is_still_bannered(self):
+        out = _taint("workspace_read", self.OLD_FORMAT)
+        assert out.content.startswith("[EXTERNAL CONTENT — provenance:")
+
+    def test_kind_raw_only_counts_inside_front_matter(self):
+        """A note whose BODY mentions 'kind: raw' is not an inbox capture."""
+        note = "my notes about the library design\nthe files carry kind: raw\n"
+        out = _taint("note_read", note)
+        assert not out.content.startswith("[EXTERNAL CONTENT")
+
+    def test_front_matter_without_kind_raw_is_not_swept_up(self):
+        """Ordinary front-matter docs (notes, courses) must not be tainted."""
+        doc = "---\ntitle: my own essay\nkind: note\n---\n\nMy words."
+        out = _taint("workspace_read", doc)
+        assert not out.content.startswith("[EXTERNAL CONTENT")

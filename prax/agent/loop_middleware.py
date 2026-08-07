@@ -130,7 +130,15 @@ def _carries_untrusted_marker(content: str) -> bool:
 
     # The marker lives in YAML front-matter, so only look at the head.
     head = content[:600]
-    return f"provenance: {PROVENANCE_UNTRUSTED}" in head
+    if f"provenance: {PROVENANCE_UNTRUSTED}" in head:
+        return True
+    # `kind: raw` is the pre-existing front-matter every inbox capture has
+    # carried since the library shipped — and library/raw/ is BY DEFINITION
+    # the external-content inbox. Honouring it covers the captures written
+    # before the explicit stamp existed (live verification found the fix
+    # protected only future captures; the 40+ files already on the production
+    # box were all pre-stamp and stayed laundered). No migration needed.
+    return "kind: raw" in head and head.startswith("---")
 
 
 def _tool_name(request: Any) -> str:
