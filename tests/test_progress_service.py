@@ -214,3 +214,82 @@ class TestProgressTools:
         content = progress_service.read_progress(user_id, slug)
         assert "wired tool" in content
         assert "next: tests" in content
+
+
+class TestArchiveKeepsItsPointers:
+    """Compaction may lose prose; it must never lose the way back.
+
+    Each recent bullet is ``{date} · {outcome} · {short_id}`` and names a
+    detail file ``.progress/{date}-{short_id}.md`` that compaction never
+    touches. Before this, the LOW-tier summariser rewrote those bullets into a
+    paragraph and the ids went with them — so the detail files survived on disk
+    and became unaddressable at exactly the moment the summary was the only
+    thing left in context. (docs/research/tencentdb-agent-memory.md)
+    """
+
+    def _folded(self, n):
+        return [f"2026-08-{i:02d} · did thing {i} · id{i:03d}" for i in range(1, n + 1)]
+
+    def test_ids_survive_a_summariser_that_drops_them(self):
+        archive = progress_service._preserve_refs(
+            "The team did several things.", self._folded(3))
+        assert "The team did several things." in archive
+        for ref in ("2026-08-01-id001", "2026-08-02-id002", "2026-08-03-id003"):
+            assert ref in archive
+
+    def test_compaction_end_to_end_keeps_refs(self):
+        """Through the real _compact path with a summariser that discards
+        everything — the worst case."""
+        sections = progress_service.ProgressSections(
+            archive="", recent=self._folded(12), open_threads=[])
+        out = progress_service._compact(sections, compactor=lambda _a, _f: "Stuff happened.")
+        assert "Stuff happened." in out.archive
+        assert "2026-08-01-id001" in out.archive
+
+    def test_refs_are_not_duplicated_across_compactions(self):
+        first = progress_service._preserve_refs("Prose.", self._folded(2))
+        second = progress_service._preserve_refs(first, self._folded(2))
+        assert second.count("2026-08-01-id001") == 1
+
+    def test_the_trailer_is_bounded_and_says_so(self):
+        """The archive has a char cap; an unbounded ref list would eat it."""
+        many = [f"2026-08-01 · x · id{i:03d}" for i in range(200)]
+        archive = progress_service._preserve_refs("Prose.", many)
+        kept = archive.count("2026-08-01-id")
+        assert kept == progress_service.MAX_ARCHIVE_REFS
+        assert "older)" in archive          # truncation is marked, not silent
+
+    def test_a_malformed_bullet_yields_no_pointer(self):
+        """Better no pointer than a bogus one."""
+        assert progress_service._entry_ref("not a bullet") is None
+        assert progress_service._entry_ref("nodate · outcome · id1") is None
+        assert progress_service._entry_ref("2026-08-01 · o · a1b2") == "2026-08-01-a1b2"
+
+
+class TestDereferenceOneSession:
+    def test_a_session_id_reads_exactly_that_session(self, user_with_space):
+        uid, slug = user_with_space
+        when = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
+        progress_service.append_progress(
+            uid, slug, "first thing", detail="FIRST DETAIL", session_id="aaa111",
+            now=when)
+        progress_service.append_progress(
+            uid, slug, "second thing", detail="SECOND DETAIL", session_id="bbb222",
+            now=when)
+
+        one = progress_service.read_session_detail(uid, slug, "2026-08-01-bbb222")
+        assert "SECOND DETAIL" in one
+        assert "FIRST DETAIL" not in one          # the whole point
+
+        whole_day = progress_service.read_session_detail(uid, slug, "2026-08-01")
+        assert "FIRST DETAIL" in whole_day and "SECOND DETAIL" in whole_day
+
+    def test_an_unknown_session_id_says_so(self, user_with_space):
+        uid, slug = user_with_space
+        out = progress_service.read_session_detail(uid, slug, "2026-08-01-nope99")
+        assert "No session detail" in out
+
+    def test_a_bad_date_still_explains_both_forms(self, user_with_space):
+        uid, slug = user_with_space
+        out = progress_service.read_session_detail(uid, slug, "last tuesday")
+        assert "YYYY-MM-DD" in out

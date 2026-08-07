@@ -2183,6 +2183,7 @@ class ConversationAgent:
                 audit_plan_completion,
                 audit_scheduled_task_grounding,
                 audit_tool_failures,
+                audit_undelivered_artifact,
                 decide_scheduled_briefing_action,
                 format_audit_warning,
             )
@@ -2209,6 +2210,7 @@ class ConversationAgent:
             plan_mismatch = audit_plan_completion(response, messages)
             tool_failures = audit_tool_failures(response, tool_results)
             fabricated_links = audit_fabricated_links(response, tool_results)
+            undelivered = audit_undelivered_artifact(response, messages)
             trifecta_trail = audit_trajectory_messages(messages)
             scheduled_grounding = (
                 audit_scheduled_task_grounding(task_input, response, messages)
@@ -2256,6 +2258,13 @@ class ConversationAgent:
                     f"agent likely invented where it saved something; verify the "
                     f"link before presenting it"
                 )
+            if undelivered:
+                flagged_parts.append(
+                    "UNDELIVERED ARTIFACT: the response promises the user a "
+                    "link/file but contains no URL and no delivery tool "
+                    "succeeded this turn — a filename or path in a message is "
+                    "not a delivery; send it with workspace_send_file"
+                )
             if trifecta_trail:
                 flagged_parts.append(
                     f"COMPLETED LETHAL TRIFECTA: an external sink "
@@ -2278,6 +2287,14 @@ class ConversationAgent:
                                user_id, scheduled, warning)
                 # Trend the guard firings so the inline checks become an
                 # alertable production signal, not just a per-turn correction.
+                # Every check that fired must appear here. Three of them
+                # (tool_failures, fabricated_links, trifecta_trail) were
+                # missing, with two consequences: their firings never reached
+                # the HALLUCINATION_GUARD trend, and — when they were the ONLY
+                # checks to fire — the attended-quarantine notice fell through
+                # to the generic "unverified content" wording. Observed live:
+                # a turn where a spoke CRASHED, the audit flagged it, and the
+                # only user-visible consequence was nothing at all.
                 _guard_types = []
                 if findings:
                     _guard_types.append("numeric_claim")
@@ -2287,6 +2304,14 @@ class ConversationAgent:
                     _guard_types.append("artifact_location")
                 if plan_mismatch:
                     _guard_types.append("plan_completion")
+                if tool_failures:
+                    _guard_types.append("tool_failure")
+                if fabricated_links:
+                    _guard_types.append("fabricated_link")
+                if undelivered:
+                    _guard_types.append("undelivered_artifact")
+                if trifecta_trail:
+                    _guard_types.append("lethal_trifecta")
                 if scheduled_grounding:
                     _guard_types.append("scheduled_evidence_floor")
                 try:
@@ -2350,6 +2375,10 @@ class ConversationAgent:
                         "narrative": "news/weather I couldn't confirm with a live source",
                         "artifact_location": "a file/link location I couldn't confirm",
                         "plan_completion": "a completion claim that may be only partial",
+                        "tool_failure": "a tool that crashed without being mentioned",
+                        "fabricated_link": "a link no tool actually produced",
+                        "undelivered_artifact": "a promised file/link that was never sent",
+                        "lethal_trifecta": "an external send after reading private data",
                         "scheduled_evidence_floor": "insufficiently-sourced content",
                     }
                     reasons = "; ".join(_labels.get(t, t) for t in _guard_types) or "unverified content"

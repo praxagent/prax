@@ -32,6 +32,11 @@ from prax.services.library_service import _space_path, ensure_library
 logger = logging.getLogger(__name__)
 
 MAX_FILE_CHARS = 6000
+
+# Session ids kept on the archive so summarised work stays addressable
+# (see _preserve_refs). Bounded so the trailer can't outgrow the file cap.
+MAX_ARCHIVE_REFS = 40
+_REFS_PREFIX = "Sessions: "
 MAX_RECENT_ENTRIES = 10
 COMPACT_KEEP_RECENT = 5
 PROGRESS_FILE = ".progress.md"
@@ -188,14 +193,33 @@ def append_progress(
 
 
 def read_session_detail(user_id: str, slug: str, date: str) -> str:
-    """Read per-session detail files for a date (YYYY-MM-DD).
+    """Read per-session detail files for a date, or one session by its id.
 
-    Progressive disclosure: details are not auto-loaded into context;
-    the agent asks for them by date when it needs them.  Returns
-    concatenated content from every detail file matching the date.
+    Progressive disclosure: details are not auto-loaded into context; the agent
+    asks for them when it needs them. Accepts either:
+
+    * ``YYYY-MM-DD`` — every session from that day, concatenated; or
+    * ``YYYY-MM-DD-{short_id}`` — the single session that reference names.
+
+    The second form is the point: entry bullets and the compacted archive both
+    carry ``{date}-{short_id}`` refs, so an abstraction in context always
+    dereferences to exactly the evidence it came from rather than to a whole
+    day's worth (docs/research/tencentdb-agent-memory.md).
     """
+    if re.match(r"^\d{4}-\d{2}-\d{2}-\S+$", date):
+        details_dir = _detail_dir(user_id, slug)
+        target = details_dir / f"{date}.md"
+        if not _space_exists(user_id, slug):
+            return f"Space '{slug}' does not exist."
+        if not target.is_file():
+            return f"No session detail {date} for {slug}."
+        try:
+            return f"### {target.name}\n\n{target.read_text(encoding='utf-8')}"
+        except Exception as e:
+            logger.warning("Failed to read detail file %s: %s", target, e)
+            return f"Could not read session detail {date}."
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
-        return "Date must be YYYY-MM-DD."
+        return "Date must be YYYY-MM-DD (or YYYY-MM-DD-{session_id})."
     if not _space_exists(user_id, slug):
         return f"Space '{slug}' does not exist."
     details_dir = _detail_dir(user_id, slug)
@@ -251,10 +275,72 @@ def _compact(
         logger.warning("Compactor failed, falling back to truncated archive: %s", e)
         new_archive = _fallback_archive(sections.archive, to_fold)
     return ProgressSections(
-        archive=new_archive.strip(),
+        archive=_preserve_refs(new_archive.strip(), to_fold),
         recent=kept,
         open_threads=sections.open_threads,
     )
+
+
+def _preserve_refs(archive: str, folded: list[str]) -> str:
+    """Re-attach the session ids the summariser dropped.
+
+    Compaction is a lossy LLM rewrite, and the thing it loses that matters most
+    is not prose — it is the **pointer**. Each recent bullet is
+    ``{date} · {outcome} · {short_id}`` and names a detail file
+    ``.progress/{date}-{short_id}.md`` that compaction deliberately never
+    touches. Without the id in the archive, those files survive on disk and
+    become unreachable at exactly the moment the summary is the only thing left
+    in context.
+
+    So the ids are appended verbatim, outside the summarised prose: an
+    abstraction must keep a deterministic path back to its evidence. Ids
+    already present in the archive are not duplicated, and the trailer is
+    bounded so the archive cannot grow without limit — oldest refs are dropped
+    first (their detail files may well have been pruned anyway) and the
+    truncation is marked rather than silent.
+
+    Rationale: docs/research/tencentdb-agent-memory.md.
+    """
+    refs = [r for r in (_entry_ref(e) for e in folded) if r]
+    if not refs:
+        return archive
+
+    body, existing = _split_refs(archive)
+    merged = existing + [r for r in refs if r not in existing]
+    dropped = 0
+    if len(merged) > MAX_ARCHIVE_REFS:
+        dropped = len(merged) - MAX_ARCHIVE_REFS
+        merged = merged[-MAX_ARCHIVE_REFS:]
+    trailer = f"{_REFS_PREFIX}{', '.join(merged)}"
+    if dropped:
+        trailer += f" (+{dropped} older)"
+    return f"{body}\n\n{trailer}".strip() if body else trailer
+
+
+def _entry_ref(entry: str) -> str | None:
+    """``2026-08-07 · did a thing · a1b2c3`` → ``2026-08-07-a1b2c3``.
+
+    Returns None for anything that isn't a well-formed bullet, so a malformed
+    line degrades to "no pointer" rather than a bogus one.
+    """
+    parts = [p.strip() for p in entry.split("·")]
+    if len(parts) < 3:
+        return None
+    date, short_id = parts[0], parts[-1]
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", date) or not short_id:
+        return None
+    return f"{date}-{short_id}"
+
+
+def _split_refs(archive: str) -> tuple[str, list[str]]:
+    """Split an archive into (prose, existing refs)."""
+    idx = archive.rfind(_REFS_PREFIX)
+    if idx == -1:
+        return archive, []
+    body = archive[:idx].strip()
+    tail = archive[idx + len(_REFS_PREFIX):]
+    tail = re.sub(r"\s*\(\+\d+ older\)\s*$", "", tail).strip()
+    return body, [r.strip() for r in tail.split(",") if r.strip()]
 
 
 def _fallback_archive(current_archive: str, folded: list[str]) -> str:

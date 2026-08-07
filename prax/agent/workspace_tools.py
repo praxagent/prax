@@ -1017,11 +1017,16 @@ def progress_append(
 
 @tool
 def progress_detail(space_slug: str, date: str) -> str:
-    """Read the per-session detail file(s) for a given date in a space.
+    """Read the per-session detail notes behind a progress entry.
 
-    `date` must be YYYY-MM-DD. Use this only when the one-line outcome
-    in progress_read is not enough and you need the fuller notes from
-    that session. Not auto-loaded — progressive disclosure.
+    `date` is either `YYYY-MM-DD` (every session that day) or
+    `YYYY-MM-DD-{session_id}` for ONE session. Entry bullets end in that
+    session id, and the archive paragraph keeps a `Sessions: ...` list of
+    the ids it summarised — so when a summary is too thin, pass its id here
+    to read exactly the notes it came from rather than a whole day's worth.
+
+    Use only when the one-line outcome in progress_read is not enough.
+    Not auto-loaded — progressive disclosure.
     """
     try:
         from prax.services import progress_service

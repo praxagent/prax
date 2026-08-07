@@ -760,6 +760,66 @@ def audit_fabricated_links(response: str, tool_results: list[str]) -> dict | Non
     return {"urls": sorted(set(fabricated))} if fabricated else None
 
 
+# Phrases that promise the user a retrievable thing *in this reply*.
+_DELIVERY_PROMISE_PATTERNS: list[re.Pattern] = [
+    re.compile(r"here(?:'s| is)\s+(?:the|your)\s+(?:link|file|download|mp3|pdf|audio|video|image|attachment)\b", re.IGNORECASE),
+    re.compile(r"^\s*(?:the\s+)?link\s*:", re.IGNORECASE | re.MULTILINE),
+    re.compile(r"\byou can (?:download|grab|get) it (?:here|at)\b", re.IGNORECASE),
+    re.compile(r"\b(?:i(?:'ve| have))?\s*attached\b", re.IGNORECASE),
+    re.compile(r"\bsending (?:it|the file) (?:now|over)\b", re.IGNORECASE),
+]
+
+# Tools whose success means a file actually reached the user.
+_DELIVERY_TOOLS = frozenset({
+    "workspace_send_file", "send_file", "workspace_share_link",
+})
+
+
+def audit_undelivered_artifact(response: str, messages: list) -> dict | None:
+    """Flag a reply that PROMISES a link/file but delivers neither.
+
+    The live regression: asked "Link please?", the agent replied
+    "Here's the link: ``polydao_narration.mp3``" — a bare filename in
+    backticks. No URL, no upload, nothing the user could click or open.
+    ``audit_fabricated_links`` cannot catch this because it only fires when a
+    URL is *present*; ``audit_artifact_location`` passed because
+    ``artifact_locator`` had in fact been called. The failure lives exactly in
+    the gap between them.
+
+    Deterministic and conservative: it fires only when the reply makes an
+    explicit delivery promise AND carries no URL AND no delivery tool
+    succeeded this turn. A reply that merely *mentions* a path, or that says
+    "the file is at …" without promising a link, is not flagged.
+    """
+    if not response:
+        return None
+    promises = [p.pattern for p in _DELIVERY_PROMISE_PATTERNS if p.search(response)]
+    if not promises:
+        return None
+    if _URL_RE.search(response):
+        return None  # a link is present — fabrication is the other check's job
+
+    try:
+        from langchain_core.messages import ToolMessage
+    except Exception:
+        return None
+
+    for msg in messages or []:
+        if not isinstance(msg, ToolMessage):
+            continue
+        if str(getattr(msg, "name", "") or "") not in _DELIVERY_TOOLS:
+            continue
+        content = str(getattr(msg, "content", "") or "")
+        # workspace_send_file reports "Sent X to the user via ..." on success
+        # and "... not found in workspace" on failure. Only success counts.
+        if "not found" in content.lower():
+            continue
+        if "sent " in content.lower() or "delivered" in content.lower():
+            return None
+
+    return {"promises": promises, "delivered": False}
+
+
 def format_audit_warning(findings: list[dict]) -> str:
     """Format ungrounded-claim findings into a human-readable audit note."""
     if not findings:
