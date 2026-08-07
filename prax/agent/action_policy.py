@@ -211,9 +211,7 @@ def get_risk_level(tool_name: str) -> RiskLevel:
     """Return the risk level for *tool_name*.
 
     Static classification wins.  IMPORTED plugin tools are automatically
-    elevated to HIGH.  Unclassified tools default to MEDIUM — unless
-    ``settings.unknown_tool_high_risk`` is set, which makes the default HIGH
-    (deny-by-default: an unrecognised tool must be confirmed before it runs).
+    elevated to HIGH.  Unclassified tools default to MEDIUM.
     """
     # Static classification takes precedence.
     static = TOOL_RISK_MAP.get(tool_name)
@@ -235,14 +233,12 @@ def get_risk_level(tool_name: str) -> RiskLevel:
     except Exception:
         pass  # Best-effort — don't break risk classification
 
-    # Deny-by-default for unrecognised tools when enabled.
-    try:
-        from prax.settings import settings
-        if settings.unknown_tool_high_risk:
-            return RiskLevel.HIGH
-    except Exception:
-        pass
-
+    # Unrecognised tools default to MEDIUM. A deny-by-default variant
+    # (unrecognised → HIGH) was measured in the 2026-07-08 flag campaign and
+    # REGRESSED: 4/6 vs 5/6, because it blocked a tool the agent needed and the
+    # agent then gave up rather than routing around it. Removed rather than
+    # left switchable — a known-harmful setting invites someone to flip it.
+    # Rebuilding this needs a design that degrades instead of stranding.
     return RiskLevel.MEDIUM
 
 

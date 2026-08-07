@@ -35,8 +35,7 @@ class TestDetectionIsSymbolic:
         """The graph, not the extractor, reports the existing current target."""
         with patch("prax.services.memory.graph_store.current_targets",
                    return_value=["porto"]) as q:
-            with patch.object(consistency.settings, "memory_consistency_enabled", True, create=True), \
-                 patch.object(consistency.settings, "memory_consistency_auto_supersede", False, create=True):
+            with patch.object(consistency.settings, "memory_consistency_mode", "log", create=True):
                 consistency.enforce("u1", _rel(target="lisbon"), result)
         q.assert_called_once_with(user_id="u1", source_name="tj",
                                   relation_type="lives_in")
@@ -75,7 +74,7 @@ class TestActingModes:
         with patch("prax.services.memory.graph_store.current_targets",
                    return_value=["porto"]), \
              patch("prax.services.memory.graph_store.supersede_relation") as sup, \
-             patch.object(consistency.settings, "memory_consistency_auto_supersede", False, create=True):
+             patch.object(consistency.settings, "memory_consistency_mode", "log", create=True):
             consistency.enforce("u1", _rel(), result)
         sup.assert_not_called()
         assert result.conflicts_detected == 1
@@ -86,7 +85,7 @@ class TestActingModes:
                    return_value=["porto"]), \
              patch("prax.services.memory.graph_store.supersede_relation",
                    return_value=True) as sup, \
-             patch.object(consistency.settings, "memory_consistency_auto_supersede", True, create=True):
+             patch.object(consistency.settings, "memory_consistency_mode", "enforce", create=True):
             consistency.enforce("u1", _rel(target="lisbon"), result)
         sup.assert_called_once_with(user_id="u1", source_name="tj",
                                     relation_type="lives_in",
@@ -100,7 +99,7 @@ class TestActingModes:
                    return_value=["porto"]), \
              patch("prax.services.memory.graph_store.supersede_relation",
                    side_effect=RuntimeError("neo4j down")), \
-             patch.object(consistency.settings, "memory_consistency_auto_supersede", True, create=True):
+             patch.object(consistency.settings, "memory_consistency_mode", "enforce", create=True):
             consistency.enforce("u1", _rel(), result)
         assert result.conflicts_detected == 1
         assert result.conflicts_superseded == 0
@@ -114,18 +113,29 @@ class TestDegradation:
             consistency.enforce("u1", _rel(), result)
         assert result.conflicts_detected == 0
 
-    def test_flag_off_means_prior_behaviour(self):
-        with patch.object(consistency.settings, "memory_consistency_enabled", False, create=True):
+    def test_off_means_prior_behaviour(self):
+        with patch.object(consistency.settings, "memory_consistency_mode", "off", create=True):
             assert consistency.enabled() is False
+            assert consistency.enforcing() is False
+
+    def test_log_detects_but_never_enforces(self):
+        with patch.object(consistency.settings, "memory_consistency_mode", "log", create=True):
+            assert consistency.enabled() is True
+            assert consistency.enforcing() is False
+
+    def test_enforce_does_both(self):
+        with patch.object(consistency.settings, "memory_consistency_mode", "enforce", create=True):
+            assert consistency.enabled() is True
+            assert consistency.enforcing() is True
 
     def test_prompt_addendum_only_appears_when_enabled(self):
         """With the flag off the extraction prompt is byte-identical to
         before this feature existed."""
         from prax.services.memory.consolidation import _consistency_addendum
 
-        with patch.object(consistency.settings, "memory_consistency_enabled", False, create=True):
+        with patch.object(consistency.settings, "memory_consistency_mode", "off", create=True):
             assert _consistency_addendum() == ""
-        with patch.object(consistency.settings, "memory_consistency_enabled", True, create=True):
+        with patch.object(consistency.settings, "memory_consistency_mode", "log", create=True):
             addendum = _consistency_addendum()
         assert "single-valued" in addendum
         for rtype in consistency.SINGLE_VALUED_TYPES:

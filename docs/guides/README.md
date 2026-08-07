@@ -23,3 +23,4 @@ Practical guides for setting up, extending, and testing Prax.
 - [Authentication](authentication.md) — Tailscale, Google/GitHub OAuth, Authentik, multi-user routing
 - [Git hygiene](git-hygiene.md) — Keep the repo clean of data & secrets: what never gets committed, the gitignore-glob gotcha (exact `conversations.db` misses `conversations.db.legacy-backup`), a pre-commit scan (never blanket `git add -A`), and the `git filter-repo` surgery to purge a file from all history — with the residual-exposure caveats (forks, old SHAs, GitHub Support) for public repos.
 - [Troubleshooting](troubleshooting.md) — Common issues and fixes
+- [Flag audit](flag-audit.md) — the 61-flag inventory, what merged, what should be deleted, and the rule for when a flag has earned its place

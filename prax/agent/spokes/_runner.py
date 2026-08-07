@@ -37,13 +37,10 @@ def _apply_pinned_inputs(task: str) -> str:
     report delegation found 22 candidate .md files and narrated the wrong one,
     front-matter and all. Pinning the capture into the task removes the guess.
 
-    Flag-gated (``DELEGATION_PINNED_INPUTS_ENABLED``, default off) and a no-op
-    when nothing was captured this turn.
+    Unconditional: this is a plumbing fix, not a behaviour experiment — the
+    orchestrator already held this information and the delegation was dropping
+    it. A no-op when nothing was captured this turn, which is the common case.
     """
-    from prax.settings import settings
-
-    if not getattr(settings, "delegation_pinned_inputs_enabled", False):
-        return task
     from prax.agent.user_context import current_turn_captures, current_user_id
 
     captures = current_turn_captures.get()

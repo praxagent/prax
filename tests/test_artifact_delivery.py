@@ -90,26 +90,21 @@ class TestSendFileResolvesContainerPaths:
 
 
 class TestPinnedInputs:
-    def _task(self, flag, captures):
-        from prax.settings import settings
-
+    def _task(self, captures):
         tok_c = current_turn_captures.set(captures)
         tok_u = current_user_id.set("usr_test1")
         try:
-            with patch.object(settings, "delegation_pinned_inputs_enabled", flag, create=True):
-                return _runner._apply_pinned_inputs("Narrate the report as MP3")
+            return _runner._apply_pinned_inputs("Narrate the report as MP3")
         finally:
             current_turn_captures.reset(tok_c)
             current_user_id.reset(tok_u)
 
-    def test_flag_off_leaves_the_task_untouched(self, user_root):
-        assert self._task(False, ("20260806-slug",)) == "Narrate the report as MP3"
-
     def test_nothing_captured_leaves_the_task_untouched(self, user_root):
-        assert self._task(True, ()) == "Narrate the report as MP3"
+        """The common case — pinning must not perturb ordinary delegations."""
+        assert self._task(()) == "Narrate the report as MP3"
 
     def test_capture_is_pinned_with_container_path(self, user_root):
-        out = self._task(True, ("20260806-220342-cdn-discordapp",))
+        out = self._task(("20260806-220342-cdn-discordapp",))
         assert "PINNED INPUTS" in out
         assert "library/raw/20260806-220342-cdn-discordapp.md" in out
         # The container path names the USER's directory, not /workspace/active.
@@ -118,16 +113,8 @@ class TestPinnedInputs:
 
 
 class TestDeliveryHint:
-    def _hint(self, result, flag=True):
-        from prax.settings import settings
-
-        with patch.object(settings, "artifact_delivery_hint_enabled", flag, create=True):
-            return sandbox_agent._append_delivery_hint(result, "usr_test1")
-
-    def test_flag_off_is_a_noop(self, user_root):
-        (user_root / "active" / "a.mp3").write_bytes(b"x")
-        text = "Made /workspace/usr_test1/active/a.mp3"
-        assert self._hint(text, flag=False) == text
+    def _hint(self, result):
+        return sandbox_agent._append_delivery_hint(result, "usr_test1")
 
     def test_existing_artifact_gets_a_verified_hint(self, user_root):
         (user_root / "active" / "a.mp3").write_bytes(b"x")
