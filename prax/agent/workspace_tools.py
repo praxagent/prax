@@ -1036,6 +1036,30 @@ def progress_detail(space_slug: str, date: str) -> str:
 
 
 @tool
+def progress_search(space_slug: str, query: str) -> str:
+    """Keyword-search the session detail notes of a space.
+
+    The detail notes are the COMPLETE record of past sessions; the summary in
+    progress_read is a lossy abstraction over them. Use this when you need
+    something that happened but do NOT know when — `progress_detail` requires a
+    date, which is only useful once you already know it.
+
+    Deterministic substring match (all terms must appear on a line), newest
+    sessions first. Every hit carries its `{date}-{session_id}` ref, so follow
+    up with `progress_detail(space_slug, ref)` to read that session in full.
+
+    A "no match" here is meaningful: the record is complete, so it is evidence
+    the thing was never recorded, not a retrieval failure.
+    """
+    try:
+        from prax.services import progress_service
+        return progress_service.search_session_details(
+            _get_user_id(), space_slug, query)
+    except Exception as e:
+        return f"Failed to search session details: {e}"
+
+
+@tool
 def agent_plan(goal: str, steps: list[str], confidence: str = "medium") -> str:
     """Break a complex request into a numbered plan of steps.
 
@@ -1626,7 +1650,7 @@ def build_workspace_tools():
         # Planning — the orchestrator manages its own plan
         agent_plan, agent_step_done, agent_plan_status, agent_plan_clear,
         # Per-space session progress — survives context-window boundary
-        progress_read, progress_append, progress_detail,
+        progress_read, progress_append, progress_detail, progress_search,
         # (Todo tools moved to the tasks spoke — delegate_tasks.  The
         # orchestrator no longer carries them inline; this keeps its
         # tool count under Anthropic's ~50-tool accuracy threshold.)
