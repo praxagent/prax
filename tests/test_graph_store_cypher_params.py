@@ -21,7 +21,7 @@ from contextlib import contextmanager
 
 import pytest
 
-from prax.services.memory import graph_store
+from prax.services.memory import failure_journal, graph_store, knowledge_graph
 
 # `$name` but not `$$` or a property-map key; Cypher params are word-chars.
 PARAM_RE = re.compile(r"(?<![\w$])\$(\w+)")
@@ -133,4 +133,114 @@ def test_decay_graph_reaches_the_prune_statements(monkeypatch):
 
     assert sum("DELETE" in q for q, _ in calls) == 2, (
         "entity and relation pruning must both run"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# The same guard, over the other Cypher-issuing modules
+# --------------------------------------------------------------------------- #
+#
+# graph_store is where the defect was found, but it is not the only module that
+# writes Cypher: knowledge_graph has 26 distinct `$params` and failure_journal
+# 14, neither previously exercised. Guarding only the module that happened to
+# break is how you get the same bug twice — the fix has to cover the class.
+#
+# A static scan confirmed `$lambda` was the only Python-KEYWORD collision in
+# the codebase, so no second instance of that exact spelling exists. These
+# tests cover the broader class: a statement referencing a parameter that is
+# never supplied, whatever the reason.
+#
+# failure_journal imports `_session` from graph_store, so patching one reaches
+# both.
+
+KG_ENTRY_POINTS = [
+    ("list_namespaces", lambda: knowledge_graph.list_namespaces("u1")),
+    ("get_namespace_stats", lambda: knowledge_graph.get_namespace_stats("u1", "ns")),
+    ("delete_namespace", lambda: knowledge_graph.delete_namespace("u1", "ns")),
+    ("get_concept", lambda: knowledge_graph.get_concept("u1", "widgets")),
+    ("add_concept", lambda: knowledge_graph.add_concept("u1", "ns", "widgets")),
+    ("add_knowledge_relation",
+     lambda: knowledge_graph.add_knowledge_relation("u1", "ns", "a", "rel", "b")),
+    ("link_to_memory", lambda: knowledge_graph.link_to_memory("u1", "c", "e")),
+    ("list_concepts", lambda: knowledge_graph.list_concepts("u1", "ns")),
+    ("list_relations", lambda: knowledge_graph.list_relations("u1", "ns")),
+]
+
+FJ_ENTRY_POINTS = [
+    ("get_failures", lambda: failure_journal.get_failures("u1")),
+    ("get_failure_stats", lambda: failure_journal.get_failure_stats("u1")),
+    ("resolve_failure", lambda: failure_journal.resolve_failure("c1", "fixed")),
+]
+
+
+def _assert_params_supplied(label, calls):
+    for query, params in calls:
+        referenced = set(PARAM_RE.findall(query))
+        missing = referenced - set(params)
+        assert not missing, (
+            f"{label}: Cypher references {sorted(missing)} but they were not "
+            f"passed (supplied: {sorted(params)}).\n{query.strip()}"
+        )
+
+
+@pytest.mark.parametrize("name,call", KG_ENTRY_POINTS,
+                         ids=[e[0] for e in KG_ENTRY_POINTS])
+def test_knowledge_graph_cypher_parameters_are_supplied(name, call, monkeypatch):
+    calls: list[tuple[str, dict]] = []
+
+    @contextmanager
+    def fake_session():
+        yield _RecordingSession(calls)
+
+    monkeypatch.setattr(knowledge_graph, "_session", fake_session)
+    call()
+    _assert_params_supplied(name, calls)
+
+
+@pytest.mark.parametrize("name,call", FJ_ENTRY_POINTS,
+                         ids=[e[0] for e in FJ_ENTRY_POINTS])
+def test_failure_journal_cypher_parameters_are_supplied(name, call, monkeypatch):
+    calls: list[tuple[str, dict]] = []
+
+    @contextmanager
+    def fake_session():
+        yield _RecordingSession(calls)
+
+    # failure_journal imports _session FROM graph_store at call time.
+    monkeypatch.setattr(graph_store, "_session", fake_session)
+    call()
+    _assert_params_supplied(name, calls)
+
+
+def test_no_cypher_parameter_collides_with_a_python_keyword():
+    """`$lambda` could not be passed as a kwarg and so was never supplied.
+
+    Static sweep over every Cypher-issuing module, so a NEW statement using
+    `$from`, `$class`, `$import` etc. is caught at the point it is written
+    rather than after a night of silently-skipped writes.
+    """
+    import keyword
+    from pathlib import Path
+
+    # Known and CORRECT: decay_graph names its parameter `lambda` and passes it
+    # in a dict, which works. The dynamic test above proves it is supplied. The
+    # spelling is allowed here so this sweep flags only NEW occurrences, which
+    # are overwhelmingly likely to be the kwarg mistake.
+    ALLOWED = {"services/memory/graph_store.py: $lambda"}
+
+    root = Path(__file__).resolve().parents[1] / "prax"
+    offenders: list[str] = []
+    for py in root.rglob("*.py"):
+        text = py.read_text()
+        if "MATCH" not in text and "MERGE" not in text:
+            continue
+        for name in set(PARAM_RE.findall(text)):
+            if keyword.iskeyword(name):
+                entry = f"{py.relative_to(root)}: ${name}"
+                if entry not in ALLOWED:
+                    offenders.append(entry)
+    assert not offenders, (
+        "Cypher parameters named after Python keywords CANNOT be passed as "
+        "kwargs. Pass a params dict instead — and add a dynamic test that the "
+        "statement actually receives it:\n  " + "\n  ".join(offenders)
     )

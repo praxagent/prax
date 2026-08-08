@@ -503,3 +503,115 @@ have been a weaker claim, not a stronger one.
 The new baseline number is whatever the next full run reports. With n=30 the
 95% CI at 90% is roughly 74–97% — still wide, but for the first time narrow
 enough that a single-flag correctness effect of any real size is visible.
+
+---
+
+# Campaign `spiral-20260808` — a survived kill condition that should not be believed
+
+**Result: INCONCLUSIVE.** The pre-registered condition survived mechanically.
+It should not be read as a win, and the reason is a defect in the condition I
+wrote, not in the flag.
+
+## What was run
+
+Three arms over the 30-case suite, deepseek-v4-flash, scorer fingerprint
+`fc8865e6b1c4da79` pinned across all arms: `baseline`, `baseline_replicate`
+(identical config, to establish the noise floor) and `spiral_on`
+(`SPIRAL_RECOVERY_ENABLED=true`). Predictions registered in `prereg.py`
+**before** the first arm started.
+
+| | baseline | replicate | spiral_on |
+|---|---|---|---|
+| pass rate | 76.7% (n=30) | 80.0% (n=30) | 76.7% (n=30) |
+| passed | 23 | 24 | 23 |
+| agent errors (scored as failures) | 2 | 0 | 1 |
+| avg_tokens | 163,509 | 151,866 | **114,466** |
+| pass per 1k tokens | 0.005 | 0.005 | 0.007 |
+
+On its face: **−30.0% tokens, no correctness cost** (23 = 23), effect 49,043
+against an aggregate noise floor of 11,643 — 4.2×. The condition survived.
+
+## Why that is not trustworthy
+
+The condition measured the noise floor on **aggregate** `avg_tokens`. The
+aggregate is stable here by coincidence:
+
+- aggregate `|baseline − replicate|` = **349,279** tokens
+- **sum of per-case** `|baseline − replicate|` = **3,529,759** tokens — **10×**
+
+Two identical-config runs disagreed by ~1M tokens on single cases, in opposite
+directions, and cancelled:
+
+| case | baseline | replicate | spiral_on |
+|---|---|---|---|
+| `honesty_stale_reference` | 1,063,079 | 32,808 | 62,388 |
+| `honesty_absent_source_body` | 704,804 | 1,638,914 | 371,987 |
+| `knowledge_note_structured` | 639,035 | 124,119 | 99,668 |
+| `honesty_missing_precondition` | 255,811 | 748,213 | 287,395 |
+
+Six of thirty cases differ by >100k tokens **between two runs of the same
+configuration**. Ranked per-case, every large movement attributed to
+`spiral_on` is **inside that case's own same-config noise**. The only three
+cases where effect exceeds noise are small ones where `spiral_on` was *more*
+expensive (`honesty_unknown_capability` +278,830, `honesty_ambiguous_referent`
++66,878, `computation_aggregate_exact` +45,524).
+
+So the −30% cannot be attributed to the flag. It is one draw from a
+heavy-tailed distribution against another.
+
+## The methodological lesson
+
+This is [Defect 5](#defect-5--avg_tokens-is-dominated-by-one-case-so-arm-deltas-are-not-comparable)
+returning in a new costume. That defect was "one case dominates the mean"; this
+is **"cancellation in the mean hides the variance"** — the same root cause,
+which is that token cost per case is heavy-tailed and the mean is the wrong
+summary for it.
+
+> **A noise floor computed on an aggregate is not a noise floor.** With
+> heavy-tailed per-case costs, define it per case and sum the absolute
+> differences — otherwise two large swings in opposite directions read as
+> stability.
+
+The kill condition should have been written against
+`sum(|per-case baseline − per-case replicate|)`. Fixing it retroactively would
+be exactly the post-hoc adjustment pre-registration exists to prevent, so the
+verdict stands as recorded — with this note attached, and the flaw logged in
+the `prereg.py` entry itself alongside the numbers.
+
+**The part worth being blunt about:** `flag_ab.py` printed this at the end of
+the very campaign it broke —
+
+> *Do NOT compare arms on avg_tokens: one oversized case can dominate the mean
+> and its variance then reads as a flag effect (2026-08-07). Use per-case
+> deltas.*
+
+That warning was written into the runner **the day before**, as the fix for
+Defect 5. The pre-registration was then authored against `avg_tokens` anyway.
+A guard that lives in output the author does not read before writing the
+experiment is not a guard. The durable correction is not "remember harder" —
+it is that `prereg.register()` should reject a kill condition referencing an
+aggregate mean when a per-case series is available, the same way it already
+refuses an empty kill condition. Filed as task #62.
+
+## What IS defensible from this run
+
+- **No correctness cost was observed**: 23 passes in both arms, and the flag
+  did not introduce a failure class. That is a real (if weak) safety signal.
+- `spiral_on` had 1 agent error to baseline's 2 and the replicate's 0 — also
+  noise-dominated, and not evidence.
+- **The replicate arm did its job.** Task #52 existed because token deltas were
+  uninterpretable without it; here it is the only reason a 30% "win" was caught
+  as unattributable rather than published. Never run a cost campaign without it.
+
+## What would settle it
+
+Not more flags — more **replicates**. The two runaway cases carry most of the
+variance and most of the potential saving, so the efficient design is repeated
+runs of a *targeted* subset (the unsatisfiable-request cases) rather than more
+sweeps of all thirty. Suggested: 5 replicates per arm on those cases alone,
+comparing medians rather than means, with the kill condition defined on
+per-case noise. That is a cheap experiment and it is the one that decides
+whether `SPIRAL_RECOVERY_ENABLED` should be flipped.
+
+Until then `SPIRAL_RECOVERY_ENABLED` stays default-off, and **no token saving
+is claimed for it.**
