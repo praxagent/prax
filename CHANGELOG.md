@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.44.0](https://github.com/praxagent/prax/compare/v0.43.5...v0.44.0) (2026-08-08)
+
+
+### Features
+
+* honest eval accounting, a 30-case capability suite, and prefix-cache visibility ([#223](https://github.com/praxagent/prax/issues/223)) ([c3d0d3c](https://github.com/praxagent/prax/commit/c3d0d3c4b5000f094493ba9405e7b2bdd2f78abb))
+
 ## [0.43.5](https://github.com/praxagent/prax/compare/v0.43.4...v0.43.5) (2026-08-07)
 
 
