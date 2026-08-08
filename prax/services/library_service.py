@@ -2577,6 +2577,51 @@ def run_health_check(user_id: str) -> dict[str, Any]:
             })
     report["static"]["empty_notebooks"] = empty_notebooks
 
+    # Taxonomy contract (P1 sibling distinction, P5 structural economy) — the
+    # computable half of the shape contract from arXiv 2607.26637. Deterministic
+    # and model-free, so it runs in the STATIC layer beside the other structural
+    # checks rather than behind the LLM one. See
+    # docs/research/filesystem-agent-memory.md; the paper's own finding is that
+    # taxonomy adherence ERODES as a store grows, which is why this is a drift
+    # detector run periodically rather than a one-off audit.
+    try:
+        from prax.services.library_taxonomy import taxonomy_report
+
+        tree = {
+            "path": "library", "name": "library", "description": "",
+            "kind": "folder",
+            "children": [
+                {
+                    "path": sp.get("slug", ""), "name": sp.get("name", ""),
+                    "description": sp.get("description", "") or "",
+                    "kind": "folder",
+                    "children": [
+                        {
+                            "path": f"{sp.get('slug', '')}/{nb.get('slug', '')}",
+                            "name": nb.get("name", ""),
+                            "description": nb.get("description", "") or "",
+                            "kind": "folder",
+                            "children": [
+                                {"path": f"{sp.get('slug', '')}/{nb.get('slug', '')}/{n.get('slug', '')}",
+                                 "name": n.get("title", "") or n.get("slug", ""),
+                                 "description": n.get("summary", "") or "",
+                                 "kind": "note", "children": []}
+                                for n in all_notes
+                                if n.get("project") == sp.get("slug")
+                                and n.get("notebook") == nb.get("slug")
+                            ],
+                        }
+                        for nb in list_notebooks(user_id, sp.get("slug"))
+                    ],
+                }
+                for sp in list_spaces(user_id)
+            ],
+        }
+        report["static"]["taxonomy"] = taxonomy_report(tree)
+    except Exception:  # noqa: BLE001 - a shape check must never break the audit
+        logger.debug("taxonomy report failed", exc_info=True)
+        report["static"]["taxonomy"] = {"error": "unavailable"}
+
     # Orphans — notes with no wikilinks out and no backlinks in
     orphans: list[dict] = []
     for n in all_notes:

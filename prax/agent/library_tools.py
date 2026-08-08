@@ -1017,6 +1017,18 @@ def library_health_check() -> str:
     lines.append(f"- Empty notebooks: {len(static.get('empty_notebooks', []))}")
     lines.append(f"- Orphan notes: {len(static.get('orphans', []))}")
     lines.append(f"- Short notes: {len(static.get('short_notes', []))}")
+    tax = static.get("taxonomy") or {}
+    counts = tax.get("counts") or {}
+    if counts:
+        # P1 = siblings you cannot tell apart from a listing; P5 = a folder
+        # level that does not narrow the search. Both are cheap to fix and
+        # both make the store harder to search as it grows.
+        lines.append(
+            f"- Taxonomy drift: {counts.get('P1', 0)} indistinguishable sibling "
+            f"group(s), {counts.get('P5', 0)} level(s) that add depth without "
+            f"narrowing the search")
+    elif tax.get("error"):
+        lines.append("- Taxonomy check: unavailable")
     if isinstance(llm, dict):
         if "error" in llm:
             lines.append(f"- LLM analysis: failed ({llm['error']})")
