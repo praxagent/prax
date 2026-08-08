@@ -87,17 +87,66 @@ class PreRegistration:
         return Verdict(self.experiment, killed, self.kill_condition, observed)
 
 
+
+# Metrics that are an AGGREGATE MEAN over cases whose per-case cost is
+# heavy-tailed. A noise floor computed on one of these is not a noise floor:
+# two large per-case swings in opposite directions cancel and read as
+# stability.
+#
+# Learned on campaign spiral-20260808 (2026-08-08). Aggregate
+# |baseline - replicate| was 349,279 tokens; the SUM of per-case absolute
+# differences was 3,529,759 — 10x larger — because one case fell ~1.03M while
+# another rose ~0.93M between two runs of the SAME configuration. A kill
+# condition written against `avg_tokens` survived on a -30% "effect" that was
+# entirely inside per-case noise.
+#
+# `flag_ab.py` already printed a warning about this, at the END of the very
+# campaign it broke. A guard in output nobody reads while designing the
+# experiment is not a guard, so it lives here now — at registration time.
+#
+# Bounded outcome metrics (pass_rate, accuracy) are NOT listed: a mean over a
+# binary outcome is well-behaved, and blocking those would make the rule noise.
+_HEAVY_TAILED_AGGREGATES = (
+    "avg_tokens", "avg_total_tokens", "mean_tokens", "avg_cost", "mean_cost",
+    "avg_duration", "mean_duration", "avg_latency", "total_tokens_avg",
+)
+
+
+def uses_heavy_tailed_aggregate(kill_condition: str) -> list[str]:
+    """Names of heavy-tailed aggregate metrics referenced by *kill_condition*."""
+    low = (kill_condition or "").lower()
+    return [m for m in _HEAVY_TAILED_AGGREGATES if m in low]
+
+
 def register(*, experiment: str, hypothesis: str, kill_condition: str,
-             kill: Callable[[dict[str, Any]], bool]) -> PreRegistration:
+             kill: Callable[[dict[str, Any]], bool],
+             allow_aggregate_mean: bool = False) -> PreRegistration:
     """Record the refutation standard BEFORE the run.
 
     Refuses an empty kill condition: "nothing would change my mind" is not an
     experiment, it is a decision wearing one's clothes.
+
+    Also refuses a condition resting on an aggregate MEAN of a heavy-tailed
+    per-case cost (``avg_tokens`` and friends) — see
+    ``_HEAVY_TAILED_AGGREGATES``. Define the threshold on a per-case series
+    instead (sum of absolute per-case differences, or medians). Pass
+    ``allow_aggregate_mean=True`` to override deliberately; the override is
+    recorded in the log so it is auditable rather than silent.
     """
     if not kill_condition.strip():
         raise ValueError(
             "A pre-registration needs a non-empty kill condition — if no result "
             "would refute the hypothesis, this is not an experiment.")
+    offenders = uses_heavy_tailed_aggregate(kill_condition)
+    if offenders and not allow_aggregate_mean:
+        raise ValueError(
+            f"Kill condition rests on aggregate mean(s) {offenders}, whose "
+            f"per-case cost is heavy-tailed. Two large per-case swings in "
+            f"opposite directions cancel in the mean and read as stability — "
+            f"this produced a false 'survived' verdict on spiral-20260808. "
+            f"Define the condition on a per-case series (sum of absolute "
+            f"per-case deltas, or per-case medians), or pass "
+            f"allow_aggregate_mean=True to override deliberately.")
     reg = PreRegistration(experiment=experiment, hypothesis=hypothesis,
                           kill_condition=kill_condition, kill=kill)
     _append({
@@ -106,6 +155,8 @@ def register(*, experiment: str, hypothesis: str, kill_condition: str,
         "hypothesis": hypothesis,
         "kill_condition": kill_condition,
         "registered_at": reg.registered_at,
+        **({"allow_aggregate_mean": True, "aggregate_metrics": offenders}
+           if offenders else {}),
     })
     return reg
 

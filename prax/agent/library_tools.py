@@ -1017,6 +1017,18 @@ def library_health_check() -> str:
     lines.append(f"- Empty notebooks: {len(static.get('empty_notebooks', []))}")
     lines.append(f"- Orphan notes: {len(static.get('orphans', []))}")
     lines.append(f"- Short notes: {len(static.get('short_notes', []))}")
+    tax = static.get("taxonomy") or {}
+    counts = tax.get("counts") or {}
+    if counts:
+        # P1 = siblings you cannot tell apart from a listing; P5 = a folder
+        # level that does not narrow the search. Both are cheap to fix and
+        # both make the store harder to search as it grows.
+        lines.append(
+            f"- Taxonomy drift: {counts.get('P1', 0)} indistinguishable sibling "
+            f"group(s), {counts.get('P5', 0)} level(s) that add depth without "
+            f"narrowing the search")
+    elif tax.get("error"):
+        lines.append("- Taxonomy check: unavailable")
     if isinstance(llm, dict):
         if "error" in llm:
             lines.append(f"- LLM analysis: failed ({llm['error']})")
@@ -1050,6 +1062,22 @@ _TEXTUAL_SUFFIXES = {
 }
 
 
+def _page_ranges(pages: list[int]) -> str:
+    """Compress [1,2,3,7,9,10] to "1-3, 7, 9-10" — a list of 200 page numbers
+    is noise; the shape of the gap is the information."""
+    if not pages:
+        return ""
+    out, start, prev = [], pages[0], pages[0]
+    for n in pages[1:] + [None]:
+        if n is not None and n == prev + 1:
+            prev = n
+            continue
+        out.append(str(start) if start == prev else f"{start}-{prev}")
+        if n is not None:
+            start = prev = n
+    return ", ".join(out)
+
+
 def _extract_pdf_text(path, max_chars: int) -> str:
     """Text from a PDF, page by page, with the page count stated.
 
@@ -1076,16 +1104,25 @@ def _extract_pdf_text(path, max_chars: int) -> str:
     parts: list[str] = []
     total = len(reader.pages)
     used = 0
+    empty_pages: list[int] = []
+    stopped_at: int | None = None
     for i, page in enumerate(reader.pages, 1):
         try:
             text = page.extract_text() or ""
         except Exception:  # noqa: BLE001
             text = ""
         if not text.strip():
+            # A page that yields nothing is not nothing: it is usually a scan,
+            # a figure, or a layout pypdf cannot read. Silently skipping it
+            # hands the caller a confident excerpt of a document it has mostly
+            # not seen — the same failure as summarising an article whose body
+            # never arrived, except the gap is invisible instead of stated.
+            empty_pages.append(i)
             continue
         chunk = f"\n--- page {i} of {total} ---\n{text.strip()}"
         if used + len(chunk) > max_chars:
             parts.append(f"\n[truncated at page {i} of {total}]")
+            stopped_at = i
             break
         parts.append(chunk)
         used += len(chunk)
@@ -1096,7 +1133,29 @@ def _extract_pdf_text(path, max_chars: int) -> str:
             f"(No extractable text in this {total}-page PDF. It is most likely "
             "scanned images — OCR would be needed, which this tool does not do.)"
         )
-    return body
+
+    # Coverage banner. Leads the output rather than trailing it: a caller that
+    # reads the first lines and starts summarising must meet the caveat before
+    # the content, not after it.
+    seen = total - len(empty_pages) if stopped_at is None else stopped_at - 1 - len(
+        [p for p in empty_pages if p < stopped_at])
+    notes: list[str] = []
+    if empty_pages:
+        pct = round(100 * len(empty_pages) / total)
+        notes.append(
+            f"{len(empty_pages)} of {total} pages ({pct}%) yielded NO extractable "
+            f"text and are absent below: pages {_page_ranges(empty_pages)}. They "
+            f"are most likely scans or figures; this tool does not do OCR.")
+    if stopped_at is not None:
+        notes.append(
+            f"Extraction stopped at page {stopped_at} of {total} on a size limit, "
+            f"so pages {stopped_at}-{total} are not included either.")
+    if not notes:
+        return body
+    notes.append(
+        f"Treat this as a partial reading of {seen} page(s), not the document. "
+        f"Say so if you summarise it.")
+    return "[INCOMPLETE EXTRACTION] " + " ".join(notes) + "\n\n" + body
 
 
 @tool

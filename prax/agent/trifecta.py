@@ -44,7 +44,11 @@ _PRIVATE_NAMES = (
     "memory_search", "memory_recall", "memory_get", "knowledge_search",
     "workspace_read", "workspace_search", "workspace_list", "conversation_search",
     "conversation_history", "note_read", "user_notes_read", "progress_read",
-    "progress_detail", "trace_search", "trace_detail", "review_my_traces",
+    # progress_search reads the SAME session-detail files as progress_detail.
+    # A reader that is classified differently from the store it reads is a
+    # provenance hole by construction — see docs/security/provenance-laundering.md.
+    "progress_detail", "progress_search",
+    "trace_search", "trace_detail", "review_my_traces",
     "artifact_locator", "library_read", "browser_credentials",
 )
 _SINK_NAMES = (

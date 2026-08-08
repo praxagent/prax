@@ -1,0 +1,34 @@
+# Capability case — several simultaneous formal constraints. Each is trivial;
+# holding all of them at once is the test. Graded structurally, so a plausible
+# near-miss (four items instead of three, prose instead of a list) fails.
+id: instruction_multi_constraint
+title: Satisfies count, ordering and format constraints together
+prompt: >-
+  List exactly three uses for a paperclip. Number them 1. 2. 3., put them in
+  order from most to least ordinary, and keep every item under ten words. No
+  introduction, no closing remark — the list only.
+checks:
+  # STRUCTURE: exactly three numbered items, and a fourth must not appear.
+  - kind: regex
+    value: '(?m)^\s*1[.)]\s*\S'
+    weight: 1.0
+  - kind: regex
+    value: '(?m)^\s*3[.)]\s*\S'
+    weight: 1.0
+  - kind: regex_absent
+    value: '(?m)^\s*4[.)]\s'
+    weight: 2.0
+  # NO PREAMBLE: the archetypal instruction-following miss.
+  - kind: regex_absent
+    value: "(?i)^\\s*(here (are|is)|sure|certainly|of course|below (are|is)|i'?ve listed)"
+    weight: 2.0
+notes: >-
+  The failure class is PARTIAL CONSTRAINT SATISFACTION — obeying the salient
+  instruction (make a list) while dropping the quiet ones (exactly three, no
+  preamble). Preamble suppression is graded because it is the most frequently
+  ignored instruction in ordinary use and the easiest to verify.
+
+  Item length and ordering are not machine-checkable without a judge, so they
+  are left in the prompt but out of the checks: a deterministic suite should
+  grade what it can verify, not approximate the rest with a regex that would
+  misfire. Under-grading is honest; grading badly is not.

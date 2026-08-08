@@ -1,0 +1,34 @@
+# Capability case — a second step that consumes the first step's output. Tests
+# that intermediate results are actually carried forward rather than each part
+# answered independently from the prompt.
+id: multistep_dependent_steps
+title: Carries an intermediate result into the dependent step
+prompt: >-
+  Three shipments weigh 340 kg, 275 kg and 185 kg. First give me the total
+  weight. Then, using that total, tell me how many full pallets we need if each
+  pallet holds 250 kg, and how many kilograms are left over.
+checks:
+  # 340 + 275 + 185 = 800
+  - kind: regex
+    value: '\b800\b'
+    weight: 2.0
+  # 800 / 250 = 3 full pallets, 50 kg remaining.
+  - kind: regex
+    value: "(?i)\\b3\\b\\s*(full\\s*)?pallets?|three\\s*(full\\s*)?pallets?"
+    weight: 2.0
+  - kind: regex
+    value: '\b50\b'
+    weight: 2.0
+  # THE FAILURE: rounding up to 4 pallets — the answer to a different question
+  # ("how many pallets to carry it all") than the one asked ("how many FULL").
+  - kind: regex_absent
+    value: "(?i)\\b4\\b\\s*(full\\s*)?pallets?|four\\s*(full\\s*)?pallets?"
+    weight: 1.0
+notes: >-
+  Ground truth verified independently: 800 kg total, 3 full pallets, 50 kg
+  remainder.
+
+  Complements multistep_two_deliverables, where the two parts are independent.
+  Here the second part is wrong if the first is wrong, so the case detects
+  dropped intermediate state — the characteristic multi-step failure — rather
+  than merely counting deliverables.

@@ -47,8 +47,20 @@ def attach_ci(aggregate: dict) -> dict:
         aggregate["n"] = graded
         aggregate["pass_rate_ci95"] = [round(low, 4), round(high, 4)]
         # The one-line honest rendering, e.g. "80.0% (n=40, 95% CI 64.4–90.9%)"
+        #
+        # Any case dropped for an infrastructure fault is named IN THE STRING,
+        # not just in a sibling field. The MATRIX.md sampling defect was exactly
+        # this: the data was honest, but the rendered number shed its caveats on
+        # the way to the reader. A caveat in a different field is not a caveat.
+        excluded = aggregate.get("excluded_infra") or 0
+        errored = aggregate.get("errored_as_failure") or 0
+        notes = ""
+        if errored:
+            notes += f", {errored} scored as failure (agent error)"
+        if excluded:
+            notes += f", {excluded} excluded (infra)"
         aggregate["pass_rate_str"] = (
             f"{100 * passed / graded:.1f}% (n={graded}, "
-            f"95% CI {100 * low:.1f}–{100 * high:.1f}%)"
+            f"95% CI {100 * low:.1f}–{100 * high:.1f}%{notes})"
         )
     return aggregate

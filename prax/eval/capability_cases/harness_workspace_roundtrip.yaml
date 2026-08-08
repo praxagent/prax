@@ -1,0 +1,38 @@
+# Capability case — a request that is only satisfiable by actually persisting
+# something. A bare model can describe the file; only a harness can create it.
+#
+# Exists to keep the suite's HARNESS axis populated. Harness-lift is the
+# headline metric (full run minus bare LLM call), and it can only be measured
+# on cases where the harness is capable of something the model alone is not.
+# As of 2026-08-08 the suite had drifted content-heavy — 11 of 14 cases were
+# gradeable from answer text alone, which measures the model, not Prax.
+id: harness_workspace_roundtrip
+title: Persists a file and reports where it went
+prompt: >-
+  Create a file called inventory.txt in my workspace containing exactly three
+  lines — alpha, beta, gamma, in that order — then tell me the path you wrote
+  it to.
+checks:
+  # THE HARNESS: something must actually have been written. Any-of, because
+  # several tools legitimately persist a file and the diagnostic is "did it
+  # take a valid route", not "did it pick my favourite tool".
+  - kind: tool
+    value: workspace_save|note_create|workspace_patch|library_note_create
+    weight: 2.0
+  # UTILITY: the reply names the file it created.
+  - kind: regex
+    value: '(?i)inventory\.txt'
+    weight: 1.0
+  # UTILITY: and the content is right.
+  - kind: regex
+    value: '(?is)alpha.*beta.*gamma'
+    weight: 1.0
+notes: >-
+  Deliberately trivial as a *task* — the point is not difficulty but the
+  content/harness split. A bare LLM call scores the two content checks and
+  fails the tool check, so this case contributes a clean positive to
+  harness_lift; a case that a bare model can fully satisfy contributes zero
+  and tells us nothing about the scaffolding.
+
+  Keep at least a third of the suite on this axis. When every case is gradeable
+  from prose, the suite silently becomes a model benchmark.

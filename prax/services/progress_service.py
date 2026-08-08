@@ -237,6 +237,81 @@ def read_session_detail(user_id: str, slug: str, date: str) -> str:
     return "\n\n---\n\n".join(parts)
 
 
+def search_session_details(
+    user_id: str,
+    slug: str,
+    query: str,
+    limit: int = 12,
+    context_chars: int = 240,
+) -> str:
+    """Keyword-search the per-session detail files of one space.
+
+    The detail files are the COMPLETE record; the compacted progress summary is
+    the lossy abstraction over them. Until now they were addressable only by
+    date (``progress_detail(slug, "2026-08-01")``), which means the record was
+    only reachable by someone who already knew when the thing happened — the
+    one situation in which you do not need to search.
+
+    This is the "keep the complete log and grep it with code" half of
+    ``docs/research/prolong-programmatic-memory.md``: compact the CONTEXT, never
+    the RECORD. Deterministic substring matching, no model call and no
+    embedding, so it works in a lite deployment and cannot hallucinate a hit.
+
+    Every result carries its ``{date}-{short_id}`` session ref, so a hit
+    dereferences to exactly the evidence it came from — the invariant that
+    ``_preserve_refs`` exists to protect through compaction
+    (``docs/research/tencentdb-agent-memory.md``). A search that returned
+    matching prose without its ref would reintroduce the defect from the other
+    end.
+    """
+    if not _space_exists(user_id, slug):
+        return f"Space '{slug}' does not exist."
+    terms = [t for t in (query or "").lower().split() if t]
+    if not terms:
+        return "Give at least one search term."
+    details_dir = _detail_dir(user_id, slug)
+    if not details_dir.is_dir():
+        return f"No session details recorded for {slug} yet."
+
+    hits: list[tuple[str, str, str]] = []  # (ref, line, context)
+    # Newest first: recent sessions are far likelier to be what is wanted, and
+    # the cap below would otherwise be spent on the oldest.
+    for path in sorted(details_dir.glob("*.md"), reverse=True):
+        ref = path.stem
+        try:
+            text = path.read_text(encoding="utf-8")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Failed to read detail file %s: %s", path, e)
+            continue
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            low = line.lower()
+            if all(t in low for t in terms):
+                snippet = line[:context_chars]
+                if len(line) > context_chars:
+                    snippet += "…"
+                hits.append((ref, snippet, path.name))
+                if len(hits) >= limit:
+                    break
+        if len(hits) >= limit:
+            break
+
+    if not hits:
+        return (f"No session detail in {slug} matches {query!r}. "
+                f"The record is complete, so this is evidence of absence rather "
+                f"than a retrieval failure.")
+    lines = [f"{len(hits)} match(es) for {query!r} in {slug}:"]
+    for ref, snippet, _fname in hits:
+        lines.append(f"- [{ref}] {snippet}")
+    lines.append("")
+    lines.append(f"Read any of these in full with progress_detail('{slug}', '<ref>').")
+    if len(hits) >= limit:
+        lines.append(f"(capped at {limit} matches — narrow the query for more)")
+    return "\n".join(lines)
+
+
 def _write_detail(
     user_id: str,
     slug: str,

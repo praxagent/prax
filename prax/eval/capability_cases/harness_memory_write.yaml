@@ -1,0 +1,29 @@
+# Capability case — a durable fact the user asks to be remembered. A bare
+# model can only say "noted"; persisting it requires the memory layer.
+id: harness_memory_write
+title: Persists a fact the user asks to be remembered
+prompt: >-
+  Remember this for future conversations: my rack-mounted NAS lives in the
+  basement utility room, and its maintenance window is the first Sunday of
+  each month. Confirm what you've stored.
+checks:
+  # THE HARNESS: the fact must reach the memory layer, not just the reply.
+  - kind: tool
+    value: memory_remember|memory_stm_write|memory_structured_archive|delegate_memory
+    weight: 2.0
+  # UTILITY: the confirmation must restate the fact, so the user can catch a
+  # mis-stored detail before it becomes durable.
+  - kind: regex
+    value: '(?i)basement|utility room'
+    weight: 1.0
+  - kind: regex
+    value: '(?i)first sunday'
+    weight: 1.0
+notes: >-
+  On the HARNESS axis by design — "remember this" is the archetypal request a
+  bare LLM cannot honour and a harness can, so it produces clean harness-lift.
+
+  The confirmation check is not decoration: a memory write the user cannot see
+  is a memory write they cannot correct, and a wrong durable fact is worse than
+  no fact. Storing silently would satisfy the tool check alone, and must not
+  pass.

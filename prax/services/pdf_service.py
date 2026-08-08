@@ -64,9 +64,54 @@ def extract_markdown(pdf_path: str) -> str:
             content = f.read()
 
         logger.info("Extracted %d chars of markdown from PDF", len(content))
-        return content
+        return _with_coverage_note(pdf_path, content)
     finally:
         shutil.rmtree(output_dir, ignore_errors=True)
+
+
+
+# Density below which an extraction is almost certainly missing most of the
+# document. A page of prose is 1,500-3,000 characters; a page of dense tables
+# or a title page is much less. 120 is deliberately far below any real page so
+# the note fires on genuine failures (scans, unparseable layouts) rather than
+# on merely sparse documents — a warning that cries wolf gets ignored, and an
+# ignored warning is worse than none.
+_MIN_CHARS_PER_PAGE = 120
+
+
+def _page_count(pdf_path: str) -> int | None:
+    """Page count, or None if it cannot be determined cheaply."""
+    try:
+        from pypdf import PdfReader
+
+        return len(PdfReader(pdf_path).pages)
+    except Exception:  # noqa: BLE001 - a missing count must not break extraction
+        return None
+
+
+def _with_coverage_note(pdf_path: str, content: str) -> str:
+    """Prefix an honest warning when the extraction looks far too thin.
+
+    The converter returns markdown with no indication of how much of the
+    document it actually recovered, so a 40-page scan and a 40-page report both
+    come back as "some markdown". A caller then summarises whatever arrived
+    with full confidence. Stating the shortfall turns a silent gap into a
+    disclosed one; it does not fix the extraction, and does not pretend to.
+    """
+    pages = _page_count(pdf_path)
+    if not pages:
+        return content
+    body = (content or "").strip()
+    if not body:
+        return (f"[NO TEXT EXTRACTED] This {pages}-page PDF produced no text at "
+                f"all — most likely scanned images. It has not been read.")
+    if len(body) < _MIN_CHARS_PER_PAGE * pages:
+        return (f"[LIKELY INCOMPLETE EXTRACTION] Only {len(body)} characters were "
+                f"recovered from {pages} pages (~{len(body) // pages} per page), "
+                f"far below a normal page of text. Much of this document is "
+                f"probably missing — treat what follows as a partial reading and "
+                f"say so if you summarise it.\n\n{body}")
+    return content
 
 
 def process_pdf_url(url: str) -> str:

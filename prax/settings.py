@@ -839,6 +839,21 @@ class AppSettings(BaseSettings):
             "docs/research/verify-and-commit-discipline.md."
         ),
     )
+    prompt_cache_enabled: bool = Field(
+        default=False, alias="PROMPT_CACHE_ENABLED",
+        description=(
+            "When true, marks the system prompt as a cacheable prefix for "
+            "providers that require an explicit client-side breakpoint "
+            "(Anthropic's `cache_control`). An agent turn re-sends the system "
+            "prompt, tool definitions and full history on EVERY tool-calling "
+            "round, so a 29-call turn pays for that prefix 29 times. "
+            "OpenAI-compatible endpoints cache prefixes automatically and are "
+            "unaffected; non-Anthropic requests pass through untouched, so "
+            "this is a no-op rather than a risk on those deployments. "
+            "Default-off: judge it on the measured `cached_tokens_in` delta in "
+            "the trace, not on the flag being set."
+        ),
+    )
     spiral_recovery_enabled: bool = Field(
         default=False, alias="SPIRAL_RECOVERY_ENABLED",
         description=(

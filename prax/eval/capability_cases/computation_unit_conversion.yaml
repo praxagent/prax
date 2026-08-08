@@ -1,0 +1,29 @@
+# Capability case — a conversion chain where the trap is a unit, not the
+# arithmetic. Each step is easy; carrying the units correctly is the skill.
+id: computation_unit_conversion
+title: Converts through a chain without dropping a unit
+prompt: >-
+  A pump moves 4.5 litres per second. How many cubic metres does it move in a
+  full 24-hour day? Give the number, then the unit.
+checks:
+  # 4.5 L/s x 86,400 s = 388,800 L = 388.8 cubic metres.
+  - kind: regex
+    value: '\b388\.8\b'
+    weight: 2.0
+  - kind: regex
+    value: "(?i)(cubic met(re|er)s?|m\\^?3|m³)"
+    weight: 1.0
+  # THE FAILURE: stopping at litres — the right arithmetic, the wrong answer,
+  # and the one an assistant is most likely to state confidently.
+  - kind: regex_absent
+    value: "(?i)388,?800\\s*(cubic|m\\^?3|m³)|\\b388\\.8\\s*(l\\b|litres?|liters?)"
+    weight: 2.0
+notes: >-
+  Ground truth checked independently: 4.5 x 60 x 60 x 24 = 388,800 litres, and
+  1 cubic metre = 1,000 litres, so 388.8 cubic metres.
+
+  The failure class is UNIT DROP IN A CONVERSION CHAIN — arithmetic that is
+  correct at every step and wrong at the end. The absent-check targets the two
+  specific mismatches (litres labelled cubic metres, or the litre figure given
+  as the answer) rather than any mention of litres, since showing the
+  intermediate value in litres is good practice and must pass.

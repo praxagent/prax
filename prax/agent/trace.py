@@ -85,6 +85,13 @@ class SpanNode:
     llm_calls: int = 0
     tokens_in: int = 0
     tokens_out: int = 0
+    # Of `tokens_in`, how many the provider served from a cached prefix vs
+    # wrote into the cache. A turn re-sends the system prompt, the tool
+    # definitions and the whole history on EVERY tool-calling round, so this is
+    # the difference between paying once for that prefix and paying N times —
+    # and `tokens_in` alone cannot distinguish the two.
+    cached_tokens_in: int = 0
+    cache_write_tokens: int = 0
     usage_by_model: dict = field(default_factory=dict)
 
 
@@ -100,8 +107,16 @@ class ExecutionGraph:
         self.source: str = ""  # Origin channel: discord | sms | voice | teamwork | scheduler | task_runner
 
     def add_llm_usage(self, span_id: str, model: str,
-                      tokens_in: int, tokens_out: int) -> None:
-        """Attribute one completed LLM call's usage to a span."""
+                      tokens_in: int, tokens_out: int,
+                      cached_in: int = 0, cache_write: int = 0) -> None:
+        """Attribute one completed LLM call's usage to a span.
+
+        `cached_in` is the subset of `tokens_in` served from a cached prefix
+        (already counted in `tokens_in`, never added to it) — keeping it a
+        subset rather than a separate total means existing totals and any cost
+        arithmetic built on them stay correct whether or not a provider
+        reports cache details.
+        """
         with self._lock:
             node = self._nodes.get(span_id)
             if node is None:
@@ -109,10 +124,14 @@ class ExecutionGraph:
             node.llm_calls += 1
             node.tokens_in += int(tokens_in or 0)
             node.tokens_out += int(tokens_out or 0)
+            node.cached_tokens_in += int(cached_in or 0)
+            node.cache_write_tokens += int(cache_write or 0)
             per = node.usage_by_model.setdefault(model or "unknown",
                                                  {"in": 0, "out": 0})
             per["in"] += int(tokens_in or 0)
             per["out"] += int(tokens_out or 0)
+            if cached_in:
+                per["cached_in"] = per.get("cached_in", 0) + int(cached_in)
 
     def add_node(self, node: SpanNode) -> None:
         with self._lock:
@@ -184,6 +203,14 @@ class ExecutionGraph:
                 nodes.append({
                     "tokens_in": n.tokens_in,
                     "tokens_out": n.tokens_out,
+                    # Subset of tokens_in served from a cached prefix. Emitted
+                    # only when non-zero so a provider that reports nothing
+                    # doesn't litter every trace with zeros that read like a
+                    # measured "no caching happened".
+                    **({"cached_tokens_in": n.cached_tokens_in}
+                       if n.cached_tokens_in else {}),
+                    **({"cache_write_tokens": n.cache_write_tokens}
+                       if n.cache_write_tokens else {}),
                     "llm_calls": n.llm_calls,
                     # None means "no rate known", which is reported as unknown
                     # rather than as $0.00 — unknown and free are different claims.
@@ -220,6 +247,8 @@ class ExecutionGraph:
                 overall_status = "completed"
             total_in = sum(n.tokens_in for n in self._nodes.values())
             total_out = sum(n.tokens_out for n in self._nodes.values())
+            total_cached = sum(n.cached_tokens_in for n in self._nodes.values())
+            total_cache_write = sum(n.cache_write_tokens for n in self._nodes.values())
             merged: dict[str, dict] = {}
             for n in self._nodes.values():
                 for m, u in n.usage_by_model.items():
@@ -232,6 +261,12 @@ class ExecutionGraph:
                 "node_count": len(nodes),
                 "tokens_in": total_in,
                 "tokens_out": total_out,
+                # The prefix-reuse ratio is the whole point of collecting this:
+                # it says what fraction of a turn's input was paid for once
+                # rather than once per tool-calling round.
+                **({"cached_tokens_in": total_cached} if total_cached else {}),
+                **({"cache_write_tokens": total_cache_write}
+                   if total_cache_write else {}),
                 # None = "no rate known", reported as unknown rather than $0.00.
                 "cost_estimate_usd": _usage_cost(merged),
                 "nodes": nodes,

@@ -1,0 +1,32 @@
+# Capability case — an explicit request to put work on the user's board. The
+# Library Kanban is the user's own work surface, and only the harness can
+# reach it; a bare model can only agree to.
+#
+# Note the prompt is unambiguous ("on my task board", "track it") because the
+# wall between agent_plan and the Kanban is deliberate: Prax must touch the
+# board ONLY when the user explicitly asks. A vaguer prompt would reward
+# exactly the boundary violation the wall exists to prevent.
+id: harness_task_board_routing
+title: Routes an explicit tracked-work request to the task board
+prompt: >-
+  Put this on my task board so I don't lose it: replace the seal on the coolant
+  pump before the next service. Track it as a real task, not just a reply.
+checks:
+  # THE HARNESS: it must route somewhere that persists a tracked task.
+  - kind: tool
+    value: library_task_add|todo_add|delegate_tasks
+    weight: 2.0
+  # UTILITY: confirm what was created, so a mis-filed task is catchable.
+  - kind: regex
+    value: '(?i)seal|coolant pump'
+    weight: 1.0
+notes: >-
+  On the HARNESS axis: the deliverable is a persisted task, not prose about
+  one. Accepts any of several routes (direct tool or delegation to the tasks
+  spoke) because the diagnostic is "did it reach the board", not which path it
+  took.
+
+  Deliberately the ONLY board-touching case in the suite, and explicit by
+  construction — see docs/library.md on the agent_plan/Kanban wall. A suite
+  that rewarded board writes on implicit requests would train the behaviour
+  the wall forbids.

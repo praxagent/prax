@@ -480,6 +480,44 @@ def _resolve_concurrency(concurrency: int | None) -> int:
         return 1
 
 
+def summarize_capability_results(results: list[dict]) -> dict:
+    # An errored case used to be dropped from BOTH the pass rate and
+    # avg_tokens. That silently launders the worst runs: a case where the
+    # agent burned 727k tokens on an unsatisfiable request and never
+    # answered vanished from the numerator, the denominator AND the cost
+    # axis — so unbounded escalation *raised* the reported score. Same
+    # shape as the MATRIX.md sampling defect: a number that quietly
+    # excludes its own worst input.
+    #
+    # So errors are split by attribution. Agent-attributable ones (it timed
+    # out, it crashed) are FAILURES and keep their token cost. Only
+    # infrastructure faults are excluded, and the exclusion is reported in
+    # the aggregate so it can never be silent.
+    from prax.eval import is_infrastructure_error
+
+    counted = [r for r in results if not is_infrastructure_error(r.get("error"))]
+    excluded = len(results) - len(counted)
+    n = len(counted)
+    passed = sum(1 for r in counted if r.get("passed") and not r.get("error"))
+    total_tokens = sum(int(r.get("tokens", 0)) for r in counted)
+    graded = counted
+    return {
+        "graded": n,
+        "excluded_infra": excluded,
+        "errored_as_failure": sum(1 for r in counted if r.get("error")),
+        "passed": passed,
+        "pass_rate": round(passed / n, 3) if n else 0.0,
+        "avg_total": round(sum(r.get("total", 0.0) for r in graded) / n, 3) if n else 0.0,
+        # HAL cost axis — never report accuracy without cost. Efficiency =
+        # pass-rate points per 1k tokens, so a pricier model must EARN its lift.
+        "avg_tokens": round(total_tokens / n) if n else 0,
+        "pass_per_1k_tokens": round(passed / (total_tokens / 1000), 3) if total_tokens else None,
+        # HAL gaming-detection — passes that may be gamed (empty answer clearing
+        # an absent-check). Non-zero means the pass_rate is partly unearned.
+        "gaming_suspects": sum(1 for r in graded if r.get("gaming_suspect")),
+    }
+
+
 def run_capability_suite(cases: list[CapabilityCase] | None = None, *,
                          tier: str = "medium", model_override: str | None = None,
                          executor=None, suite_dir: Path | None = None,
@@ -532,29 +570,10 @@ def run_capability_suite(cases: list[CapabilityCase] | None = None, *,
             "error": run.error or None,
         }
 
-    def _summarize(results: list[dict]) -> dict:
-        graded = [r for r in results if not r.get("error")]
-        n = len(graded)
-        passed = sum(1 for r in graded if r.get("passed"))
-        total_tokens = sum(int(r.get("tokens", 0)) for r in graded)
-        return {
-            "graded": n,
-            "passed": passed,
-            "pass_rate": round(passed / n, 3) if n else 0.0,
-            "avg_total": round(sum(r.get("total", 0.0) for r in graded) / n, 3) if n else 0.0,
-            # HAL cost axis — never report accuracy without cost. Efficiency =
-            # pass-rate points per 1k tokens, so a pricier model must EARN its lift.
-            "avg_tokens": round(total_tokens / n) if n else 0,
-            "pass_per_1k_tokens": round(passed / (total_tokens / 1000), 3) if total_tokens else None,
-            # HAL gaming-detection — passes that may be gamed (empty answer clearing
-            # an absent-check). Non-zero means the pass_rate is partly unearned.
-            "gaming_suspects": sum(1 for r in graded if r.get("gaming_suspect")),
-        }
-
     return run_batch(
         [c.id for c in cases], _run_one, out_dir=suite_dir, label="capability",
         concurrency=eff_conc, resume=resume,
-        per_item_timeout_s=None, summarize=_summarize,
+        per_item_timeout_s=None, summarize=summarize_capability_results,
     )
 
 
@@ -609,6 +628,11 @@ def run_harness_lift(cases: list[CapabilityCase] | None = None, *,
         bt = sum(int(r.get("bare_tokens", 0)) for r in ok)
         return {
             "cases": len(ok),
+            # Lift needs BOTH scores, so a run that errored on either arm can't
+            # contribute one — but the drop must be visible. An unreported
+            # exclusion is how the capability aggregate came to hide its worst
+            # case (see summarize_capability_results).
+            "dropped_errored": len(results) - len(ok),
             "avg_full_content": round(sum(cfs) / len(cfs), 3) if cfs else None,
             "avg_bare_content": round(sum(cbs) / len(cbs), 3) if cbs else None,
             "avg_harness_lift": round(sum(lifts) / len(lifts), 3) if lifts else None,
