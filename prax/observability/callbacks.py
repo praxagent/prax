@@ -162,8 +162,10 @@ class OTelLLMCallback(BaseCallbackHandler):
             from prax.agent.trace import get_current_trace
             ctx = get_current_trace()
             if ctx:
+                cached_in, cache_write = _cache_tokens_from_message(response)
                 ctx.graph.add_llm_usage(ctx.span_id, model,
-                                        input_tokens, output_tokens)
+                                        input_tokens, output_tokens,
+                                        cached_in, cache_write)
         except Exception:  # noqa: BLE001 - accounting must never break a call
             pass
 
@@ -310,6 +312,30 @@ def _usage_from_message(response: Any) -> tuple[int, int]:
     try:
         meta = getattr(_first_message(response), "usage_metadata", None) or {}
         return int(meta.get("input_tokens") or 0), int(meta.get("output_tokens") or 0)
+    except Exception:  # noqa: BLE001 - accounting is best-effort
+        return 0, 0
+
+
+def _cache_tokens_from_message(response: Any) -> tuple[int, int]:
+    """``(cache_read, cache_creation)`` input tokens, or ``(0, 0)``.
+
+    An agent turn is a loop of model calls that each re-send the system prompt,
+    the tool definitions and the whole accumulated conversation — so most input
+    tokens are a re-sent prefix, and whether the provider served them from cache
+    is the single largest cost lever there is. `input_tokens` alone cannot tell
+    you: a cached prefix and an uncached one look identical in that number.
+
+    Reads the LangChain-normalised `input_token_details`, which both the
+    Anthropic and OpenAI integrations populate. Best-effort by design — a
+    provider that reports nothing yields zeros and is indistinguishable from
+    "no caching", which is why the flag that consumes this must be judged on a
+    measured delta rather than on these fields being non-zero.
+    """
+    try:
+        meta = getattr(_first_message(response), "usage_metadata", None) or {}
+        details = meta.get("input_token_details") or {}
+        return (int(details.get("cache_read") or 0),
+                int(details.get("cache_creation") or 0))
     except Exception:  # noqa: BLE001 - accounting is best-effort
         return 0, 0
 

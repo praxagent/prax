@@ -269,6 +269,91 @@ class LoopHeartbeat(AgentMiddleware):
 
 
 # ---------------------------------------------------------------------------
+# Prefix caching — stop re-paying for the same prompt every tool-calling round
+# ---------------------------------------------------------------------------
+class PromptPrefixCache(AgentMiddleware):
+    """Mark the stable head of the prompt as cacheable, for providers that ask.
+
+    An agent turn is a LOOP: every tool call sends the system prompt, the tool
+    definitions and the entire accumulated conversation again. A turn with 29
+    tool calls pays for that prefix 29 times. Measured on 2026-08-07: one
+    capability case spent 727,550 input tokens in a single turn.
+
+    Providers split into two camps and the difference decides whether this
+    middleware does anything at all:
+
+    * **OpenAI-compatible** endpoints cache long prefixes automatically,
+      server-side, with no client cooperation. Nothing to do — and nothing
+      here will help.
+    * **Anthropic** caches only what the client explicitly marks, via a
+      ``cache_control`` breakpoint on a content block. Prax marked nothing, so
+      it got nothing.
+
+    So this marks the SYSTEM message — the one part of the prompt guaranteed
+    stable across every round of a turn (it changes only on deploy, or when
+    the injected agent_plan changes, which is the point at which a re-cache is
+    correct anyway). Conversation history is deliberately left unmarked:
+    Anthropic allows only a handful of breakpoints, and the system prompt plus
+    tool definitions is where the reliably-repeated bulk lives.
+
+    Non-Anthropic requests are passed through untouched, so enabling this on an
+    OpenAI-only deployment is a no-op rather than a risk.
+
+    Default-off (``PROMPT_CACHE_ENABLED``). Judge it on a measured token delta
+    from ``cached_tokens_in`` in the trace, never on the flag being set — see
+    task #59.
+    """
+
+    def wrap_model_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
+        self._mark(request)
+        return handler(request)
+
+    async def awrap_model_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
+        self._mark(request)
+        return await handler(request)
+
+    @staticmethod
+    def _is_anthropic(request: Any) -> bool:
+        """True only when the bound model is an Anthropic one.
+
+        Checked by class name rather than by the configured base URL: Prax's
+        keyless mode points ``ANTHROPIC_BASE_URL`` at the secrets proxy, so the
+        URL says nothing about the provider, but the LangChain integration
+        class still does.
+        """
+        model = getattr(request, "model", None)
+        return "anthropic" in type(model).__name__.lower() if model is not None else False
+
+    @classmethod
+    def _mark(cls, request: Any) -> None:
+        try:
+            if not cls._is_anthropic(request):
+                return
+            messages = getattr(request, "messages", None) or []
+            for msg in messages:
+                if (getattr(msg, "type", None) or "") != "system":
+                    continue
+                content = getattr(msg, "content", None)
+                if isinstance(content, str):
+                    if not content.strip():
+                        return
+                    msg.content = [{
+                        "type": "text",
+                        "text": content,
+                        "cache_control": {"type": "ephemeral"},
+                    }]
+                elif isinstance(content, list) and content:
+                    last = content[-1]
+                    # Already marked (a retry re-entering the same request) —
+                    # marking twice would burn a scarce breakpoint.
+                    if isinstance(last, dict) and "cache_control" not in last:
+                        last["cache_control"] = {"type": "ephemeral"}
+                return
+        except Exception:  # noqa: BLE001 - a cache hint must never break a call
+            logger.debug("PromptPrefixCache marking failed", exc_info=True)
+
+
+# ---------------------------------------------------------------------------
 # Self-regulation — steadying counsel when the loop starts to spiral
 # ---------------------------------------------------------------------------
 class SteadyingCounsel(AgentMiddleware):
@@ -472,8 +557,9 @@ def default_middleware() -> list[AgentMiddleware]:
         base = bool(getattr(settings, "agent_middleware_enabled", False))
         spiral = bool(getattr(settings, "spiral_recovery_enabled", False))
         memoize = bool(getattr(settings, "tool_memoize_enabled", False))
+        prompt_cache = bool(getattr(settings, "prompt_cache_enabled", False))
     except Exception:  # pragma: no cover - settings unavailable in odd contexts
-        base = spiral = memoize = False
+        base = spiral = memoize = prompt_cache = False
     stack: list[AgentMiddleware] = []
     # Memoizer first so a cache hit short-circuits before taint re-processing;
     # the cached result was already tainted on the miss that stored it.
@@ -483,4 +569,9 @@ def default_middleware() -> list[AgentMiddleware]:
         stack += [UntrustedContentTaint(), LoopHeartbeat()]
     if spiral:
         stack.append(SteadyingCounsel())
+    # Last: it only annotates the outgoing prompt, so it must see whatever the
+    # other middleware injected (taint banners, steadying counsel) rather than
+    # caching a prefix that is about to change underneath it.
+    if prompt_cache:
+        stack.append(PromptPrefixCache())
     return stack
