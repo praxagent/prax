@@ -76,3 +76,41 @@ def resolve_task_timeout(override: float | None = None) -> float | None:
     except Exception:
         val = 0
     return float(val) if val > 0 else None
+
+
+# Errors that are the HARNESS's fault, not the agent's. Everything else is
+# attributed to the agent and scored as a failed case.
+#
+# Fail-closed on purpose: an unrecognised error counts AGAINST the agent. The
+# opposite default (exclude anything that errored) is what let a 180s timeout
+# on an unsatisfiable request disappear from the pass rate entirely — a run
+# that gets worse should never be able to score better by failing harder.
+# Adding a pattern here is a deliberate act of saying "this was our fault".
+_INFRA_ERROR_PATTERNS = (
+    "connection refused",
+    "connection reset",
+    "connection error",
+    "temporarily unavailable",
+    "name or service not known",
+    "rate limit",
+    "429",
+    "502 bad gateway",
+    "503 service unavailable",
+    "504 gateway timeout",
+    "insufficient_quota",
+    "invalid api key",
+    "authenticationerror",
+    "no space left on device",
+)
+
+
+def is_infrastructure_error(error: str | None) -> bool:
+    """True when *error* is an environment fault rather than an agent failure.
+
+    An agent timeout is NOT infrastructure — running out of budget on a task is
+    a capability outcome and must be scored as one.
+    """
+    if not error:
+        return False
+    low = str(error).lower()
+    return any(p in low for p in _INFRA_ERROR_PATTERNS)

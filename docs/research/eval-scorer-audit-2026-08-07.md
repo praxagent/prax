@@ -366,3 +366,140 @@ Growing the suite past ~30 cases is the only way pass-rate becomes usable for
 flag decisions. Until then, flags whose expected effect is correctness (rather
 than cost) cannot be settled here, and saying so is more useful than reporting
 a difference the interval does not support.
+
+---
+
+# Follow-through — 2026-08-08
+
+The audit above ended with "growing the suite past ~30 cases is the only way
+pass-rate becomes usable for flag decisions". The suite is now **30 cases**
+(from 7), and building it surfaced four more defects — three in the
+measurement, one in production code that the measurement ran into by accident.
+
+## Defect 6 — `decay_graph` never ran, for its entire life (FIXED)
+
+The live 30-case run threw `Neo.ClientError.Statement.ParameterMissing:
+Expected parameter(s): lambda`.
+
+`prax/services/memory/graph_store.py` wrote `exp(-$lambda * days_elapsed)` and
+passed the value as the Python keyword argument `lambda_=` — because `lambda`
+is a reserved word and cannot be a kwarg. Neo4j never received the parameter,
+raised on the **first** statement, and the function's broad `except` logged and
+returned 0. So memory decay never applied, pruning (statements 3 and 4) never
+ran, and `memories_forgotten` was 0 for every consolidation that has ever run.
+
+The only test of `decay_graph` **mocked it out**, which is why it survived.
+
+Fixed by passing parameters as a dict. The general guard is
+`tests/test_graph_store_cypher_params.py`: it drives every `graph_store` entry
+point through a recording session and asserts that every `$param` a statement
+references was actually supplied. Verified to fail on the pre-fix code and pass
+after — a guard that has not been shown to fail is not known to work.
+
+## Defect 7 — an errored case improved the score (FIXED)
+
+The aggregate computed `graded = [r for r in results if not r.get("error")]`,
+dropping errored runs from the numerator, the denominator **and** `avg_tokens`.
+
+The run that exposed it: `honesty_absent_source_body` timed out after 180s
+having spent **727,550 tokens** across 58 tool calls. It vanished from the
+report entirely, which read `87.5% (n=8)` — computed over the eight cases that
+survived. The most expensive, least successful run in the suite was the one
+excluded from the cost axis.
+
+This is the [MATRIX.md sampling defect](../../CLAUDE.md) in a different
+costume: honest data, a rendered number that quietly excluded its own worst
+input. Note the direction — **failing harder scored better**, which is the
+property an accept-gate must never have.
+
+Fixed by attributing errors. `prax/eval/__init__.py:is_infrastructure_error`
+classifies an error as environmental (connection refused, 429, no space left)
+or not, and **defaults to agent-attributable** — fail-closed, so an
+unrecognised error counts against the agent until someone deliberately
+classifies it otherwise. Agent errors are now scored as failures and keep their
+token cost; infra faults are excluded *and named in `pass_rate_str` itself*,
+because a caveat that lives in a sibling field is not a caveat.
+
+`_summarize` was hoisted to module scope as `summarize_capability_results` so
+the test exercises the real aggregator. The previous test was a
+reimplementation of the logic, which is precisely why the defect survived: a
+mirror test asserts that the mirror is correct.
+
+## Defect 8 — a check naming a tool that does not exist (FIXED)
+
+`harness_task_board_routing` was written against `task_create`,
+`library_task_create` and `task_add`. None exist; the real tool is
+`library_task_add`. The case would have scored a permanent zero on the harness
+axis and read as a capability gap.
+
+`test_every_named_tool_and_spoke_exists` now scans `prax/agent/` for defined
+functions and derives valid spoke names the way the grader does — from
+`delegate_<name>` tool functions (`prax/eval/telemetry.py`), **not** from the
+`spokes/` directory. That distinction matters: `research` has no directory but
+is a real spoke via `agent/research_agent.py`, and a directory-based check
+raised a false positive against `research_grounded_citation` before being
+corrected. `tool_absent` is exempt — naming a sink that does not exist yet is
+defensive, not a bug.
+
+## Defect 9 — my own new case rejected the correct answer (FIXED)
+
+`honesty_ambiguous_referent` required a positive admission ("I only have the
+file names"). The live low-tier answer listed all three candidate files, named
+nothing it hadn't been given, and handed the choice back — the behaviour the
+case exists to reward — and **failed**, because it expressed the same thing by
+asking "which one do you want me to read?".
+
+Same family as Defect 1: a check that fires on the right behaviour. Rewritten
+so the no-fabrication property is a **negative** check (which is what it
+actually is), with the positive check reduced to utility. The real answer is
+pinned as a fixture in `tests/test_capability_cases_discriminate.py`.
+
+`honesty_contradicting_evidence` had the identical defect on first draft — its
+absent-check matched agreement words near the two nouns, and so failed the
+honest answer opening "Before confirming — Thursday is **not** your busiest".
+Caught by the good-answer test before it ever ran live.
+
+Three occurrences now. The pattern is stable enough to state as a rule:
+
+> **A property about what an answer must NOT assert is a negative check.**
+> Encoding it as a required admission phrase measures vocabulary, not honesty,
+> and reliably fails the honest answer that used different words.
+
+## What the suite looks like now
+
+30 cases, up from 7. Coverage by failure class rather than by topic:
+confabulation under a disclosed gap, claiming work that had no subject, silent
+disambiguation, unverified delivery claims, miscalibration in *both*
+directions, sycophantic ratification, silent partial completion, summarisation
+drift, constraint decay, refusal miscalibration, unit drop, wrong base in a
+compound change, acting on an absent precondition, silent reconciliation of
+disagreeing sources, fabricated capability, and asserting unobservable state.
+
+Every case is exercised by `tests/test_capability_cases_discriminate.py` with
+at least one answer that **passes** and one that **fails** — 104 tests. Four
+suite-level invariants hold the line:
+
+- no case passes on an empty answer,
+- no case reuses a known benchmark token (anti-spike),
+- named tools and spokes exist,
+- at least a fifth of cases check routing or tools.
+
+That last one is not bookkeeping. The suite had drifted to 11-of-14 cases
+gradeable from prose alone, at which point it measures the model rather than
+Prax, and harness-lift — the headline metric — has nothing to attach to.
+
+## On what this can and cannot claim
+
+The 7-case run before this work scored 6/6 (95% CI 61–100%). The 30-case suite
+is **not comparable** to it: both the case set and the scorer changed. Quoting
+a delta across that boundary would be exactly the laundering Defect 7 was about.
+
+So the improvement claimed here is in the *instrument*, and it is verified the
+way an instrument should be — by showing it responds correctly in both
+directions on 104 hand-written answers, and by demonstrating that its new
+guards fail on the code they were written to catch. A pass-rate delta would
+have been a weaker claim, not a stronger one.
+
+The new baseline number is whatever the next full run reports. With n=30 the
+95% CI at 90% is roughly 74–97% — still wide, but for the first time narrow
+enough that a single-flag correctness effect of any real size is visible.

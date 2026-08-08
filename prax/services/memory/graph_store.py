@@ -452,7 +452,12 @@ def decay_graph(user_id: str, halflife_days: float = 14.0, prune_threshold: floa
     try:
         with _session() as session:
             # Decay entity importance
-            result = session.run(
+            # NB: passed as a dict, not kwargs — the Cypher parameter is named
+            # `lambda`, which cannot be a Python keyword argument.  Passing it
+            # as `lambda_=` silently produced a ParameterMissing error for the
+            # entire life of this function (caught by the except below, so the
+            # decay never ran and `memories_forgotten` was always 0).
+            session.run(
                 """
                 MATCH (e:Entity {user_id: $uid})
                 WITH e,
@@ -460,9 +465,7 @@ def decay_graph(user_id: str, halflife_days: float = 14.0, prune_threshold: floa
                 SET e.importance = e.importance * exp(-$lambda * days_elapsed)
                 RETURN count(e) AS updated
                 """,
-                uid=user_id,
-                now=now.isoformat(),
-                lambda_=lambda_,
+                {"uid": user_id, "now": now.isoformat(), "lambda": lambda_},
             )
 
             # Decay relation weights
@@ -473,9 +476,7 @@ def decay_graph(user_id: str, halflife_days: float = 14.0, prune_threshold: floa
                      duration.between(datetime(r.last_seen), datetime($now)).days AS days_elapsed
                 SET r.weight = r.weight * exp(-$lambda * days_elapsed)
                 """,
-                uid=user_id,
-                now=now.isoformat(),
-                lambda_=lambda_,
+                {"uid": user_id, "now": now.isoformat(), "lambda": lambda_},
             )
 
             # Prune low-importance entities without relations

@@ -1,0 +1,31 @@
+# Capability case — a percentage question whose difficulty is identifying the
+# base, not doing the arithmetic.
+id: computation_percentage_base
+title: Applies a percentage change to the correct base
+prompt: >-
+  A subscription cost 80 pounds. It rose by 25 percent in January, then fell by
+  20 percent in March. What does it cost now, and is that more or less than the
+  original 80?
+checks:
+  # 80 x 1.25 = 100; 100 x 0.80 = 80. Back to exactly the original.
+  - kind: regex
+    value: "(?i)(£|\\bGBP\\s*)?\\b80(\\.00?)?\\b"
+    weight: 2.0
+  # THE PROPERTY: it must state the comparison, which is the actual question.
+  - kind: regex
+    value: "(?i)(same|unchanged|identical|back to|no (net )?change|neither more nor less|equal to the original)"
+    weight: 2.0
+  # THE FAILURE: the naive 25 - 20 = 5 percent net, giving 84, or treating the
+  # second change as applying to the original base.
+  - kind: regex_absent
+    value: "(?i)\\b84(\\.00?)?\\b|\\b5\\s*(%|per ?cent)\\s*(net|more|increase|higher)|net (increase|gain) of 5"
+    weight: 2.0
+notes: >-
+  Ground truth: 80 x 1.25 = 100, 100 x 0.80 = 80. The percentages do not
+  cancel by luck — they cancel exactly, which makes the wrong answer (84, from
+  adding the percentages) unambiguous rather than a rounding dispute.
+
+  The failure class is WRONG BASE IN A COMPOUND CHANGE. It generalises to
+  discounts on discounts, growth then decline, and margin-on-cost versus
+  margin-on-price — a family of errors that are confidently stated and rarely
+  questioned.

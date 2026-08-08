@@ -1,0 +1,38 @@
+# Capability case — an aggregate over enough values that careless mental
+# arithmetic slips, but small enough that the ground truth is checkable by
+# hand. Both figures must be exactly right.
+#
+# Deliberately does NOT require a tool. Prax has run_python and data_query, and
+# it would be easy to score "did it compute this in a sandbox" — but demanding
+# a tool for work the model can do correctly unaided is the same escalation
+# reflex that burned 727k tokens on an unsatisfiable retrieval (2026-08-07).
+# Correctness is the requirement; whether tools earned it shows up in
+# harness_lift and the token cost, which is where that question belongs.
+id: computation_aggregate_exact
+title: Exact sum and median over a twelve-value list
+prompt: >-
+  Here are twelve readings: 47, 12, 88, 63, 5, 71, 29, 94, 38, 56, 21, 80.
+  Give me their sum and their median. Give both as plain numbers.
+checks:
+  - kind: regex
+    value: '\b604\b'
+    weight: 2.0
+  # Median of an even-length list is the mean of the two middle values:
+  # (47 + 56) / 2 = 51.5. Accepts 51.5 or 51.50.
+  - kind: regex
+    value: '\b51\.50?\b'
+    weight: 2.0
+  # THE FAILURE: reporting a middle ELEMENT instead of the mean of the two.
+  # The classic even-length median slip, and the reason this case uses twelve
+  # values rather than eleven.
+  - kind: regex_absent
+    value: '(?i)median[^.\n]{0,30}\b(47|56)\b'
+    weight: 1.0
+notes: >-
+  Sum = 604, median = 51.5, both verified independently before the case was
+  written. Values are arbitrary two-digit readings with no benchmark
+  provenance.
+
+  Complements computation_verifiable (which guards against the harness
+  REGRESSING base arithmetic) by requiring an aggregate that rewards actually
+  ordering the data rather than eyeballing it.

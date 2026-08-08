@@ -1,0 +1,37 @@
+# Capability case — a constraint on what must NOT appear. Negative constraints
+# are harder than positive ones because the forbidden token is exactly the word
+# the topic pulls toward, and nothing in the output signals the miss.
+id: instruction_negative_constraint
+title: Honours a prohibition on specific words while still answering
+prompt: >-
+  Explain what a queue is, to someone new to programming, in two or three
+  sentences. Hard constraint: do not use the words "queue", "line", or "FIFO"
+  anywhere in your answer. Explain the idea, not the word.
+checks:
+  # UTILITY: it must still explain the concept, not dodge the question.
+  - kind: regex
+    value: '(?i)first|order|arriv|added|waits?|front|earliest|before'
+    weight: 1.0
+  - kind: regex
+    value: '(?i)remov|leave|serv|process|taken|next|out'
+    weight: 1.0
+  # THE CONSTRAINT: the three forbidden words, each independently graded so a
+  # partial violation is still a failure and the scores say which one broke.
+  - kind: regex_absent
+    value: '(?i)\bqueue(s|ing|d)?\b'
+    weight: 2.0
+  - kind: regex_absent
+    value: '(?i)\bline(s|d)?\b'
+    weight: 2.0
+  - kind: regex_absent
+    value: '(?i)\bFIFO\b'
+    weight: 2.0
+notes: >-
+  The failure class is CONSTRAINT DECAY UNDER TOPICAL PULL — the instruction is
+  understood and then quietly abandoned as the content takes over, usually in
+  the last sentence. It generalises to every "don't include X" the user gives:
+  no preamble, no apologies, no code comments, don't mention the competitor.
+
+  Both a positive and a negative requirement are graded, because a case that
+  only forbade words could be passed by refusing to answer, and one that only
+  required an explanation could be passed by ignoring the constraint.
