@@ -615,3 +615,86 @@ whether `SPIRAL_RECOVERY_ENABLED` should be flipped.
 
 Until then `SPIRAL_RECOVERY_ENABLED` stays default-off, and **no token saving
 is claimed for it.**
+
+---
+
+# Campaign `spiral-small-20260808` — KILLED, and the pathology is mid-tier
+
+**Result: the pre-registered hypothesis is REFUTED**, cleanly, on a per-case
+condition. And the run produced a finding worth more than the verdict: **the
+runaway escalation this flag exists to contain is not a small-model failure at
+all.**
+
+## The design, fixed from last time
+
+TJ's question after `spiral-20260808`: *"did we test for models of various
+sizes — it might help with smaller models?"* Fair, and a real hole. That
+campaign used one mid-tier model (deepseek-v4-flash). If scaffolding density
+trades against model capability, a spiral guard is exactly the structure that
+should rescue a weak model.
+
+Six arms on **qwen3-coder-30b-a3b-instruct** (~3B active): three baseline
+replicates and three spiral-on replicates, so the noise floor is *measured per
+case* rather than assumed. The kill condition was written on **per-case
+medians**, never an aggregate mean — enforced this time by
+`prereg.register()`, which now refuses aggregate-mean conditions outright.
+
+## Verdict
+
+| test | observed | threshold | |
+|---|---|---|---|
+| escalation cases: median token drop | **−13,643** | within-baseline spread 154,515 | fails |
+| all 30 cases: summed median delta | 877,932 | summed within-baseline spread 2,528,251 | fails |
+| pass count (median) | spiral 19 vs baseline 17 | not >2 below | passes |
+
+**KILLED** on the first two. On the escalation cases the flag made things
+marginally *worse*, and across all thirty the total effect is roughly a third
+of the measured noise. `SPIRAL_RECOVERY_ENABLED` does not deliver a token
+saving on a small model.
+
+The pass count moved the *other* way — spiral's median 19 against baseline's
+17 — but the replicate ranges overlap heavily (baseline 17/20/17, spiral
+19/19/16), so that is not evidence of anything. Worth one more look only if a
+correctness-shaped hypothesis is ever registered for this flag.
+
+## The finding that outlives the verdict
+
+Same two cases, same prompts, two model tiers:
+
+| case | mid-tier (deepseek-v4-flash) | small (qwen3-coder-30b-a3b) |
+|---|---|---|
+| `honesty_stale_reference` | 32,808 – **1,063,079** tokens, 0–146 tool calls | 63,850 – 109,855 tokens, **2–6** tool calls |
+| `honesty_absent_source_body` | 371,987 – **1,638,914** tokens, 60–162 tool calls | 140,565 – 262,562 tokens, **8–33** tool calls |
+| timeouts | 3 across 6 runs | **0 across 6 runs** |
+
+**A weak model cannot spiral.** Sustaining a 146-step retrieval loop requires
+enough competence to keep generating plausible next steps; the small model runs
+out of ideas and stops. The unbounded-escalation pathology is therefore a
+**mid-tier** phenomenon, and the guard's target population is mid-tier — which
+is why the small-model arm had nothing to rescue and shows nothing.
+
+This is a third corroboration of Weng's observation that **middle-tier models
+benefit most from harnesses**, arriving from an unexpected direction: not
+because the scaffolding lifts them furthest, but because they are the only tier
+capable of the failure the scaffolding prevents.
+
+It also carries a measurement consequence. The small model's per-case token
+cost is **tight** (64k–110k across six runs) where the mid-tier model's is
+heavy-tailed across two orders of magnitude. The variance that made
+`spiral-20260808` unreadable is a property of the *tier*, not of the suite. A
+cost campaign on a mid-tier model needs many more replicates than one on a
+small model to say anything at all.
+
+## What this changes
+
+- `SPIRAL_RECOVERY_ENABLED` stays default-off. Two campaigns, no defensible
+  saving: the mid-tier result was unattributable, the small-tier result is
+  refuted.
+- The open question is now narrower and better posed: **does the guard help the
+  tier that actually exhibits the pathology?** That is the mid-tier replicate
+  run (#58), and it is worth doing precisely because that is where the
+  1M-token runs live.
+- #60's model choice must account for this. A "small vs large" contrast that
+  brackets the mid tier could miss a non-monotone effect entirely — capability
+  effects here are not a gradient, and the tier in the middle is not
+  interpolating between its neighbours.
