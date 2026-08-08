@@ -183,8 +183,15 @@ def _judge_output(
     unpack only the first four elements for backward compatibility.
     """
     from prax.agent.llm_factory import build_llm
+    from prax.settings import settings
 
-    llm = build_llm(tier=tier, config_key="eval_judge")
+    # A GRADER, not a generator. Without an explicit temperature this
+    # inherited AGENT_TEMPERATURE (0.7) — the knob tuned to make the
+    # agent write well — so the same answer could be graded pass on one
+    # run and fail on the next, and a published number was not
+    # reproducible. See JUDGE_TEMPERATURE.
+    llm = build_llm(tier=tier, config_key="eval_judge",
+                    temperature=settings.judge_temperature)
     model_name = getattr(llm, "model_name", "") or getattr(llm, "model", "unknown")
 
     prompt = _JUDGE_PROMPT.format(

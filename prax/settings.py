@@ -839,6 +839,19 @@ class AppSettings(BaseSettings):
             "docs/research/verify-and-commit-discipline.md."
         ),
     )
+    judge_temperature: float = Field(
+        default=0.0, alias="JUDGE_TEMPERATURE",
+        description=(
+            "Sampling temperature for LLM surfaces that GRADE rather than "
+            "generate: eval judges, note-quality review, the self-improve "
+            "accept gate. These previously inherited AGENT_TEMPERATURE (0.7) — "
+            "the knob tuned to make the agent write well — which made every "
+            "verdict stochastic: the same answer could be graded pass on one "
+            "run and fail on the next, and a published eval number was not "
+            "reproducible. A grader should be as close to deterministic as the "
+            "model allows. Raise this only if you can show a measured reason."
+        ),
+    )
     prompt_cache_enabled: bool = Field(
         default=False, alias="PROMPT_CACHE_ENABLED",
         description=(

@@ -194,8 +194,15 @@ def _default_auditor(base_prompt: str, patch: str, tier: str = "high") -> tuple[
     import re
 
     from prax.agent.llm_factory import build_llm
+    from prax.settings import settings
     try:
-        llm = build_llm(tier=tier, config_key="self_regen_auditor")
+        # A GRADER, not a generator. Without an explicit temperature this
+        # inherited AGENT_TEMPERATURE (0.7) — the knob tuned to make the
+        # agent write well — so the same answer could be graded pass on one
+        # run and fail on the next, and a published number was not
+        # reproducible. See JUDGE_TEMPERATURE.
+        llm = build_llm(tier=tier, config_key="self_regen_auditor",
+                        temperature=settings.judge_temperature)
         resp = llm.invoke(_AUDITOR_PROMPT.format(patch=patch))
         text = _extract_text(resp)
         m = re.search(r"\{.*\}", text, re.DOTALL)  # first JSON object, past any preamble
