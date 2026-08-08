@@ -436,6 +436,13 @@ def delegate_parallel(tasks: list[dict]) -> str:
     )
 
     results: list[str] = [""] * len(tasks)
+    # Per-slot outcome, so the MERGE can count what actually came back. A
+    # fan-out whose merge does not check its inputs against what it dispatched
+    # will happily synthesise a "complete" answer from a partial set — the same
+    # defect as an eval aggregate that drops errored cases, or a PDF read that
+    # skips the pages it could not parse. Both were fixed the same week; this
+    # is the third surface.
+    outcomes: list[str] = ["ok"] * len(tasks)
 
     # Copy the current context (ContextVars: user_id, channel_id, active_view, etc.)
     # so worker threads inherit them.  Without this, ContextVars default to None in
@@ -460,11 +467,13 @@ def delegate_parallel(tasks: list[dict]) -> str:
             except Exception as exc:
                 logger.warning("delegate_parallel task %d failed: %s", idx + 1, exc, exc_info=True)
                 results[idx] = f"Task failed: {exc}"
+                outcomes[idx] = "failed"
 
         for future in not_done:
             idx = future_to_idx[future]
             future.cancel()
             results[idx] = "Task timed out."
+            outcomes[idx] = "timed_out"
 
     parts: list[str] = []
     for idx, result_text in enumerate(results, start=1):
@@ -475,13 +484,41 @@ def delegate_parallel(tasks: list[dict]) -> str:
 
     summary = "\n\n".join(parts)
 
+    # Fan-in guard. Individual slots already carry their failure text, but a
+    # model reading twelve results of which three say "Task failed" can still
+    # write a confident synthesis over the nine — so state the shortfall up
+    # front, where it cannot be skimmed past.
+    n_failed = outcomes.count("failed")
+    n_timed_out = outcomes.count("timed_out")
+    n_ok = len(tasks) - n_failed - n_timed_out
+    if n_failed or n_timed_out:
+        detail = ", ".join(
+            bit for bit in (
+                f"{n_failed} failed" if n_failed else "",
+                f"{n_timed_out} timed out" if n_timed_out else "",
+            ) if bit)
+        summary = (
+            f"[INCOMPLETE FAN-OUT] {n_ok} of {len(tasks)} sub-tasks returned a "
+            f"result ({detail}). Anything built on this is based on a PARTIAL "
+            f"set — say which parts are missing rather than presenting it as "
+            f"complete.\n\n" + summary)
+
     # Append execution graph for the governing agent
     graph = get_graph_summary()
     if graph and "No active trace" not in graph:
         summary += f"\n\n## Execution Graph\n{graph}"
 
-    span.end(status="completed", summary=f"{len(tasks)} tasks completed")
-    logger.info("delegate_parallel: all %d tasks complete", len(tasks))
+    # The span used to claim "{len(tasks)} tasks completed" whatever happened,
+    # which put an unearned completion claim into the trace — the artifact a
+    # person opens to find out what went wrong.
+    span.end(
+        status="completed" if n_ok == len(tasks) else "partial",
+        summary=f"{n_ok}/{len(tasks)} tasks completed"
+                + (f" ({n_failed} failed, {n_timed_out} timed out)"
+                   if (n_failed or n_timed_out) else ""),
+    )
+    logger.info("delegate_parallel: %d/%d tasks complete (%d failed, %d timed out)",
+                n_ok, len(tasks), n_failed, n_timed_out)
     return summary
 
 
