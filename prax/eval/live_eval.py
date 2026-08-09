@@ -111,7 +111,14 @@ def _judge_trace(trigger: str, trace_summary: str, tier: str = "low") -> dict:
         from langchain_core.messages import HumanMessage
 
         from prax.agent.llm_factory import build_llm
-        llm = build_llm(tier=tier, config_key="eval_judge")
+        from prax.settings import settings
+        # A GRADER, not a generator. Without an explicit temperature this
+        # inherited AGENT_TEMPERATURE (0.7) — the knob tuned to make the
+        # agent write well — so the same answer could be graded pass on one
+        # run and fail on the next, and a published number was not
+        # reproducible. See JUDGE_TEMPERATURE.
+        llm = build_llm(tier=tier, config_key="eval_judge",
+                        temperature=settings.judge_temperature)
         prompt = _JUDGE_PROMPT.format(
             trigger=trigger[:1000], trace_summary=trace_summary[:2000]
         )

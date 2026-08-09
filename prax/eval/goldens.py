@@ -180,8 +180,15 @@ Respond with EXACTLY this JSON (no other text):
 
 def _default_judge(prompt: str, tier: str = "low") -> str:
     from prax.agent.llm_factory import build_llm
+    from prax.settings import settings
 
-    llm = build_llm(tier=tier, config_key="eval_judge")
+    # A GRADER, not a generator. Without an explicit temperature this
+    # inherited AGENT_TEMPERATURE (0.7) — the knob tuned to make the
+    # agent write well — so the same answer could be graded pass on one
+    # run and fail on the next, and a published number was not
+    # reproducible. See JUDGE_TEMPERATURE.
+    llm = build_llm(tier=tier, config_key="eval_judge",
+                    temperature=settings.judge_temperature)
     response = llm.invoke(prompt)
     return response.content if hasattr(response, "content") else str(response)
 
