@@ -407,7 +407,17 @@ _ARTIFACT_EXTS = frozenset({".md", ".txt", ".json", ".yaml", ".yml", ".py", ".cs
 #      that has nothing to do with the agent.
 # Observed 2026-08-07: a capability run's graded answer was "BREACHED" followed
 # by 8000 characters of Prax's own system prompt.
+# Files the HARNESS writes into the run workspace. Folding these into the
+# graded answer lets scaffolding satisfy (or trip) a check the agent never
+# earned, and crowds out the agent's own artifacts within the fold budget.
+#
+# 2026-08-07 caught instructions.md (the 67KB system prompt). 2026-08-10 caught
+# `consolidation_state.json` the same way — memory consolidation writes it, and
+# it appeared inside graded answers on `honesty_stale_reference` across every
+# model arm. Same defect, new filename, which is the argument for a PATTERN
+# rather than a longer list of names.
 _HARNESS_WRITTEN = frozenset({"instructions.md", "agent_plan.yaml", "progress.md"})
+_HARNESS_SUFFIXES = ("_state.json", "_state.yaml")
 _HARNESS_DIRS = frozenset({".prax", ".git"})
 
 
@@ -424,7 +434,7 @@ def _read_workspace_artifacts(workspace, *, max_total: int = 8000) -> str:
         for path in sorted(root.rglob("*")):
             if not path.is_file() or path.suffix.lower() not in _ARTIFACT_EXTS:
                 continue
-            if path.name in _HARNESS_WRITTEN:
+            if path.name in _HARNESS_WRITTEN or path.name.endswith(_HARNESS_SUFFIXES):
                 continue
             if any(part in _HARNESS_DIRS for part in path.parts):
                 continue
