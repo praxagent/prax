@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import logging
 import os
@@ -12,6 +13,7 @@ import tempfile
 import threading
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 
 import yaml
 
@@ -772,6 +774,49 @@ def read_links(user_id: str) -> str:
         return f.read()
 
 
+def atomic_write(filepath: str, content: str | bytes) -> None:
+    """Write *content* to *filepath* so a reader never sees a partial file.
+
+    # INVARIANT: a concurrent reader of `filepath` observes either the complete
+    # previous content or the complete new content — never a splice, and never
+    # a truncated file if the process dies mid-write.
+
+    The naive `open(path, "w")` truncates the target immediately and then
+    streams bytes into it, so there is a window in which the file on disk is
+    incomplete. Writers are already serialised by `get_lock(user_id)`, but
+    READERS take no lock (`read_file` deliberately does not), and the user's
+    file browser takes no lock either — so serialising writers does not close
+    that window. Writing to a temporary file and renaming does, because
+    `os.replace` is atomic on POSIX.
+
+    The temp file must live in the SAME DIRECTORY as the target: `os.replace`
+    is only atomic within a filesystem, and a temp elsewhere (e.g. /tmp) can
+    land on a different mount.
+
+    Grounded in #64. Note the correction that produced this function: the
+    original report claimed there was no locking at all, which was wrong — it
+    grepped `workspace_tools.py` rather than this module. The lock exists and
+    serialises writers; what it does not do is make a write atomic for readers.
+    """
+    target = Path(filepath)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    binary = isinstance(content, bytes)
+    fd, tmp = tempfile.mkstemp(
+        dir=str(target.parent), prefix=f".{target.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb" if binary else "w",
+                       **({} if binary else {"encoding": "utf-8"})) as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, str(target))
+    except BaseException:
+        # Leave no debris on any failure path, including KeyboardInterrupt.
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
 def save_file(user_id: str, filename: str, content: str | bytes) -> str:
     """Save content to active/{filename}, git commit. Returns the file path.
 
@@ -781,12 +826,7 @@ def save_file(user_id: str, filename: str, content: str | bytes) -> str:
     with get_lock(user_id):
         root = ensure_workspace(user_id)
         filepath = safe_join(root, "active", filename)
-        if isinstance(content, bytes):
-            with open(filepath, "wb") as f:
-                f.write(content)
-        else:
-            with open(filepath, "w", encoding="utf-8") as f:
-                f.write(content)
+        atomic_write(filepath, content)
         git_commit(root, f"Save {filename} to active workspace")
         logger.info("Saved %s to workspace for %s", filename, user_id)
         return filepath
@@ -912,8 +952,12 @@ def _read_todos(user_id: str) -> list[dict]:
 
 def _write_todos(user_id: str, todos: list[dict]) -> None:
     root = ensure_workspace(user_id)
-    with open(os.path.join(root, "todos.yaml"), "w", encoding="utf-8") as f:
-        yaml.dump(todos, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    # Atomic: the plan and todo files are re-read constantly (agent_plan is
+    # injected into the system prompt every turn), so a torn read here surfaces
+    # as corrupt YAML inside a live turn, not as a quiet filesystem oddity.
+    atomic_write(
+        os.path.join(root, "todos.yaml"),
+        yaml.dump(todos, default_flow_style=False, sort_keys=False, allow_unicode=True))
     # Remove legacy .json if it exists.
     legacy = os.path.join(root, "todos.json")
     if os.path.isfile(legacy):
@@ -993,8 +1037,9 @@ def _plan_path(user_id: str) -> str:
 
 
 def _write_plan(root: str, plan: dict) -> None:
-    with open(os.path.join(root, "agent_plan.yaml"), "w", encoding="utf-8") as f:
-        yaml.dump(plan, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    atomic_write(
+        os.path.join(root, "agent_plan.yaml"),
+        yaml.dump(plan, default_flow_style=False, sort_keys=False, allow_unicode=True))
     # Remove legacy .json if it exists.
     legacy = os.path.join(root, "agent_plan.json")
     if os.path.isfile(legacy):
