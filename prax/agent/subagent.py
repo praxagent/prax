@@ -488,6 +488,9 @@ def delegate_parallel(tasks: list[dict]) -> str:
     # model reading twelve results of which three say "Task failed" can still
     # write a confident synthesis over the nine — so state the shortfall up
     # front, where it cannot be skimmed past.
+    # INVARIANT: the merged output reports on a COMPLETE set, or says which
+    # part is missing. A caller can never read this summary as whole when it is
+    # not. Enforced by tests/test_delegate_parallel_fanin.py.
     n_failed = outcomes.count("failed")
     n_timed_out = outcomes.count("timed_out")
     n_ok = len(tasks) - n_failed - n_timed_out

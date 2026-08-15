@@ -491,6 +491,10 @@ def _resolve_concurrency(concurrency: int | None) -> int:
 
 
 def summarize_capability_results(results: list[dict]) -> dict:
+    # INVARIANT: the reported pass rate is MONOTONE IN FAILURES — adding a
+    # case that errors can never raise it, and the case's tokens are never
+    # dropped from the cost axis. Enforced by
+    # tests/test_eval_error_accounting.py::test_failing_harder_can_never_score_better
     # An errored case used to be dropped from BOTH the pass rate and
     # avg_tokens. That silently launders the worst runs: a case where the
     # agent burned 727k tokens on an unsatisfiable request and never

@@ -249,17 +249,33 @@ def supersede_relation(
     source_name: str,
     relation_type: str,
     target_name: str,
+    valid_until: str | None = None,
 ) -> bool:
-    """Mark a relation as no longer current by setting valid_until = now.
+    """Mark a relation as no longer current by closing its validity interval.
 
-    Used when consolidation detects a contradicting fact (e.g., user now prefers
-    light mode → supersede the old "prefers dark mode" edge).
+    # INVARIANT: valid_from/valid_until describe when the fact was TRUE IN THE
+    # WORLD; first_seen/last_seen describe when WE OBSERVED it. The two axes are
+    # independent and may disagree — a fact learned in August can stop being
+    # true in March.
+
+    *valid_until* is the moment the fact ceased to hold. It defaults to now,
+    which is correct only when we learn of a change as it happens.
+
+    This default used to be hardcoded, which quietly collapsed the closing
+    boundary onto record time: told in August "I moved to Berlin back in March",
+    consolidation closed `lives_in → Paris` at AUGUST, so a point-in-time query
+    for April answered Paris — wrong, with the right date discarded from the
+    very utterance that triggered the supersede (#65). The opening boundary
+    never had this problem: `add_relation` has always accepted `valid_from`.
+
+    Callers that know the effective date should pass it. Callers that do not
+    should not invent one — `now` is the honest default for "we just found out".
 
     Inspired by Rasmussen et al., "Zep" (2025): bi-temporal supersession.
     """
     src = source_name.strip().lower()
     tgt = target_name.strip().lower()
-    now = datetime.now(UTC).isoformat()
+    now = valid_until or datetime.now(UTC).isoformat()
 
     try:
         with _session() as session:

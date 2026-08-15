@@ -359,6 +359,11 @@ def _compact(
 def _preserve_refs(archive: str, folded: list[str]) -> str:
     """Re-attach the session ids the summariser dropped.
 
+    # INVARIANT: every folded entry's ``{date}-{short_id}`` ref survives
+    # compaction, so any abstraction left in context still dereferences to the
+    # detail file it came from. Re-attached by CODE, never trusted to the
+    # model's output.
+
     Compaction is a lossy LLM rewrite, and the thing it loses that matters most
     is not prose — it is the **pointer**. Each recent bullet is
     ``{date} · {outcome} · {short_id}`` and names a detail file

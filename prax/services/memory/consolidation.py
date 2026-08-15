@@ -181,11 +181,17 @@ def consolidate_user(user_id: str) -> ConsolidationResult:
             # Handle supersession: if this relation contradicts an existing one
             supersedes = rel.get("supersedes")
             if supersedes:
+                # INVARIANT: valid_until records when the fact CEASED TO BE
+                # TRUE, not when we found out. The extraction reports it when
+                # the utterance carries it; None falls back to now, which is
+                # honest for "we just learned of a change happening now" and
+                # dishonest for a retrospective one — hence asking for it (#65).
                 graph_store.supersede_relation(
                     user_id=user_id,
                     source_name=supersedes.get("source", rel.get("source", "")),
                     relation_type=supersedes.get("type", rel.get("type", "")),
                     target_name=supersedes.get("target", rel.get("target", "")),
+                    valid_until=supersedes.get("valid_until"),
                 )
         except Exception:
             logger.debug("Failed to upsert relation: %s", rel, exc_info=True)
@@ -366,6 +372,10 @@ Return JSON with this exact structure:
   ],
   "relations": [
     {"source": "entity_name", "type": "works_on|interested_in|prefers|related_to|part_of|caused_by|mentioned_with", "target": "entity_name", "weight": 1.0, "evidence": "brief reason", "confidence": 0.0-1.0, "valid_from": "ISO date or null", "supersedes": null}
+    // "supersedes" replaces an older relation: {"source": "...", "type": "...", "target": "...", "valid_until": "ISO date or null"}
+    // valid_until is WHEN THE OLD FACT STOPPED BEING TRUE, which is often NOT today.
+    // "I moved to Berlin back in March" told in August => valid_until is March.
+    // Use null only when the change genuinely happened just now.
   ],
   "facts": [
     {"content": "The important fact or preference to remember", "importance": 0.0-1.0, "confidence": 0.0-1.0}
