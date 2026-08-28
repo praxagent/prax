@@ -81,7 +81,7 @@ compile skill A, verify it holds; compile skill B, **re-verify A**. Prompt-layer
 forgetting is cheap to measure — it is just the capability suite run again —
 and it would be an easy thing to never think to check.
 
-Note the tension with [MORPHEUS](morpheus-assessment.md), which argued LLMs are
+Note the tension with [MORPHEUS](skyfall-morpheus-continual-learning.md), which argued LLMs are
 *not* continual learners. These are not straightforwardly reconcilable, and I
 am not going to reconcile them from two abstracts; the honest position is that
 one paper reports a method that works on its benchmarks and the other reports a

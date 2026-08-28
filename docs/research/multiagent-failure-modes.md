@@ -58,7 +58,7 @@ single well-resourced agent covers the same ground.
 
 This decouples two axes we have been treating as one. It also lands on a live
 decision: the model ladder changed on 2026-08-09, and the
-[capability suite](harness-beats-model-choice.md) measures *execution*
+[capability suite](crush-charm-coding-agent.md) measures *execution*
 capability only. Nothing in our eval matrix measures whether a model coordinates
 or escalates — and this says the two do not move together.
 

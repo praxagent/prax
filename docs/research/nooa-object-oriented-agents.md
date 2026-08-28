@@ -33,7 +33,7 @@ checkable in principle — unlike Schema's self-reported 99%
 ([arc-agi-3](arc-agi-3-schema-harness.md)).
 
 The frame fits a thread we already run: RLM's code-REPL orchestration
-([rlm-harness](rlm-recursive-language-models.md)) is tracked as a narrow
+([rlm-harness](rlm-harness-lid.md)) is tracked as a narrow
 experiment via `run_python`. NOOA is that idea productionized — the model
 writes Python that calls typed methods on live objects instead of emitting
 JSON tool calls. Their Table-7 sweep (14 frameworks; "no other system
@@ -89,7 +89,7 @@ not code.
 
 ## Related
 
-- [rlm-recursive-language-models.md](rlm-recursive-language-models.md) — the
+- [rlm-recursive-language-models.md](rlm-harness-lid.md) — the
   code-REPL orchestration lane this strengthens.
 - [acm-agentic-context-management.md](acm-agentic-context-management.md) —
   context-as-API, second sighting.

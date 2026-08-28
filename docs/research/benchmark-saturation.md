@@ -123,7 +123,7 @@ at best.
   still authored"; this adds that hidden-ness does not buy longevity either.
 - [aide2-recursive-self-improvement.md](aide2-recursive-self-improvement.md) —
   the public/private split whose theory this partially corrects.
-- [eval-rigor-review.md](eval-rigor-review.md) + the scorecard-honesty thread —
+- [eval-rigor-review.md](eval-rigor-review-2026-07.md) + the scorecard-honesty thread —
   a score published without its discriminative power is the same omission
   class as a sample published as a suite.
 - [arc-agi-3-schema-harness.md](arc-agi-3-schema-harness.md) — the flagship

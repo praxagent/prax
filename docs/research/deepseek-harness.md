@@ -81,7 +81,7 @@ that the scaffolding is what makes an agent trustworthy, it is not.
   grounds, not on quality.
 - **TypeScript/Node stack** — irrelevant; Prax is Python and that is settled.
 - **`dsh` as a benchmark target** — declined for now. Comparing harnesses is
-  genuinely valuable ([harness_lift](harness-beats-model-choice.md) is the
+  genuinely valuable ([harness_lift](crush-charm-coding-agent.md) is the
   instrument nobody else computes), but a developer preview warning of
   compatibility-breaking changes is a moving target, and the comparison would
   measure their preview rather than their design.

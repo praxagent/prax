@@ -19,7 +19,7 @@ standing Prax positions, and it exposed one real bug in our own stack.
 
 "Benchmarks rarely measure AI models in isolation. They also measure less
 visible choices about API settings, harness design, and prompting" — that is
-**audit-the-checker-first** ([eval-rigor](eval-rigor-review.md); lanyon /
+**audit-the-checker-first** ([eval-rigor](eval-rigor-review-2026-07.md); lanyon /
 proofjudge / axiomprover), stated by a lab about a benchmark instead of by us
 about a scorer. The same week this landed, our own Terminal-Bench probe
 produced 0/11 that turned out to be **two runner artifacts** (tests starved of
@@ -92,7 +92,7 @@ of this weakens the part we act on, which is structural, not the scores.
 
 ## Related
 
-- [eval-rigor-review.md](eval-rigor-review.md) — audit the checker first; this
+- [eval-rigor-review.md](eval-rigor-review-2026-07.md) — audit the checker first; this
   is the vendor-side sighting, and the TB runner artifacts are ours.
 - [harness-generalization.md](harness-generalization.md) — the harness as a
   hyperparameter; no universally superior harness.

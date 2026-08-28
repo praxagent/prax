@@ -40,7 +40,7 @@ Two places Prax needs exactly this:
 
 1. **The secrets proxy.** It sits in the streaming path of every model call.
    A proxy that mangles a stream fails **silently** — the
-   [FailureAtlas](failure-atlas-assessment.md) row already names silent
+   [FailureAtlas](failure-atlas-llm-gateways.md) row already names silent
    corruption (HTTP 200 + wrong semantics) as the worst failure class, and
    flags a proxy silent-failure suite as the adopt. This supplies the missing
    technique: assert the response is **equivalent to the un-proxied one**, not
@@ -87,7 +87,7 @@ launch claims: the idea can be good while the marketing is unverified.
 
 ## Related
 
-- [failure-atlas-assessment.md](failure-atlas-assessment.md) — silent failure
+- [failure-atlas-assessment.md](failure-atlas-llm-gateways.md) — silent failure
   as the worst class; this sharpens its proxy-test adopt row.
 - [weakest-not-shortest.md](weakest-not-shortest.md) — the
   behaviour-preserving change class is exactly what `/simplify` produces.

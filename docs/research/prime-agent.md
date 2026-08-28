@@ -36,7 +36,7 @@ Three real gaps, stated without flinching:
    variables, imports and intermediate state carry between steps. Prax's
    `run_python` is `subprocess.run` per call — a fresh interpreter every time,
    no state. That is the difference between a REPL and a calculator, and it is
-   the [RLM](rlm-recursive-language-models.md) code-as-action lane we banked as
+   the [RLM](rlm-harness-lid.md) code-as-action lane we banked as
    a "narrow experiment" and never built.
 2. **Skills as importable packages.** Recurring workflows become Python
    packages the agent imports. Prax has spokes (fixed, code-owned) and
@@ -141,7 +141,7 @@ human expert baseline" rests on whichever baseline figure they adopted.
 
 - [harness-r1.md](harness-r1.md) + [harness-compass.md](harness-compass.md) —
   the research versions of `/refine`; this is the shipped one.
-- [rlm-recursive-language-models.md](rlm-recursive-language-models.md) — the
+- [rlm-recursive-language-models.md](rlm-harness-lid.md) — the
   RLM lane we banked as a narrow experiment; they built it.
 - [weng-harness-engineering.md](weng-harness-engineering.md) — rung 4 again.
 - [benchmark-saturation.md](benchmark-saturation.md) — why a measured low
