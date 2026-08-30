@@ -37,6 +37,17 @@ MODEL_PRICING: dict[str, tuple[float, float]] = {
     "gpt-5.6-terra": (2.00, 12.00),
     # OpenRouter stress-test floor for coding evals (live models-endpoint rate)
     "qwen/qwen3-coder-30b-a3b-instruct": (0.07, 0.27),
+    # The LIVE ladder (moved to OpenRouter 2026-08-09). These three carried
+    # ~100% of production traffic while every trace showed
+    # cost_estimate_usd: null — the fail-closed unknown-rate semantics held
+    # (unknown ≠ $0.00), but a table that lacks the models actually in
+    # production reports "unknown" for everything, which is honest and useless.
+    # Dated snapshots (-0731) resolve via the suffix match on the base slug.
+    # Rates read from openrouter.ai/api/v1/models on 2026-08-30 — not recalled,
+    # not estimated. When these drift, the fix is to re-read the endpoint.
+    "deepseek/deepseek-v4-flash-0731": (0.065, 0.18),
+    "z-ai/glm-5.2": (1.19, 3.74),
+    "openai/gpt-5.6-sol-pro": (2.00, 10.00),
 }
 
 

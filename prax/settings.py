@@ -852,6 +852,21 @@ class AppSettings(BaseSettings):
             "model allows. Raise this only if you can show a measured reason."
         ),
     )
+    scheduler_misfire_grace_s: int = Field(
+        default=600, alias="SCHEDULER_MISFIRE_GRACE_S",
+        description=(
+            "How far back (seconds) the scheduler looks for a cron fire that "
+            "was missed while the process was down or the job not yet "
+            "re-registered; a missed fire inside this window runs once at "
+            "startup, loudly. Jobs are re-added fresh at every boot, so "
+            "without this a restart that straddles a fire time silently "
+            "swallows it — observed live 2026-08-30, when a deploy restart at "
+            "22:59:52 ate the 23:00:00 first fire of a brand-new schedule. "
+            "0 disables catch-up (restores the old lose-the-fire behaviour). "
+            "Also applied as the in-process misfire_grace_time, so a stalled "
+            "live process fires late-but-once instead of dropping the run."
+        ),
+    )
     judge_votes: int = Field(
         default=1, alias="JUDGE_VOTES",
         description=(

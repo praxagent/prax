@@ -9,7 +9,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.tools import tool
 
-from prax.agent.agent_loop import build_agent_loop
+from prax.agent.agent_loop import build_agent_loop, invoke_isolated
 from prax.agent.llm_factory import build_llm
 from prax.settings import settings
 
@@ -171,7 +171,8 @@ def _run_subagent(task: str, category: str) -> str:
         pass
 
     try:
-        result = subgraph.invoke(
+        result = invoke_isolated(
+            subgraph,
             {"messages": [
                 SystemMessage(content=system_msg),
                 HumanMessage(content=task),

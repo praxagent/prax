@@ -300,6 +300,51 @@ def _on_reminder_fire(
 # APScheduler job management
 # ---------------------------------------------------------------------------
 
+def _missed_fire(trigger, last_run_iso: str | None, now, grace_s: int):
+    """Return the fire time that was MISSED within the last *grace_s* seconds, or None.
+
+    A schedule's fire is lost when the process is down (or the job not yet
+    re-registered) at the fire instant: jobs are re-added fresh at every boot,
+    so APScheduler computes the next fire from "now" and the one that just
+    passed simply never happened. Found live 2026-08-30 — a deploy restart at
+    22:59:52 swallowed the 23:00:00 first fire of a schedule created half an
+    hour earlier; the scheduler re-added the job at 23:00:14 and nothing
+    anywhere recorded that anything was missed.
+
+    Decision: the most recent scheduled time T in (now - grace_s, now] counts
+    as missed iff the schedule has not already run at-or-after T (last_run
+    guard — if the process WAS up and fired, last_run >= T and we do nothing).
+    Returns T for the caller to fire once, loudly. Grace of 0 disables.
+    """
+    if grace_s <= 0:
+        return None
+    from datetime import timedelta
+    window_start = now - timedelta(seconds=grace_s)
+    # Walk the trigger's fire times forward from the window start; keep the
+    # last one that is <= now. (Bounded: a 1-minute cron in a 10-min window
+    # is ~10 iterations.)
+    t, missed = window_start, None
+    for _ in range(grace_s // 30 + 2):
+        t = trigger.get_next_fire_time(None, t)
+        if t is None or t > now:
+            break
+        missed = t
+        from datetime import timedelta as _td
+        t = t + _td(seconds=1)
+    if missed is None:
+        return None
+    if last_run_iso:
+        try:
+            last = datetime.fromisoformat(last_run_iso)
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=missed.tzinfo)
+            if last >= missed:
+                return None  # it actually ran; nothing was missed
+        except ValueError:
+            pass  # unparseable last_run: treat as never-ran, prefer firing
+    return missed
+
+
 def _register_job(user_id: str, schedule: dict, default_tz: str) -> str | None:
     """Register a single schedule with APScheduler.  Returns job_id or None."""
     if not schedule.get("enabled", True):
@@ -318,14 +363,36 @@ def _register_job(user_id: str, schedule: dict, default_tz: str) -> str | None:
         logger.warning("Invalid schedule %s for user %s", sched_id, user_id)
         return None
 
+    grace = int(getattr(settings, "scheduler_misfire_grace_s", 600) or 0)
     job = _scheduler.add_job(
         _on_fire,
         trigger=trigger,
         args=[user_id, sched_id, schedule["prompt"], schedule.get("channel")],
         id=f"{user_id}:{sched_id}",
         replace_existing=True,
+        # Within a LIVE process, a fire delayed by a stall still runs (coalesced
+        # to one) instead of being dropped by APScheduler's default 1s grace.
+        misfire_grace_time=grace or 1,
+        coalesce=True,
         name=f"{user_id}:{schedule.get('description', sched_id)}",
     )
+
+    # Across a RESTART the job store is rebuilt from YAML, so APScheduler can't
+    # know a fire was just missed — check ourselves and fire once, loudly.
+    missed = _missed_fire(trigger, schedule.get("last_run"),
+                          datetime.now(tz), grace)
+    if missed is not None:
+        logger.warning(
+            "Catch-up: schedule %s (user %s) missed its %s fire while the "
+            "process was down/registering — firing once now",
+            sched_id, user_id, missed.isoformat())
+        _scheduler.add_job(
+            _on_fire,
+            args=[user_id, sched_id, schedule["prompt"], schedule.get("channel")],
+            id=f"{user_id}:{sched_id}:catchup",
+            replace_existing=True,
+            name=f"catchup:{user_id}:{sched_id}",
+        )
     return job.id
 
 
