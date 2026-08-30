@@ -71,6 +71,45 @@ class ConversationService:
         self._database = database_name or settings.database_name
         self._uses_real_sqlite = retriever is retrieve_dict and saver is add_dict_to_list
 
+    def resolve_conversation(self, user_id: str,
+                             conversation_key: int | None = None) -> tuple[str, int]:
+        """Derive ``(database_name, db_key)`` for a user's conversation history.
+
+        This derivation used to live inline in ``reply()``, and two blueprint
+        endpoints re-implemented half of it by hand — so when ``_build_history``
+        grew a ``database_name`` parameter, the copies kept passing one argument
+        and the endpoints 500'd behind a broad except ("Failed to get context
+        stats", found live 2026-08-30). One derivation, importable by every
+        caller, so a signature change breaks loudly at the callsite.
+        """
+        user_obj = None
+        try:
+            from prax.services.identity_service import get_user
+            user_obj = get_user(user_id)
+        except Exception:
+            user_obj = None
+        if conversation_key is not None:
+            db_key = conversation_key
+        elif user_obj:
+            db_key = int(user_id.replace("-", "")[:15], 16)
+        else:
+            # Legacy ids are numeric (+1555… / D<discord_id>). Anything else —
+            # e.g. a UUID the identity service doesn't know (fresh DB, test
+            # env) — takes the same stable hex-slice as a known user, instead
+            # of ValueError-ing on int('a98cd46a…'). An unknown user must get
+            # a KEY, not a crash.
+            raw = user_id.lstrip("+").lstrip("D")
+            try:
+                db_key = int(raw)
+            except ValueError:
+                db_key = int(user_id.replace("-", "")[:15], 16)
+        database_name = (
+            ensure_conversation_db(user_id, self._database)
+            if self._uses_real_sqlite
+            else self._database
+        )
+        return database_name, db_key
+
     def _build_history(self, database_name: str, phone_int: int) -> list[dict]:
         """Return stored conversation history, preserving the ``date`` field.
 
@@ -114,22 +153,9 @@ class ConversationService:
         except Exception:
             pass
 
-        # Derive the database key for conversation history.
-        if conversation_key is not None:
-            db_key = conversation_key
-        elif user_obj:
-            # Stable integer derived from UUID (first 15 hex digits).
-            db_key = int(user_id.replace("-", "")[:15], 16)
-        else:
-            # Legacy fallback: phone number (+1555...) or D{discord_id}.
-            raw = user_id.lstrip("+").lstrip("D")
-            db_key = int(raw)
-
-        database_name = (
-            ensure_conversation_db(user_id, self._database)
-            if self._uses_real_sqlite
-            else self._database
-        )
+        # Derive the database key for conversation history (shared with the
+        # TeamWork context endpoints — see resolve_conversation).
+        database_name, db_key = self.resolve_conversation(user_id, conversation_key)
 
         history = self._build_history(database_name, db_key)
         if not history:
