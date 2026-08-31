@@ -270,6 +270,27 @@ def get_user(user_id: str) -> User | None:
         conn.close()
 
 
+def get_user_by_workspace(workspace_dir: str) -> User | None:
+    """Look up a user by their opaque workspace dir name (``usr_<id8>``).
+
+    The scheduler rebuilds its jobs from workspace DIRECTORY names at boot,
+    which are not user ids — a fire then reached reply() as "usr_90c2b48f",
+    every id-derivation branch raised, and the scheduled message died before
+    generation (first observed on the very first fire of a schedule,
+    2026-08-31 00:00 UTC). This is the missing edge: dir name -> canonical id.
+    """
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT id, display_name, workspace_dir, timezone, created_at "
+            "FROM users WHERE workspace_dir = ?",
+            (workspace_dir,),
+        ).fetchone()
+        return User(*row) if row else None
+    finally:
+        conn.close()
+
+
 def get_user_by_identity(provider: str, external_id: str) -> User | None:
     """Look up a user by provider identity without auto-creating."""
     conn = _connect()

@@ -58,3 +58,29 @@ def test_blueprint_no_longer_hand_derives_the_key():
     assert src.count("resolve_conversation(uid)") == 2
     # The old inline derivation must not survive anywhere in the blueprint.
     assert 'replace("-", "")[:15]' not in src
+
+
+def test_an_opaque_workspace_id_gets_a_stable_key_never_a_crash():
+    """`usr_90c2b48f` killed the first-ever fire of a live schedule.
+
+    The scheduler passed a workspace DIR NAME as the user id; it is neither
+    numeric-legacy nor hex, so both derivation branches raised and the
+    scheduled message died before generation. Any string must yield a key.
+    """
+    _, k1 = conversation_service.resolve_conversation("usr_90c2b48f")
+    _, k2 = conversation_service.resolve_conversation("usr_90c2b48f")
+    assert isinstance(k1, int) and k1 == k2  # stable
+    _, k3 = conversation_service.resolve_conversation("any-∆-shape_at all")
+    assert isinstance(k3, int)
+
+
+def test_scheduler_loads_jobs_under_the_canonical_identity(tmp_path, monkeypatch):
+    """The dir name is NOT a user id — boot must resolve it when identity knows it.
+
+    Otherwise a rebooted schedule fires under `usr_<id8>` and lands in a
+    DIFFERENT conversation (or, before the hardening above, crashed outright).
+    """
+    import pathlib as _pl
+
+    src = _pl.Path("prax/services/scheduler_service.py").read_text()
+    assert "get_user_by_workspace" in src

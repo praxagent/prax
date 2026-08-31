@@ -94,15 +94,21 @@ class ConversationService:
             db_key = int(user_id.replace("-", "")[:15], 16)
         else:
             # Legacy ids are numeric (+1555… / D<discord_id>). Anything else —
-            # e.g. a UUID the identity service doesn't know (fresh DB, test
-            # env) — takes the same stable hex-slice as a known user, instead
-            # of ValueError-ing on int('a98cd46a…'). An unknown user must get
-            # a KEY, not a crash.
+            # an unknown UUID, an opaque workspace name (usr_90c2b48f, which
+            # KILLED the first-ever fire of a schedule at 2026-08-31 00:00
+            # because 'usr…' is neither an int nor hex), or any future shape —
+            # must yield a stable KEY, never a crash. Order: int, hex-slice,
+            # then a hash of the whole id as the shape-proof floor.
             raw = user_id.lstrip("+").lstrip("D")
             try:
                 db_key = int(raw)
             except ValueError:
-                db_key = int(user_id.replace("-", "")[:15], 16)
+                try:
+                    db_key = int(user_id.replace("-", "")[:15], 16)
+                except ValueError:
+                    import hashlib
+                    db_key = int(
+                        hashlib.sha256(user_id.encode()).hexdigest()[:15], 16)
         database_name = (
             ensure_conversation_db(user_id, self._database)
             if self._uses_real_sqlite

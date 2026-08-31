@@ -497,7 +497,20 @@ def _load_all_users() -> None:
         # Recurring schedules + reminders (opt-in via schedules.yaml).
         if (user_dir / "schedules.yaml").exists():
             with _lock:
-                _sync_user_jobs(user_dir.name)
+                # The dir name (usr_<id8>) is NOT a user id. Register jobs
+                # under the canonical identity when one exists, so a fire
+                # reaches reply() with the same id normal traffic uses —
+                # same conversation, same notes, same memory. Fall back to
+                # the dir name for workspaces with no identity row.
+                _uid = user_dir.name
+                try:
+                    from prax.services.identity_service import get_user_by_workspace
+                    _u = get_user_by_workspace(user_dir.name)
+                    if _u:
+                        _uid = _u.id
+                except Exception:
+                    pass
+                _sync_user_jobs(_uid)
         # Task runner polling — opt-in via settings, per-user.
         if settings.task_runner_enabled:
             from prax.services import task_runner_service
