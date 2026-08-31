@@ -138,8 +138,15 @@ def _resolve_cross_channel(user_id: str) -> tuple[str | None, str | None]:
     phone: str | None = None
     discord_id: str | None = None
 
-    # UUID — resolve via identity service
-    if not user_id.startswith("D") and not user_id.startswith("+") and not user_id[0:1].isdigit():
+    # Identity-service users FIRST, decided by lookup rather than by the shape
+    # of the string. The old classifier sniffed "first char is a digit" to mean
+    # "phone number" — but a UUID can begin with a digit, and the one live user
+    # whose UUID starts with '9' had every scheduled delivery misrouted to
+    # Twilio as "+90c2b48f-…" (error 20404) while Discord reported "no Discord
+    # ID" — with the identity rows sitting right there in the DB
+    # (found live 2026-08-31, on the fire the catch-up had just rescued).
+    _is_legacy = user_id.startswith(("D", "+")) or user_id.lstrip("+").isdigit()
+    if not _is_legacy:
         from prax.services.identity_service import get_identities
         for identity in get_identities(user_id):
             if identity["provider"] == "sms":

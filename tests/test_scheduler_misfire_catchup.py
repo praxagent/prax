@@ -97,3 +97,41 @@ def test_stale_last_run_from_the_previous_hour_does_not_block():
     last_run = datetime(2026, 8, 30, 15, 0, 1, tzinfo=TZ).isoformat()
     missed = _missed_fire(t, last_run, now, grace_s=600)
     assert missed is not None and missed.hour == 16
+
+
+def test_a_uuid_starting_with_a_digit_resolves_via_identity_not_twilio():
+    """`90c2b48f-…` was classified as a PHONE because its first char is a digit.
+
+    Scheduled deliveries for that user dialed Twilio with "+90c2b48f-…"
+    (error 20404) and skipped Discord entirely, while both identity rows sat
+    in the DB. Channel classification must be by LOOKUP, not string shape:
+    only fully-numeric ids (or D/+ prefixes) are legacy.
+    """
+    from unittest.mock import patch
+
+    from prax.services.scheduler_service import _resolve_cross_channel
+
+    rows = [
+        {"provider": "sms", "external_id": "+14155551234"},
+        {"provider": "discord", "external_id": "1034618200000000000"},
+    ]
+    with patch("prax.services.identity_service.get_identities", return_value=rows):
+        phone, discord = _resolve_cross_channel("90c2b48f-5744-52f5-a9e2-065f45306a2b")
+    assert phone == "+14155551234"
+    assert discord == "D1034618200000000000"
+
+
+def test_fully_numeric_and_prefixed_ids_stay_on_the_legacy_path():
+    from unittest.mock import patch
+
+    from prax.services.scheduler_service import _resolve_cross_channel
+
+    # If these hit the identity service the patch would return rows; they must not.
+    with patch("prax.services.identity_service.get_identities",
+               side_effect=AssertionError("legacy id must not hit identity")):
+        p1, _ = _resolve_cross_channel("+15551234567")
+        assert p1 == "+15551234567"
+        _, d2 = _resolve_cross_channel("D123456789")
+        assert d2 == "D123456789"
+        p3, _ = _resolve_cross_channel("15551234567")
+        assert p3 == "+15551234567"
