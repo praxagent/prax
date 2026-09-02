@@ -25,8 +25,8 @@ missing.**
 
 ## Why this isn't just another weights paper
 
-Every prior GPU-wall assessment ([RLM](rlm-recursive-language-models.md),
-[lm-sleep](lm-sleep-paradigm.md), [MORPHEUS](skyfall-morpheus-continual-learning.md),
+Every prior GPU-wall assessment ([RLM](rlm-harness-lid.md),
+[lm-sleep](lm-sleep-consolidation.md), [MORPHEUS](skyfall-morpheus-continual-learning.md),
 [ARTS](arts-agentic-tree-search.md),
 [learnable-novelty](learnable-novelty.md), [ACM](acm-agentic-context-management.md),
 [kernel-forge](kernel-forge-mcts-optimization.md)) ended at "this needs

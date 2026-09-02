@@ -190,13 +190,20 @@ def llm_review(title: str, content: str, *, deep_dive: bool = True) -> dict | No
     try:
         from prax.agent.llm_factory import build_llm
         from prax.plugins.llm_config import get_component_config
+        from prax.settings import settings
 
         cfg = get_component_config("note_quality_reviewer")
+        # A GATE, not a generator: this returns `approved: bool`, so a stochastic
+        # verdict means the same note passes on one run and fails on the next.
+        # The hardcoded 0.2 was the same defect the eval graders had at 0.7, one
+        # layer over and with a smaller blast radius — small is not correct. An
+        # explicit `temperature` in llm_routing.yaml still wins.
+        cfg_temp = cfg.get("temperature")
         llm = build_llm(
             provider=cfg.get("provider"),
             model=cfg.get("model"),
             tier=cfg.get("tier") or "medium",
-            temperature=cfg.get("temperature") or 0.2,
+            temperature=settings.judge_temperature if cfg_temp is None else cfg_temp,
         )
         # Truncate very long content to stay within budget.
         review_content = content[:8000]

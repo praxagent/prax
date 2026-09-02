@@ -212,8 +212,21 @@ def _binarize(raw) -> float:
         return 0.0
 
 
+def _judge_votes() -> int:
+    """``JUDGE_VOTES`` — how many independent ballots a judged criterion gets.
+
+    Default 1 (previous behaviour). Raise it to trade tokens for a stabler verdict.
+    """
+    try:
+        from prax.settings import settings
+        return max(1, int(getattr(settings, "judge_votes", 1) or 1))
+    except Exception:
+        return 1
+
+
 def score_golden(golden: Golden, output: str, *, judge=None, tier: str = "low",
-                 audit: bool = False, auditor=None, audit_tier: str = "high") -> dict:
+                 audit: bool = False, auditor=None, audit_tier: str = "high",
+                 votes: int | None = None) -> dict:
     """Score *output* against *golden*'s rubric.
 
     Returns ``{total, scores:{key:0/1}, reasoning, error?}``. Two scoring paths:
@@ -243,6 +256,7 @@ def score_golden(golden: Golden, output: str, *, judge=None, tier: str = "low",
             judged.append(c)
 
     reasoning = ""
+    result_extra: dict = {}
     if judged:  # only invoke the LLM if something actually needs judging
         criteria = "\n".join(
             f"- {c.key} (weight {c.weight}): {c.description}" for c in judged
@@ -255,20 +269,49 @@ def score_golden(golden: Golden, output: str, *, judge=None, tier: str = "low",
             score_keys=score_keys,
         )
         # Default judge takes (prompt, tier); an injected judge takes just (prompt).
-        try:
-            text = _default_judge(prompt, tier=tier) if judge is None else judge(prompt)
-        except Exception as exc:
-            logger.warning("Golden judge failed for %s: %s", golden.id, exc)
-            return {"total": 0.0, "scores": {}, "reasoning": "", "error": str(exc)}
+        # k-VOTE MAJORITY. Pinning JUDGE_TEMPERATURE to 0.0 removed the *configured*
+        # randomness but not the provider's: the 2026-08-20 bias audit re-graded the
+        # same answer five times at temp 0.0 and watched 3 of 5 criteria flip, with a
+        # golden's total swinging 0.20-0.65. Temperature is necessary, not sufficient.
+        # Voting is the model-agnostic remedy (a provider `seed` is OpenAI-only and
+        # best-effort, and the live ladder runs DeepSeek/GLM through OpenRouter).
+        #
+        # INVARIANT: votes=1 is EXACTLY the previous behaviour — one call, one verdict,
+        # no majority logic — so this cannot re-baseline a published number until
+        # someone raises it deliberately. See docs/guides/judge-audit.md.
+        n_votes = max(1, int(votes if votes is not None else _judge_votes()))
+        ballots: list[dict] = []
+        last_error = ""
+        for _ in range(n_votes):
+            try:
+                text = _default_judge(prompt, tier=tier) if judge is None else judge(prompt)
+            except Exception as exc:
+                logger.warning("Golden judge failed for %s: %s", golden.id, exc)
+                last_error = str(exc)
+                continue
+            try:
+                ballots.append(_clean_json(text))
+            except Exception as exc:
+                last_error = f"unparseable judge output: {exc}"
 
-        try:
-            data = _clean_json(text)
-        except Exception as exc:
-            return {"total": 0.0, "scores": {}, "reasoning": "", "error": f"unparseable judge output: {exc}"}
+        if not ballots:
+            # Every ballot failed — fail closed with the error, never a silent 0.
+            return {"total": 0.0, "scores": {}, "reasoning": "",
+                    "error": last_error or "judge returned no usable ballot"}
 
         for c in judged:
-            scores[c.key] = _binarize(data.get("scores", {}).get(c.key, 0.0))
-        reasoning = str(data.get("reasoning", ""))
+            marks = [_binarize(b.get("scores", {}).get(c.key, 0.0)) for b in ballots]
+            # Strict majority: a tie falls to 0. "Be strict and decisive" is the
+            # judge's own instruction, and a split panel is not a satisfied criterion.
+            scores[c.key] = 1.0 if sum(marks) * 2 > len(marks) else 0.0
+        reasoning = str(ballots[0].get("reasoning", ""))
+        if n_votes > 1:
+            unanimous = all(
+                len({_binarize(b.get("scores", {}).get(c.key, 0.0)) for b in ballots}) == 1
+                for c in judged
+            )
+            result_extra = {"votes": n_votes, "ballots_used": len(ballots),
+                            "unanimous": unanimous}
 
     # Supervising auditor (opt-in): a stronger model re-checks only the criteria
     # the cheap judge PASSED — the gaming direction (impressive vacuity -> false
@@ -297,6 +340,7 @@ def score_golden(golden: Golden, output: str, *, judge=None, tier: str = "low",
     wt = golden.weight_total() or 1.0
     total = sum(scores.get(c.key, 0.0) * c.weight for c in golden.rubric) / wt
     result = {"total": round(total, 3), "scores": scores, "reasoning": reasoning}
+    result.update(result_extra)
     if audit:
         result["audited"] = True
         result["vetoed"] = vetoed

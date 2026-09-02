@@ -56,7 +56,7 @@ kernel latency is:
 **Prax's fitness function has none of those properties.** The capability suite
 is n=30 with a 95% CI of roughly ±16pp, each run costs minutes and real money,
 and two configurations within ~5 cases are indistinguishable
-([model ladder](harness-beats-model-choice.md) measured exactly that). A search
+([model ladder](crush-charm-coding-agent.md) measured exactly that). A search
 loop cannot hill-climb a signal it cannot resolve.
 
 That is not a reason to abandon #29. It is the reason #29 is hard, stated

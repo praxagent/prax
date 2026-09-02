@@ -50,7 +50,7 @@ it failed, never *which turn* went wrong — and this week that cost real time:
   progress, which is precisely the number that would size the intervention.
 - **Self-regeneration** (#29) has to decide *what to patch*. A trajectory-level
   "this failed" is the weakest possible input to that decision, and
-  [ARTS](arts-assessment.md) already flagged failure-provenance diagnosis as
+  [ARTS](arts-agentic-tree-search.md) already flagged failure-provenance diagnosis as
   the thing to extract.
 
 ## What we could actually build

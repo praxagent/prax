@@ -102,3 +102,59 @@ def test_generators_are_left_warm():
     assert "judge_temperature" not in proposer.group(0), (
         "the proposer GENERATES candidate patches — pinning it to the judge "
         "temperature would remove the variation the search depends on")
+
+
+def test_note_quality_gate_uses_judge_temperature_not_a_hardcoded_warm_value():
+    """`note_quality` returns ``approved: bool`` — a GATE, so its verdict must not drift.
+
+    It shipped at a hardcoded 0.2: the same defect the eval graders had at 0.7,
+    one layer over and with a smaller blast radius. Small is not correct.
+    """
+    import prax.services.note_quality as nq
+    from prax.settings import settings
+
+    captured = {}
+
+    def fake_build_llm(**kwargs):
+        captured.update(kwargs)
+        raise RuntimeError("stop here — we only care about how the LLM was built")
+
+    import prax.agent.llm_factory as factory
+    import prax.plugins.llm_config as cfgmod
+    orig_build, orig_cfg = factory.build_llm, cfgmod.get_component_config
+    factory.build_llm = fake_build_llm
+    cfgmod.get_component_config = lambda key: {}
+    try:
+        nq.llm_review("A title", "some note content")
+    except Exception:
+        pass
+    finally:
+        factory.build_llm, cfgmod.get_component_config = orig_build, orig_cfg
+
+    assert captured.get("temperature") == settings.judge_temperature
+    assert captured["temperature"] == 0.0
+
+
+def test_an_explicit_routing_temperature_still_wins_for_the_note_gate():
+    """Operators keep control — llm_routing.yaml overrides the default."""
+    import prax.agent.llm_factory as factory
+    import prax.plugins.llm_config as cfgmod
+    import prax.services.note_quality as nq
+
+    captured = {}
+
+    def fake_build_llm(**kwargs):
+        captured.update(kwargs)
+        raise RuntimeError("stop")
+
+    orig_build, orig_cfg = factory.build_llm, cfgmod.get_component_config
+    factory.build_llm = fake_build_llm
+    cfgmod.get_component_config = lambda key: {"temperature": 0.4}
+    try:
+        nq.llm_review("A title", "content")
+    except Exception:
+        pass
+    finally:
+        factory.build_llm, cfgmod.get_component_config = orig_build, orig_cfg
+
+    assert captured.get("temperature") == 0.4

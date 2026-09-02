@@ -1134,6 +1134,11 @@ def _extract_pdf_text(path, max_chars: int) -> str:
             "scanned images — OCR would be needed, which this tool does not do.)"
         )
 
+    # INVARIANT: a partial read announces itself. If any page yielded no text,
+    # or extraction stopped early, the caller is told before the content — never
+    # handed an excerpt that reads as the whole document. Enforced by
+    # tests/test_pdf_extraction_coverage.py.
+    #
     # Coverage banner. Leads the output rather than trailing it: a caller that
     # reads the first lines and starts summarising must meet the caveat before
     # the content, not after it.

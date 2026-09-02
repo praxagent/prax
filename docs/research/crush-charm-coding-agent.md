@@ -155,7 +155,7 @@ from scaffold changes alone, and Claude Opus 4.5 scores ~45.9% in a
 standardised independent run against ~49.8–51.8% in vendor harness
 comparisons. Treat the direction as solid and the specific figures as
 unconfirmed. (The
-[Agent Harness survey](agent-harness-survey.md) lesson applies: a third-party
+[Agent Harness survey](agent-harness-engineering-survey.md) lesson applies: a third-party
 summary invented numbers once already.)
 
 The weakest claim is the one that sounds strongest. A rank correlation of
@@ -164,7 +164,7 @@ pass rate on 250 tasks the per-cell 95% interval is roughly ±6 points, which is
 comparable to the gaps between adjacent ranks. "The ranking does not transfer"
 is plausible and consistent with the vendor/agnostic split, but this design
 cannot establish it. Per
-[Harness Generalization](harness-generalization-assessment.md), significance
+[Harness Generalization](harness-generalization.md), significance
 testing belongs before an eval win is declared.
 
 ### What it means for Prax
@@ -187,7 +187,7 @@ fidelity and give it rope; a model-agnostic harness substitutes structure for
 capability. Structure rescues a weak model and *taxes* a strong one, by
 overriding a better plan and spending tokens to do it. Prax has already banked
 two independent predictions of this shape: "adaptive simplification — delete
-scaffolding as models improve" ([Agent Harness survey](agent-harness-survey.md))
+scaffolding as models improve" ([Agent Harness survey](agent-harness-engineering-survey.md))
 and Weng's finding that **middle-tier** models benefit most from harnesses
 ([Weng](weng-harness-engineering.md)).
 

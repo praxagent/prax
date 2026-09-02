@@ -20,7 +20,7 @@ from collections.abc import Callable
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from prax.agent.agent_loop import build_agent_loop
+from prax.agent.agent_loop import build_agent_loop, invoke_isolated
 from prax.agent.llm_factory import build_llm
 from prax.agent.message_text import message_text
 
@@ -229,7 +229,11 @@ def run_spoke(
         _ctx_retries = 0
         while True:
             try:
-                result = graph.invoke(
+                # invoke_isolated: sever inherited callbacks so the spoke's
+                # inner tool events are recorded ONCE (under this spoke), not
+                # also under the orchestrator. See agent_loop.invoke_isolated.
+                result = invoke_isolated(
+                    graph,
                     {"messages": messages},
                     config={"recursion_limit": effective_limit, "callbacks": _cbs},
                 )

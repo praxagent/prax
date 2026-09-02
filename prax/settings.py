@@ -852,6 +852,38 @@ class AppSettings(BaseSettings):
             "model allows. Raise this only if you can show a measured reason."
         ),
     )
+    scheduler_misfire_grace_s: int = Field(
+        default=600, alias="SCHEDULER_MISFIRE_GRACE_S",
+        description=(
+            "How far back (seconds) the scheduler looks for a cron fire that "
+            "was missed while the process was down or the job not yet "
+            "re-registered; a missed fire inside this window runs once at "
+            "startup, loudly. Jobs are re-added fresh at every boot, so "
+            "without this a restart that straddles a fire time silently "
+            "swallows it — observed live 2026-08-30, when a deploy restart at "
+            "22:59:52 ate the 23:00:00 first fire of a brand-new schedule. "
+            "0 disables catch-up (restores the old lose-the-fire behaviour). "
+            "Also applied as the in-process misfire_grace_time, so a stalled "
+            "live process fires late-but-once instead of dropping the run."
+        ),
+    )
+    judge_votes: int = Field(
+        default=1, alias="JUDGE_VOTES",
+        description=(
+            "Independent ballots per judged rubric criterion; the verdict is the "
+            "strict majority (a tie falls to 0 — a split panel is not a satisfied "
+            "criterion). Default 1 is EXACTLY the previous behaviour: one call, "
+            "one verdict, no majority logic. Pinning JUDGE_TEMPERATURE to 0.0 "
+            "removed the configured randomness but not the provider's — the "
+            "2026-08-20 bias audit re-graded one answer five times at temperature "
+            "0.0 and watched 3 of 5 criteria flip, with a golden's total swinging "
+            "0.20-0.65. Voting is the model-agnostic remedy (a provider `seed` is "
+            "OpenAI-only and best-effort, while the ladder runs DeepSeek/GLM "
+            "through OpenRouter). Costs k x judge tokens, and RAISING IT "
+            "RE-BASELINES every published number, so change it deliberately. "
+            "See docs/guides/judge-audit.md."
+        ),
+    )
     prompt_cache_enabled: bool = Field(
         default=False, alias="PROMPT_CACHE_ENABLED",
         description=(

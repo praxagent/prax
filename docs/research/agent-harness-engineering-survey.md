@@ -77,7 +77,7 @@ numbers (sandbox escape rates, a tool-format SWE-bench jump, a
 benchmark-vs-merge-rate gap) that do **not** appear on the authors' page,
 which lists **five** challenges and no such figures. I have not quoted those
 numbers and neither should we — this is the audit-the-source rule that
-[eval-rigor](eval-rigor-review.md) and the [openai-arc3](openai-arc3-harness-settings.md)
+[eval-rigor](eval-rigor-review-2026-07.md) and the [openai-arc3](openai-arc3-harness-settings.md)
 note keep earning: secondary summaries embellish, and a number with no
 verifiable primary is not a number. If the PDF becomes readable, verify the
 challenge list before citing anything from it.

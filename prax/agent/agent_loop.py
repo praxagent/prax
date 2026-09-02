@@ -63,3 +63,35 @@ def build_agent_loop(
     if middleware:
         kwargs["middleware"] = middleware
     return create_agent(llm, tools, **kwargs)
+
+
+def invoke_isolated(graph, inputs, *, config=None):
+    """Invoke *graph* without inheriting the caller's LangChain callbacks.
+
+    A spoke's loop runs INSIDE one of the orchestrator's tool calls, and
+    LangChain propagates the ambient callback config down through a contextvar
+    — so the spoke's inner tool events fired BOTH the spoke's
+    GraphCallbackHandler and the orchestrator's. Every spoke-internal tool was
+    recorded twice, once under each parent (6 duplicate pairs in a single
+    31-node trace, found 2026-08-30).
+
+    Running the invoke in a copied context with the propagation var cleared
+    severs exactly that inheritance: only the callbacks passed explicitly in
+    *config* fire. OTEL span parentage is unaffected (it propagates via the
+    OpenTelemetry context, not LangChain's).
+
+    INVARIANT: one tool call, one span. The delegation TREE is preserved —
+    the spoke's span is still parented under the delegate_* tool span; what
+    disappears is the second copy of each inner event at orchestrator level.
+    """
+    import contextvars
+
+    from langchain_core.runnables.config import var_child_runnable_config
+
+    ctx = contextvars.copy_context()
+
+    def _run():
+        var_child_runnable_config.set(None)
+        return graph.invoke(inputs, config=config)
+
+    return ctx.run(_run)

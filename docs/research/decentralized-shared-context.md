@@ -23,7 +23,7 @@ Reported: **SWE-bench Verified up to +10.5pp with 50% lower cost per task**;
 
 ## Reconciling it with the opposite finding
 
-[Scaling Agent Systems](scaling-agent-systems-assessment.md) (Google/MIT)
+[Scaling Agent Systems](scaling-agent-systems.md) (Google/MIT)
 measured the reverse: a **verifying hub** produced 4.4× error against 17.2× for
 uncoordinated peers — which we took as evidence *for* hub-and-spoke.
 

@@ -3069,7 +3069,7 @@ def context_stats():
 
         uid = _get_teamwork_user_id()
         history = conversation_service._build_history(
-            int(uid.replace("-", "")[:15], 16),
+            *conversation_service.resolve_conversation(uid),
         )
 
         # Count tokens in current history
@@ -3132,8 +3132,9 @@ def context_compact():
         from prax.services.conversation_service import conversation_service
 
         uid = _get_teamwork_user_id()
-        conversation_key = int(uid.replace("-", "")[:15], 16)
-        history = conversation_service._build_history(conversation_key)
+        history = conversation_service._build_history(
+            *conversation_service.resolve_conversation(uid),
+        )
 
         if not history:
             return jsonify({"compacted": False, "reason": "No history to compact"})

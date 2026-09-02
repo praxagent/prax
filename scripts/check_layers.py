@@ -98,7 +98,7 @@ ALLOWLIST: set[str] = {
     # smell to pay down; none are load-bearing enough to fix right now.
     "prax/services/conversation_service.py:27 -> prax.agent",
     "prax/services/feedback_service.py:214 -> prax.agent.trace",
-    "prax/services/scheduler_service.py:234 -> prax.agent.orchestrator",
+    "prax/services/scheduler_service.py:241 -> prax.agent.orchestrator",
     # task_runner_service spawns a synthetic orchestrator turn per
     # picked-up task — same pattern as scheduler_service.  Both
     # should long-term route through a background-work abstraction

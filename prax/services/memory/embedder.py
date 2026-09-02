@@ -30,6 +30,10 @@ _embed_cache: dict[str, list[float]] = {}
 _MAX_CACHE = 5000
 
 
+class EmbeddingUnavailableError(RuntimeError):
+    """Every embedding provider failed. Raised instead of fabricating vectors."""
+
+
 def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 
@@ -67,11 +71,28 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
         logger.exception("Primary embedding failed — trying fallback")
         try:
             vectors = _embed_fastembed(uncached_texts)
-        except Exception:
-            logger.exception("Fallback embedding also failed")
-            # Return zero vectors as last resort (search quality will degrade)
-            dim = 1536 if provider == "openai" else 384
-            vectors = [[0.0] * dim for _ in uncached_texts]
+        except Exception as fallback_exc:
+            # RAISE — never invent data. The old last resort returned all-zero
+            # vectors with a success status: the write "succeeded", cosine
+            # similarity against a zero vector is degenerate, and nothing
+            # recorded that the content was never embedded. On the live box
+            # (2026-08-30) BOTH providers were broken for weeks — provider
+            # pointed at an Ollama that was never installed, fastembed absent
+            # from the venv — and every memory write took this path. The store
+            # stayed empty only because a separate Qdrant error also failed
+            # the write; had it succeeded, the memory would now be full of
+            # unfindable entries that CLAIM to be stored, which is worse than
+            # empty. An embedding that does not exist must fail the write, and
+            # the caller decides what that means.
+            logger.error(
+                "Embedding unavailable: primary provider %r failed and the "
+                "fastembed fallback failed too — REFUSING to fabricate "
+                "zero vectors. Memory writes will fail loudly until an "
+                "embedding provider is reachable.", provider)
+            raise EmbeddingUnavailableError(
+                f"no embedding provider available (primary={provider!r}; "
+                f"fallback fastembed: {fallback_exc})"
+            ) from fallback_exc
 
     # Populate cache
     for idx, vec in zip(uncached_indices, vectors, strict=False):

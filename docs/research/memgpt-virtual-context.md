@@ -173,8 +173,8 @@ that this paper named clearly.
 - [`self-improving-agents-survey.md`](self-improving-agents-survey.md) — flagged
   memory consolidation as Prax's weakest scaffolding cell. This is the concrete
   version of that finding.
-- [`coala-assessment.md`](coala-assessment.md) — CoALA's memory axis; MemGPT is
+- [`coala-assessment.md`](coala-cognitive-architectures.md) — CoALA's memory axis; MemGPT is
   the mechanism CoALA describes abstractly.
-- [`lm-sleep-assessment.md`](lm-sleep-assessment.md) — consolidation at the
+- [`lm-sleep-assessment.md`](lm-sleep-consolidation.md) — consolidation at the
   weights level; document-don't-adopt. MemGPT is the scaffolding-level answer to
   the same question, which is why it fares better here.

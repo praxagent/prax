@@ -9,7 +9,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.tools import tool
 
-from prax.agent.agent_loop import build_agent_loop
+from prax.agent.agent_loop import build_agent_loop, invoke_isolated
 from prax.agent.llm_factory import build_llm
 from prax.settings import settings
 
@@ -171,7 +171,8 @@ def _run_subagent(task: str, category: str) -> str:
         pass
 
     try:
-        result = subgraph.invoke(
+        result = invoke_isolated(
+            subgraph,
             {"messages": [
                 SystemMessage(content=system_msg),
                 HumanMessage(content=task),
@@ -488,6 +489,9 @@ def delegate_parallel(tasks: list[dict]) -> str:
     # model reading twelve results of which three say "Task failed" can still
     # write a confident synthesis over the nine — so state the shortfall up
     # front, where it cannot be skimmed past.
+    # INVARIANT: the merged output reports on a COMPLETE set, or says which
+    # part is missing. A caller can never read this summary as whole when it is
+    # not. Enforced by tests/test_delegate_parallel_fanin.py.
     n_failed = outcomes.count("failed")
     n_timed_out = outcomes.count("timed_out")
     n_ok = len(tasks) - n_failed - n_timed_out

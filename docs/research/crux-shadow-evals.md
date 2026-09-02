@@ -27,7 +27,7 @@ agents died.
    a direction before evidence warranted it; internal reviews inflated —
    "Weak Reject" for papers experts unambiguously rejected). → The
    maker≠checker stack: [#36]'s judge audit, the supervising auditor, and
-   [eval-rigor](eval-rigor-review.md). Their agents' self-review *surfaced*
+   [eval-rigor](eval-rigor-review-2026-07.md). Their agents' self-review *surfaced*
    the right issues and still didn't gate behavior — a review that doesn't
    bind is telemetry, not a gate. Prax's `accept_change` binds.
 2. **No creative response to negative feedback** (added caveats, narrowed
