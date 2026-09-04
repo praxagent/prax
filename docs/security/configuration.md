@@ -22,7 +22,7 @@ Key fields:
 | `PHONE_TO_EMAIL_MAP` | JSON: `{"+15551234567": "alice@example.com"}` | `None` |
 | `NGROK_URL` | HTTPS base URL from ngrok — Twilio webhooks + opt-in shares only (course/note pages no longer auto-publish here) | `None` |
 | `TEAMWORK_BASE_URL` | User-facing base URL Prax pastes into chat for course/note links | `http://localhost:8000` |
-| `TS_AUTHKEY` | Tailscale reusable, **non-ephemeral**, pre-approved auth key — enables the Tailscale sidecar | `None` |
+| `TS_AUTHKEY` | Tailscale auth key; prefer a non-ephemeral identity with persisted state. Pre-approve if tailnet device approval requires it. Current Compose also requires a nonempty value when this profile is disabled; see below. | `None` |
 | `TS_HOSTNAME` | Tailnet hostname for the sidecar (becomes `<hostname>.<tailnet>.ts.net`) | `prax` |
 | `COMPOSE_PROFILES` | Set to `tailscale` to activate the sidecar; without this it's silently skipped | *(unset)* |
 | `WORKSPACE_DIR` | Path to workspace root | `./workspaces` |
@@ -206,15 +206,21 @@ explicitly opts a specific page into the share registry.  See
 
 ### Remote access (Tailscale sidecar)
 
-To access TeamWork and Grafana from another machine without exposing the
-host's network, opt into the dockerized Tailscale sidecar.  Without
-`TS_AUTHKEY` + `COMPOSE_PROFILES=tailscale` in `.env`, the sidecar is
-silently skipped — there's no opt-out flag to set.
+To access TeamWork and Grafana over a private HTTPS route, opt into the
+dockerized Tailscale sidecar. It does not remove the host-published application
+ports; restrict those separately. The sidecar starts only with the `tailscale`
+profile. Current Compose files require `TS_AUTHKEY` during interpolation even
+when that profile is disabled: for local use with `COMPOSE_PROFILES` unset, set
+`TS_AUTHKEY=unused`. Replace the placeholder with a real key before enabling
+Tailscale.
 
 1. Generate a key at <https://login.tailscale.com/admin/settings/keys>.
-   Pick **Reusable ✓**, **Ephemeral ✗**, **Pre-approved ✓** — non-ephemeral
-   keys avoid the free tier's 1,000-min/month minute budget that would
-   otherwise count container restarts as fresh ephemeral nodes.
+   Use a non-ephemeral identity and persisted state for this long-running
+   service. A reusable key supports re-enrollment; scope and protect it. Select
+   pre-approval only if device approval is enabled. Ephemeral nodes are designed
+   for short-lived workloads; their minute accounting depends on the plan and
+   lifetime, and nodes present for four hours count as standard tagged devices.
+   See [Tailscale's documentation](https://tailscale.com/docs/features/ephemeral-nodes).
 2. Add to `.env`:
    ```
    TS_AUTHKEY=tskey-auth-...
@@ -226,7 +232,7 @@ silently skipped — there's no opt-out flag to set.
    Visit `https://prax.<tailnet>.ts.net/` for TeamWork and
    `https://prax.<tailnet>.ts.net:3001/` for Grafana.
 
-The sidecar runs in userspace mode (no `/dev/net/tun` on the host) and
+The checked-in sidecar uses kernel TUN mode with `NET_ADMIN` and `/dev/net/tun`, and
 persists state in a Docker volume so the node identity survives restarts
 — each restart re-registers as the same device, so it doesn't churn
 your tailnet's device count.

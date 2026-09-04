@@ -1,152 +1,149 @@
-# Endorsed deployment topology — isolate, sandbox, guardrail
+# Deployment topology: credentials, execution, and access
 
 [← Security](README.md) · Related: [Secrets proxy](secrets-proxy.md) · [Credential registry](credentials.md)
 
-Prax is meant to be the **mature-adult** version of an open agent harness: powerful,
-but built so that when — not if — the agent is prompt-injected or runs hostile code,
-it **cannot walk away with your secrets or your box.** The endorsed production shape
-makes that structural, not hopeful.
+The recommended boundary separates provider credentials from the agent and runs
+generated code in a dedicated execution environment. Its protections depend on
+deployment isolation. Authorized API access, workspace data, and local credentials
+remain exposed to agent misuse; this is not a guarantee against compromise.
 
-## The shape: four isolated containers on one shared network
+## What the stock Compose files provide
 
+The full and lite configurations start a bundled `prax` service and a separate
+`sandbox`. TeamWork and memory services run inside `prax`; they are not four
+independently isolated containers. The full file can add a reverse proxy through
+the `secrets-proxy` profile.
+
+The files favor local development and self-improvement:
+
+- Prax receives `/var/run/docker.sock`, which gives it administrative access to
+  the host Docker daemon.
+- The sandbox receives the selected workspace and a read-write `/source` mount
+  of the Prax checkout, including files in that checkout such as `.env`.
+- The sandbox inherits `OPENAI_KEY` and `ANTHROPIC_KEY` as coding-agent environment
+  variables. Configuring Prax's model endpoint does not automatically configure
+  the sandbox's independent coding clients.
+- UI, API, and dashboard ports are published to host interfaces. The optional
+  Tailscale service adds a private route; it does not remove those bindings.
+
+A separate proxy container **on the same Docker daemon** does not isolate its
+secrets from a process that can administer that daemon. Do not describe stock
+Compose as hardened against a compromised Prax process.
+
+## A boundary for credential isolation
+
+```text
+Prax host / execution domain       Separate proxy host / administration domain
+Prax + trusted workspace    ---->  authenticated reverse proxy  ----> provider
+       |                          provider credentials
+       +--> sandbox
 ```
-              ┌──────────────────────── shared docker network ────────────────────────┐
-              │                                                                         │
-   ┌──────────┴──────────┐   ┌───────────────────┐   ┌────────────────┐   ┌────────────┴────────────┐
-   │  PRAX (the agent)   │   │  SECRETS-PROXY     │   │  SANDBOX       │   │  TEAMWORK (optional)    │
-   │  • no real API keys │──▶│  • holds ALL keys  │   │  • runs code   │   │  • web UI               │
-   │  • HTTPS_PROXY ─────────▶│  • injects + fwd   │──▶ (egress)        │   │  • no AI keys           │
-   │  • trusts proxy CA  │   │  • LOCKED DOWN 🔒   │   │  • own overlay │   │                         │
-   └─────────────────────┘   └───────────────────┘   └────────────────┘   └─────────────────────────┘
-        can reach the proxy       can reach the             the ONLY           can reach Prax's API
-        over the network only     internet                 code-exec box
-        — NOT its filesystem                                (container = the
-          or its env                                         boundary)
-```
 
-Each box is a **separate container** (ideally a separate OS user/UID too). They
-**share a network so they can talk**, but one container **cannot read another's
-filesystem, env, or memory**. That's the whole game:
+Prax may reach the proxy's restricted network endpoint but must not have its host
+credentials, Docker socket, secret files, or administrative API. A separate VM or
+host is one way to establish that boundary. A same-host deployment requires
+independently restricted users, administration, mounts, and execution privileges;
+a virtual environment or sibling directory alone does not suffice.
 
-- **Prax** runs *keyless*. It holds the proxy's access token (or trusts its CA) and
-  nothing else of value. Compromise it and there's no provider key to steal.
-- **The secrets-proxy** holds every real key and is the single, small, auditable
-  component that injects them. It is the **deterministic** trust anchor — you can
-  read all of its code, versus an LLM whose behaviour you can't bound.
-- **The sandbox** is the only place agent-written code runs; the container *is* the
-  boundary (see [sandbox-execution-boundary](sandbox-execution-boundary.md)).
-- **TeamWork** (optional) is a pure UI with no AI keys.
-
-### Why this is the right trade (the deterministic-risk argument)
-
-Keeping keys in the agent is a **high-probability, unbounded** risk: prompt
-injection is routine for an agent that reads the web and runs code, and you can't
-cap what a manipulated LLM does with a key it holds. Moving the keys into the proxy
-converts that into a **low-probability, bounded** risk: a ~few-hundred-line service
-that does exactly what its code says, every time — auditable, rate-limitable,
-lockable. You can engineer *its* compromise probability down; you cannot do that to
-an LLM. Concentrating the secret in the smallest, most predictable component is the
-same principle behind HSMs and secret managers.
+For production, restrict host-published ports, put user-facing services behind
+authentication, and expose only the interfaces needed. Run one instance per
+untrusted tenant with independent execution, data, and credentials. The current
+shared sandbox is suitable for one owner or a trusted team, not mutually
+untrusted tenants. See [Authentication](../guides/authentication.md).
 
 ## Two proxy modes — pick your coverage
 
-Both run the proxy as its own container; they differ in how much egress they cover.
-The map of exactly which credential is handled how is the
-[credential registry](credentials.md) — the single source of truth.
-
-| Mode | Covers | Mechanism | Cost |
+| Mode | Coverage | Client setup | Access boundary |
 |---|---|---|---|
-| **Reverse** (default, shipped) | the 3 **model** keys | Prax points `OPENAI_BASE_URL`/`ANTHROPIC_BASE_URL` at the proxy; it swaps the token for the real key | simplest; no TLS interception |
-| **Forward** (opt-in) | **all 15 injectable keys** (model **and** REST) | transparent MITM: Prax sets `HTTPS_PROXY` at the proxy, which terminates TLS and injects auth by destination host from the registry-generated forward-map | one box for *all* egress — no base-URL needed — but **decrypts all egress** |
+| Reverse | Configured OpenAI-compatible and Anthropic upstreams | Provider base URLs plus the proxy token in the normal API-key slot | `PROXY_AUTH_TOKEN` must be nonempty; restrict network reachability and encrypt cross-host traffic. |
+| Forward | Supported credential rules for destination hosts | `HTTPS_PROXY` / `HTTP_PROXY`, trusted interception CA, nonempty provider placeholders | The checked-in forward service has no caller-authentication gate. Use a trusted loopback endpoint or an independently authenticated tunnel/gateway. |
 
-Forward mode is a superset: the forward-map includes the model providers too, so
-you do **not** also set `OPENAI_BASE_URL` — every outbound call, model or REST, is
-intercepted and injected by host. Reverse mode is just the lighter, no-MITM option
-when you only want the model keys off the box.
+The forward proxy is implemented, but a registry entry is not evidence that every
+provider path works. Some credentials require OAuth exchange, login sessions, or
+an unconfigured host and are skipped. Consult the [support matrix](credentials.md#support-and-verification-status).
+Unmatched destinations pass through the forward service: it is not an egress
+allowlist. Clients that ignore proxy variables can also bypass it.
 
-Even with forward mode, **10 credentials structurally cannot move** (in-process
-signing, the inbound MCP token, Prax's own DB/sandbox/UI, git-over-SSH keys, and
-**Discord's bot token** — its gateway is a websocket that carries the token in the
-IDENTIFY payload, not an injectable HTTP header) — see the registry. `DISCORD_BOT_TOKEN`
-is the one *third-party* secret keyless-Prax can't remove: lower blast radius than a
-cloud/model key (it can't spend money or reach other providers — only impersonate the
-bot in its own guilds) but not risk-free, so scope the bot minimally and rotate on any
-doubt. "Zero secrets in Prax" is the direction; this is the honest map of how far it
-reaches. (Some forward-capable keys are also deliberately *not held* — e.g. Google, whose
-Cloud billing has no hard spend cap; see [credentials.md](credentials.md).)
+Forward mode decrypts routed HTTPS requests. Trusting the interception CA
+establishes trust in the proxy's certificates; it does not authenticate clients
+to the proxy. The reverse service's `PROXY_AUTH_TOKEN` does not protect the forward
+port. Apply externally enforced network controls if all egress must be restricted.
 
 ### Wiring forward mode
-```bash
-# 1. Generate the forward-map from Prax's registry (never-drift link):
-python -m prax.services.credential_registry --export-forward-map ../prax-secrets-proxy/forward-map.json
-# 2. Run the forward proxy (its own container, holds the real keys):
-cd ../prax-secrets-proxy && docker compose --profile forward up   # mitmproxy on :8786
-# 3. Trust its CA in Prax's bundle (system CAs + the mitmproxy CA):
-cat "$(uv run python -m certifi)" ~/.mitmproxy/mitmproxy-ca-cert.pem > ~/PRAX/prax-proxy-ca-bundle.pem
-```
-Then in Prax's env (note: **no** `OPENAI_BASE_URL` — forward mode catches it too):
-```bash
-HTTPS_PROXY=http://secrets-proxy:8786
-HTTP_PROXY=http://secrets-proxy:8786
-NO_PROXY=localhost,127.0.0.1        # don't route Prax's own loopback/UI through it
-SSL_CERT_FILE=/abs/path/prax-proxy-ca-bundle.pem
-REQUESTS_CA_BUNDLE=/abs/path/prax-proxy-ca-bundle.pem
-# Set EVERY proxied key (OPENAI_KEY, SERPER_DEV_API_KEY, ELEVENLABS_API_KEY, …) to a
-# NON-EMPTY placeholder here — the real keys live only in the proxy's .env, and the
-# proxy strips the placeholder + injects the real key by host. The placeholder must
-# be non-empty: several Prax REST clients presence-guard on the key (e.g. serper
-# returns "SERPER_DEV_API_KEY isn't configured" if it's blank) and short-circuit
-# BEFORE the request reaches the proxy. Any non-empty string works (e.g. "proxied").
-```
 
-**Verify one provider round-trips** before trusting it: with the proxy up, make a
-real call (e.g. a web search) and confirm the answer comes back — a `401` means the
-key isn't reaching that host (check the forward-map rule + the real key in the
-proxy's `.env`); a TLS error means Prax isn't trusting the mitmproxy CA (rebuild the
-bundle). The proxy logs one `injected <scheme> @ <host>` line per hit — never the key.
+This is an integration procedure for an operator who has already established the
+boundary above. Component run instructions live in the proxy repository.
 
-## 🔒 LOCK DOWN THE PROXY CONTAINER — HARD
+1. Generate `forward-map.json` from Prax's registry. The map contains environment
+   variable names and injection rules, not provider key values:
 
-**The proxy is now the crown jewels.** It holds every key and (in forward mode) sees
-every request body. Its compromise is total. Treat it like an HSM, not an app:
+   ```bash
+   uv run python -m prax.services.credential_registry --export-forward-map /tmp/prax-forward-map.json
+   ```
 
-- **Isolate it.** Own container, own non-root UID, own secret store. Prax must be
-  able to reach its *port* and nothing else — never its filesystem, env, or the
-  `.env` that holds the keys. (Docker: separate service; no shared volumes with
-  Prax; don't mount the proxy's `.env` anywhere Prax can read.)
-- **Minimise reachability.** Bind loopback or the private container network only.
-  Nothing outside the stack should be able to reach `:8785`/`:8786`. Reachability
-  *is* the control — whoever can reach it can spend the keys.
-- **Require the token** (`PROXY_AUTH_TOKEN`) so only Prax, not any other process on
-  the network, can use it. Use **TLS** (or the MITM CA) so the token/traffic never
-  cross a wire in plaintext.
-- **Least privilege.** No extra tools in the image, read-only root filesystem where
-  possible, drop Linux capabilities, no Docker socket, no host mounts.
-- **Never log secrets.** The proxy logs `method/host/status` only — never a key or
-  body. Keep it that way.
-- **Rotate on any doubt.** If the proxy box is ever suspected, rotate *every* key it
-  held — that's the blast radius, and it's why keeping it small and boring matters.
-- **Patch it.** It's the one component whose compromise is game-over; keep its base
-  image and `mitmproxy`/deps current.
+2. Transfer the map to the isolated proxy's configuration, set the supported real
+   keys there, and start its `forward` profile. Keep the forward port loopback-only
+   unless access is independently authenticated and restricted.
+3. Obtain the **public CA certificate** from the proxy's persisted `mitm-ca`
+   volume. Preserve its private key on the proxy. Add the certificate to a bundle
+   containing the client's normal system roots, and mount that bundle read-only
+   where Prax can read it. Do not assume a CA exists in the host's `~/.mitmproxy`:
+   the checked-in container uses a Docker volume.
+4. In Prax, use the actual endpoint reachable from its network namespace:
 
-If you can't lock the proxy down this hard, you have **not** improved your security
-by adding it — you've just moved all the keys into one box. The isolation is the
-whole point.
+   ```env
+   HTTPS_PROXY=http://127.0.0.1:8786
+   HTTP_PROXY=http://127.0.0.1:8786
+   NO_PROXY=localhost,127.0.0.1
+   SSL_CERT_FILE=/path/inside/prax/proxy-ca-bundle.pem
+   REQUESTS_CA_BUNDLE=/path/inside/prax/proxy-ca-bundle.pem
+   ```
 
-## The opt-out — Prax can still hold its own keys (at your risk)
+   This example assumes native Prax reaches an authenticated tunnel on loopback.
+   A container needs its own reachable endpoint; its `127.0.0.1` is not the host.
+   Include local service names in `NO_PROXY` as appropriate. Do not point the model
+   base URLs at the reverse service when forwarding directly to provider hosts.
+   Set each proxied provider key to a nonempty placeholder so client presence
+   checks pass. That placeholder is not an access-control credential.
+5. Verify one provider at a time with a small request, its proxy log entry, and
+   its expected response. A successful response proves that request path worked;
+   it does not prove filesystem isolation or coverage of every tool.
 
-None of this is forced. If you'd rather run the simple way, **put the keys in Prax's
-own `.env` and don't point any base URL / `HTTPS_PROXY` at a proxy.** Prax works
-exactly as before. This is fine for a trusted, solo, non-exposed setup — you're
-choosing to accept that a prompt-injected or compromised Prax could read those keys.
-Praxagent **endorses the proxy topology** for anything exposed or handling data you
-care about, and the keys-in-Prax path is planned for eventual de-emphasis — but it
-stays supported. Your box, your call.
+## Credentials and data that remain in Prax
+
+Even a working proxy deployment retains session-signing secrets, inbound MCP
+credentials, sandbox/UI/DB access, and any configured SSH keys. Discord's bot
+credential remains local because the gateway protocol uses it in its connection
+payload. Unsupported third-party authentication flows also remain local until
+implemented differently. These credentials and workspace contents have value;
+protect and rotate them according to their privileges.
+
+Credential isolation reduces direct provider-key exposure. A compromised agent
+can still spend through an authorized proxy, misuse the bot or workspace, or
+send data to reachable destinations. Keep credentials narrowly scoped, review
+provider spending, and enforce the required network and execution policy outside
+agent-editable code.
+
+## Protecting the proxy
+
+Use a dedicated secret store and administrative identity. Avoid host mounts and
+Docker sockets that the agent can use to reach the proxy. Restrict callers,
+require the reverse token, and encrypt cross-host transport. Run as a non-root
+user where supported, minimize privileges, and keep dependencies patched. Logs
+should omit credentials and request bodies. Rotate affected keys and proxy
+access credentials after suspected compromise.
+
+## Direct provider access
+
+Direct keys in Prax remain supported. This simpler configuration exposes them to
+code running with Prax's privileges. Choose the deployment based on the actual
+trust model, not on the presence of a proxy container alone.
 
 ## Verification status
 
-The reverse proxy is live-verified end-to-end (keyless model calls over TLS with the
-token gate). The forward (MITM) injector is **unit-tested** (the generic
-bearer/header/basic/query injection, per host, from the registry map); a full
-end-to-end MITM run against each real third-party provider is the operator's to
-verify with their own keys. See [`VERIFICATION_LEDGER.md`](../VERIFICATION_LEDGER.md).
+Documentation and configuration were cross-checked on September 4, 2026. The
+[verification ledger](../VERIFICATION_LEDGER.md#secrets-proxy-prax-secrets-proxy)
+records earlier live observations, including partial forward-provider coverage.
+This documentation revision did not deploy a fresh production stack or execute
+paid provider calls. Operators must verify their chosen network path, credentials,
+and isolation independently.

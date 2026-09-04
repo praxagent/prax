@@ -2,68 +2,84 @@
 
 [← Infrastructure](README.md)
 
-### Docker Compose (recommended)
+## Docker Compose
+
+Start with the [setup guide](../guides/setup.md), which includes the required
+Prax, TeamWork, and prax-sandbox sibling checkouts and private configuration.
 
 ```bash
-cp .env-example .env    # configure API keys
 docker compose up --build
 ```
 
-**Day-to-day usage** — once images are built, skip the rebuild to start in seconds:
+The stock configuration is for a trusted owner or shared development environment.
+It mounts the host Docker socket into Prax and the Prax checkout read-write into
+the sandbox. Those privileges are not a hardened boundary against a compromised
+agent. Read [Deployment topology](../security/deployment-topology.md) before
+using an exposed server or relying on credential isolation.
+
+### Day-to-day commands
 
 ```bash
-docker compose up                         # start with existing images (fast)
-docker compose up --build                 # rebuild ALL images then start
-docker compose up --build prax            # rebuild only the prax image, start everything
-docker compose up --build sandbox         # rebuild only the sandbox image, start everything
-docker compose build prax && docker compose up   # same idea, explicit two-step
+docker compose up                         # start using existing images
+docker compose up --build                 # build images and start the stack
+docker compose up --build prax            # start Prax and its dependencies
+docker compose up --build sandbox         # start only the sandbox service
+docker compose build prax                 # build without starting services
+docker compose restart prax               # restart after code-only changes
 ```
 
-Use `--build` when you've changed a Dockerfile or its dependencies (e.g. added a package). For code-only changes in dev mode, plain `docker compose up` is enough.
+Selecting `sandbox` does not start its dependent Prax service. For code-only
+changes, the default source mounts avoid an image rebuild, but the process needs
+a restart to load the changes unless a development reloader is active.
 
-**Dev mode** — mount local source code so changes auto-reload without rebuilding:
+### Development reloader
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up
 ```
 
-This bind-mounts `prax/`, `app.py`, `config.py`, and `scripts/` into the container and sets `DEBUG=true`, which enables Flask's Werkzeug reloader. Edit code locally, save, and the app restarts automatically. You still need `--build` if you change the Dockerfile, `pyproject.toml`, or system-level dependencies.
+The development override enables Flask's reloader. Dependency or Dockerfile
+changes still require rebuilding the image.
 
-This starts two core services (the `prax` container is all-in-one):
+### Services and ports
 
-| Service | Description |
-|---------|-------------|
-| **prax** | All-in-one container that bundles the Flask app (port 5001), the TeamWork web UI (port 3000) + API (port 8000), Qdrant, Neo4j, and ngrok (dashboard on 4040). `.env` injected, Docker socket for sandbox management. ngrok forwards the Twilio webhook routes (`/transcribe`, `/sms`) and the gated `/shared/<token>` endpoint to the public internet — only files/courses/notes registered in `workspaces/{user}/.shares.json` are reachable through it. |
-| **sandbox** | Always-on **pure-execution** sandbox with Python + scientific stack, DuckDB, Lean, LaTeX, ffmpeg, poppler, pandoc, headless Chrome, and desktop. Ships **no coding-agent server** (no OpenCode/Claude-Code/Codex) and takes no model API keys — Prax codes natively. Shares `./workspaces` volume. |
-| **tailscale** *(opt-in)* | Userspace `tailscaled` sidecar that joins your tailnet and serves TeamWork (`:443`) + Grafana (`:3001`) over MagicDNS HTTPS. Activated by setting `TS_AUTHKEY` + `COMPOSE_PROFILES=tailscale` in `.env`; silently skipped otherwise. State persists in a Docker volume so the node identity survives restarts. |
+| Service | What runs | Addresses |
+|---------|-----------|-----------|
+| `prax` | Flask, TeamWork, Qdrant, Neo4j, and optional ngrok | Host `3000` and `8000` map to TeamWork's container `8000`; host `5001` is Prax; `4040` is ngrok's dashboard. Qdrant/Neo4j ports stay internal. |
+| `sandbox` | Coding agents, Chromium/CDP, desktop, and toolchains from the sibling prax-sandbox image | Stock Compose passes OpenAI/Anthropic key values and mounts the selected workspace at `/workspace` plus the checkout at `/source`. |
+| `tailscale` (opt-in) | Tailscale sidecar using kernel TUN mode, `NET_ADMIN`, and `/dev/net/tun` | Tailnet HTTPS routes to TeamWork and, in the full observability profile, Grafana. Node state persists in a volume. |
 
-The app waits for the sandbox and TeamWork health checks before starting. Environment detection is automatic — `RUNNING_IN_DOCKER=true` and `SANDBOX_HOST=sandbox` are set by compose.
+Prax waits for the sandbox healthcheck before starting. The bundled entrypoint
+starts its internal services. A healthy container is an availability signal, not
+proof that every UI panel, model credential, or tool path works.
 
-**With observability** — add `--profile observability` to start Tempo, Loki, Prometheus, Promtail, and Grafana alongside the core services:
+Full Compose profiles are `local-llm`, `observability`, `tailscale`, and
+`secrets-proxy`. Lite Compose has the bundled memory services and the `tailscale`
+profile, but does not define those other optional services. There is no `memory`
+or `ollama` profile. See [Setup](../guides/setup.md#full-and-lite-modes).
+
+### Observability
 
 ```bash
 docker compose --profile observability up --build
 ```
 
-This adds five services (Tempo :4318, Loki :3100, Promtail, Prometheus :9090, Grafana :3002). See [Observability](observability.md) for details. Safe to leave `OBSERVABILITY_ENABLED=true` in `.env` — Prax probes Tempo at startup and silently disables tracing if it's unreachable.
+Full Compose adds Tempo, Loki, Prometheus, Promtail, and Grafana. Grafana is
+published at host port `3002`. The example configuration enables anonymous
+Grafana admin access, so restrict its reachability or configure authentication
+before exposing it. See [Observability](observability.md).
 
-**Runtime capabilities in Docker mode:**
-- `sandbox_install("package")` — apt-get install inside the running sandbox
-- `sandbox_rebuild()` — Prax edits the Dockerfile, rebuilds the image, and restarts the container
-- `workspace_share_file("path/to/file.mp4")` — publish a single file at a public ngrok URL (explicit user consent only — file is added to the share registry; revoke via `workspace_unshare_file(token)`, audit via `workspace_list_shares()`)
+### Access and credential boundaries
 
-### Standalone (without compose)
+Adding Tailscale does not close the existing host-published ports. Bind or firewall
+those ports for your deployment. Keep sandbox control interfaces private.
 
-```bash
-docker build -t prax .
+The sandbox is not a credential-free image by virtue of being a separate
+container: stock Compose passes provider values into its environment and mounts
+the Prax checkout. Configure independent coding clients and review mounts when
+using a [secrets proxy](../security/secrets-proxy.md).
 
-docker run -d -p 5001:5001 --restart always \
-  -v "$HOME/workspaces:/app/workspaces" \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  prax
-```
-
-Build the sandbox image separately (it lives in the sibling **prax-sandbox** repo):
-```bash
-cd ../prax-sandbox && make build          # -> prax-sandbox:latest
-```
+For an alternative container arrangement, derive it from the checked-in Compose
+and Dockerfiles, including their sibling build contexts, configuration, workspace
+mounts, and service dependencies. A bare `docker build .` / `docker run prax`
+example omits those requirements and is not an equivalent deployment.
