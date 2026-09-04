@@ -1,151 +1,102 @@
-# Credential registry — the single source of truth (Prax ⇄ proxy, no drift)
+# Credential registry
 
-[← Security](README.md) · Related: [The secrets proxy](secrets-proxy.md)
+[← Security](README.md) · Related: [Secrets proxy](secrets-proxy.md)
 
-**Every credential Prax supports is registered in exactly one place —
-[`prax/services/credential_registry.py`](../../prax/services/credential_registry.py) —
-and classified by whether/how the [secrets-proxy](secrets-proxy.md) can hold it
-instead of Prax.** This page mirrors that registry for humans; the code is
-authoritative.
+Prax's credential settings are classified in
+[`prax/services/credential_registry.py`](../../prax/services/credential_registry.py).
+This page explains the available proxy paths and their limitations. A registry
+classification describes an integration mechanism, not proof that a provider
+has been tested or that a particular deployment isolates its secrets.
 
-## Why this exists (the never-drift contract)
+## Adding a credential
 
-Keyless Prax only works if there's a *complete, authoritative* answer to "what
-credentials does Prax use, and can the proxy handle each?" If a new key gets added
-to `settings.py` and nobody updates the proxy story, a secret silently stays in
-Prax's env that the operator believed was gone — **drift**, and a security
-regression.
+1. Add its setting in `prax/settings.py`.
+2. Add a registry row with the appropriate class.
+3. Implement and test any required client or proxy wiring. Record external
+   verification separately in the [verification ledger](../VERIFICATION_LEDGER.md).
 
-So the invariant is enforced by a test, not by discipline:
-[`tests/test_credential_registry.py`](../../tests/test_credential_registry.py)
-**fails CI** if any `*_KEY` / `*_TOKEN` / `*_SECRET` / `*_API` field exists in
-`settings.py` without a matching row in the registry. You cannot add a credential
-and forget to classify it. (It has already earned its keep — it caught
-`NEO4J_PASSWORD` and two SSH keys on first run.)
-
-### Adding a credential (the whole procedure)
-1. Add the `Field(..., alias="NEW_KEY")` in `prax/settings.py`.
-2. Add a `Credential(...)` row in `credential_registry.py`, choosing a class:
-   - **`PROXY_MODEL`** — a model provider reached via a base-URL override
-     (proxied *today*).
-   - **`PROXY_FORWARD`** — an ordinary HTTPS REST API; proxyable *only* via the
-     transparent forward proxy (Tier-2, planned) — until then the key stays in Prax.
-   - **`PROXY_LOCAL`** — in-process signing, an *inbound* token, or Prax's own
-     co-located infra; the proxy cannot and should not hold it.
-3. If it's `MODEL`/`FORWARD`, wire the proxy side to inject it.
-
-The test enforces step 2. Keep the classification honest.
+The [registry test](../../tests/test_credential_registry.py) checks that credential
+settings have entries. It does not prove every authentication flow works.
 
 ## The three classes
 
-- **Tier 1 — model providers (proxied today).** Base-URL override
-  (`OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL`); the proxy swaps the presented token
-  for the real key. This is what ships in `prax-secrets-proxy` now.
-- **Tier 2 — REST APIs (planned).** These SDKs don't expose a base-URL knob, so
-  they can only be proxied by a **transparent forward proxy** (`HTTPS_PROXY` + a CA
-  Prax trusts) that injects auth by destination host. Until that ships, these keys
-  stay in Prax. See [secrets-proxy.md → Tier 2](secrets-proxy.md#tier-2--general-egress-future).
-- **Not proxyable.** In-process (`FLASK_SECRET_KEY`), inbound (`MCP_BEARER_TOKEN`),
-  Prax's own infra (`NEO4J_PASSWORD`, sandbox/TeamWork), or non-HTTP
-  (git-over-SSH keys). By design these live only in Prax.
+- `PROXY_MODEL`: a model provider that can use a base-URL override.
+- `PROXY_FORWARD`: an outbound API credential considered for host-based forward
+  injection. The forward implementation exists, but unsupported flows and missing
+  host mappings are skipped.
+- `PROXY_LOCAL`: session signing, inbound authentication, infrastructure access,
+  or a protocol that the current HTTP injectors do not support. These stay local.
 
-## The registry (mirrors the code — 29 credentials)
+## The registry
 
-### Tier 1 — model providers · proxied TODAY via base-URL override
+### Tier 1 — model providers
 
-| Env | Service | Host | Inject |
-|---|---|---|---|
-| `OPENAI_KEY` | OpenAI (or OpenAI-compatible base URL) | api.openai.com | bearer |
-| `ANTHROPIC_KEY` | Anthropic | api.anthropic.com | x-api-key |
-| `OPENROUTER_API_KEY` | OpenRouter (cheap-eval) | openrouter.ai | bearer¹ |
-
-¹ Proxyable via the openai leg (`PROXY_OPENAI_BASE_URL=…openrouter…`) or its own
-upstream; needs Prax's openrouter base URL pointed at the proxy.
-
-### Tier 2 — REST APIs · proxyable only via the transparent forward proxy (PLANNED)
-
-| Env | Service | Purpose | Host | Inject |
-|---|---|---|---|---|
-| `BRAVE_API_KEY` | Brave Search | web search | api.search.brave.com | `X-Subscription-Token` |
-| `TAVILY_API_KEY` | Tavily | web search | api.tavily.com | bearer |
-| `SERPER_DEV_API_KEY` | Serper.dev | web search | google.serper.dev | `X-API-KEY` |
-| `JINA_API_KEY` | Jina AI | URL reader + search | r.jina.ai | bearer (reader works keyless) |
-| `GOOGLE_API_KEY` | Google | programmable search / Gemini vision | www.googleapis.com | `?key=` ⚠️ |
-| `GOOGLE_CSE_ID` | Google CSE | search engine id | www.googleapis.com | `?cx=` ⚠️ |
-| `VISION_API_KEY` | Vision provider | image analysis | — | bearer |
-| `ELEVENLABS_API_KEY` | ElevenLabs | text-to-speech | api.elevenlabs.io | `xi-api-key` |
-| `AMADEUS_API_KEY` | Amadeus | travel search (OAuth id) | api.amadeus.com | basic |
-| `AMADEUS_API_SECRET` | Amadeus | travel search (OAuth secret) | api.amadeus.com | basic |
-| `TWITTER_API` | X / Twitter v2 | fetch tweets/threads | api.twitter.com | bearer |
-| `THREADS_API` | Meta Threads | fetch Threads posts | graph.threads.net | bearer |
-| `NYT_PASSWORD` | New York Times | news access | www.nytimes.com | basic |
-| `HF_TOKEN_RO` | Hugging Face | gated dataset fetch² | huggingface.co | bearer |
-| `TWILIO_ACCOUNT_SID` | Twilio | SMS/voice (basic user) | api.twilio.com | basic |
-| `TWILIO_AUTH_TOKEN` | Twilio | SMS/voice (basic pass) | api.twilio.com | basic |
-
-² Used at dataset-fetch time (scripts), not agent runtime — low priority.
-
-⚠️ **Google keys are deliberately UNSET (2026-07-22).** They remain classified
-`PROXY_FORWARD` (forward-proxyable in principle), but we hold **no** Google key.
-Google Cloud billing is **not** a hard-capped pay-as-you-go product — a runaway loop
-or a prompt-injected agent could run up **unbounded** charges with no ceiling to stop
-it, which is a categorically worse failure mode than a metered per-call API. So the
-safe default is to hold no Google key at all: Prax degrades to the keyless search
-providers and non-Google vision. Only set `GOOGLE_API_KEY` behind a Google Cloud
-budget/quota cap you have configured yourself.
-
-_Verified live 2026-07-22: Serper, OpenAI, and **Twilio** (basic auth) all inject +
-work through the forward proxy; **ElevenLabs** injects correctly but the held key is
-stale (401 → rotate)._
-
-### Not proxyable — stays in Prax by design
-
-| Env | Why it stays local |
+| Setting | Reverse-proxy wiring |
 |---|---|
-| `DISCORD_BOT_TOKEN` | **non-HTTP** — the bot gateway is a websocket carrying the token in its IDENTIFY payload (no header to inject), and REST wants `Authorization: Bot <token>` (prefix generic injection omits → 401). Verified 401 through the proxy 2026-07-22. |
-| `FLASK_SECRET_KEY` | in-process session signing; never egresses |
-| `MCP_BEARER_TOKEN` | **inbound** — authenticates other agents *to* Prax |
-| `SANDBOX_DAEMON_TOKEN` / `SANDBOX_CLIENT_KEY` | Prax's own remote-sandbox infra (bearer / mTLS key) |
-| `TEAMWORK_API_KEY` | Prax's own co-located UI (loopback/tailnet) |
-| `NEO4J_PASSWORD` | Prax's own graph DB over `bolt://` |
-| `GPU_POWER_BROKER_TOKEN` | infra control token (reclassify FORWARD if it ever calls a third party) |
-| `PRAX_SSH_KEY_B64` / `PLUGIN_REPO_SSH_KEY_B64` | git-over-SSH — not an HTTP API the egress proxy can inject |
+| `OPENAI_KEY` | `OPENAI_BASE_URL` points to the proxy's `/openai` route; use the proxy token as the client key. |
+| `ANTHROPIC_KEY` | `ANTHROPIC_BASE_URL` points to `/anthropic`; use the proxy token as the client key. |
+| `OPENROUTER_API_KEY` | Set Prax's `OPENROUTER_BASE_URL` to the proxy's OpenAI-compatible route. Configure that proxy upstream for OpenRouter and provide its real key there. |
 
-### Not in the registry: per-repo deploy keys
+The reverse proxy's OpenAI-compatible leg has one configured upstream. An
+OpenRouter upstream is not simultaneously a direct OpenAI endpoint. Verify model
+paths and routing in the intended configuration.
 
-Attaching a git repo to a Library space **generates** an ed25519 deploy key per
-repository (`~/.prax/git-keys/{user}/{space}/{repo}`, mode 0600). They are not
-registry rows because they are not env-var credentials — nothing in
-`settings.py` names them, so the drift-guard has nothing to check.
+### Tier 2 — REST APIs
 
-They belong to the same class as `PRAX_SSH_KEY_B64`: **git-over-SSH, not
-proxyable.** The mitigation is scope rather than injection — a deploy key is
-registered on exactly one repository, so a leak exposes that repo and not
-everything the account can reach. Write access is off until a human toggles it,
-per repository. Full design: [`space-git-repos.md`](space-git-repos.md).
+| Setting | Host / mechanism | Current limit |
+|---|---|---|
+| `BRAVE_API_KEY` | `api.search.brave.com`, subscription header | No successful live verification recorded. |
+| `TAVILY_API_KEY` | `api.tavily.com`, bearer | No successful live verification recorded. |
+| `SERPER_DEV_API_KEY` | `google.serper.dev`, API-key header | Successful historical forward request recorded. |
+| `JINA_API_KEY` | `r.jina.ai`, bearer | The map names the reader host; do not assume it also covers `s.jina.ai` search. |
+| `GOOGLE_API_KEY`, `GOOGLE_CSE_ID` | `www.googleapis.com`, query parameters | Does not cover every Google/Gemini host. Historical Custom Search request returned `403`. |
+| `VISION_API_KEY` | Provider-dependent | No fixed host; skipped by the generated map. |
+| `ELEVENLABS_API_KEY` | `api.elevenlabs.io`, `xi-api-key` | Historical request returned `401`; successful authenticated use not established. |
+| `AMADEUS_API_KEY`, `AMADEUS_API_SECRET` | OAuth token exchange | Skipped; generic header injection does not perform the exchange. |
+| `TWITTER_API` | `api.twitter.com`, bearer | Successful historical forward request recorded. |
+| `THREADS_API` | `graph.threads.net`, bearer | No successful live verification recorded. |
+| `NYT_PASSWORD` | Login/cookie session | Skipped; not an HTTP credential-injection flow. |
+| `HF_TOKEN_RO` | `huggingface.co`, bearer | Historical dataset-fetch request recorded; this is not an agent-runtime guarantee. |
+| `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` | `api.twilio.com`, paired HTTP basic auth | Successful historical forward request recorded. |
 
-### `DISCORD_BOT_TOKEN` — on Prax by necessity: less risky, not risk-free
+Only configured hosts and implemented authentication schemes are covered. A
+nonempty placeholder is needed for clients with credential-presence checks, but
+it does not authenticate a client to the forward proxy. The checked-in forward
+service has no caller token gate and passes unmatched hosts. See
+[the access boundary](secrets-proxy.md#tier-2--general-egress).
 
-This is the one third-party credential the keyless-Prax invariant genuinely **does
-not cover**, so be honest about it. It can't move to the proxy (the bot needs the
-token locally to open its gateway websocket — see the table), so a prompt-injected or
-compromised Prax *can* read it from its own env.
+### Not proxyable by the current integration
 
-Why that's **less** dangerous than a leaked cloud/model key: a stolen bot token
-**can't spend money** and **can't reach any other provider** — its blast radius is
-bounded to the Discord guilds the bot is already in. Why it's **still** dangerous:
-within that radius it grants **full impersonation of the bot** — read and send in
-every channel it can see, DM users — until the token is regenerated. So treat it with
-care: give the bot **minimal permissions/intents**, and **rotate the token** the
-moment Prax is suspected of compromise. "Keyless except Discord" is the accurate
-claim, not "keyless."
+| Setting | Why it stays local |
+|---|---|
+| `DISCORD_BOT_TOKEN` | The Discord gateway uses the token in its connection payload. |
+| `FLASK_SECRET_KEY` | Prax session signing. |
+| `MCP_BEARER_TOKEN` | Authenticates inbound MCP callers. |
+| `SANDBOX_DAEMON_TOKEN`, `SANDBOX_CLIENT_KEY` | Remote sandbox access. |
+| `TEAMWORK_API_KEY` | Prax/TeamWork integration. |
+| `NEO4J_PASSWORD` | Graph database access over Bolt. |
+| `GPU_POWER_BROKER_TOKEN` | Infrastructure control. |
+| `PRAX_SSH_KEY_B64`, `PLUGIN_REPO_SSH_KEY_B64` | Git-over-SSH access. |
 
-## Honest status
+Local credentials remain sensitive. For example, a stolen bot token can
+impersonate the bot within its granted permissions, while SSH or sandbox
+credentials can grant code or infrastructure access. Scope them narrowly and
+rotate affected credentials after suspected compromise. Provider-key isolation
+must not be described as holding no secrets or nothing of value.
 
-**Today, keyless covers the 3 model keys** (the highest-value theft target) — that's
-real and worth doing. The 16 Tier-2 REST keys can all move to the proxy via the
-transparent forward proxy (built, unit-tested, first providers verified live — see
-the ledger); the 10 local credentials — `DISCORD_BOT_TOKEN` and the 9 in-process /
-inbound / own-infra keys above — fundamentally can't. So "Prax holds zero secrets" is
-the direction, and this registry is the honest, enforced map of how far along the
-path each credential is — with a test making sure the map never lies.
+## Support and verification status
+
+Cross-checked September 4, 2026 against Prax's registry, the companion proxy source
+at `3a2550cb6e5747c22cc37bbf37349196065a2775`, and the existing verification ledger.
+This documentation pass did not make paid provider calls.
+
+| Surface | Implementation | Recorded external evidence |
+|---|---|---|
+| Reverse model proxy | Available; authentication enforced only with nonempty `PROXY_AUTH_TOKEN` | July 22 ledger records TLS/readiness and token rejection checks; it does not establish a new full Prax completion test in this revision. |
+| Forward injector | Available as an opt-in mitmproxy service; bearer, named-header, basic, and query injection | July 22 ledger records successful requests for OpenAI, Serper, Twilio, Twitter, and Hugging Face. Other paths remain partial or unverified. |
+| OAuth/login/dynamic-host flows | Not supported by the generated forward map | Amadeus, NYT login, and the generic vision credential are skipped. |
+| Forward caller authentication and enforced egress allowlist | Not present in the checked-in service | Must be supplied by a separate network/authentication boundary if required. |
+
+The [verification ledger](../VERIFICATION_LEDGER.md#secrets-proxy-prax-secrets-proxy)
+contains the dated observations and limits. Historical provider responses are not
+claims about a current operator's credentials or account access.

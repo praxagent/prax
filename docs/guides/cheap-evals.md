@@ -1,99 +1,96 @@
-# Running evals cheaply (and without bill-shock)
+# Running evals with cost controls
 
 [← Guides](README.md)
 
-Prax's `make eval` makes real LLM calls (agent replay + judge), so it costs money.
-This guide is how to run evals for pennies **and make a surprise bill structurally
-impossible.**
+Prax's live evaluations make provider calls for agent replay and judging. Limit
+the number of cases, choose models deliberately, and configure provider-side
+spending controls before running them. No client-side setting here guarantees an
+exact dollar ceiling across every tool and provider.
 
-## The one idea: prepaid providers can't overspend
+## Provider billing controls
 
-The strongest guarantee isn't a spending cap you have to remember to set — it's a
-provider you **prepay**. Load $5–10 of credit; when it's gone, calls just stop.
-There is no postpaid invoice to be surprised by.
+With a prepaid provider, start with a small balance and review auto-recharge and
+other billing settings. OpenRouter supports both manual credit purchases and
+auto top-up; turn auto top-up off if a fixed purchased balance is your intended
+constraint. Its activity view reports usage by model, provider, and API key.
+See [OpenRouter's billing documentation](https://openrouter.ai/docs/faq#credit-and-billing-systems).
 
-Two good OpenAI-compatible prepaid options:
-
-- **[OpenRouter](https://openrouter.ai)** — one prepaid key fronts hundreds of
-  models (many free-tier), plus it doubles as cross-provider failover. Small
-  markup. Base URL: `https://openrouter.ai/api/v1`.
-- **[DeepSeek](https://api.deepseek.com)** — the cheapest *quality* per token
-  (V3-class ≈ $0.14/$0.28 per 1M in/out), also prepaid. Base URL:
-  `https://api.deepseek.com`.
+For another OpenAI-compatible provider, verify its current prices, payment terms,
+concurrent-request behavior, and exhaustion policy before relying on a balance as
+a limit. Prepaid billing is not a universal guarantee that overage is impossible.
 
 ## The easy path: OpenRouter + `make eval CHEAP=1`
 
-Put your OpenRouter key in `.env`:
-
-```dotenv
-OPENROUTER_API_KEY=sk-or-xxxx
-```
-
-Then run **any** eval target with `CHEAP=1`:
+Set `OPENROUTER_API_KEY` in private configuration, or configure the corresponding
+proxy route. Then run a small evaluation:
 
 ```bash
-make eval CHEAP=1              # regression replay + goldens
-make eval-capability CHEAP=1  # the 7-case capability suite
+PRAX_EVAL_MAX_CASES=3 make eval CHEAP=1
+make eval-capability CHEAP=1
 make eval-benchmark BENCH=ifeval CHEAP=1
 ```
 
-`CHEAP=1` switches the provider to `openrouter` and points **every tier** at one
-cheap model — `deepseek/deepseek-v4-flash` by default — **for that make invocation
-only.** Production (`make run-local-*`, `restart-prax`) is untouched: the key's
-mere presence never redirects the live server. Pick a different model with
-`OPENROUTER_EVAL_MODEL=<slug>` (browse slugs at
-[openrouter.ai/models](https://openrouter.ai/models)).
+`CHEAP=1` selects OpenRouter and points the tier models at
+`deepseek/deepseek-v4-flash` for that Make invocation. Override it with
+`OPENROUTER_EVAL_MODEL=<slug>` after checking the current
+[model catalog and prices](https://openrouter.ai/models). It does not redirect a
+separately running production process.
 
-A full pass is **~$0.20–0.35**; a prepaid balance is your hard ceiling.
+The Makefile also selects Ollama embeddings with `nomic-embed-text`. Run Ollama
+and pull that model before evaluation, using the host or container address
+appropriate to the evaluation process. Missing local embeddings can cause failures.
 
-**Caveat:** vision cases (`analyze_image`, some GAIA tasks) still use
-`VISION_PROVIDER`/`VISION_MODEL` — point those at OpenRouter too, or run
-text-only suites, if you want a pure-OpenRouter run.
+Vision, search, speech, and other external tools have separate configuration and
+may incur additional charges. Inspect the suite and its enabled tools; routing
+the language-model tiers through one provider does not route every paid request.
+Cost depends on case count, prompts, tokens, retries, judges, models, and tools;
+previous campaign totals are not a quote for a new run.
 
 ## Manual passthrough (any provider)
 
-For a provider without the `CHEAP=1` shortcut, set the OpenAI-compatible client
-directly:
+For an OpenAI-compatible provider without the shortcut, configure:
 
-```dotenv
-OPENAI_BASE_URL=https://api.deepseek.com   # or another OpenAI-compatible endpoint
-OPENAI_KEY=<your provider key>
+```env
+LLM_PROVIDER=openai
+OPENAI_BASE_URL=https://your-provider.example/v1
+OPENAI_KEY=<provider key or configured proxy credential>
 ```
 
-`LLM_PROVIDER` stays `openai`; Prax auto-disables OpenAI-proprietary features
-(Responses API + `logprobs`) that third parties don't implement. Set the tier
-models to that provider's slugs. Leave `OPENAI_BASE_URL` unset for OpenAI (default).
+Replace the example URL and choose model identifiers supported by that provider.
+Prax disables its OpenAI-specific Responses/logprobs path for non-OpenAI base
+URLs. This does not establish complete compatibility with every third-party API.
+Leave `OPENAI_BASE_URL` unset for the direct OpenAI endpoint.
 
-## The zero-code alternative: OpenAI nano + a hard cap
+## OpenAI: enable enforcement, not only alerts
 
-If you'd rather not switch providers, OpenAI is already cheap on the nano tier —
-a *full* flag-eval campaign (7 arms + benchmarks, ~2.3M tokens) cost **under $2**.
-Set a **hard monthly usage limit** in the OpenAI billing dashboard (e.g. $10);
-it's postpaid but stops at the ceiling.
+As of September 4, 2026, OpenAI supports organization and project hard spend
+limits. In the API Platform settings, open the intended organization's or
+project's Limits page, set the monthly amount, enable **Enforce a hard limit**,
+and save. Spend alerts alone notify you; they do not stop traffic.
 
-## The guards that actually stop a runaway bill (already in Prax)
+When tracked spend reaches the applicable hard limit, affected requests return
+`429` with `organization_spend_limit_exceeded` or `project_spend_limit_exceeded`.
+Enforcement propagates asynchronously, so a small amount of additional usage can
+occur and recorded spend may slightly exceed the configured amount. Organization
+limits cover all its projects; project limits cover traffic billed to that
+project. See [OpenAI's spend-limit documentation](https://developers.openai.com/api/docs/guides/spend-limits).
 
-Regardless of provider, these are what prevent a loop from spending real money:
+Use a separate evaluation project where practical and confirm the evaluation's
+credential bills to it. Limits on one provider do not cover charges from another.
 
-- **`make ci` is keyless** — the ~2,450 logic tests make **zero** API calls.
-  Only `make eval` (live replay + judge) costs anything.
-- **Goldens list for free.** `run_golden_suite` only scores when
-  `PRAX_EVAL_GOLDENS=1`; otherwise it just lists tracked targets.
-- **`PRAX_EVAL_MAX_CASES`** caps how many recorded cases replay (default 20 — set
-  `3`–`5` for a cheap smoke).
-- **Keep the orchestrator on the nano/low tier** for eval runs; the judge is low
-  tier already.
-- **Cost is measured**, not guessed — the HAL axis (`pass_per_1k_tokens`,
-  `avg_full_tokens`) is reported so you see spend per run.
-- **Per-benchmark cost**: `make eval-benchmark BENCH=all` reports real token counts
-  and a **USD estimate per benchmark** plus a suite total. Estimates use the price
-  table in `prax/eval/pricing.py` (approximate 2026 rates); for exact figures on
-  any model, set `EVAL_COST_INPUT_PER_M` / `EVAL_COST_OUTPUT_PER_M`. An unknown
-  model reports `n/a` (never a fabricated zero).
+## Prax controls and reporting
 
-## Recommendation
+- `make ci` runs the automated logic suite with live/integration cases excluded;
+  live evaluation targets are separate. Keep provider credentials out of CI.
+- `run_golden_suite` scores only with `PRAX_EVAL_GOLDENS=1`; otherwise it lists
+  tracked targets.
+- `PRAX_EVAL_MAX_CASES` limits recorded-case replay (default 20). It is not a
+  universal cap on every benchmark target or every API call within a case.
+- Loop, round, and failure limits reduce runaway work. They are not dollar caps.
+- Evaluation output reports token usage and USD estimates where supported.
+  `prax/eval/pricing.py` is an estimate table, not the provider's billing ledger.
+  Use `EVAL_COST_INPUT_PER_M` and `EVAL_COST_OUTPUT_PER_M` to supply current rates;
+  unknown models report `n/a`.
 
-For "cheap **and** can't-get-a-huge-bill," use **OpenRouter or DeepSeek with a
-prepaid balance** — the prepaid model is the guarantee. Keep `PRAX_EVAL_MAX_CASES`
-low and let `make ci` stay keyless. If you don't want to touch providers, run on
-OpenAI nano with a $10 hard cap.
+Run a small sample, compare its usage with the provider dashboard, then increase
+the scope. Keep alerts and enforcement configured while monitoring the run.

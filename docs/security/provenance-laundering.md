@@ -1,11 +1,10 @@
 # Provenance laundering: untrusted web content becomes "private data"
 
 **Found:** 2026-08-07, while investigating stochastic injection resistance.
-**Status:** **FIXED 2026-08-07, unconditional.** The marker taint briefly
-shipped behind `PROVENANCE_MARKER_TAINT_ENABLED`; the flag was removed the same
-day at the maintainer's call, and he was right: the off-state preserved a
-security mislabelling, and a mislabelling with a switch attached is not a
-configuration choice. A test now fails if anyone reintroduces one.
+**Status:** Fixed on 2026-08-07. Marker-based taint is unconditional. The initial
+`PROVENANCE_MARKER_TAINT_ENABLED` flag was removed that day because disabling it
+preserved the provenance misclassification. A regression test checks that the
+flag is not reintroduced.
 **Severity:** the guard it defeats is the lethal-trifecta guard, so this is a
 security finding rather than a quality one.
 
@@ -85,21 +84,19 @@ Provenance is now a property of the **content**, not the transport.
 |---|---|---|
 | `raw_capture` stamps `provenance: untrusted-external` in the front-matter it already writes | no | pure metadata; the harness *knows* it is third-party at that moment |
 | `library_raw_*` reclassified `untrusted_source` | no | they were **neither** — MEDIUM risk with no provenance. A plain misclassification |
-| `UntrustedContentTaint` banners on the **marker**, whatever tool returned it | **no — unconditional** (flag removed same day) | the banner text is the one production already applies to every direct fetch, so this extends proven text to the places it was wrongly missing; an off-state that preserves a mislabelling is not a choice anyone should be offered |
+| `UntrustedContentTaint` banners on the **marker**, whatever tool returned it | **no — unconditional** (flag removed same day) | applies the existing external-content banner when marked content is read back through a different tool |
 
 The marker is read **only from the front-matter head (600 chars)**, so body
 text merely mentioning it cannot self-declare provenance — nor spoof it away.
 A test pins that.
 
-`tests/test_provenance_laundering.py` (9 tests) includes **the fetch → capture →
-read-back reproduction this document previously admitted was missing**, plus
+`tests/test_provenance_laundering.py` includes a **fetch → capture → read-back
+reproduction**, plus
 the no-overreach cases: a user's own note is never tainted, genuinely private
 readers keep their classification, and tainting stays idempotent.
 
-**Rollback**, since there is no flag: revert the commit and deploy. Accepted
-deliberately — the mechanism is deterministic, nine tests pin it, and a
-security guard with an env-var off switch is itself a risk surface (one config
-regression away from silently losing the protection).
+**Rollback:** revert the change and deploy the reverted version. There is no
+runtime flag to disable marker-based taint.
 
 ### Original fix direction (retained for the reasoning)
 
@@ -125,18 +122,17 @@ fences rather than the problem class, and would false-positive on ordinary
 quoted text. Provenance should come from a place the harness *knows*, not from
 punctuation.
 
-## Honest limits
+## Limitations
 
-- **Half the reproduction exists; the other half still does not.** The tests
-  now walk **fetch → capture → read-back** and prove the label survives. They
+- The tests exercise **fetch → capture → read-back** and verify that the label
+  survives. They
   do **not** exercise the **→ sink** leg, so the claim "this can arm the
   lethal-trifecta guard" remains *derived from reading `trifecta.py`*, not
-  demonstrated. Saying the gap is closed would be overclaiming: what is closed
-  is the laundering of the label, not a demonstration of the downstream
-  consequence.
+  demonstrated. The fix preserves the label; the downstream consequence has
+  not been demonstrated end to end.
 - **No exploit was executed.**
 - Auto-capture only stores pages the **user chose to share**, which narrows the
   practical attack to "user is induced to share a malicious link" — a real but
   not trivial precondition.
-- Nothing here depends on the injection flakiness that prompted the
-  investigation; it is a separate, permanent defect.
+- This defect was independent of the variable injection-test results that
+  prompted the investigation.
