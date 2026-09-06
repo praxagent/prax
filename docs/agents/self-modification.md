@@ -18,7 +18,7 @@ Two deployment paths:
 3. **Verify** — runs tests + lint + app startup check (all must pass)
 4. **Deploy** — copies changed files to live repo + commits; Werkzeug's reloader auto-restarts
 
-> Path A relies on Werkzeug's file-watching reloader (`docker compose -f docker-compose.yml -f docker-compose.dev.yml`). In production (gunicorn), use Path B — hot-swap will not trigger a reload.
+> Path A relies on Werkzeug's file-watching reloader, i.e. `DEBUG=true` (`make restart-prax` and `make run-local-all-dev` / `-tail-dev` set it; `deploy/systemd/prax.service` and plain `make run-local-all` run `python app.py` without it — `DEBUG` defaults to `false` in `prax/settings.py` and the Makefile). Without the reloader, use Path B — hot-swap will not trigger a reload. There is no gunicorn in this repo. **Known gap (2026-09):** the dev overlay `docker-compose.dev.yml` defines services `app` and `teamwork`, neither of which exists in `docker-compose.yml` (the services are `prax`, `sandbox`, ...), so `docker compose -f docker-compose.yml -f docker-compose.dev.yml up` does not enable the reloader for the `prax` container.
 
 **Path B — PR (complex changes):**
 1. Same steps 1-2

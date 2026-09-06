@@ -84,10 +84,15 @@ cd ../prax-secrets-proxy && docker compose --profile forward up   # mitmproxy on
 # 3. Trust its CA in Prax's bundle (system CAs + the mitmproxy CA):
 cat "$(uv run python -m certifi)" ~/.mitmproxy/mitmproxy-ca-cert.pem > ~/PRAX/prax-proxy-ca-bundle.pem
 ```
-Then in Prax's env (note: **no** `OPENAI_BASE_URL` — forward mode catches it too):
+Then in Prax's env (note: **no** `OPENAI_BASE_URL` — forward mode catches it too).
+Set `PROXY_FORWARD_AUTH_TOKEN` in the proxy's `.env` and pass it in the proxy URL —
+the addon (`secrets_proxy/mitm_addon.py`) answers `407` to a caller without it once
+the token is set, and the username half is free-form and recorded in the audit
+line (leaving the token empty leaves the forward proxy open to any caller that can
+reach `:8786`):
 ```bash
-HTTPS_PROXY=http://secrets-proxy:8786
-HTTP_PROXY=http://secrets-proxy:8786
+HTTPS_PROXY=http://prax:<PROXY_FORWARD_AUTH_TOKEN>@secrets-proxy:8786
+HTTP_PROXY=http://prax:<PROXY_FORWARD_AUTH_TOKEN>@secrets-proxy:8786
 NO_PROXY=localhost,127.0.0.1        # don't route Prax's own loopback/UI through it
 SSL_CERT_FILE=/abs/path/prax-proxy-ca-bundle.pem
 REQUESTS_CA_BUNDLE=/abs/path/prax-proxy-ca-bundle.pem
@@ -117,9 +122,10 @@ every request body. Its compromise is total. Treat it like an HSM, not an app:
 - **Minimise reachability.** Bind loopback or the private container network only.
   Nothing outside the stack should be able to reach `:8785`/`:8786`. Reachability
   *is* the control — whoever can reach it can spend the keys.
-- **Require the token** (`PROXY_AUTH_TOKEN`) so only Prax, not any other process on
-  the network, can use it. Use **TLS** (or the MITM CA) so the token/traffic never
-  cross a wire in plaintext.
+- **Require the token** — `PROXY_AUTH_TOKEN` for the reverse proxy and
+  `PROXY_FORWARD_AUTH_TOKEN` for the forward proxy — so only Prax, not any other
+  process on the network, can use it. Both are **open when left empty**. Use
+  **TLS** (or the MITM CA) so the token/traffic never cross a wire in plaintext.
 - **Least privilege.** No extra tools in the image, read-only root filesystem where
   possible, drop Linux capabilities, no Docker socket, no host mounts.
 - **Never log secrets.** The proxy logs `method/host/status` only — never a key or

@@ -51,7 +51,7 @@ unswappable. With the seam, middleware rollout, a LangChain 2.x migration, or
 an owned-loop experiment are all changes to one module with the eval suite as
 the referee.
 
-## In-loop middleware (`AGENT_MIDDLEWARE_ENABLED`, default off)
+## In-loop middleware (`AGENT_MIDDLEWARE_ENABLED`, default on since 2026-08-07)
 
 Prax enforces safety at two layers, and they are complements, not rivals:
 
@@ -66,9 +66,11 @@ Prax enforces safety at two layers, and they are complements, not rivals:
 The middleware stack (LangChain 1.x `AgentMiddleware`, hooks like
 `wrap_tool_call` / `before_model` / `after_model`) is assembled in
 `loop_middleware.default_middleware()` and attached by `build_agent_loop()`
-only when `AGENT_MIDDLEWARE_ENABLED=true`. Off (the default), no `middleware`
-kwarg is passed at all — the compiled graph is identical to prior behaviour
-and keyless CI stays green.
+only when `AGENT_MIDDLEWARE_ENABLED=true` — the code default since 2026-08-07
+(`prax/settings.py`; the 2026-07-08 eval gate flipped it, see
+[flag-audit](../guides/flag-audit.md)). Set it to `false` and no `middleware`
+kwarg is passed at all — the compiled graph is identical to the pre-middleware
+behaviour; keyless CI runs with the default.
 
 Current stack when enabled:
 

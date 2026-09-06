@@ -1,11 +1,17 @@
 # Provenance laundering: untrusted web content becomes "private data"
 
 **Found:** 2026-08-07, while investigating stochastic injection resistance.
-**Status:** **FIXED 2026-08-07, unconditional.** The marker taint briefly
+**Status:** **FIXED 2026-08-07** — no flag of its own. The marker taint briefly
 shipped behind `PROVENANCE_MARKER_TAINT_ENABLED`; the flag was removed the same
 day at the maintainer's call, and he was right: the off-state preserved a
 security mislabelling, and a mislabelling with a switch attached is not a
 configuration choice. A test now fails if anyone reintroduces one.
+**Known gap (2026-09):** "no flag of its own" is not "unconditional". The marker
+check (`_carries_untrusted_marker`) runs inside `UntrustedContentTaint`, and
+`prax/agent/loop_middleware.py` adds that middleware to the stack only when
+`AGENT_MIDDLEWARE_ENABLED` is true (`prax/settings.py`, default `True` since
+2026-08-07). Turning the middleware seam off removes every banner — marker-based
+and tool-name-based alike; nothing at the governance perimeter re-applies it.
 **Severity:** the guard it defeats is the lethal-trifecta guard, so this is a
 security finding rather than a quality one.
 
@@ -85,7 +91,7 @@ Provenance is now a property of the **content**, not the transport.
 |---|---|---|
 | `raw_capture` stamps `provenance: untrusted-external` in the front-matter it already writes | no | pure metadata; the harness *knows* it is third-party at that moment |
 | `library_raw_*` reclassified `untrusted_source` | no | they were **neither** — MEDIUM risk with no provenance. A plain misclassification |
-| `UntrustedContentTaint` banners on the **marker**, whatever tool returned it | **no — unconditional** (flag removed same day) | the banner text is the one production already applies to every direct fetch, so this extends proven text to the places it was wrongly missing; an off-state that preserves a mislabelling is not a choice anyone should be offered |
+| `UntrustedContentTaint` banners on the **marker**, whatever tool returned it | **no flag of its own** (flag removed same day; inherits `AGENT_MIDDLEWARE_ENABLED`, see Status) | the banner text is the one production already applies to every direct fetch, so this extends proven text to the places it was wrongly missing; an off-state that preserves a mislabelling is not a choice anyone should be offered |
 
 The marker is read **only from the front-matter head (600 chars)**, so body
 text merely mentioning it cannot self-declare provenance — nor spoof it away.
@@ -135,6 +141,20 @@ punctuation.
   is the laundering of the label, not a demonstration of the downstream
   consequence.
 - **No exploit was executed.**
+- **Known gap (2026-09): promotion drops the marker.** `promote_raw`
+  (`prax/services/library_service.py`) copies a capture's body into a new note
+  and adds only `promoted_from` / `source_url` to the front-matter — not
+  `provenance`. The note is then read back through `library_note_read`, which
+  `prax/agent/trifecta.py` classifies as `private_data` and which prepends a
+  `# title` header rather than front-matter, so the marker check has nothing to
+  find. The laundering this page describes re-opens one hop later, for every
+  later turn and every other reader.
+- **The guard this defect targets is itself soft.** `LETHAL_TRIFECTA_GUARD` is
+  off by default; in `prax/agent/governed_tool.py` the guard body is wrapped in
+  `except Exception: pass`, so an internal error allows the sink silently; and
+  `trifecta.py` classifies `delegate_<spoke>` tools only by membership in its
+  `_DELEGATE_*` sets, so `delegate_sandbox`, `delegate_content_editor`,
+  `delegate_plugins` and `delegate_tasks` (among others) carry no leg at all.
 - Auto-capture only stores pages the **user chose to share**, which narrows the
   practical attack to "user is induced to share a malicious link" — a real but
   not trivial precondition.

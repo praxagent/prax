@@ -124,12 +124,24 @@ The observability services (Tempo, Loki, Promtail, Prometheus, Grafana) are defi
 ```bash
 # Full stack with observability:
 docker compose --profile observability up --build
-
-# Dev mode with observability:
-docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile observability up --build
 ```
 
-Open Grafana at **http://localhost:3002** (default credentials: admin/prax).
+(`docker-compose.dev.yml` overrides services that no longer exist in the base
+file — see the Known gap in [docker.md](docker.md) — so it is not a working
+dev overlay; the native `make run-local-all` brings up the same five services
+through its `_local-observability` step, which runs
+`docker compose --profile observability up` naming only those services.)
+
+Open Grafana at **http://localhost:3002**. The compose configuration sets an
+admin login (`GF_SECURITY_ADMIN_USER=admin` / `GF_SECURITY_ADMIN_PASSWORD=prax`)
+**and** enables anonymous access at the **Admin** role
+(`GF_AUTH_ANONYMOUS_ENABLED=true`, `GF_AUTH_ANONYMOUS_ORG_ROLE=Admin`), so no
+login is required: anyone who can reach the port is a Grafana admin, able to
+read every shipped log/trace and add or repoint datasources. The port is
+published as `3002:3000` (all interfaces) and, in the Tailscale shapes
+(`make tailscale-up`, the `tailscale` sidecar), served to the whole tailnet on
+`:3001`. Treat reachability of that port as admin access until anonymous access
+is disabled.
 
 ### Retention & disk usage (long-running stacks)
 

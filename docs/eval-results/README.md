@@ -6,11 +6,14 @@ is the accountability layer on top of the eval engine.
 
 > ## ⚠️ Every run here is a SAMPLE, not a full benchmark suite.
 >
-> `make eval-matrix` caps each benchmark at `MATRIX_LIMIT` cases (10 by default).
-> A public suite is typically hundreds to thousands of cases — GSM8K's test split
-> alone is 1,319 problems — so `gsm8k 1.00` here means **10 of 1,319 sampled**, not
-> a suite score. On top of that, benchmarks marked `dataset: seed` ran on a **small
-> case set authored in this repo**, not the public benchmark of that name.
+> `make eval-matrix` caps each benchmark at `MATRIX_LIMIT` cases (40 by default in
+> the `Makefile`; the 2026-07-24 record was run at 10). A public suite is typically
+> hundreds to thousands of cases — GSM8K's test split alone is 1,319 problems — so
+> `gsm8k 1.00` in that record means **10 of 1,319 sampled**, not a suite score. On
+> top of that, benchmarks marked `dataset: seed` ran on a **small case set shipped
+> in this repo** (a handful of items per adapter; not all are original — at least
+> one GSM8K seed item also appears in the public test split), not the public
+> benchmark of that name.
 >
 > **These numbers must never be quoted as benchmark scores, put on a comparison
 > chart against other systems, or compared to a published leaderboard.** The sample
@@ -27,6 +30,15 @@ is the accountability layer on top of the eval engine.
 > it prompted — refusing to record a high-error run (`assert_run_healthy`), excluding
 > executor failures rather than scoring them, and commit-stamping the run dir so
 > `resume` can't stitch stale cases — are what make later runs trustworthy.
+>
+> **Known gap (2026-09) — two error policies coexist.** The capability suite was
+> later changed to fail-closed (`prax/eval/__init__.py:is_infrastructure_error` +
+> `prax/eval/capability.py`): only recognised infrastructure faults are excluded,
+> and agent-attributable errors count as failures with their tokens. The benchmark
+> aggregator behind this scorecard (`prax/eval/benchmarks/__init__.py:_summarize`)
+> still drops *every* errored case from `pass_rate` and the token totals and reports
+> the count as `errors` (the `err%` column). So a matrix number excludes crashes that
+> the capability suite would score as failures; read `err%` alongside `pass rate`.
 
 ## Non-negotiable: aggregates only
 

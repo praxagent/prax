@@ -33,7 +33,7 @@ Then run **any** eval target with `CHEAP=1`:
 
 ```bash
 make eval CHEAP=1              # regression replay + goldens
-make eval-capability CHEAP=1  # the 7-case capability suite
+make eval-capability CHEAP=1  # the capability suite (prax/eval/capability_cases/, 30 cases as of 2026-09)
 make eval-benchmark BENCH=ifeval CHEAP=1
 ```
 
@@ -75,7 +75,7 @@ it's postpaid but stops at the ceiling.
 
 Regardless of provider, these are what prevent a loop from spending real money:
 
-- **`make ci` is keyless** — the ~2,450 logic tests make **zero** API calls.
+- **`make ci` is keyless** — the unit/logic test suite makes **zero** API calls.
   Only `make eval` (live replay + judge) costs anything.
 - **Goldens list for free.** `run_golden_suite` only scores when
   `PRAX_EVAL_GOLDENS=1`; otherwise it just lists tracked targets.

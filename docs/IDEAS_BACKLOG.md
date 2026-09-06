@@ -389,7 +389,7 @@ Distilled from reading these customer stories + cookbook recipes against the bug
 - **Why it matters**: Our system prompt is ~54k tokens (logged at startup; noted in the Phase 0 writeup). We re-send it on every turn. Anthropic's prompt caching gives a 90% discount on cache hits, which cuts per-turn cost dramatically and drops time-to-first-token meaningfully. **Speculative caching is especially relevant for scheduled tasks** — warm the cache at 08:55 so the 09:00 briefing fires near-instantly against a hot cache.
 - **Prax mapping**: `prax/plugins/prompts/system_prompt.md` is mostly stable between turns. Mark it as a cache breakpoint when constructing the LangChain message in `prax/agent/llm_factory.py` (Anthropic provider) or equivalent OpenAI request. Add a pre-warming hook in `prax/services/scheduler_service.py:_on_fire` that fires ~5 minutes before scheduled execution.
 - **Effort**: ~1-2 hours
-- **Status**: not started
+- **Status**: shipped as `PROMPT_CACHE_ENABLED` (`PromptPrefixCache` in `prax/agent/loop_middleware.py`, default off; 2026-08-08). Unit-tested only — no live cache hit measured yet, see the row in [`VERIFICATION_LEDGER.md`](VERIFICATION_LEDGER.md). The scheduled-task pre-warming hook is not started.
 
 ---
 
@@ -441,7 +441,7 @@ Distilled from reading these customer stories + cookbook recipes against the bug
 - **Why it matters**: `scripts/run_coverage_harness.py` is a one-off script that measures fallback rate. A proper eval framework runs deterministic goldens against (prompt, tool, model) combinations, tracks regressions across runs, and gates deploys. It's the long-form answer to "how do we know briefing quality actually improved after a change?"
 - **Prax mapping**: New `prax/eval/` module (there's already a stub — `prax/eval/runner.py` exists) expanded into a full eval runner with a goldens directory, per-eval config, regression tracking, and a report generator that feeds back into the Phase 0 docs.
 - **Effort**: ~2-3 days
-- **Status**: stub exists; full framework pending
+- **Status**: shipped — `prax/eval/` now holds the runner, goldens, the capability suite, multi-turn cases, benchmark adapters and the scorecard; see [`guides/eval-matrix.md`](guides/eval-matrix.md) and the committed record in [`eval-results/`](eval-results/).
 
 ### 12. Citations API for grounded output
 
@@ -576,7 +576,7 @@ Distilled from reading these customer stories + cookbook recipes against the bug
   to workspace plugins.
 - **Effort**: docs/design done (this entry + cloud-gpu.md); a reference `gpu_power`
   plugin ~½ day; auto-start orchestration ~1–2 days.
-- **Status**: design only — no behavior-changing code yet.
+- **Status**: reference `gpu_power` plugin shipped (`prax/plugins/tools/gpu_power/`, 2026-06-21; registers zero tools unless `GPU_POWER_BROKER_URL` is set). Auto-start orchestration not started.
 
 ### 17. Success-side procedural capture ("skills" done right) + similarity recall
 
@@ -1058,7 +1058,7 @@ Distilled from reading these customer stories + cookbook recipes against the bug
 - **Effort**: P1 plugin micro-loop ~3–5 days (it's wiring existing pieces: trace-diff
   notice + `plugin_write` + worktree + `make ci`/`make eval` gate + flag + checkpoint
   rollback); widening to prompts/routing is later and gated on fitness-function trust.
-- **Status**: not started — tracked in evals via
+- **Status**: P0 shipped propose-only — `prax/eval/self_regen.py` is the propose → verify → keep loop, `make eval-self-regen` runs it, and `SELF_REGEN_ENABLED` (default off) gates auto-apply; follow-ons are tracked in [`research/adopt-tracker.md`](research/adopt-tracker.md). Still tracked in evals via
   [`prax/eval/goldens/self_regeneration_judgment.yaml`](../prax/eval/goldens/self_regeneration_judgment.yaml).
   Composes with #19 (notice), #22 (governor), #23 (the loop engine), #26 (un-gameable
   gate), #17 (record/compound).

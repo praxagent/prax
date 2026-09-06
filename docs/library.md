@@ -7,8 +7,16 @@ operational boards, personal tracking — whatever the user wants to
 organize.  Humans and agents collaborate on the same corpus with
 explicit authorship provenance so neither steps on the other.
 
-The core shape is **Project → Notebook → Note** with three cross-cutting
+The core shape is **Space → Notebook → Note** with three cross-cutting
 features:
+
+> **Naming (2026-04 rename).** The Library grouping is a **Space** in the code, on
+> disk (`library/spaces/{slug}/`), in the HTTP routes (`/library/spaces/...`) and in
+> the tool names (`library_space_*`); it was called a "project" before 2026-04 and
+> was renamed to avoid clashing with TeamWork's top-level Project. The full
+> hierarchy is TeamWork › Project › Space › Notebook › Note. The prose below still
+> says "project" in places where it means the Library space; the identifiers are
+> the current ones.
 
 - **Sequenced notebooks** for ordered lessons / steps / chapters with
   progress tracking and a "current lesson" pointer
@@ -34,7 +42,7 @@ features:
 | System | Whose list? | Storage | Time scale | Visibility |
 |---|---|---|---|---|
 | **`agent_plan`** | Prax's **private** working memory | `workspaces/{user}/agent_plan.yaml` | Seconds to minutes (per user turn) | Read-only widget in the chat view; cleared at end of turn |
-| **Library Kanban** | The **human's** project board | `library/projects/{p}/.tasks.yaml` | Days to weeks (real project work) | Full Library UI, drag-and-drop, activity log, reminders |
+| **Library Kanban** | The **human's** project board | `library/spaces/{slug}/.tasks.yaml` | Days to weeks (real project work) | Full Library UI, drag-and-drop, activity log, reminders |
 
 **Why the wall matters:**
 
@@ -160,9 +168,9 @@ workspaces/{user_id}/library/
 │   └── 2026-04-08-140000-article.md
 ├── outputs/                        # generated briefs / reports / answers
 │   └── 2026-04-08-140000-health-check.md
-└── projects/
-    └── {project-slug}/
-        ├── .project.yaml           # project metadata
+└── spaces/
+    └── {space-slug}/
+        ├── .space.yaml             # space metadata
         ├── .tasks.yaml             # Kanban columns + tasks (when tasks_enabled)
         └── notebooks/
             └── {notebook-slug}/
@@ -181,7 +189,7 @@ overwritten on the next mutation.
 
 ## Data model
 
-### Project metadata (`.project.yaml`)
+### Space metadata (`.space.yaml`)
 
 ```yaml
 slug: learn-french
@@ -363,17 +371,19 @@ The queue drains once per turn so Prax doesn't nag on subsequent turns.
 
 ## Storage service (`prax/services/library_service.py`)
 
-### Projects
+### Spaces
+
+(The functions are named `*_space`; their slug parameter is still called `project` in the signatures.)
 
 | Function | Purpose |
 |---|---|
 | `ensure_library(user_id)` | Idempotent skeleton creation |
-| `create_project(user_id, name, description?, kind?, status?, target_date?, pinned?, tasks_enabled?, reminder_channel?)` | Create a project |
-| `update_project(user_id, project, ...)` | Update any subset of metadata fields |
-| `get_project(user_id, project)` | Full project detail with progress rollup |
-| `list_projects(user_id)` | All projects, pinned first then alphabetical |
-| `delete_project(user_id, project)` | Delete an empty project |
-| `create_learning_project(user_id, subject, title?, modules?, description?, target_date?, notebook_name?)` | One-call course creation: project + sequenced notebook + ordered lesson notes |
+| `create_space(user_id, name, description?, kind?, status?, target_date?, pinned?, tasks_enabled?, reminder_channel?)` | Create a space |
+| `update_space(user_id, project, ...)` | Update any subset of metadata fields (incl. `theme_hue`) |
+| `get_space(user_id, project)` | Full space detail with notebook + note counts |
+| `list_spaces(user_id)` | All spaces, pinned first then alphabetical |
+| `delete_space(user_id, project, archive_notes?)` | Delete a space (optionally archiving its notes first) |
+| `create_learning_space(user_id, subject, title?, modules?, description?, target_date?, notebook_name?, target_space?, expand?)` | One-call course creation: space + sequenced notebook + ordered lesson notes |
 
 ### Notebooks
 
@@ -487,11 +497,12 @@ on a card and you'll be pinged; mark it done and the ping disappears.
 
 ## Agent tools (`prax/agent/library_tools.py`)
 
-30 tools registered in the knowledge spoke (and the course spoke,
-alongside the legacy `course_*` tools).
+Registered in the knowledge spoke and the course spoke (alongside the legacy
+`course_*` tools); 45 `@tool` functions in `library_tools.py` as of 2026-09.
 
-**Projects**: `library_project_create`, `library_projects_list`,
-`library_project_update`, `library_create_learning_project`
+**Spaces**: `library_space_create`, `library_spaces_list`,
+`library_space_update`, `library_create_learning_space`,
+`library_space_generate_cover`
 
 **Notebooks**: `library_notebook_create`, `library_notebooks_list`,
 `library_notebook_sequence`, `library_notebook_reorder`
@@ -504,10 +515,16 @@ alongside the legacy `course_*` tools).
 `library_raw_promote`, `library_outputs_write`, `library_outputs_list`,
 `library_health_check`, `library_schedule_health_check`
 
-**Kanban**: `library_task_add`, `library_tasks_list`,
-`library_task_move`, `library_task_update`, `library_task_delete`,
-`library_task_comment`, `library_column_add`, `library_column_rename`,
-`library_column_remove`
+**Kanban**: `library_task_add`, `library_task_add_from_tool_output`,
+`library_tasks_list`, `library_task_move`, `library_task_update`,
+`library_task_delete`, `library_task_comment`, `library_column_add`,
+`library_column_rename`, `library_column_remove`
+
+**Archive / files / repos**: `library_archive_capture`, `library_archive_pdf`,
+`library_archive_list`; `library_files_list`, `library_file_read`; and the
+`space_repo_*` tools (`space_repo_add`, `space_repos_list`, `space_repo_status`,
+`space_repo_log`, `space_repo_pull`, `space_repo_set_write`, `space_repo_commit`,
+`space_repo_push`) when `SPACE_REPOS_ENABLED` is on
 
 Agent-created notes always get `author: prax`.  Human-authored notes
 come in through the TeamWork UI (the `POST /library/notes` endpoint
@@ -523,35 +540,39 @@ All routes are prefixed `/teamwork/library`.  TeamWork proxies them
 through `../teamwork/src/teamwork/routers/library.py` at the standard
 `/api` prefix.
 
-### Tree + projects
+### Tree + spaces
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/library` | Full tree (projects → notebooks → notes metadata) |
-| `POST` | `/library/projects` | Create project |
-| `GET` | `/library/projects/{p}` | Project meta + progress |
-| `PATCH` | `/library/projects/{p}` | Update project meta |
-| `DELETE` | `/library/projects/{p}` | Delete empty project |
+| `GET` | `/library` | Full tree (spaces → notebooks → notes metadata) |
+| `POST` | `/library/spaces` | Create space |
+| `GET` | `/library/spaces/{space}` | Space meta + progress |
+| `PATCH` | `/library/spaces/{space}` | Update space meta |
+| `DELETE` | `/library/spaces/{space}` | Delete space |
 
 ### Notebooks + notes
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/library/projects/{p}/notebooks` | Create notebook |
-| `PATCH` | `/library/projects/{p}/notebooks/{n}` | Update notebook meta (sequenced, current_slug) |
-| `POST` | `/library/projects/{p}/notebooks/{n}/reorder` | Batch reorder notes |
-| `DELETE` | `/library/projects/{p}/notebooks/{n}` | Delete empty notebook |
+| `POST` | `/library/spaces/{space}/notebooks` | Create notebook |
+| `PATCH` | `/library/spaces/{space}/notebooks/{n}` | Update notebook meta (sequenced, current_slug) |
+| `POST` | `/library/spaces/{space}/notebooks/{n}/reorder` | Batch reorder notes |
+| `DELETE` | `/library/spaces/{space}/notebooks/{n}` | Delete empty notebook |
 | `POST` | `/library/notes` | Create note (defaults to `author: human` — the UI is the caller) |
-| `GET` | `/library/notes/{p}/{n}/{slug}` | Read note |
-| `PATCH` | `/library/notes/{p}/{n}/{slug}` | Update note |
-| `DELETE` | `/library/notes/{p}/{n}/{slug}` | Delete note |
-| `PATCH` | `/library/notes/{p}/{n}/{slug}/move` | Move note |
-| `PATCH` | `/library/notes/{p}/{n}/{slug}/editable` | Toggle `prax_may_edit` |
-| `PATCH` | `/library/notes/{p}/{n}/{slug}/status` | Mark todo/done |
-| `GET` | `/library/notes/{p}/{n}/{slug}/backlinks` | Notes that wikilink to this one |
-| `POST` | `/library/notes/{p}/{n}/{slug}/refine` | Quick refine (preview, not applied) |
-| `POST` | `/library/notes/{p}/{n}/{slug}/apply-refine` | Apply approved refinement |
-| `POST` | `/library/notes/{p}/{n}/{slug}/refine-via-agent` | Full chat-agent refinement with tool access |
+| `GET` | `/library/notes/{space}/{n}/{slug}` | Read note |
+| `PATCH` | `/library/notes/{space}/{n}/{slug}` | Update note |
+| `DELETE` | `/library/notes/{space}/{n}/{slug}` | Delete note |
+| `PATCH` | `/library/notes/{space}/{n}/{slug}/move` | Move note |
+| `PATCH` | `/library/notes/{space}/{n}/{slug}/editable` | Toggle `prax_may_edit` |
+| `PATCH` | `/library/notes/{space}/{n}/{slug}/status` | Mark todo/done |
+| `GET` | `/library/notes/{space}/{n}/{slug}/backlinks` | Notes that wikilink to this one |
+| `POST` | `/library/notes/{space}/{n}/{slug}/refine` | Quick refine (preview, not applied) |
+| `POST` | `/library/notes/{space}/{n}/{slug}/apply-refine` | Apply approved refinement |
+| `POST` | `/library/notes/{space}/{n}/{slug}/refine-via-agent` | Full chat-agent refinement with tool access |
+
+Also under `/library/spaces/{space}/`: `cover` (GET/POST/DELETE, `cover/generate`), `files`,
+`wiki`, `flashcards`, `chat` + `chat/history`, and `model` — see
+`prax/blueprints/teamwork_routes.py` for the full list.
 
 ### Schema + index + tags
 
@@ -581,18 +602,18 @@ through `../teamwork/src/teamwork/routers/library.py` at the standard
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/library/projects/{p}/tasks` | List tasks (optionally `?column=...`) |
-| `POST` | `/library/projects/{p}/tasks` | Create task |
-| `GET` | `/library/projects/{p}/tasks/{id}` | Full task detail |
-| `PATCH` | `/library/projects/{p}/tasks/{id}` | Update task |
-| `DELETE` | `/library/projects/{p}/tasks/{id}` | Delete task |
-| `PATCH` | `/library/projects/{p}/tasks/{id}/move` | Move to column |
-| `POST` | `/library/projects/{p}/tasks/{id}/comment` | Add comment |
-| `GET` | `/library/projects/{p}/tasks/columns` | List columns |
-| `POST` | `/library/projects/{p}/tasks/columns` | Add column |
-| `PATCH` | `/library/projects/{p}/tasks/columns/{id}` | Rename column |
-| `DELETE` | `/library/projects/{p}/tasks/columns/{id}` | Remove empty column |
-| `POST` | `/library/projects/{p}/tasks/columns/reorder` | Reorder columns |
+| `GET` | `/library/spaces/{space}/tasks` | List tasks (optionally `?column=...`) |
+| `POST` | `/library/spaces/{space}/tasks` | Create task |
+| `GET` | `/library/spaces/{space}/tasks/{id}` | Full task detail |
+| `PATCH` | `/library/spaces/{space}/tasks/{id}` | Update task |
+| `DELETE` | `/library/spaces/{space}/tasks/{id}` | Delete task |
+| `PATCH` | `/library/spaces/{space}/tasks/{id}/move` | Move to column |
+| `POST` | `/library/spaces/{space}/tasks/{id}/comment` | Add comment |
+| `GET` | `/library/spaces/{space}/tasks/columns` | List columns |
+| `POST` | `/library/spaces/{space}/tasks/columns` | Add column |
+| `PATCH` | `/library/spaces/{space}/tasks/columns/{id}` | Rename column |
+| `DELETE` | `/library/spaces/{space}/tasks/columns/{id}` | Remove empty column |
+| `POST` | `/library/spaces/{space}/tasks/columns/reorder` | Reorder columns |
 
 ## Hugo publishing (`prax/services/hugo_publishing.py`)
 

@@ -1,6 +1,6 @@
 # Prax — AI Assistant
 
-Multi-channel AI assistant (TeamWork web UI, Discord, SMS/voice) powered by a LangGraph ReAct agent with 97+ tools.
+Multi-channel AI assistant (TeamWork web UI, Discord, SMS/voice) powered by a LangGraph ReAct agent and a governed tool set spread across the orchestrator and its spoke agents (tool counts drift — measure, don't quote; see Key Patterns).
 
 ## Quick Reference
 
@@ -10,6 +10,13 @@ Multi-channel AI assistant (TeamWork web UI, Discord, SMS/voice) powered by a La
   actionlint + `uv run ruff check .` + the full pytest suite with
   `-x` and the sandbox-dependent tests excluded.  If `make ci` is
   green, CI will be green.
+  **Known gap (2026-09):** local `make ci` is not fully keyless.
+  `prax/settings.py` loads `.env` itself (`env_file=".env"`), and
+  `tests/conftest.py` pins only 54 env keys (53 real aliases plus a
+  `NGROCK_URL` typo for `NGROK_URL`), so every other setting comes from
+  your `.env`. A module-scope import can therefore pass locally and fail
+  on keyless GitHub CI — the fixture docstring in
+  `tests/test_context_stats_endpoint.py` records one such case.
 - **Targeted test run:** `FLASK_SECRET_KEY=ci-test-key uv run pytest tests/<file>.py -x -q`
 - **Lint only:** `make lint` (or `uv run ruff check .`)
 - **Lint auto-fix:** `uv run ruff check --fix`
@@ -34,7 +41,8 @@ scripts/                # Utility scripts
 docs/                   # Documentation (architecture, agents, guides, research)
 ```
 
-The **sandbox** (coding agents + browser + desktop container) is its own repo,
+The **sandbox** (code execution + browser + desktop container; the coding-agent
+CLIs were deliberately removed from its image) is its own repo,
 `../prax-sandbox`, consumed via the `prax_sandbox_client` dependency (uv path
 source). Prax runs with or without it (`SANDBOX_ENABLED`); local or remote
 (`SANDBOX_DAEMON_URL`). See `docs/infrastructure/sandbox.md`.
@@ -54,12 +62,18 @@ degrades to keys-in-`.env` when unset. Integration doc:
 **Credential registry — the never-drift contract.** Every credential Prax
 supports lives in ONE canonical place: `prax/services/credential_registry.py`
 (mirror doc: `docs/security/credentials.md`), classified `PROXY_MODEL` (proxied
-today via base-URL), `PROXY_FORWARD` (Tier-2 transparent forward proxy, planned),
-or `PROXY_LOCAL` (in-process/inbound/own-infra, never proxyable). A drift-guard
+today via base-URL), `PROXY_FORWARD` (Tier-2 transparent forward proxy — shipped
+as an opt-in profile in the proxy repo, see `docs/security/deployment-topology.md`;
+the registry's own comment still says "planned"), or `PROXY_LOCAL`
+(in-process/inbound/own-infra, never proxyable). A drift-guard
 test (`tests/test_credential_registry.py`) **fails CI** if a `*_KEY`/`*_TOKEN`/
 `*_SECRET`/`*_API` field is added to `settings.py` without a registry row — so
 Prax and the proxy can't silently diverge. When you add any credential, add its
 registry row in the same change.
+**Known gap (2026-09):** the guard only sees `settings.py` fields. Credentials
+read straight from `os.environ` bypass it and have no registry row — e.g.
+`SENDGRID_API_KEY` in `prax/readers/reader_functions.py` and
+`HF_TOKEN`/`HUGGINGFACE_TOKEN` in `prax/eval/benchmarks/datasets.py`.
 
 ## Docs placement — federate by ownership
 
@@ -92,17 +106,22 @@ its README, while *how Prax uses it* lives in `docs/security/secrets-proxy.md`:
   directly; the layer linter (rule 4) fails CI if you do.  In-loop
   middleware (provenance tainting of untrusted tool results, per-step
   heartbeat) lives in `prax/agent/loop_middleware.py` behind
-  `AGENT_MIDDLEWARE_ENABLED` (default off; the eval gate governs the flip).
+  `AGENT_MIDDLEWARE_ENABLED` (default **on** since 2026-08-07 — see
+  `docs/guides/flag-audit.md`; set it to `false` to debug without middleware).
   Full stack contract: [`docs/architecture/lang-stack.md`](docs/architecture/lang-stack.md).
 - Settings are Pydantic fields with env var aliases in `prax/settings.py`
 - Plugin tools are loaded from `prax/plugins/tools/` and wrapped with governance
 - Sub-agents (spokes) live in `prax/agent/spokes/` — browser, content,
-  course, desktop, finetune, knowledge, memory, research, sandbox,
-  scheduler, sysadmin, **tasks**, workspace.  The orchestrator
-  delegates to them via the `delegate_<spoke>` tools.  The
-  orchestrator itself carries ~42 tools (delegations + kernel +
-  planning + meta) — well under the ~50-tool accuracy threshold
-  Anthropic documents.  When adding tools, prefer spoke-internal
+  course, desktop, environment, finetune, knowledge, memory, plugins,
+  professor, sandbox, scheduler, sysadmin, **tasks**, workspace (15
+  directories as of 2026-09; the research agent lives in
+  `prax/agent/research_agent.py`, and the memory spoke is deliberately
+  not registered — see `spokes/__init__.py`).  The orchestrator
+  delegates to them via the `delegate_<spoke>` tools.  With default
+  settings the orchestrator itself carries 45 tools, 17 of them
+  `delegate_*` (measured keyless via `build_default_tools()`, 2026-09;
+  42/15 with `SANDBOX_ENABLED=false`) — under the ~50-tool accuracy
+  threshold Anthropic documents.  When adding tools, prefer spoke-internal
   placement over orchestrator-level.
 - The Library (projects → notebooks → notes, Kanban, archive, inbox,
   outputs) lives in `prax/services/library_service.py` +
@@ -154,10 +173,9 @@ its README, while *how Prax uses it* lives in `docs/security/secrets-proxy.md`:
 - **Reliability & quality flags** — a set of opt-in features
   (cross-provider LLM failover, durable checkpoints + resume,
   continuous/decomposed evals + `make eval`, retrieval rerank/query
-  expansion + hybrid knowledge search, prompt selectivity, intent
-  clarification, deny-by-default tool boundaries, hallucination-guard
-  metrics) all gate behind env flags that **default to prior
-  behaviour** (so `make ci` stays green keyless).  All flags are in
+  expansion + hybrid knowledge search, prompt selectivity,
+  hallucination-guard metrics) gate behind env flags that **default to
+  prior behaviour** (so `make ci` stays green keyless).  All flags are in
   `prax/settings.py` + `.env-example`; the rationale and per-feature
   anchors are in
   [`docs/research/reliable-agentic-systems-bayer.md`](docs/research/reliable-agentic-systems-bayer.md).
@@ -165,12 +183,19 @@ its README, while *how Prax uses it* lives in `docs/security/secrets-proxy.md`:
   behaviour changes so the eval gate governs rollout.  **First eval-gate
   run (2026-07-08)** A/B'd every measurable flag — full verdicts in
   [`docs/research/flag-eval-campaign-2026-07-08.md`](docs/research/flag-eval-campaign-2026-07-08.md):
-  `AGENT_MIDDLEWARE_ENABLED` and `PROMPT_SELECTIVITY_ENABLED` are now the
-  recommended configuration (flipped in `.env-example`); intent
-  clarification and deny-by-default tool boundaries were REJECTED on
-  measured evidence (cost/correctness regressions) — don't flip them
-  without new data; retrieval rerank/expansion and attended quarantine
-  are deferred pending better eval coverage.  Code defaults stay off.
+  `AGENT_MIDDLEWARE_ENABLED` and `PROMPT_SELECTIVITY_ENABLED` are the
+  recommended configuration, and their **code defaults flipped to `True`
+  on 2026-08-07**; intent clarification (`INTENT_CLARIFICATION_ENABLED`)
+  and deny-by-default tool boundaries (`UNKNOWN_TOOL_HIGH_RISK`) were
+  REJECTED on measured evidence (cost/correctness regressions) and **both
+  flags and their code paths were deleted** in the 2026-08-07 flag audit
+  ([`docs/guides/flag-audit.md`](docs/guides/flag-audit.md)) — unknown
+  tools classify MEDIUM; retrieval rerank/expansion and attended
+  quarantine are deferred pending better eval coverage.
+  **Known gap (2026-09):** `CHECKPOINT_BACKEND=sqlite` needs
+  `langgraph-checkpoint-sqlite`, which is not a dependency — without it
+  `prax/agent/checkpoint.py` logs a warning and falls back to in-memory
+  (see `docs/architecture/lang-stack.md`).
 - **MCP server** (`prax/mcp/`, default-off) — exposes a curated,
   bearer-gated subset of Prax tools to *other* agents over the Model
   Context Protocol (`POST /mcp`, JSON-RPC, no SDK dep). Fail-closed
@@ -233,13 +258,25 @@ its README, while *how Prax uses it* lives in `docs/security/secrets-proxy.md`:
   public scorecard.  Real datasets cache under `$PRAX_EVAL_DIR/datasets/`
   (data-only, never committed).  Full how-to + prereqs:
   [`docs/guides/eval-matrix.md`](docs/guides/eval-matrix.md).  The
-  **historical results record** (`docs/eval-results/`, a committed,
-  trend-tracking scorecard for public accountability) is **planned, not
-  yet started** — held until the matrix is shaken down and the last
-  benchmark is added.  When it lands, its hard rule is **aggregates only
+  **historical results record** lives in
+  [`docs/eval-results/`](docs/eval-results/) — `MATRIX.md` plus one
+  aggregates-only JSON per run; `make eval-matrix` records by default
+  (`RECORD=0` skips).  Its hard rule is **aggregates only
   (pass-rate/tokens/cost/config/commit) — NEVER benchmark questions or
-  answers in the public repo** (contamination firewall); raw per-case
-  runs stay in `$PRAX_EVAL_DIR`.
+  answers in the public repo** (contamination firewall, enforced on the
+  record by `prax/eval/scorecard.py:assert_no_leak`); raw per-case runs
+  stay in `$PRAX_EVAL_DIR`.
+  **Known gap (2026-09):** the firewall is a repo-content rule, not an
+  agent-side one.  `source_read`/`source_list` in
+  `prax/agent/plugin_tools.py` contain paths with a string-prefix check
+  against the repo root, so any sibling directory whose name starts with
+  `prax` — including the default `../prax-evals` — is readable through the
+  sysadmin spoke, and `EVAL_MODE_TOOL_DENYLIST` in `prax/eval/_guards.py`
+  does not list the source tools.  Separately, eval "isolation"
+  (`_isolated_prax_scope` in `prax/eval/gaia_single.py`) only re-points
+  `settings.workspace_dir`; the sandbox container keeps the `/workspace`
+  mount it was started with, so sandbox-executed eval steps write into
+  that mounted user workspace.
 
 ## Solo dev flow (GitHub)
 

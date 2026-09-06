@@ -14,6 +14,10 @@ decisions about Prax's shape that want alignment before code lands.
 
 ## Status (2026-04-19)
 
+> **Status note (2026-09):** this is a snapshot from 2026-04-19 and has not been
+> updated since. Item-level status is tracked in
+> [`docs/research/adopt-tracker.md`](../research/adopt-tracker.md), not here.
+
 - **Tier A — all shipped.** ✅ A1 edit-with-linter, ✅ A5 bounded
   progress file, ✅ A9 `AGENTS.md` map.
 - **Tier B — all shipped.** ✅ B2 stateful sandbox viewer, ✅ B8

@@ -58,8 +58,8 @@ The GAIA harness runs Prax against external agentic benchmarks (GAIA,
 ## The isolation rule (important)
 
 **All eval data lives outside the repository.**  The single root is
-`$PRAX_EVAL_DIR` (default: `/Users/d7082791602/PROJECTS/prax-evals`),
-a sibling of the gpt-transcriber repo.  It is:
+`$PRAX_EVAL_DIR` (default: the repo-sibling `../prax-evals`, derived from the
+repo's own location in `prax/eval/__init__.py:_default_eval_dir`).  It is:
 
 - **Outside git** — not committed, not tracked, not visible to `git`.
 - **Outside `workspaces/`** — Prax's `workspace_list` / `workspace_read`
@@ -67,6 +67,16 @@ a sibling of the gpt-transcriber repo.  It is:
   CANNOT reach a sibling PROJECTS directory.
 - **Outside the sandbox container mount set** — the sandbox spoke
   runs in Docker with `workspaces/` mounted in, but NOT `prax-evals/`.
+
+**Known gap (2026-09):** the scoping above covers the `workspace_*` tools, not
+the sysadmin spoke's `source_read` / `source_list` / `source_grep`
+(`prax/agent/plugin_tools.py`).  Their containment check is a string-prefix
+test on the resolved path (`str(abs_path).startswith(str(_PROJECT_ROOT))`),
+so a sibling directory whose path merely *starts with* the repo's path —
+`../prax-evals`, `../prax-eval-battery` — passes it, `.json` is an allowed
+extension, and none of the three tools is in `EVAL_MODE_TOOL_DENYLIST`.
+Until the check is fixed, pointing `PRAX_EVAL_DIR` at a directory whose path
+does not share the repo directory's prefix closes this for that deployment.
 
 ### Why this matters: contamination prevention
 
@@ -106,9 +116,8 @@ $PRAX_EVAL_DIR/
 
 ## Compliance-scrubbed public receipts
 
-After a run, the runner also writes a **scrubbed** receipt to
-`gpt-transcriber/docs/research/receipts/gaia-run-{date}.md` that
-contains:
+The intended design is that a run also writes a **scrubbed** receipt to
+`docs/research/receipts/gaia-run-{date}.md` containing only:
 
 - `task_id` (public identifier)
 - Level, pass/fail, cost, token breakdown, wall time
@@ -116,8 +125,14 @@ contains:
 - Our retro notes (what went wrong, root cause, fix applied)
 
 The receipt **does NOT** contain the question text, the ground-truth
-answer, or Prax's verbatim response.  The `_receipt.py` dumper
-enforces this at runtime — not just discipline.
+answer, or Prax's verbatim response.
+
+**Known gap (2026-09):** no receipt dumper exists — there is no
+`prax/eval/_receipt.py` and no `docs/research/receipts/` directory; the
+scrubbing described here is a design intent, not an enforced runtime step.
+The committed public record that *does* exist is the aggregates-only
+scorecard under `docs/eval-results/` (`prax/eval/scorecard.py:assert_no_leak`
+enforces the no-questions/no-answers rule there).
 
 ## Pre-run contamination assertions
 
@@ -131,15 +146,35 @@ If any check fails, the runner refuses to run.  Fail-fast.
 
 ## Eval-mode tool denylist
 
-In eval mode, the orchestrator disables tools with unscoped
-filesystem access:
+`EVAL_MODE_TOOL_DENYLIST` (`prax/eval/_guards.py`) names the tools that must
+not be available while a suite runs.  As of 2026-09 it contains exactly:
 
-- `self_improve_*` (can touch the repo itself)
-- `plugin_write` (can write arbitrary files)
-- Direct shell access outside the sandbox container
+- `self_improve_start`, `self_improve_deploy`, `self_improve_rollback`,
+  `self_improve_status` (can touch the repo itself)
+- `plugin_write`, `plugin_activate`, `plugin_remove` (can write arbitrary
+  files)
 
-Keeps every *useful* capability tool (browser, fetch, notes, memory,
-research, sandbox, scheduler) enabled.
+There is **no** shell-access entry: `sandbox_shell` and `run_python` stay
+available (they execute in the sandbox container), as do browser, fetch,
+notes, memory, research and scheduler tools.
+
+**How it is applied, and its limits (2026-09):** `_isolated_prax_scope`
+(`prax/eval/gaia_single.py`) applies the list by replacing
+`tool_registry.get_registered_tools` with a filtering wrapper for the duration
+of the run.  That only reaches tools the *hub* registers by name.  Two known
+gaps follow:
+
+- The `plugin_*` and `self_improve_*` entries are spoke-internal tools of the
+  sysadmin spoke (`prax/agent/spokes/sysadmin/agent.py`, reached through
+  `delegate_sysadmin`, which is not denylisted), so the filter never sees
+  them.  `self_improve_*` tools are additionally only built when
+  `SELF_IMPROVE_ENABLED` is on (default off).
+- `prax/agent/orchestrator.py` binds `get_registered_tools` with a
+  from-import at module load, so an orchestrator module imported before the
+  scope is entered keeps calling the unfiltered function.
+
+No test exercises the denylist today.  Treat it as intent, not as an
+enforced boundary, until the filter is applied at the point of use.
 
 ## Running
 

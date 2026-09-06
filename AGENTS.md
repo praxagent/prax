@@ -13,8 +13,8 @@ alongside this file.
 
 Multi-channel AI assistant (TeamWork web UI, Discord, SMS/voice)
 powered by a LangGraph ReAct agent. Python 3.13 + Flask backend +
-Pydantic settings. Hub-and-spoke orchestrator with ~11 domain spokes
-and a plugin system. Package manager is **uv**, never pip.
+Pydantic settings. Hub-and-spoke orchestrator with 15 spoke agents
+(as of 2026-09) and a plugin system. Package manager is **uv**, never pip.
 
 Flask entry: [`app.py`](app.py). Agent entry: [`prax/agent/orchestrator.py`](prax/agent/orchestrator.py).
 Settings: [`prax/settings.py`](prax/settings.py).
@@ -40,11 +40,11 @@ Settings: [`prax/settings.py`](prax/settings.py).
 | Area | Path |
 |---|---|
 | Orchestrator + top-level tools | `prax/agent/` |
-| Sub-agents (spokes) — browser, content, course, memory, research, sandbox, scheduler, workspace, etc. | `prax/agent/spokes/` |
+| Sub-agents (spokes) — browser, content, course, desktop, environment, finetune, knowledge, memory, plugins, professor, sandbox, scheduler, sysadmin, tasks, workspace (the research agent is `prax/agent/research_agent.py`) | `prax/agent/spokes/` |
 | Business logic services (conversation, workspace, memory, library, teamwork) | `prax/services/` |
 | Flask route blueprints | `prax/blueprints/` |
 | Plugins + capability gateway | `prax/plugins/` |
-| Docker sandbox (Claude Code / OpenCode / Codex inside a container) | separate repo `../prax-sandbox/` (dep `prax_sandbox_client`) |
+| Docker sandbox (code execution, browser, desktop — the coding-agent CLIs were removed from the image) | separate repo `../prax-sandbox/` (dep `prax_sandbox_client`) |
 | Tests (unit + e2e) | `tests/` |
 | Utility scripts | `scripts/` |
 | Deployment modes: full compose, lite compose, k8s | `docker-compose.yml`, `docker-compose.lite.yml`, `k8s/` |
@@ -69,10 +69,11 @@ Settings: [`prax/settings.py`](prax/settings.py).
   (`prax/agent/agent_loop.py`) — never import `langchain.agents` /
   `langgraph` directly (layer rule 4 fails CI). In-loop middleware
   lives in `prax/agent/loop_middleware.py` behind
-  `AGENT_MIDDLEWARE_ENABLED`. See
+  `AGENT_MIDDLEWARE_ENABLED` (default on since 2026-08-07). See
   [`docs/architecture/lang-stack.md`](docs/architecture/lang-stack.md).
-- **Hub-and-spoke delegation.** The orchestrator holds ~44 tools
-  (12 `delegate_*` + kernel + planning/meta + trace introspection)
+- **Hub-and-spoke delegation.** The orchestrator holds 45 tools with
+  default settings (17 `delegate_*` + kernel + planning/meta + trace
+  introspection; measured via `build_default_tools()` 2026-09 — it drifts)
   and hands domain work off to focused spokes. Target ceiling:
   Anthropic's ~50-tool accuracy threshold. Don't pile more tools
   onto the orchestrator — add a spoke or put the tool inside an

@@ -221,7 +221,7 @@ User ──> OAuth2 Proxy (:4180) ──> TeamWork (:8000)
               └── Forwards X-Forwarded-User, X-Forwarded-Email headers
 ```
 
-TeamWork receives every request pre-authenticated. The user's email is in the `X-Forwarded-Email` header.
+TeamWork receives every request pre-authenticated. The user's email is in the `X-Forwarded-Email` header — but note that **TeamWork does not read `X-Forwarded-*` headers today** (`teamwork/src/teamwork/proxy_auth.py` verifies a signed JWT assertion header, not these). OAuth2 Proxy is therefore a *perimeter* control: it only protects TeamWork if TeamWork is reachable exclusively through the proxy (Step 5 below). For an in-app check that also rejects requests which bypass the proxy, see [Verified in-app check: `PROXY_AUTH_*`](#verified-in-app-check-proxy_auth_-iap--cloudflare-access).
 
 ### Step 1: Create a Google OAuth app
 
@@ -378,7 +378,7 @@ X-Forwarded-Preferred-Username: alice
 X-Forwarded-Groups: engineering,admins
 ```
 
-TeamWork can read these headers to identify the user and route to the correct workspace. No code changes needed until you implement multi-user workspace routing.
+TeamWork does **not** consume these headers as of 2026-09 — nothing in `teamwork/src/teamwork/` reads `X-Forwarded-User` / `X-Forwarded-Email`, and the app has no per-user workspace routing (see [Multi-user workspace routing](#multi-user-workspace-routing), which is a design sketch, not shipped code). They are available to a future routing layer; today they are informational only, and identity is enforced at the proxy.
 
 ---
 
@@ -517,7 +517,39 @@ After starting, access `http://localhost:9000/if/flow/initial-setup/` to create 
 
 ---
 
+## Verified in-app check: `PROXY_AUTH_*` (IAP / Cloudflare Access)
+
+The one authenticating-proxy integration TeamWork actually implements is the
+`PROXY_AUTH_*` middleware (`teamwork/src/teamwork/proxy_auth.py`, settings in
+`teamwork/src/teamwork/config.py`). It is **default off** (the middleware is not
+even added). When `PROXY_AUTH_ENABLED=true`, every request except the exempt paths
+(`PROXY_AUTH_EXEMPT_PATHS`, default `/health,/healthz`) must carry a **valid signed
+JWT assertion** from the fronting proxy, verified against the provider's JWKS —
+so a request that reaches the bound port *without* going through the proxy is
+rejected by the app itself (401), not only by the firewall. It is fail-closed:
+misconfiguration refuses to start.
+
+```env
+PROXY_AUTH_ENABLED=true
+PROXY_AUTH_PROVIDER=iap                 # preset: header x-goog-iap-jwt-assertion, ES256, Google JWKS
+PROXY_AUTH_AUDIENCE=<IAP backend-service audience>   # REQUIRED when enabled
+# or:
+# PROXY_AUTH_PROVIDER=cloudflare_access   # preset: header cf-access-jwt-assertion, RS256
+# PROXY_AUTH_AUDIENCE=<Access application AUD tag>
+# PROXY_AUTH_ISSUER=https://<team>.cloudflareaccess.com   # JWKS URL derived from this
+```
+
+`PROXY_AUTH_HEADER`, `PROXY_AUTH_JWKS_URL`, `PROXY_AUTH_ALGORITHMS` override the
+preset for other providers. OAuth2 Proxy and Authentik (above) do not emit a JWT
+assertion header in these presets, so with them the perimeter (Step 5) is the
+control. Full deployment scenarios: [network-exposure](../security/network-exposure.md)
+(Scenario B).
+
 ## Multi-user workspace routing
+
+> **Status (2026-09): design sketch, not implemented.** TeamWork reads no identity
+> header and Prax has no per-email workspace mapping; the flow below is what such a
+> layer would look like.
 
 Once authentication is in place and you're ready for multi-user, the app needs to map authenticated users to workspaces. The flow:
 

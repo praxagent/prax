@@ -1,6 +1,6 @@
 # Architecture
 
-Prax is organized in five layers with a clear direction of dependency: **blueprints → services → agent → plugins**. The hub-and-spoke architecture keeps each agent's tool count low while providing deep domain capabilities.
+Prax is organized in five layers with a clear direction of dependency: **blueprints → services → agent → plugins** (plus the legacy `readers/` helpers being migrated into plugins). The hub-and-spoke architecture keeps each agent's tool count low while providing deep domain capabilities.
 
 ## Contents
 
@@ -46,12 +46,10 @@ graph TB
         Orchestrator["ConversationAgent"]
         LLMFactory["LLM Factory"]
 
-        subgraph Tools["Orchestrator Tools (~24)"]
-            BuiltIn["Core (3)\nsearch, datetime, URL fetch"]
-            WS["Workspace (11)\nfiles, todos, planning"]
-            Sched["Scheduler (9)\ncron, reminders"]
-            Courses["Courses (6)\ntutoring"]
-            Spokes["Spoke Delegates (9)\nbrowser, content, sysadmin,\nsandbox, finetune, knowledge,\nresearch, vision, memory"]
+        subgraph Tools["Orchestrator Tools (45 as of 2026-09, sandbox enabled)"]
+            BuiltIn["Kernel (4)\nsearch, datetime, URL fetch, sandbox_shell"]
+            WS["Planning / meta / introspection (24)\nagent_plan_*, progress_*, user_notes_*, think,\nrun_python, trace_*, review_my_traces, doctor, ..."]
+            Spokes["Spoke Delegates (15)\nbrowser, content_editor, course, desktop,\nenvironment, finetune, knowledge, plugins,\nprofessor, research, sandbox, scheduler,\nsysadmin, tasks, workspace"]
             SA["Sub-Agent (2)\ndelegate_task, delegate_parallel"]
         end
     end
@@ -82,7 +80,7 @@ graph TB
         Todos["todos.json\n(user to-do list)"]
         Links["links.md\n(link history)"]
         Instructions["instructions.md\n(prompt reference)"]
-        AgentPlan["agent_plan.json\n(task decomposition)"]
+        AgentPlan["agent_plan.yaml\n(task decomposition)"]
     end
 
     subgraph Memory["Memory System (optional)"]
@@ -135,11 +133,11 @@ graph TB
     WS --> Workspace
     Spokes -->|sandbox| Container
     Container --> Exec
-    Sched --> ScheduleYAML
+    Spokes -->|scheduler| ScheduleYAML
     Spokes -->|finetune| Unsloth
     Spokes -->|finetune| vLLM
     vLLM --> LoRA
-    SA -->|codegen| Worktree
+    Spokes -->|sysadmin → self-improve| Worktree
     Spokes -->|sysadmin| PluginLoader
     PluginLoader --> BuiltInPlugins
     PluginLoader --> CustomPlugins
@@ -162,21 +160,21 @@ graph TB
     ConvoSvc -->|SMS / Discord reply| User
     Worktree -->|PR| Workspace
     Orchestrator -->|context inject| STM
-    Spokes -->|memory spoke| Qdrant
-    Spokes -->|memory spoke| Neo4j
+    Orchestrator -->|turn-end consolidation| Qdrant
+    Orchestrator -->|turn-end consolidation| Neo4j
     Embedder --> Qdrant
     STM --> Workspace
 ```
 
 ## Concepts — What Lives Where
 
-Prax is organized in five layers. Each has a clear job and a single direction of dependency: **blueprints → services → agent → plugins**.
+Prax is organized in five layers. Each has a clear job and a single direction of dependency: **blueprints → services → agent → plugins**, with `readers/` as a legacy fifth layer that is being folded into plugins.
 
 | Layer | Directory | What it is | Example |
 |-------|-----------|------------|---------|
 | **Blueprints** | `prax/blueprints/` | Flask route handlers — the HTTP surface. They receive webhooks from Twilio (voice, SMS) or serve static files. Blueprints know about *channels* but not about the agent. | `POST /sms` validates a Twilio signature, hands the message to `SmsService`, and returns a TwiML response. |
 | **Services** | `prax/services/` | Business logic that doesn't belong in the agent. A service encapsulates one capability: workspace git ops, Docker sandbox lifecycle, Playwright browser sessions, APScheduler cron, Hugo publishing, etc. Services are called *both* by blueprints (channel-facing) and by agent tools (capability-facing). They never call the agent directly. | `workspace_service.py` manages the per-user git repo — creating, reading, locking, committing. |
-| **Agent** | `prax/agent/` | The LangGraph ReAct loop and everything around it: the orchestrator, LLM factory, tool builders, governance, checkpointing. Tool builder files (`*_tools.py`) define groups of LangChain tools that thin-wrap a service. The agent layer decides *what* to do; services decide *how* to do it. | `sandbox_tools.py` exposes the direct-execution tools (`sandbox_shell`, `sandbox_install`, `sandbox_rebuild`, `sandbox_view/scroll/goto`, `desktop_*`) that delegate to `sandbox_service.py`; `delegate_sandbox` runs a headless sub-agent that writes and runs code directly in the container via `sandbox_shell`. The multi-round OpenCode coding-session tools were removed (2026-07) — Prax codes natively. |
+| **Agent** | `prax/agent/` | The LangGraph ReAct loop and everything around it: the orchestrator, LLM factory, tool builders, governance, checkpointing. Tool builder files (`*_tools.py`) define groups of LangChain tools that thin-wrap a service. The agent layer decides *what* to do; services decide *how* to do it. | `sandbox_tools.py` exposes the direct-execution tools (`sandbox_shell`, `sandbox_install`, `sandbox_rebuild`, `sandbox_view/scroll/goto`, `desktop_*`) that reach the container through `prax/services/sandbox_bridge.py` (the `prax_sandbox_client` adapter); `delegate_sandbox` runs a headless sub-agent that writes and runs code directly in the container via `sandbox_shell`. The multi-round OpenCode coding-session tools were removed (2026-07) — Prax codes natively. |
 | **Plugins** | `prax/plugins/` | Hot-swappable extensions discovered at startup. Each plugin lives in `plugins/tools/<name>/plugin.py`, exports a `register()` function returning LangChain tools, and can be created/modified/rolled back at runtime — by the agent itself. The plugin system also manages the system prompt and LLM routing config. | `plugins/tools/news/plugin.py` provides the unified `news` tool with actions for briefings, RSS checking, and audio. |
 | **Readers** | `prax/readers/` | Legacy content-extraction helpers (ArXiv, NPR audio, web scraping). Being migrated into plugins. New code should use or create a plugin instead. | `readers/news/npr_top_hour.py` fetches the latest NPR podcast URL — now called by the `news` plugin. |
 
@@ -236,12 +234,12 @@ Prax has a two-layer memory system inspired by human cognition, implemented acro
                              └─────────────────┘
 ```
 
-**Short-term memory (STM)** is a per-user JSON scratchpad stored in the workspace (`{workspace}/memory/stm.json`). It requires no infrastructure — works even without the memory Docker profile. The orchestrator injects STM entries into the system prompt on every turn.
+**Short-term memory (STM)** is a per-user JSON scratchpad stored in the workspace (`{workspace}/memory/stm.json`). It requires no infrastructure — works even when Qdrant/Neo4j are unreachable. The orchestrator injects STM entries into the system prompt on every turn.
 
-**Long-term memory (LTM)** requires Qdrant (vector store) and Neo4j (knowledge graph), started via `--profile memory`. Memories are stored as both dense embeddings (semantic similarity) and sparse TF-IDF vectors (keyword matching) in Qdrant, plus entities, typed relations, temporal events, and causal links in Neo4j (multi-graph separation). At query time, all three retrieval arms (dense, sparse, graph neighbourhood) run in parallel and results are fused via **query-adaptive weighted RRF** — factual queries boost sparse+graph, semantic queries boost dense.
+**Long-term memory (LTM)** requires Qdrant (vector store) and Neo4j (knowledge graph) — both are compiled into the `prax` Docker image and start with the container (no compose profile; `make run-local-all` starts them as containers for a host-process Prax). Memories are stored as both dense embeddings (semantic similarity) and sparse TF-IDF vectors (keyword matching) in Qdrant, plus entities, typed relations, temporal events, and causal links in Neo4j (multi-graph separation). At query time, all three retrieval arms (dense, sparse, graph neighbourhood) run in parallel and results are fused via **query-adaptive weighted RRF** — factual queries boost sparse+graph, semantic queries boost dense.
 
 **Consolidation** converts conversation traces into durable memories: LLM extraction of entities/relations/facts/temporal events/causal links → **confidence validation gate** (≥0.6 → LTM, below → STM pending review) → graph upsert with **bi-temporal edges** (valid_from/valid_until for supersession tracking) → vector upsert → **dual decay** (Ebbinghaus time-based + interaction-based, using the stronger signal) → daily summaries.
 
 **Embedding providers** are pluggable: OpenAI (default, cloud), Ollama (local, no data leaves your machine), or fastembed (in-process, zero dependencies). The system gracefully degrades — if Qdrant or Neo4j are unreachable, LTM returns empty results without errors. STM always works.
 
-The memory spoke agent exposes 10 tools for explicit memory operations (remember, recall, forget, entity lookup, graph query, etc.). See [Memory deep-dive](../infrastructure/memory.md) for full documentation.
+A memory spoke (`prax/agent/spokes/memory/`) with explicit remember/recall/forget/graph tools exists but is **deliberately not registered** with the orchestrator (see the note in `prax/agent/spokes/__init__.py`): memory writes happen automatically through the turn-end consolidation hook and reads through the per-turn context injection. See [Memory deep-dive](../infrastructure/memory.md) for full documentation.

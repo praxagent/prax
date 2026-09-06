@@ -284,7 +284,11 @@ Per-user scratchpad stored as workspace JSON files at `{workspace}/memory/stm.js
 
 ## Long-Term Memory (LTM)
 
-Requires `MEMORY_ENABLED=true` and the memory Docker profile (`docker compose --profile memory up`).
+Requires `MEMORY_ENABLED=true` (the default since 2026-04) plus a reachable Qdrant
+and Neo4j. There is no `memory` compose profile: in the compose deployment both
+run **inside the `prax` container image** (see the `Dockerfile`), and
+`make run-local-all` starts them as `docker run` containers (`_local-qdrant`,
+`_local-neo4j` in the `Makefile`).
 
 ### Vector Store (Qdrant)
 
@@ -433,7 +437,10 @@ where `k = 60` (standard constant from Cormack et al., 2009) and `weight_i` come
 - **Re-sort** and take top-k
 
 **Step 6: Reinforcement**
-- Returned memories get their `access_count` and `interaction_epoch` updated
+- Returned memories get their `access_count` and `last_accessed` updated
+  (`vector_store.reinforce_memory`); `interaction_epoch` is only written when a
+  caller passes it, and the retrieval path does not (`retrieval.py` calls
+  `reinforce_memory(r.memory_id)`)
 - This implements the "strengthen on recall" pattern (MemoryBank, Zhong et al., 2023)
 
 #### Optional precision passes (opt-in)
@@ -572,7 +579,7 @@ Converts episodic conversation traces into durable memories.
 | Trigger | When |
 |---------|------|
 | **Auto (per-turn)** | Orchestrator calls `maybe_consolidate(user_id)` after every turn; runs the full pipeline once every 5 turns per user |
-| **Scheduled** | Every `MEMORY_CONSOLIDATION_INTERVAL` seconds (default: 3600 = 1 hour) — _historical, prefer the per-turn auto trigger_ |
+| **Scheduled** | _Historical — no longer exists._ `MEMORY_CONSOLIDATION_INTERVAL` is still defined in settings but has no reader; the per-turn trigger is the only automatic one |
 | **Manual** | Agent calls `memory_consolidate` tool |
 
 > **History note:** Before April 2026, consolidation was documented as "scheduled" but never actually wired up — the function existed but had no callers, so memory stayed empty even though the infrastructure was in place. This was fixed by adding a per-turn auto-consolidation hook in `prax/services/memory_service.py:maybe_consolidate()` invoked from the orchestrator's turn-end block. Frequency is bounded by `_CONSOLIDATE_EVERY_N_TURNS = 5` to amortize the LLM extraction cost.
@@ -647,10 +654,25 @@ time_factor = exp(-λ_t × days_since_last_access)
 where λ_t = ln(2) / MEMORY_DECAY_HALFLIFE_DAYS
 ```
 
-With the default half-life of 7 days:
+What a **single** pass computes, with the default half-life of 7 days:
 - After 7 days without access: importance halves (0.8 → 0.4)
 - After 14 days: quarters (0.8 → 0.2)
 - After 21 days: eighths (0.8 → 0.1)
+
+**Known gap (2026-09): repeated passes compound, so the curve above is not what
+the store experiences.** `vector_store.decay_memories` multiplies the **stored**
+importance by `exp(-λ_t × days_since_last_access)` and writes the result back
+(`set_payload`), but nothing advances a "last decayed" timestamp — `days_elapsed`
+is always measured from `last_accessed`. The next pass therefore multiplies the
+already-decayed value by the full factor again, and the exponent accumulates
+(sum of the ages at each pass, not the age). The pass runs unconditionally inside
+every consolidation (`consolidation.py`), i.e. every 5 turns per user
+(`memory_service._CONSOLIDATE_EVERY_N_TURNS`), not once a day; the
+`last_decay_run` value written to consolidation state is never read. Active users
+prune their memories fastest. `graph_store.decay_graph` has the same shape
+(`SET e.importance = e.importance * exp(-$lambda * days_elapsed)`). Only
+memories that surface in the top-k of a recall (and so get `last_accessed`
+reset) escape it.
 
 ### Interaction-based decay
 
@@ -660,6 +682,13 @@ where λ_i = ln(2) / HALFLIFE_INTERACTIONS  (default: 100 interactions)
 ```
 
 A user who chats daily and one who chats weekly should have different effective decay rates. Interaction-based decay measures "how much has happened since this memory was last relevant?" rather than just clock time.
+
+**Known gap (2026-09): interaction decay is inert.** The per-user epoch counter is
+advanced by `vector_store.increment_interaction_epoch`, reached only through
+`MemoryService.track_interaction` — which has no production callers (tests only,
+as of 2026-09; the orchestrator never calls it). The epoch therefore stays at 0,
+`interaction_gap` is 0 for every memory, and `interaction_factor` is 1.0, so
+`min(time_factor, interaction_factor)` is always the time factor.
 
 ### Effective decay
 
@@ -673,7 +702,7 @@ The stronger decay signal wins. This handles both:
 
 Below 0.02: memory is pruned.
 
-**Reinforcement:** Accessing a memory resets both its `last_accessed` timestamp and `interaction_epoch`, restarting both decay clocks. Frequently recalled memories persist; unused ones fade — just like human memory.
+**Reinforcement:** Accessing a memory resets its `last_accessed` timestamp and bumps `access_count` (`reinforce_memory`). Its `interaction_epoch` is updated only when the caller passes the current epoch, which the retrieval path does not do — so in practice only the time clock restarts. Frequently recalled memories persist; unused ones fade (subject to the compounding gap above).
 
 **Graph decay** uses a 2× longer half-life (14 days default) since entity relationships are more stable than episodic memories.
 
@@ -700,7 +729,7 @@ The memory system supports multiple embedding backends for dense vectors. Your c
 
 - **OpenAI** — Best quality, lowest friction. Use this if you're already using OpenAI for LLM calls and don't have strict data privacy requirements. The embedding data sent is just the text being stored/queried — not conversation history.
 
-- **Ollama** — Best balance of quality and privacy. Use this if you want no data leaving your machine, have a reasonably capable CPU (or GPU), and don't mind running one more service. `nomic-embed-text` is the recommended model — it's small, fast, and punches above its weight on retrieval benchmarks. With Docker Compose (`--profile ollama`), setup is one command.
+- **Ollama** — Best balance of quality and privacy. Use this if you want no data leaving your machine, have a reasonably capable CPU (or GPU), and don't mind running one more service. `nomic-embed-text` is the recommended model — it's small, fast, and punches above its weight on retrieval benchmarks. With Docker Compose (`--profile local-llm`), setup is one command.
 
 - **fastembed (local)** — Zero-dependency fallback. Use this if you want the absolute simplest setup or as an automatic fallback when other providers fail. Quality is lower (384-dim vs 1536-dim means less semantic resolution), but for a personal assistant's memory the difference is often acceptable.
 
@@ -720,8 +749,8 @@ EMBEDDING_MODEL=text-embedding-3-small
 For users running local models who don't want to send data to OpenAI. Uses Ollama's `/api/embed` endpoint. Requires Ollama running with an embedding model pulled.
 
 ```bash
-# Docker Compose (recommended)
-docker compose --profile memory --profile ollama up --build
+# Docker Compose (recommended) — the Ollama service is behind the `local-llm` profile
+docker compose --profile local-llm up --build
 docker compose exec ollama ollama pull nomic-embed-text
 
 # Or standalone Ollama (if already installed)
@@ -734,7 +763,7 @@ EMBEDDING_MODEL=nomic-embed-text
 OLLAMA_BASE_URL=http://localhost:11434   # or http://ollama:11434 in Docker
 ```
 
-Other good Ollama embedding models: `mxbai-embed-large` (1024-dim, higher quality), `all-minilm` (384-dim, very fast).
+Other Ollama embedding models exist (`mxbai-embed-large`, 1024-dim; `all-minilm`, 384-dim), but see the dimension note below before switching: the collection width for the `ollama` provider is fixed at 768.
 
 ### Sentence Transformers / fastembed (local, fallback)
 
@@ -744,7 +773,7 @@ Lightweight local embeddings via the `fastembed` library. Uses `BAAI/bge-small-e
 EMBEDDING_PROVIDER=local
 ```
 
-The vector store automatically adapts its collection dimensions to match the embedding model.
+The vector store sizes the `dense` vector **per provider, not per model**: `_PROVIDER_DIM = {"openai": 1536, "ollama": 768, "local": 384}` in `prax/services/memory/vector_store.py`, applied when the `prax_memories` collection is created. A model whose width differs from its provider's entry (an Ollama model other than a 768-dim one, or `text-embedding-3-large` on OpenAI) does not fit the collection; switching width means deleting and re-creating the collection as described above.
 
 ### Sparse vectors
 
@@ -793,7 +822,7 @@ The memory spoke provides 10 tools via `delegate_memory`:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MEMORY_ENABLED` | `false` | Enable LTM (requires Qdrant + Neo4j) |
+| `MEMORY_ENABLED` | `true` | Enable LTM (requires Qdrant + Neo4j); default `true` in `prax/settings.py` since 2026-04 |
 | `QDRANT_URL` | `http://localhost:6333` | Qdrant vector store endpoint |
 | `NEO4J_URI` | `bolt://localhost:7687` | Neo4j graph database endpoint |
 | `NEO4J_USER` | `neo4j` | Neo4j username |
@@ -801,7 +830,7 @@ The memory spoke provides 10 tools via `delegate_memory`:
 | `EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model name |
 | `EMBEDDING_PROVIDER` | `openai` | Embedding provider: `openai`, `ollama`, or `local` |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama endpoint (when provider=ollama) |
-| `MEMORY_CONSOLIDATION_INTERVAL` | `3600` | Seconds between auto-consolidation runs |
+| `MEMORY_CONSOLIDATION_INTERVAL` | `3600` | **Unused** — defined in `prax/settings.py` but no code reads it (as of 2026-09). Consolidation cadence is the per-turn trigger, once every 5 turns per user |
 | `MEMORY_STM_MAX_ENTRIES` | `50` | Max STM entries before LLM compaction |
 | `MEMORY_DECAY_HALFLIFE_DAYS` | `7.0` | Ebbinghaus decay half-life in days |
 
@@ -827,18 +856,18 @@ components:
 ### Docker Compose (recommended)
 
 ```bash
-# Core services + memory infrastructure
-docker compose --profile memory up --build
+# Core services (Qdrant + Neo4j are bundled inside the prax container image)
+docker compose up --build
 
 # With observability too
-docker compose --profile memory --profile observability up --build
+docker compose --profile observability up --build
 ```
 
-This starts Qdrant (port 6333) and Neo4j (port 7474/7687) alongside the core services. Set `MEMORY_ENABLED=true` in `.env`.
+There is no `memory` profile (the profiles defined in `docker-compose.yml` as of 2026-09 are `local-llm`, `observability`, `secrets-proxy`, `tailscale`). Qdrant (`:6333`) and Neo4j (`:7474`/`:7687`) run inside the `prax` container and are **not published to the host** by compose — the `prax` service publishes only `3000`, `8000`, `5001` and `4040`. `MEMORY_ENABLED` defaults to `true`. (Under `make run-local-all` they are separate containers published on the host — on all interfaces; see `docs/security/network-exposure.md`.)
 
 ### Neo4j Browser
 
-Open [http://localhost:7474](http://localhost:7474) to explore the knowledge graph visually. Login with `neo4j` / `prax-memory` (or your configured password).
+Open [http://localhost:7474](http://localhost:7474) to explore the knowledge graph visually (reachable on the host under `make run-local-all`; under compose it is inside the `prax` container — `docker compose exec prax curl -s localhost:7474`, or add your own port mapping). Login with `neo4j` / `prax-memory` (or your configured password).
 
 Useful Cypher queries:
 
@@ -859,7 +888,7 @@ ORDER BY connections DESC
 
 ### Qdrant Dashboard
 
-Open [http://localhost:6333/dashboard](http://localhost:6333/dashboard) to explore stored memories, view collection stats, and run test queries.
+Open [http://localhost:6333/dashboard](http://localhost:6333/dashboard) to explore stored memories, view collection stats, and run test queries (same reachability note as Neo4j above: host-published under `make run-local-all`, in-container under compose).
 
 ---
 
@@ -928,7 +957,7 @@ The memory system follows Prax's pattern of graceful degradation:
 | `MEMORY_ENABLED=false` | STM works normally. LTM tools return "Memory system not available." |
 | Qdrant unreachable | Vector operations log warnings and return empty results |
 | Neo4j unreachable | Graph operations log warnings and return empty results |
-| Embedding API fails | Falls back to local fastembed, then to zero vectors |
+| Embedding API fails | Falls back to local fastembed; if that fails too, `embed_texts` raises `EmbeddingUnavailableError` and the write fails loudly — zero vectors are never fabricated (changed 2026-08) |
 | LLM consolidation fails | Logs warning, skips consolidation run |
 | Memory profile not started | Prax starts normally, memory context injection returns empty |
 

@@ -20,9 +20,18 @@ The entire pipeline is gated behind `FINETUNE_ENABLED=true` so the app runs norm
 
 ## Self-Improvement Cycle
 
+> **Known gap (2026-09):** nothing schedules this cycle. `run_self_improvement_cycle()`
+> exists in `prax/services/finetune_service.py` but has **no caller** anywhere in
+> `prax/`, `app.py` or `scripts/` — no scheduler registration, no cron. The steps below
+> are driven one at a time through the `finetune_*` tools (`finetune_harvest`,
+> `finetune_start`, `finetune_status`, `finetune_verify`, `finetune_load`,
+> `finetune_promote`, `finetune_rollback`, `finetune_list_adapters`) via
+> `delegate_finetune`. The "Daily Cron" participant is the intended design, not the
+> wiring.
+
 ```mermaid
 sequenceDiagram
-    participant Sched as Daily Cron
+    participant Sched as Trigger (finetune_* tools today, daily cron intended but not wired)
     participant FT as Finetune Service
     participant DB as SQLite (Conversations)
     participant Disk as Training Data (JSONL)
@@ -30,7 +39,7 @@ sequenceDiagram
     participant vLLM as vLLM Server
     participant Reg as Adapter Registry
 
-    Note over Sched: Daily at 2 AM (configurable)
+    Note over Sched: intended daily at 2 AM, no scheduler calls this today
     Sched->>FT: run_self_improvement_cycle()
     FT->>DB: harvest_corrections(since_hours=24)
     DB-->>FT: User correction pairs

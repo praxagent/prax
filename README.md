@@ -4,11 +4,11 @@
 
 **Your personal AI assistant — on the web, Discord, SMS, and voice.**
 
-97+ built-in tools, extensible via self-modifying plugins. Git-backed memory. Runs on your own server.
+A hub-and-spoke agent with built-in tools, extensible via self-modifying plugins. Git-backed memory. Runs on your own server.
 
 Designed to work with the optional [**TeamWork**](https://github.com/praxagent/teamwork) — a Slack-like web UI with real-time chat, Kanban board, file browser, terminal, and browser screencast.
 
-Designed to work with the optional [**prax-sandbox**](https://github.com/praxagent/prax-sandbox) — a plug-and-play code-execution sandbox: a long-running Docker container running the coding agents (OpenCode / Claude Code / Codex), a headless + desktop Chromium (CDP + noVNC), and a full toolchain (TeX, ffmpeg, pandoc, hugo, …).
+Designed to work with the optional [**prax-sandbox**](https://github.com/praxagent/prax-sandbox) — a plug-and-play code-execution sandbox: a long-running Docker container with a shell/Python execution surface, a headless + desktop Chromium (CDP + noVNC), code-server, and a full toolchain (TeX, ffmpeg, pandoc, hugo, …). The coding-agent CLIs it used to bundle (OpenCode / Claude Code / Codex) were removed in 2026-07 so the container needs no model API key; Prax codes with its own tools.
 
 <img src="assets/prax-header-image.png" alt="Prax">
 
@@ -36,7 +36,8 @@ Designed to work with the optional [**prax-sandbox**](https://github.com/praxage
 
 ```bash
 git clone https://github.com/praxagent/prax.git && cd prax
-git clone https://github.com/praxagent/teamwork.git ../teamwork  # web UI
+git clone https://github.com/praxagent/teamwork.git ../teamwork          # web UI (build context)
+git clone https://github.com/praxagent/prax-sandbox.git ../prax-sandbox  # sandbox image source (build context)
 cp .env-example .env                      # configure (see below)
 ```
 
@@ -52,7 +53,9 @@ OPENAI_KEY=sk-...
 PRAX_USER_ID=usr_alice
 ```
 
-Prax will **refuse to start** without `PRAX_USER_ID` when running in Docker. On first run it creates the workspace directory and associates it with your identity automatically.
+Prax will **refuse to start** without `PRAX_USER_ID` when running in Docker. On first boot it creates `workspaces/<PRAX_USER_ID>` (the service-state path is derived from the variable before any user exists — `prax/services/state_paths.py`).
+
+> **Known gap (2026-09):** the user record created by your *first message* gets its own `usr_<id8>` workspace (`identity_service._canonical_workspace`), not `<PRAX_USER_ID>`. On the *next* boot `reconcile_workspace_dir()` (`prax/services/identity_service.py`) repoints that user to `<PRAX_USER_ID>` and only symlinks the old directory when the new one does not already exist — which it does, from boot one — so nothing is migrated and notes/files written in the first session drop out of view after the first restart. Deployments whose primary user already has `workspace_dir == PRAX_USER_ID` are unaffected. `make run-local-all` also injects `PRAX_USER_ID`, so the native path is exposed on a fresh identity DB too.
 
 #### Lite mode (recommended for laptops)
 
@@ -73,6 +76,26 @@ docker compose up --build
 ```
 
 **2 containers by default** (`prax` + `sandbox`). Uses the full `Dockerfile` (JDK 21, glibc Qdrant binary) — more memory headroom for Neo4j's JVM and faster GC, suited to servers. Same bundled layout as lite: Prax + TeamWork + Qdrant + Neo4j + ngrok all run inside the `prax` container. Opt-in profiles add services alongside: `--profile local-llm` starts Ollama, `--profile observability` starts Grafana + Tempo + Prometheus + Loki (see below).
+
+> **Known gap (2026-09): as shipped, neither compose file in this repo brings Prax up.**
+> Both `docker-compose.yml` and `docker-compose.lite.yml` health-check the `sandbox`
+> service with `curl http://localhost:4096/global/health`, but the prax-sandbox image
+> removed that server on 2026-07-20 (its own `sandbox/Dockerfile` and `docker-compose.yml`
+> use `pgrep -x supervisord`), and the `prax` service has `depends_on: sandbox:
+> condition: service_healthy` — so the sandbox never reports healthy and `prax` never
+> starts. Until the healthcheck is fixed, use the native path, `make run-local-all`
+> (see [Run without Docker](#run-without-docker)), which starts the sandbox from
+> prax-sandbox's **own** compose file; or start the sandbox from that file directly
+> (`cd ../prax-sandbox && WORKSPACE_DIR=<absolute path of the user's workspace dir> docker compose up -d`)
+> and run Prax on the host.
+>
+> Also know what these two compose files do once they are fixed: the `sandbox` service
+> is passed `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` from your `.env` and bind-mounts this
+> whole repo — `.env` included — read-write at `/source`. The keyless, `/workspace`-only
+> sandbox posture described in
+> [`docs/security/sandbox-execution-boundary.md`](docs/security/sandbox-execution-boundary.md)
+> is what prax-sandbox's own compose (and therefore `make run-local-all`) gives you,
+> not what these two files give you today.
 
 Both modes expose the same UI at **http://localhost:3000** and publish the same host ports (3000, 5001, 8000, 4040). Qdrant and Neo4j run inside the `prax` container and are not published to the host by default — if you want direct access, add a `ports:` entry (`6333:6333`, `7474:7474`) to `docker-compose.yml` or use `docker compose exec prax ...`.
 
@@ -246,8 +269,14 @@ make shutdown          # stop everything run-local-all started (processes, conta
 > from scratch; `SANDBOX_PATH=/nonexistent` skips it for a core-only run.) The
 > `Fresh-install integration` GitHub workflow (`.github/workflows/fresh-install.yml`,
 > nightly/manual) runs the *same* `make integration` on a **clean runner** that clones
-> all three repos — so "works on a fresh download," not just on a machine you've been
-> hacking on, is continuously proven.
+> all three repos — the intent is that "works on a fresh download," not just on a
+> machine you've been hacking on, is proven every night.
+> **Known gap (2026-09):** it is not proving that today. The workflow last passed on
+> 2026-06-29 and every run since 2026-06-30 has failed (69 consecutive failures as of
+> 2026-09-06, per `gh run list --workflow fresh-install.yml`). The 2026-09-06 run fails
+> at `Sandbox OpenCode /global/health :4096` — `scripts/smoke_test.py` still probes the
+> OpenCode endpoint the sandbox image removed in 2026-07 — and the workflow's boot
+> `.env` sets no `TEAMWORK_API_KEY`, which TeamWork's external API now requires.
 
 > **Prerequisite — Node.js (for the TeamWork web UI).** The TeamWork UI is a React app that must
 > be compiled (or run via the Vite dev server). Without **Node.js + npm** on the host, TeamWork's
@@ -263,7 +292,7 @@ make shutdown          # stop everything run-local-all started (processes, conta
 >
 > Verify with `node --version && npm --version`, then re-run the `make` target.
 
-`run-local-all` brings up the whole stack — memory **on**, TeamWork **on**, sandbox **on**. Prax and TeamWork run as plain host processes; **Qdrant, Neo4j and the sandbox run in Docker** (Prax connects to their published localhost ports). Everything persists under the user's workspace (default `PRAX_USER=local`): Qdrant/Neo4j data in `workspaces/$PRAX_USER/.services/{qdrant,neo4j}`, and the sandbox's `/workspace` is bind-mounted to `workspaces/$PRAX_USER` — so memory **and** sandbox files survive restarts rather than vaporizing with the containers. The sandbox inherits Prax's API keys (`.env`'s `ANTHROPIC_KEY`/`OPENAI_KEY` → the sandbox's `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`). PIDs and logs land in `.local-run/`. If the sandbox is expected (Docker + checkout present) but fails to start, `run-local-all` hard-fails instead of silently disabling it.
+`run-local-all` brings up the whole stack — memory **on**, TeamWork **on**, sandbox **on**. Prax and TeamWork run as plain host processes; **Qdrant, Neo4j and the sandbox run in Docker** (Prax connects to their published ports — note the Makefile publishes Qdrant and Neo4j with plain `-p 6333:6333` / `-p 7474:7474 -p 7687:7687`, i.e. on **all** host interfaces, with Qdrant unauthenticated and Neo4j on the committed default password `prax-memory`; it does not bind them to loopback, so keep the host behind a firewall or security group). Everything persists under the user's workspace (default `PRAX_USER=local`): Qdrant/Neo4j data in `workspaces/$PRAX_USER/.services/{qdrant,neo4j}`, and the sandbox's `/workspace` is bind-mounted to `workspaces/$PRAX_USER` — so memory **and** sandbox files survive restarts rather than vaporizing with the containers. On this path the sandbox container gets **no** provider keys: the Makefile exports `.env`'s `ANTHROPIC_KEY`/`OPENAI_KEY` as `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` into the shell that runs `docker compose`, but prax-sandbox's `docker-compose.yml` declares no `environment:` block, so they never reach the container. That is the keyless posture the security docs describe — it is this repo's own `docker-compose.yml` that still injects the keys (see the Quick Start known gap). PIDs and logs land in `.local-run/`. If the sandbox is expected (Docker + checkout present) but fails to start, `run-local-all` hard-fails instead of silently disabling it.
 
 Each backing service is skipped with an **actionable install hint** (never a hard failure) if it can't start — Qdrant and Neo4j prefer Docker (falling back to a native `qdrant`/`neo4j` binary), plus a sibling TeamWork checkout and a sibling `prax-sandbox` checkout (Docker-only). Override locations/owner with `make run-local-all TEAMWORK_PATH=/path/to/teamwork SANDBOX_PATH=/path/to/prax-sandbox PRAX_USER=alice`. By default the sibling repos are expected next to this one:
 
@@ -343,8 +372,9 @@ neo4j console                              # Bolt on :7687, browser UI on :7474
 
 > Prefer not to install these directly? You can run just the two datastores as standalone containers and still run Prax itself without Docker:
 > ```bash
-> docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant
-> docker run -p 7474:7474 -p 7687:7687 -e NEO4J_AUTH=neo4j/prax-memory -e NEO4J_PLUGINS='["apoc"]' neo4j:5
+> # bind to loopback: Qdrant has no auth by default and this Neo4j password is public
+> docker run -p 127.0.0.1:6333:6333 -p 127.0.0.1:6334:6334 qdrant/qdrant
+> docker run -p 127.0.0.1:7474:7474 -p 127.0.0.1:7687:7687 -e NEO4J_AUTH=neo4j/prax-memory -e NEO4J_PLUGINS='["apoc"]' neo4j:5
 > ```
 > Or skip memory altogether: set `MEMORY_ENABLED=false` in `.env` and skip this step.
 
@@ -360,21 +390,23 @@ At minimum:
 | `RUNNING_IN_DOCKER` | **Leave unset** | Setting this flips on Docker-only code paths (the `PRAX_USER_ID` guard, the persistent-sandbox sidecar). Keep it out of your `.env`. |
 | `NEO4J_PASSWORD` | No | Defaults to `prax-memory` — match whatever you set in step 2. |
 
+> **Known gap (2026-09):** with `RUNNING_IN_DOCKER` unset, `prax.utils.shell.run_command` runs commands as a **host subprocess** rather than in the sandbox — its routing keys on `settings.sandbox_persistent`, which is simply `running_in_docker` (`prax/settings.py`), not on whether the sandbox is enabled or reachable. Callers include the six `desktop_*` tools in `prax/agent/sandbox_tools.py` (`desktop_open` passes the model-supplied string to `bash -c`), plugin `caps.run_command` (`prax/plugins/capabilities.py`), and the Mermaid validator. So on this native path (and on `make run-local-all`, which also leaves the variable unset) those commands execute on the Prax host as the Prax user, not inside the container.
+
 #### 4. Run Prax
 
 ```bash
 uv run python app.py                       # serves the Flask API on http://localhost:5001
 ```
 
-That's a fully working Prax over **Discord / SMS / voice**. The TeamWork web UI is a separate process — see below.
+That's Prax's API up. **Discord** answers once `DISCORD_BOT_TOKEN` (+ `DISCORD_ALLOWED_USERS`) is set; **SMS / voice** additionally need the Twilio setup and a public HTTPS endpoint for Twilio's webhooks (see [Channels](#channels) — and read the tunnel warning there first). The TeamWork web UI is a separate process — see below.
 
 #### 5. (Optional) Run TeamWork without Docker
 
-TeamWork is **off by default** in this setup (`TEAMWORK_ENABLED=false`). To use the web UI without Docker, run its repo separately:
+TeamWork is **off until `TEAMWORK_URL` is set** — the URL is the switch (`teamwork_active` in `prax/settings.py`; `TEAMWORK_ENABLED` is deprecated and only still honoured as an explicit `false` opt-out). To use the web UI without Docker, run its repo separately:
 
 ```bash
 git clone https://github.com/praxagent/teamwork.git ../teamwork && cd ../teamwork
-# build the frontend (Node 22+):
+# build the frontend (Node 18+, per TeamWork's README):
 cd frontend && npm ci && npm run build && cd ..
 # start the backend (FastAPI/uvicorn on :8000):
 DATABASE_URL="sqlite+aiosqlite:///./vteam.db" \
@@ -387,7 +419,6 @@ python -m teamwork.cli
 Then point Prax at it — add to **Prax's** `.env` and restart `app.py`:
 
 ```env
-TEAMWORK_ENABLED=true
 TEAMWORK_URL=http://localhost:8000
 TEAMWORK_API_KEY=<the shared key — see below>
 ```
@@ -426,7 +457,7 @@ For frontend hot-reload during development, run `npm run dev` in `teamwork/front
 
 #### Sandbox caveat
 
-The code-execution sandbox is itself a Docker container — and it now lives in its own repo, [**prax-sandbox**](https://github.com/praxagent/prax-sandbox) (a sibling directory; Prax depends on it as `prax_sandbox_client`). So "fully Docker-free" means **no sandbox**: set `SANDBOX_ENABLED=false` (or simply don't run the sandbox container) and Prax runs as a pure harness — sandbox features (package auto-install, the coding agents OpenCode / Claude Code / Codex, the in-browser terminal, the noVNC desktop, the Chrome screencast, `run_python`, and the `delegate_sandbox` / `delegate_desktop` spokes) are unavailable, and no sandbox tools are registered. Core Prax (chat, memory, notes, scheduling, channels) runs fine without it. To run a sandbox locally, build its image from the sibling repo (`docker compose up` does this automatically; or `cd ../prax-sandbox && make build`). To run it on a **remote box**, see [providing Prax a sandbox](docs/infrastructure/sandbox.md) and the prax-sandbox repo's `docs/remote.md`.
+The code-execution sandbox is itself a Docker container — and it now lives in its own repo, [**prax-sandbox**](https://github.com/praxagent/prax-sandbox) (a sibling directory; Prax depends on it as `prax_sandbox_client`). So "fully Docker-free" means **no sandbox**: set `SANDBOX_ENABLED=false` (or simply don't run the sandbox container) and Prax runs as a pure harness — sandbox features (package auto-install, `sandbox_shell`, the in-browser terminal, the noVNC desktop, the Chrome screencast, `run_python`, and the `delegate_sandbox` / `delegate_desktop` spokes) are unavailable, and no sandbox tools are registered. Core Prax (chat, memory, notes, scheduling, channels) runs fine without it. To run a sandbox locally, build its image from the sibling repo (`make run-local-all` does this on first run; or `cd ../prax-sandbox && make build`). This repo's own `docker compose up` also builds it but, as shipped, then waits forever on a stale healthcheck — see the Quick Start known gap. To run it on a **remote box**, see [providing Prax a sandbox](docs/infrastructure/sandbox.md) and the prax-sandbox repo's `docs/remote.md`.
 
 #### Ports
 
@@ -436,16 +467,35 @@ The code-execution sandbox is itself a Docker container — and it now lives in 
 | **6333 / 6334** | Qdrant HTTP / gRPC | you (step 2) |
 | **7687 / 7474** | Neo4j Bolt / browser UI | you (step 2) |
 | **8000** | TeamWork API (+ Swagger at `/docs`) | TeamWork backend (step 5) |
-| **3000** | TeamWork web UI | TeamWork (served from :8000 build, or Vite proxy) |
+| **3000** | — (Docker port mapping only) | nothing listens here without Docker; the UI is served by TeamWork itself on :8000 (or Vite on :5173) |
 | **5173** | TeamWork Vite dev server | `npm run dev` (frontend dev only) |
 | **11434** | Ollama | you (only if `EMBEDDING_PROVIDER=ollama`) |
 
 #### Channels
 
 Set up a channel in Prax's `.env`:
-- **TeamWork web UI:** run it separately (step 5), then open http://localhost:3000
+- **TeamWork web UI:** run it separately (step 5), then open http://localhost:8000
 - **Discord (free):** `DISCORD_BOT_TOKEN` + `DISCORD_ALLOWED_USERS`
-- **Twilio (paid):** `TWILIO_ACCOUNT_SID` + `TWILIO_AUTH_TOKEN` + `NGROK_URL`
+- **Twilio (paid):** `TWILIO_ACCOUNT_SID` + `TWILIO_AUTH_TOKEN` + `NGROK_URL` (Twilio's webhooks need a public HTTPS URL that reaches Prax's `:5001`)
+
+> **Read before exposing `:5001` for Twilio.** A port tunnel such as `ngrok http 5001`
+> (what the Docker image's supervisord runs when `NGROK_AUTHTOKEN` is set —
+> `scripts/ngrok-launch.sh` — and what `docs/security/configuration.md` shows for host
+> installs) forwards **every** Flask route to the internet, not only the Twilio
+> webhooks. Prax registers no request authentication on its own HTTP surface (no
+> `before_request` / API-key check in `app.py` or `prax/blueprints/`): the `/teamwork/*`
+> routes (including `/teamwork/webhook`, which runs a full agent turn, tools included, as
+> the configured TeamWork user), `/plugins/import`, and `/api/users/*` accept anonymous
+> callers, so anyone who learns the tunnel hostname can drive them. Only the Twilio
+> routes carry `@validate_twilio_request`, and it has two limits
+> (`prax/blueprints/twilio_auth.py`): with `TWILIO_AUTH_TOKEN` **unset**, validation is
+> **skipped** (logged once), leaving only per-route checks such as the SMS sender
+> allowlist (`sms_service._ensure_authorized`), which a caller satisfies by spoofing `From`; with it **set**, the signature is checked against `request.url` with no
+> `X-Forwarded-Proto` handling, so behind an HTTPS tunnel that forwards plain HTTP the
+> computed `http://…` URL does not match the `https://…` URL Twilio signed and genuine
+> requests are rejected with 403. Until the tunnel is path-restricted and the non-Twilio
+> routes are authenticated, do not put `:5001` on the public internet
+> (see [`docs/security/network-exposure.md`](docs/security/network-exposure.md)).
 
 #### Remote access
 
@@ -514,6 +564,9 @@ cd ~/PRAX/prax-secrets-proxy && cp .env-example .env   # then edit:
 #   PROXY_AUTH_TOKEN             ← python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 #   OPENROUTER_API_KEY, ELEVENLABS_API_KEY, JINA_API_KEY, SERPER_DEV_API_KEY,
 #   TWILIO_AUTH_TOKEN, HF_TOKEN_RO …  ← forward proxy (:8786), injected BY HOST
+#   (TWILIO_AUTH_TOKEN is ALSO the inbound webhook-signature secret, which a
+#    proxy cannot inject: prax/blueprints/twilio_auth.py skips validation when
+#    Prax's own copy is empty — so keyless Prax has no inbound Twilio validation)
 ```
 
 > **Naming trap.** The reverse proxy wants `OPENAI_KEY`/`ANTHROPIC_KEY` (no
@@ -559,25 +612,33 @@ cat /etc/ssl/certs/ca-certificates.crt > ~/PRAX/prax-proxy-ca-bundle.pem
 sed -n '/BEGIN CERT/,/END CERT/p' /tmp/mitmca.pem >> ~/PRAX/prax-proxy-ca-bundle.pem
 ```
 
-> **Both proxy ports must stay loopback-only.** The reverse proxy authenticates
-> callers with `PROXY_AUTH_TOKEN`; **the forward proxy currently does not
-> authenticate callers at all** — binding it to a LAN/tailnet address would let
-> anything on that network spend your keys. Run the proxy on the same host as
-> Prax until that gap is closed.
+> **Both proxy ports must stay loopback-only.** Each half authenticates callers
+> **only when its token is set** in the proxy's `.env` — the reverse proxy via
+> `PROXY_AUTH_TOKEN` (`secrets_proxy/app.py`), the forward proxy via
+> `PROXY_FORWARD_AUTH_TOKEN` (`secrets_proxy/mitm_addon.py`, which answers 407
+> without it). **Empty means open**: anything that can reach the port spends your
+> keys. Set both. The forward token travels in the proxy URL
+> (`HTTPS_PROXY=http://prax:<forward-token>@127.0.0.1:8786` — the username is
+> free-form and lands in the audit line). Even with both tokens set, bind both
+> halves to loopback and run the proxy on the same host as Prax.
 
 ### 6. Point Prax at the proxy (placeholders, not keys)
 
 In `prax/.env`:
 
 ```env
-HTTPS_PROXY=http://127.0.0.1:8786
-HTTP_PROXY=http://127.0.0.1:8786
+HTTPS_PROXY=http://prax:<forward-token>@127.0.0.1:8786
+HTTP_PROXY=http://prax:<forward-token>@127.0.0.1:8786
 NO_PROXY=localhost,127.0.0.1
 REQUESTS_CA_BUNDLE=/home/<user>/PRAX/prax-proxy-ca-bundle.pem
 SSL_CERT_FILE=/home/<user>/PRAX/prax-proxy-ca-bundle.pem
 OPENROUTER_API_KEY=<any non-empty placeholder>   # the proxy substitutes the real one
 DISCORD_ENABLED=false                            # see the warning below
 ```
+
+`<forward-token>` is the `PROXY_FORWARD_AUTH_TOKEN` you set in step 3; drop the
+`prax:<forward-token>@` part only if you left that token empty (the proxy is then open
+to any local process).
 
 **Verify keyless actually works** — this is the test that matters, not "the
 container is running":
@@ -633,9 +694,10 @@ Expose **only** the UI, and only on your tailnet:
 sudo tailscale serve --bg --https=443 http://localhost:8000
 ```
 
-> **Never expose the sandbox ports** (`:4096` OpenCode, `:9223` CDP, `:6080`
-> noVNC, `:6090` clipboard). They are **unauthenticated by design** and are safe
-> only because they bind to loopback. Once the tailnet works, close public SSH.
+> **Never expose the sandbox ports** (`:9223` CDP, `:6080` noVNC, `:6090`
+> clipboard). They are **unauthenticated by design** and are safe only because
+> they bind to loopback. (`:4096`/OpenCode no longer exists — removed 2026-07.)
+> Once the tailnet works, close public SSH.
 
 ### 9. Verify
 
@@ -743,13 +805,13 @@ Prax is a multi-channel AI assistant powered by a LangGraph ReAct agent. It conn
 | Category | Highlights |
 |----------|-----------|
 | **Channels** | [TeamWork](https://github.com/praxagent/teamwork) web UI (Slack-like chat, Kanban, terminal, browser, file browser, execution graphs, live agent output), Discord bot (free, WebSocket), Twilio voice + SMS (webhooks), cross-channel mirroring (Discord/SMS → TeamWork #discord/#sms channels) |
-| **Agent** | LangGraph ReAct loop, 97+ built-in tools (extensible via plugins), dedicated sub-agents (self-improvement, plugin engineering, content authoring, research, coding), watchdog supervisor, automatic checkpoint & retry on failures |
+| **Agent** | LangGraph ReAct loop, built-in tools on the orchestrator plus domain spokes (extensible via plugins), dedicated sub-agents (self-improvement, plugin engineering, content authoring, research, coding), watchdog supervisor, automatic checkpoint & retry on failures |
 | **Memory** | Two-layer human-like memory: STM scratchpad + LTM with Qdrant vector store (semantic recall) and Neo4j knowledge graph (entity relations, multi-hop reasoning). Hybrid retrieval via RRF fusion, Ebbinghaus-inspired forgetting curve, automatic consolidation. Plus: SQLite conversations, git-backed workspaces, user notes, to-do lists |
 | **Notes** | Conversation-to-note publishing (Hugo pages with KaTeX, mermaid, syntax highlighting), iterative updates, searchable index, shareable URLs, bidirectional knowledge graph links |
 | **Documents** | PDF extraction (arXiv, URLs, attachments), web page summaries, YouTube transcripts, LaTeX compilation, URL-to-note / PDF-to-note / arXiv-to-note pipelines |
 | **Research** | Research projects (group notes, links, sources), RSS/Atom feed subscriptions, conversation history search across sessions |
-| **Code** | Always-on Docker sandbox with [OpenCode](https://opencode.ai/), auto-installs packages, multi-model support, round-based budget control |
-| **Linux Desktop** | Full graphical desktop (Xvfb + Fluxbox + noVNC) accessible via VNC. Prax can launch GUI apps (VS Code, Chromium), interact with them programmatically (screenshot, click, type), and install software. Users see everything through TeamWork's Desktop tab |
+| **Code** | Docker execution sandbox (separate [prax-sandbox](https://github.com/praxagent/prax-sandbox) repo): `sandbox_shell` / `run_python`, package auto-install. The image ships no coding-agent server or CLI (OpenCode / Claude Code / Codex removed 2026-07) — Prax codes with its own tools |
+| **Linux Desktop** | Graphical desktop in the sandbox (Xvfb + XFCE + noVNC). Prax can launch GUI apps (Chromium, code-server, xterm), interact with them programmatically (screenshot, click, type), and install software. Users see everything through TeamWork's Desktop tab |
 | **Self-Upgrading** | Prax auto-escalates his intelligence tier when stuck. If he doesn't have a tool, he writes Python. If that fails, he uses the desktop. Never gives up |
 | **Scheduling** | Cron jobs (YAML), one-time reminders, timezone-aware delivery |
 | **Browser** | Playwright automation, persistent login profiles, VNC for manual login, credential management |
@@ -760,7 +822,7 @@ Prax is a multi-channel AI assistant powered by a LangGraph ReAct agent. It conn
 
 ## TeamWork Web UI
 
-[**TeamWork**](https://github.com/praxagent/teamwork) is an agent-agnostic collaboration shell — a Slack-like web interface that gives Prax a visual frontend. It runs as a separate container alongside Prax and connects via the External Agent API.
+[**TeamWork**](https://github.com/praxagent/teamwork) is an agent-agnostic collaboration shell — a Slack-like web interface that gives Prax a visual frontend. With this repo's Docker Compose files it is bundled **inside the `prax` container** (there is no separate `teamwork` service — `scripts/supervisord-prax.conf` runs it); without Docker it is a separate process. Either way it connects via the External Agent API.
 
 **What you get:**
 
@@ -769,12 +831,12 @@ Prax is a multi-channel AI assistant powered by a LangGraph ReAct agent. It conn
 - **Kanban board** — task management with drag-and-drop columns (pending / in progress / review / completed). Prax creates, assigns, and completes tasks automatically as it works through plans
 - **Execution graphs** — real-time visualization of agent delegation trees. Watch LangGraph execution as it happens: see which spokes are running, tool call counts, timing, and status. Click any node to inspect its details and live output
 - **Live agent output** — terminal-style view of each agent's real-time execution output (Observability > Live Agents tab). Select any agent to watch its work stream
-- **In-browser terminal** — full PTY shell into the sandbox container, or launch Claude Code directly from the UI
+- **In-browser terminal** — full PTY shell into the sandbox container (the sandbox image no longer ships coding-agent CLIs such as Claude Code)
 - **Browser screencast** — live view of the headless Chrome running in the sandbox, with mouse/keyboard passthrough
 - **File browser** — browse and manage workspace files
 - **Multi-agent status** — see which role agents (Planner, Executor, Researcher, etc.) are active
 
-TeamWork is included in the default `docker-compose.yml`. After `docker compose up --build`, open **http://localhost:3000**. API docs (Swagger) are at **http://localhost:8000/docs**.
+TeamWork is built into the `prax` image by the default `docker-compose.yml` (the `teamwork` build context). After `docker compose up --build`, open **http://localhost:3000** (subject to the compose known gap in Quick Start). API docs (Swagger) are at **http://localhost:8000/docs**.
 
 For standalone use or integration with other agents, see the [TeamWork repository](https://github.com/praxagent/teamwork).
 
@@ -806,7 +868,7 @@ Setup and prerequisites, extending the agent (plugin system, manual tool registr
 
 ### [Research](docs/research/README.md)
 
-Academic foundations for agentic workflow design — 19 sections covering planning, reflexion, orchestration, anti-hallucination, tool overload, content pipelines, plugin sandboxing, Thompson Sampling, Active Inference, and external benchmarking. Each finding is empirically validated and mapped to Prax's implementation.
+Academic foundations for agentic workflow design — covering planning, reflexion, orchestration, anti-hallucination, tool overload, content pipelines, plugin sandboxing, Thompson Sampling, Active Inference, and external benchmarking. Each finding is empirically validated and mapped to Prax's implementation.
 
 ---
 
@@ -847,18 +909,33 @@ Resolved failures stay as permanent regression guards — every fix adds a test 
 
 ## Coding Agents
 
-The sandbox image (in the separate [prax-sandbox](https://github.com/praxagent/prax-sandbox) repo) ships three coding agents — **Claude Code** (Anthropic), **Codex** (OpenAI), and **OpenCode** (multi-provider) — plus **VS Code** on the desktop. Prax uses these for self-improvement tasks (bug fixes, refactors, new features); the settings below are the Prax-side wiring.
+**Status (2026-09): the sandbox image no longer ships coding-agent CLIs.** Claude
+Code, Codex and OpenCode were removed from the [prax-sandbox](https://github.com/praxagent/prax-sandbox)
+image on 2026-07-20 (prax-sandbox #4 — see the comment block in its `sandbox/Dockerfile`)
+so that the container needs no model API key. Prax now codes with its own governed
+tools (`run_python`, `workspace_save` / `workspace_patch` with the syntax linter,
+`source_read` / `source_grep`, `sandbox_shell`) and modifies itself through the
+`self_improve_*` tools in `prax/agent/codegen_tools.py` (isolated git worktree in a
+staging clone → verify: tests, lint, startup check → hot-swap via `self_improve_deploy`;
+`self_improve_submit` exists but is disabled — git push is not allowed — and only returns
+a message telling the agent to use deploy or hand the change to the user). All of that
+stays behind `SELF_IMPROVE_ENABLED=true` (default off).
 
-### Setup
+What remains of the old wiring:
 
-1. Set `SELF_IMPROVE_ENABLED=true` in `.env` (required — global gate for all self-modification)
-2. Choose your preferred agent: `SELF_IMPROVE_AGENT=claude-code` (or `codex` / `opencode`)
-3. Rebuild the sandbox: `docker compose up --build sandbox`
-4. Configure via TeamWork terminal: `cd /source && claude login` (or `codex login`)
+- `SELF_IMPROVE_AGENT` (default `claude-code`) still exists in `prax/settings.py` and is
+  read by `prax/agent/claude_code_tools.py`, which builds a `claude` / `codex` /
+  `opencode` command line and runs it with `cd /source && …` in the sandbox. That can
+  only work if you install the CLI in the container yourself, with a dedicated,
+  spend-capped key — the image does not provide it.
+- `/source` exists only under this repo's own `docker-compose.yml` /
+  `docker-compose.lite.yml`, which bind-mount the whole repo read-write into the sandbox
+  (see the Quick Start known gap). prax-sandbox's own compose — what `make run-local-all`
+  uses — mounts only `/workspace`.
+- code-server (browser-based VS Code) is installed in the sandbox image.
 
-All agents have full read-write access to the codebase at `/source/` in the sandbox. Changes appear on your host machine immediately (bind mount). Agent configs persist across container rebuilds via workspace volumes.
-
-> **Warning:** All three agents use provider API tokens and cost money per invocation. Monitor your API spend when self-improvement is enabled.
+> **Warning:** any coding-agent CLI you install yourself uses provider API tokens and
+> costs money per invocation. Monitor your API spend when self-improvement is enabled.
 
 ---
 
@@ -871,6 +948,8 @@ Control how independently Prax operates via `PRAX_AUTONOMY` in `.env`:
 | `guided` | **(default)** All safety gates active. HIGH-risk tools require user confirmation. Prescriptive workflow rules enforced. Most conservative. |
 | `balanced` | **(recommended)** Removes prescriptive workflow rules — Prax uses judgment. HIGH-risk tools still gated but smart auto-approve kicks in when intent is clear. Agent decides its own approach. |
 | `autonomous` | Also relaxes recursion limits, allows self-tier-upgrade (agent can switch to a more capable model mid-task), and earned trust can downgrade browser tool risk levels. Most independent. |
+
+> **Known gap (2026-09):** the "HIGH-risk tools require user confirmation" gate is enforced by the governance wrapper on the orchestrator's tool set, and that set currently contains **no** HIGH-classified tool: every name in `_HIGH` (`prax/agent/action_policy.py` — `browser_click`, `browser_fill`, `schedule_create`, `plugin_write`, `plugin_import`, `self_improve_deploy`, …) is reached only through an ungoverned sub-loop — a `spokes/` agent (`prax/agent/spokes/_runner.py` binds tools without the wrapper), the self-improvement sub-agent (`prax/agent/self_improve_agent.py`, for `self_improve_deploy`) or the `gpu_power` plugin (`gpu_power_on`/`gpu_power_off`, registered only when `GPU_POWER_BROKER_URL` is set) — and none is in the hub registry. In the shipped topology the confirmation gate therefore does not fire; see Roadmap → Security & governance.
 
 ```env
 PRAX_AUTONOMY=balanced
@@ -901,16 +980,16 @@ every flag A/B'd against baseline, including the ones that measured WORSE and
 stay off)_
 - [x] Cross-provider LLM failover (rate-limit / overload / breaker-aware)
 - [x] Per-dependency circuit breakers for external services
-- [x] Durable checkpoints (in-memory / SQLite) with automatic retry-from-last-good-state
+- [x] Checkpoints with automatic retry-from-last-good-state — in-memory by default; `CHECKPOINT_BACKEND=sqlite` needs `langgraph-checkpoint-sqlite`, which is **not** a declared dependency, so without installing it `prax/agent/checkpoint.py` logs a warning and silently falls back to in-memory
 - [x] User-initiated resume of a failed/timed-out turn from saved checkpoints
 - [x] Within-turn recovery-context injection on retry after a tool-chain failure
 - [x] Multi-perspective (4-angle) error recovery + tool-call loop detection
 - [x] Health watchdog + append-only telemetry with self-repair advisories
 
 **Security & governance**
-- [x] Single governance choke point — risk classify + arg scrub + confirm gate + audit + budget
-- [x] Deny-by-default tool boundaries (unknown tools → HIGH) + scoped HIGH-risk confirmation
-- [x] SSRF egress guard (blocks internal/metadata addresses, per-redirect-hop revalidation)
+- [x] Governance wrapper (`prax/agent/governed_tool.py`: risk classify + arg scrub + confirm gate + audit + budget) applied to the orchestrator's tool set (`tool_registry.get_registered_tools`) and to the MCP server's pool. **Known gap (2026-09):** spoke-internal tools are bound without it (`prax/agent/spokes/_runner.py` builds the loop straight from `bind_tools_user_context(tools)`), and every tool classified HIGH in `prax/agent/action_policy.py` (`browser_click`, `schedule_create`, `plugin_write`, `self_improve_deploy`, …) is reached only through such an ungoverned sub-loop — a `spokes/` agent, the self-improvement sub-agent (`prax/agent/self_improve_agent.py`, for `self_improve_deploy`) or the `gpu_power` plugin — and none is in the hub registry, so the HIGH-risk confirm gate does not fire in the shipped topology
+- [x] Scoped HIGH-risk confirmation (`HIGH_RISK_SCOPED_CONFIRM`, default off; subject to the gap above). Unknown tools classify **MEDIUM** — a deny-by-default variant (unknown → HIGH) was measured in the 2026-07-08 campaign, regressed, and was removed rather than left switchable (see [flag-audit.md](docs/guides/flag-audit.md))
+- [x] SSRF egress guard (`prax/utils/ssrf.py`: blocks internal/metadata addresses, per-redirect-hop revalidation) on the plugin capability gateway and the URL reader. **Known gap (2026-09):** it is opt-in per call site and several model-controlled fetchers bypass it — `browser_navigate` / CDP navigate (no scheme or host check before `page.goto` / `Page.navigate`, so nothing in Prax refuses `file://` or internal hosts; `prax/services/browser_service.py`, `prax/agent/cdp_tools.py`), `workspace_download` (`prax/agent/workspace_tools.py`), `pdf_service.download_pdf`, and the arXiv plugin's `arxiv_fetch_papers` use plain `page.goto` / `requests.get`
 - [x] Hard plugin-activation gate for security-flagged imports
 - [x] Earned-trust relaxation + configurable autonomy profiles (guided / balanced / autonomous)
 - [x] Deterministic claim-auditor (numeric + grounding checks) over final responses
@@ -933,7 +1012,6 @@ stay off)_
 
 **Prompting & routing**
 - [x] Selective system-prompt assembly (drops unneeded topic sections on simple turns)
-- [x] Intent-clarification gate (asks one question on ambiguous-and-irreversible requests)
 - [x] Thompson Sampling tier bandit + difficulty-driven routing
 - [x] Metacognitive failure profiles injected as prompt warnings + self-verification of outputs
 

@@ -56,7 +56,7 @@ the *measured recommendation*, so a deployment that set nothing behaved
 differently from the documented advice. Aligning the defaults fixes that without
 deleting anything real.
 
-Net after the first pass: **61 → 54** boolean flags. After the cluster pass below: **49**.
+Net after the first pass: **61 → 54** boolean flags. After the cluster pass below: **49** (as of 2026-08-07; the recount command at the end of this page gives 50 as of 2026-09).
 
 ## Clusters — resolved in a follow-up pass
 

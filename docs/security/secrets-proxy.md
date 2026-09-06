@@ -13,11 +13,18 @@ assessment](../research/openai-long-horizon-safety.md) names as the *real wall*
 (an in-code guard the agent can edit is only a speed bump — proven by that piece's
 "model split a token to evade the scanner" incident, and by the [`source_grep`
 secret-leak](sandbox-execution-boundary.md) we fixed). It also caps the sandbox
-env-key exfil at the root: there's no key in the env to steal.
+env-key exfil at the root — *provided the sandbox is not handed the token*: prax's
+own `docker-compose.yml`/`.lite.yml` still pass `OPENAI_API_KEY=${OPENAI_KEY}` /
+`ANTHROPIC_API_KEY=${ANTHROPIC_KEY}` into the `sandbox` service, which in keyless
+mode is the proxy token (spendable, not stealable). prax-sandbox's own compose
+passes nothing; see [sandbox-execution-boundary.md](sandbox-execution-boundary.md).
 
-This is **Tier 1**: the two model providers (OpenAI-compatible + Anthropic), which
-is where the high-value keys live. [Tier 2](#tier-2--general-egress-future) (all
-other egress + an allowlist) is future work.
+This page is about **Tier 1**: the model providers (OpenAI-compatible +
+Anthropic), reached through a base-URL **reverse** proxy — where the high-value
+keys live. The **Tier 2 forward (MITM) proxy** for all other REST egress is
+shipped as an opt-in profile of the same repo; its wiring and lock-down checklist
+live in [deployment-topology.md](deployment-topology.md) (summary
+[below](#tier-2--general-egress)).
 
 ## Two paths — and which Praxagent endorses
 
@@ -33,8 +40,29 @@ There are two ways to give Prax model keys:
 **Praxagent endorses path (B)** for its security properties. Path (A) stays the
 zero-friction default so casual adoption isn't taxed, but it is **planned for
 deprecation in a future release** — prefer (B) for anything new or exposed. Turning
-(B) on needs **no code change in Prax** (`OPENAI_BASE_URL` already existed;
-`ANTHROPIC_BASE_URL` was added so `ChatAnthropic` can point at the proxy too).
+(B) on needs no code change for the agent's model calls (`OPENAI_BASE_URL` already
+existed; `ANTHROPIC_BASE_URL` was added so `ChatAnthropic` can point at the proxy
+too).
+
+**Known gap (2026-09): only `build_llm()` reads `OPENAI_BASE_URL` /
+`ANTHROPIC_BASE_URL`.** The `prax/agent/llm_factory.py` path reads
+`settings.openai_base_url` / `settings.anthropic_base_url` (the embedder and the
+vision client have their own `EMBEDDING_BASE_URL` / `VISION_BASE_URL`); the direct `OpenAI(api_key=settings.openai_key)`
+clients elsewhere do not — `prax/plugins/capabilities.py` (TTS, Whisper),
+`prax/conversation_memory.py`, `prax/services/sms_service.py`,
+`prax/services/youtube_service.py`, `prax/services/library_service.py` (covers),
+`prax/readers/latex/latext_gpt_tools.py`, `prax/readers/latex/latex_functions.py`,
+`prax/readers/web/web2mp3.py`, `prax/plugins/tools/image/plugin.py`. The OpenAI SDK
+would pick up `OPENAI_BASE_URL` from the process environment, but Pydantic loads
+`.env` without exporting it, and the startup allow-list that does export proxy
+variables (`_PROXY_ENV_ALLOWLIST` in `prax/settings.py`) covers only
+`HTTP(S)_PROXY`/`NO_PROXY`/CA-bundle names. So under a base-URL-only path (B)
+those features send the proxy token to `api.openai.com` and fail. The forward
+(MITM) mode does not depend on a base URL, so it should cover them (the SDK's
+httpx transport honours `HTTPS_PROXY`), but this has not been checked per client
+— see the [ledger](../VERIFICATION_LEDGER.md) row; the 2026-07-22 forward-proxy
+verification recorded OpenAI returning 200 through it without exercising these
+clients individually.
 
 ## Why a *separate* service and repo
 
@@ -140,16 +168,23 @@ values).
 
 See the [proxy repo](https://github.com/praxagent/prax-secrets-proxy)'s README for
 the authoritative production guidance. In brief: front it with a real WSGI server
-(`gunicorn`), bind it loopback or a private network the keyless Prax can reach (it
-is **unauthenticated** by design — reachability is the control, like the sandbox's
-loopback ports), and run it as its own container/user with the keys in *its* secret
-store only.
+(`gunicorn`), **set `PROXY_AUTH_TOKEN`** (an empty token means the reverse proxy is
+open to any caller that can reach the port — `secrets_proxy/config.py` treats empty
+as open), bind it loopback or a private network the keyless
+Prax can reach so that reachability is a *second* control rather than the only one,
+and run it as its own container/user with the keys in *its* secret store only.
 
-## Tier 2 — general egress (future)
+## Tier 2 — general egress
 
-Extend the same pattern to the ~5 other key-using sites (Twilio, search APIs,
-ElevenLabs): either point each at the proxy with a service tag, or run a
-**transparent forward proxy** that injects auth by destination host (needs a CA the
-sandbox trusts) — which also gives the **egress allowlist** that kills the
-data-exfiltration leg from `sandbox-execution-boundary.md`. Two birds. Tracked in
-the [adopt-tracker](../research/adopt-tracker.md).
+The same pattern for the REST key sites (Twilio, search APIs, ElevenLabs, …) is
+**shipped** as the proxy repo's opt-in `forward` profile: a mitmproxy-based
+**transparent forward proxy** (`HTTPS_PROXY` → `:8786`, a CA Prax trusts) that
+injects auth by destination host from the registry-generated forward map. Wiring,
+the `PROXY_FORWARD_AUTH_TOKEN` caller credential, and the lock-down checklist are
+in [deployment-topology.md](deployment-topology.md); which providers have been
+verified live is in the [ledger](../VERIFICATION_LEDGER.md). Two honest limits:
+the forward proxy **injects** for allow-listed hosts and passes every other host
+through untouched (`secrets_proxy/mitm_addon.py`), so it is not yet the **egress
+allowlist** that would kill the data-exfiltration leg from
+`sandbox-execution-boundary.md`; and the sandbox container does not route through
+it. Both remain tracked in the [adopt-tracker](../research/adopt-tracker.md).

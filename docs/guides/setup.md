@@ -13,7 +13,7 @@
 - OpenAI (or alternate LLM) credentials.
 - Java 11+ (for `opendataloader-pdf` PDF extraction).
 - Docker (for sandbox code execution).
-- **Optional:** NVIDIA GPU with 8GB+ VRAM + vLLM + Unsloth (for self-improving fine-tuning). To attach a host GPU to the sandbox container for ad-hoc CUDA work (Whisper acceleration, local LLM inference, ML experiments via `sandbox_shell`), install [`nvidia-container-toolkit`](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) and use `make sandbox-gpu` (or layer the override in via `COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml` in `.env`). See [Sandbox → GPU access](../infrastructure/sandbox.md) for details.
+- **Optional:** NVIDIA GPU with 8GB+ VRAM + vLLM + Unsloth (for self-improving fine-tuning). To attach a host GPU to the sandbox container for ad-hoc CUDA work (Whisper acceleration, local LLM inference, ML experiments via `sandbox_shell`), install [`nvidia-container-toolkit`](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) and use `make sandbox-gpu` (or layer the override in via `COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml` in `.env`). See [GPU access — local, cloud, least-privilege power control](cloud-gpu.md) for details.
 - **Optional:** Playwright (`pip install playwright && playwright install chromium`) for browser automation.
 - **Optional:** `gh` CLI (for self-modification PR creation).
 
@@ -37,7 +37,9 @@ These `.env` settings are **required** for Docker Compose deployments:
 | Variable | Purpose |
 |----------|---------|
 | `OPENAI_KEY` or `ANTHROPIC_KEY` | At least one LLM provider API key |
-| `PRAX_USER_ID` | Your workspace directory name (e.g. `usr_alice`). The sandbox mounts only this folder for user isolation. Pick any slug — Prax creates the directory and associates it with your identity on first run. **Prax refuses to start without this.** |
+| `PRAX_USER_ID` | Your workspace directory name (e.g. `usr_alice`). The sandbox mounts only this folder for user isolation. Pick any slug — Prax creates the directory on first run and, on later starts, points your identity at it. **Prax refuses to start without this.** |
+
+> **Known gap (2026-09):** on a *fresh* identity DB the association is not made when the user is created. Startup creates `workspaces/<PRAX_USER_ID>` for service state (`prax/services/state_paths.py`), the first message creates the user under an opaque `usr_<id8>` directory (`identity_service._canonical_workspace`), and the *next* startup's `reconcile_workspace_dir()` repoints the user at `<PRAX_USER_ID>` without migrating — its symlink is only created when the target directory does not already exist. Anything written in that first session (notes, library, schedules) can therefore become invisible after the first restart. Reproduced in a scratch tree during the 2026-09 review; not yet fixed. If a first session's work disappears after a restart, look in `workspaces/` for the `usr_*` directory it was written to — the files are still there.
 
 ## Memory System Setup
 
@@ -45,17 +47,15 @@ Prax has a two-layer memory system. **Short-term memory (STM)** works out of the
 
 ### Enabling Long-Term Memory
 
+Qdrant and Neo4j are **compiled into the `prax` Docker image** (see `Dockerfile`) and start with the container — there is no separate compose profile for them:
+
 ```bash
-# Start core services + memory infrastructure
-docker compose --profile memory up --build
+docker compose up --build
 ```
 
-Then set in `.env`:
-```env
-MEMORY_ENABLED=true
-```
+`MEMORY_ENABLED` defaults to `true` (`prax/settings.py`), so nothing needs to be set; set `MEMORY_ENABLED=false` in `.env` to turn LTM off. Inside the container Qdrant listens on `localhost:6333` and Neo4j on `localhost:7474`/`7687`; those ports are **not published to the host** by the default `docker-compose.yml` (the `prax` service publishes only `3000`, `8000`, `5001`, `4040`). Data persists under `WORKSPACE_DIR/<PRAX_USER_ID>/.services/{qdrant,neo4j}/`.
 
-This starts Qdrant (vector store, port 6333) and Neo4j (knowledge graph, port 7474/7687).
+For a host-process Prax (`make run-local-all`), the Makefile starts Qdrant and Neo4j as Docker containers itself (`_local-qdrant` / `_local-neo4j`).
 
 ### Choosing an Embedding Provider
 
@@ -68,20 +68,22 @@ EMBEDDING_PROVIDER=openai
 EMBEDDING_MODEL=text-embedding-3-small
 ```
 
-**Option 2: Ollama (local)** — No data leaves your machine. Good quality. Requires running Ollama (included in Docker Compose).
+**Option 2: Ollama (local)** — No data leaves your machine. Good quality. Requires running Ollama (the `local-llm` compose profile provides it, together with an `ollama-init` job that pulls `EMBEDDING_MODEL`, default `nomic-embed-text`).
 
 ```bash
 # Start with Ollama
-docker compose --profile memory --profile ollama up --build
+docker compose --profile local-llm up --build
 
-# Pull the embedding model (one-time)
+# Pull a different embedding model by hand if needed (one-time)
 docker compose exec ollama ollama pull nomic-embed-text
 ```
 
 ```env
 EMBEDDING_PROVIDER=ollama
 EMBEDDING_MODEL=nomic-embed-text
-OLLAMA_BASE_URL=http://localhost:11434
+# Docker Compose: leave OLLAMA_BASE_URL unset — the prax service defaults it to
+# http://ollama:11434. Host-process Prax with a local Ollama:
+# OLLAMA_BASE_URL=http://localhost:11434
 ```
 
 **Option 3: fastembed (in-process)** — Zero infrastructure, runs inside the Prax process. Lower quality but simplest possible setup.
@@ -96,6 +98,7 @@ See [Memory documentation](../infrastructure/memory.md#embedding-providers) for 
 
 After starting with memory enabled, you can verify it's working:
 
-- **Qdrant dashboard:** [http://localhost:6333/dashboard](http://localhost:6333/dashboard)
-- **Neo4j browser:** [http://localhost:7474](http://localhost:7474) (login: `neo4j` / `prax-memory`)
+- **Qdrant (inside the container):** `docker compose exec prax curl -s http://localhost:6333/collections` — the port is not published to the host by default.
+- **Neo4j (inside the container):** `docker compose exec prax curl -s http://localhost:7474` — likewise not host-published.
+- **Host-process Prax** (`make run-local-all`): the Makefile-started containers publish the usual ports, so `http://localhost:6333/dashboard` and `http://localhost:7474` work there.
 - **In chat:** Ask Prax "what's your memory status?" — it will use the `memory_stats` tool

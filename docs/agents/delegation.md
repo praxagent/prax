@@ -54,7 +54,7 @@ graph TB
     Prax -->|delegate_sysadmin| Sysadmin[Sysadmin Agent<br/>30+ tools: plugins, config, source]
     Prax -->|delegate_sandbox<br/>opt-in| Sandbox[Sandbox Agent<br/>Docker exec + Desktop + sandbox_view/scroll/goto]
     Prax -->|delegate_finetune| Finetune[Finetune Agent<br/>8 tools: LoRA pipeline]
-    Prax -->|delegate_knowledge| Knowledge[Knowledge Agent<br/>13 tools: notes + projects]
+    Prax -->|delegate_knowledge| Knowledge[Knowledge Agent<br/>library + notes + projects + knowledge graph]
     Prax -->|delegate_scheduler| Scheduler[Scheduler Agent]
     Prax -->|delegate_tasks| Tasks[Tasks Agent<br/>todos + task_runner mgmt]
     Prax -->|delegate_workspace| Workspace[Workspace Agent<br/>files + LaTeX + create_pdf/presentation/spreadsheet]
@@ -89,7 +89,7 @@ graph TB
 | **Environment** | `delegate_environment` | Location resolver + live weather fetch + datetime | Weather, local conditions, and time/location context; asks for location when only timezone is known |
 | **Plugins** | `delegate_plugins` | Manifest-routed `artifact`/`media`/`utility`/`vision`/`workspace` plugin tools | Installed end-user plugin capabilities such as presentations, media generation, OCR, and artifact conversion |
 | **Sysadmin** | `delegate_sysadmin` | 30+: plugin mgmt, prompts, LLM config, source, workspace sync | Plugin install/update, config changes, self-improvement |
-| **Sandbox** | `delegate_sandbox` *(registered whenever `SANDBOX_ENABLED`)* | Direct code execution via `sandbox_shell`, `sandbox_view` / `sandbox_scroll` / `sandbox_goto` (SWE-agent-style line-numbered file viewer), `sandbox_install`, `sandbox_rebuild`, plus `data_query` / `lean_check` (when their flags are on) and the 6 desktop tools | Headless direct code-execution sub-agent: writes and runs code directly in the Docker container via `sandbox_shell` (no coding-session lifecycle, no rounds, no archive/replay) + GUI desktop interaction. Prax codes natively (`run_python`, `workspace_save`/`workspace_patch`, `source_read`/`source_grep`, `sandbox_shell`). See [sandbox-execution-boundary](../security/sandbox-execution-boundary.md). |
+| **Sandbox** | `delegate_sandbox` *(registered whenever `SANDBOX_ENABLED`)* | Direct code execution via `sandbox_shell`, `sandbox_view` / `sandbox_scroll` / `sandbox_goto` (SWE-agent-style line-numbered file viewer), `sandbox_install`, `sandbox_rebuild`, plus `data_query` / `lean_check` (when their flags are on) and the 6 desktop tools | Headless direct code-execution sub-agent: writes and runs code directly in the Docker container via `sandbox_shell` (no coding-session lifecycle, no rounds, no archive/replay) + GUI desktop interaction. Prax codes natively (`run_python`, `workspace_save`/`workspace_patch`, `source_read`/`source_grep`, `sandbox_shell`). See [sandbox-execution-boundary](../security/sandbox-execution-boundary.md). **Known gap (2026-09):** the six `desktop_*` tools call `prax.utils.shell.run_command`, which routes into the container only when `RUNNING_IN_DOCKER=true`; on a native deployment (`make run-local-*`, the systemd unit) they run on the Prax host, where `desktop_open` executes its model-supplied command with `bash -c`. |
 | **Finetune** | `delegate_finetune` | 8: harvest, train, verify, promote, rollback | LoRA fine-tuning pipeline (requires FINETUNE_ENABLED) |
 | **Knowledge** | `delegate_knowledge` | 13: note CRUD, search, linking, URL/PDF-to-note, project management | Notes, knowledge graph, research projects |
 | **Scheduler** | `delegate_scheduler` | Cron + one-shot reminders | Schedule creation, reminder management |
@@ -282,7 +282,7 @@ flowchart LR
 
 ## Office Document Export
 
-The content spoke includes three tools for generating downloadable office documents:
+The **workspace** spoke (`prax/agent/spokes/workspace/agent.py`, tools from `prax/agent/office_tools.py`) includes three tools for generating downloadable office documents (they were moved out of the content spoke to keep the orchestrator roster small):
 
 | Tool | Output | Library |
 |------|--------|---------|
@@ -308,10 +308,10 @@ Requires `OPENAI_KEY`. Images are saved as PNG to the user's workspace. The plug
 The orchestrator keeps tools that are **conversational** (require back-and-forth with the user) or **foundational** (used by many workflows):
 
 - **Conversation** — interactive Q&A, pacing, tone
-- **Workspace** — file CRUD, todos, planning (11 tools)
-- **Courses** — tutoring is conversational; the orchestrator IS the tutor (6 tools)
-- **Scheduling** — cron jobs, reminders (9 tools)
-- **URL handling** — lightweight `fetch_url_content` (no browser needed)
+- **Kernel** — `background_search_tool`, `get_current_datetime`, `fetch_url_content` (no browser needed), `sandbox_shell`
+- **Planning + memory of the turn** — `agent_plan` / `agent_step_done` / `agent_plan_status` / `agent_plan_clear`, `progress_read/append/detail/search`, `user_notes_read/update`, `think`, `decision_record`, `artifact_locator`, `conversation_history` / `conversation_search`
+- **Introspection** — `trace_search` / `trace_detail`, `read_logs`, `system_status`, `prax_doctor`, `request_extended_budget`
+- *(File CRUD, todos, courses and scheduling are no longer orchestrator tools — they live in the workspace, tasks, course and scheduler spokes respectively. Roster measured 2026-09: 45 tools with the sandbox enabled, of which 17 are `delegate_*`.)*
 - **Resourcefulness** — `self_upgrade_tier` (auto-escalate to a more capable model when stuck), `run_python` (execute arbitrary Python in the sandbox when no existing tool fits), and `review_my_traces` (self-reflection — pull recent execution traces and send them to a HIGH-tier LLM for honest feedback on failures, efficiency, and improvements)
 - **Routing decisions** — choosing which spoke to delegate to
 - **Spoke delegation** — one `delegate_*` tool per registered spoke, plus generic sub-agent fallbacks, kept near the 50-tool ceiling
@@ -360,15 +360,23 @@ See `prax/agent/spokes/browser/agent.py` for a simple spoke, or `prax/agent/spok
 
 ## Source Code in the Sandbox
 
-The everyday persistent sandbox mounts **only `/workspace`**. The Prax source is
-mounted at `/source/` **only** during the gated, HIGH-risk self-improvement flow
-so Prax can read and modify its own code (Prax codes natively — no external coding
-agent — via `self_improve_read/write/patch/test/verify/deploy`):
+The intended posture is that the everyday persistent sandbox mounts **only
+`/workspace`** and the Prax source appears at `/source/` only during the gated,
+HIGH-risk self-improvement flow (`self_improve_read/write/patch/test/verify/deploy`;
+Prax codes natively — no external coding agent). What the shipped files actually do
+(2026-09):
 
-| Mode | Mount | Access |
+| How the sandbox was started | `/source` mount | Model keys in the container |
 |------|-------|--------|
-| Production | `./prax:/source/prax` | Read-only — inspect but not modify directly |
-| Dev mode | `./prax:/source/prax` | Read-write — changes propagate via bind mount, Werkzeug auto-reloads |
+| `../prax-sandbox/docker-compose.yml` — the `make run-local-all` / `make restart-sandbox` path | none (only `/workspace`) | none |
+| prax `docker-compose.yml` / `docker-compose.lite.yml` (the README Quick Start) | **whole repo, read-write** (`.:/source`, always — not only during self-improvement) | **yes** — `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` from `.env` |
+| + `docker-compose.dev.yml` overlay | adds `./prax:/source/prax`, `./app.py`, `./config.py`, `./tests` read-write | as above |
+
+**Known gap (2026-09):** the second row contradicts
+[sandbox-execution-boundary](../security/sandbox-execution-boundary.md); the compose
+files have not yet been brought in line with the documented boundary. Until they are,
+treat a Docker-Compose-started sandbox as having full read-write access to the
+checkout (including `.env`).
 
 ## Key Files
 

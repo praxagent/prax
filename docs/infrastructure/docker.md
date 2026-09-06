@@ -9,6 +9,18 @@ cp .env-example .env    # configure API keys
 docker compose up --build
 ```
 
+> **Known gap (2026-09): this path does not currently start `prax`.** The
+> `sandbox` service in `docker-compose.yml` (and `docker-compose.lite.yml`)
+> carries a compose-level `healthcheck` that curls `http://localhost:4096/global/health`
+> — the OpenCode server that was removed from the image in 2026-07 (prax-sandbox
+> #4). A compose `healthcheck:` overrides the image's own `HEALTHCHECK`
+> (`pgrep -x supervisord`, which is correct), so the sandbox never reports
+> healthy, and `prax` (`depends_on: sandbox: condition: service_healthy`) never
+> starts. The `make run-local-all` and `deploy/update.sh` paths start the sandbox
+> from prax-sandbox's own compose (which uses the `pgrep` check) and are not
+> affected. Fix direction: drop the override or replace it with
+> `["CMD-SHELL", "pgrep -x supervisord || exit 1"]`.
+
 **Day-to-day usage** — once images are built, skip the rebuild to start in seconds:
 
 ```bash
@@ -21,23 +33,23 @@ docker compose build prax && docker compose up   # same idea, explicit two-step
 
 Use `--build` when you've changed a Dockerfile or its dependencies (e.g. added a package). For code-only changes in dev mode, plain `docker compose up` is enough.
 
-**Dev mode** — mount local source code so changes auto-reload without rebuilding:
+**Dev mode** — the intent is to mount local source code so changes auto-reload without rebuilding:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up
 ```
 
-This bind-mounts `prax/`, `app.py`, `config.py`, and `scripts/` into the container and sets `DEBUG=true`, which enables Flask's Werkzeug reloader. Edit code locally, save, and the app restarts automatically. You still need `--build` if you change the Dockerfile, `pyproject.toml`, or system-level dependencies.
+**Known gap (2026-09): the overlay is stale.** `docker-compose.dev.yml` overrides services named `app` and `teamwork`, but `docker-compose.yml` defines `prax` and `sandbox` (TeamWork is bundled inside the `prax` image; there is no `teamwork` service). The `DEBUG=true` / live-mount settings never reach `prax`, and `app` has neither an image nor a build context. The base compose already bind-mounts `./prax`, `./app.py` and `./scripts` into `prax`; for a working live-reload dev loop use `make run-local-all-dev` (host processes) instead. You still need `--build` if you change the Dockerfile, `pyproject.toml`, or system-level dependencies.
 
 This starts two core services (the `prax` container is all-in-one):
 
 | Service | Description |
 |---------|-------------|
-| **prax** | All-in-one container that bundles the Flask app (port 5001), the TeamWork web UI (port 3000) + API (port 8000), Qdrant, Neo4j, and ngrok (dashboard on 4040). `.env` injected, Docker socket for sandbox management. ngrok forwards the Twilio webhook routes (`/transcribe`, `/sms`) and the gated `/shared/<token>` endpoint to the public internet — only files/courses/notes registered in `workspaces/{user}/.shares.json` are reachable through it. |
-| **sandbox** | Always-on **pure-execution** sandbox with Python + scientific stack, DuckDB, Lean, LaTeX, ffmpeg, poppler, pandoc, headless Chrome, and desktop. Ships **no coding-agent server** (no OpenCode/Claude-Code/Codex) and takes no model API keys — Prax codes natively. Shares `./workspaces` volume. |
+| **prax** | All-in-one container that bundles the Flask app (port 5001), the TeamWork web UI (port 3000) + API (port 8000), Qdrant, Neo4j, and ngrok (dashboard on 4040). `.env` injected, Docker socket for sandbox management. When `NGROK_AUTHTOKEN` is set, `scripts/ngrok-launch.sh` runs `ngrok http 5001` — a **port tunnel that publishes every Flask route** to the public internet, not only the Twilio webhooks (`/transcribe`, `/sms`) and `/shared/<token>`; the share registry (`workspaces/{user}/.shares.json`) gates only what `/shared/<token>` will serve. The `/teamwork/*`, `/plugins/*` and `/api/users/*` routes behind it have no inbound authentication — see [network-exposure.md](../security/network-exposure.md) and the Twilio section of [configuration.md](../security/configuration.md) before enabling it. |
+| **sandbox** | Always-on **pure-execution** sandbox with Python + scientific stack, DuckDB, Lean, LaTeX, ffmpeg, poppler, pandoc, headless Chrome, and desktop. The image ships **no coding-agent server** (no OpenCode/Claude-Code/Codex) — Prax codes natively. Mounts `${WORKSPACE_DIR}/${PRAX_USER_ID}` at `/workspace`. **Known gap (2026-09):** this compose still passes `ANTHROPIC_API_KEY=${ANTHROPIC_KEY}` / `OPENAI_API_KEY=${OPENAI_KEY}` into the container and bind-mounts the whole repo read-write at `/source` (plus `.sandbox/*` homes at `/root/…`) — leftovers from the removed coding agents. See [sandbox-execution-boundary.md](../security/sandbox-execution-boundary.md). prax-sandbox's own compose passes no keys and mounts only `/workspace`. |
 | **tailscale** *(opt-in)* | Userspace `tailscaled` sidecar that joins your tailnet and serves TeamWork (`:443`) + Grafana (`:3001`) over MagicDNS HTTPS. Activated by setting `TS_AUTHKEY` + `COMPOSE_PROFILES=tailscale` in `.env`; silently skipped otherwise. State persists in a Docker volume so the node identity survives restarts. |
 
-The app waits for the sandbox and TeamWork health checks before starting. Environment detection is automatic — `RUNNING_IN_DOCKER=true` and `SANDBOX_HOST=sandbox` are set by compose.
+The `prax` service depends on the sandbox health check (`condition: service_healthy`; see the Known gap at the top — that check currently never passes). Environment detection is automatic — `RUNNING_IN_DOCKER=true` and `SANDBOX_HOST=sandbox` are set by compose.
 
 **With observability** — add `--profile observability` to start Tempo, Loki, Prometheus, Promtail, and Grafana alongside the core services:
 

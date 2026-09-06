@@ -20,8 +20,17 @@ So the invariant is enforced by a test, not by discipline:
 [`tests/test_credential_registry.py`](../../tests/test_credential_registry.py)
 **fails CI** if any `*_KEY` / `*_TOKEN` / `*_SECRET` / `*_API` field exists in
 `settings.py` without a matching row in the registry. You cannot add a credential
-and forget to classify it. (It has already earned its keep — it caught
-`NEO4J_PASSWORD` and two SSH keys on first run.)
+to `settings.py` and forget to classify it. (It has already earned its keep — it
+caught `NEO4J_PASSWORD` and two SSH keys on first run.)
+
+**Known gap (2026-09): the guard sees `settings.py` fields only.** A credential
+read straight from the process environment never enters the registry:
+`SENDGRID_API_KEY` (`prax/readers/reader_functions.py`, `os.environ.get`),
+`HF_TOKEN` / `HUGGINGFACE_TOKEN` (`prax/eval/benchmarks/datasets.py`; only
+`HF_TOKEN_RO` is registered), `ARC_API_KEY` (`prax/eval/arc3/sdk_agent.py`), and
+the deployment-level `TS_AUTHKEY` (compose) and `NGROK_AUTHTOKEN` (`.env-example`)
+are all outside it. "Exactly one place" is true for what Pydantic loads, not for
+everything the codebase reads.
 
 ### Adding a credential (the whole procedure)
 1. Add the `Field(..., alias="NEW_KEY")` in `prax/settings.py`.
@@ -29,7 +38,9 @@ and forget to classify it. (It has already earned its keep — it caught
    - **`PROXY_MODEL`** — a model provider reached via a base-URL override
      (proxied *today*).
    - **`PROXY_FORWARD`** — an ordinary HTTPS REST API; proxyable *only* via the
-     transparent forward proxy (Tier-2, planned) — until then the key stays in Prax.
+     transparent forward proxy (Tier-2, shipped as the opt-in `forward` profile of
+     `prax-secrets-proxy` — see [deployment-topology.md](deployment-topology.md));
+     without it the key stays in Prax.
    - **`PROXY_LOCAL`** — in-process signing, an *inbound* token, or Prax's own
      co-located infra; the proxy cannot and should not hold it.
 3. If it's `MODEL`/`FORWARD`, wire the proxy side to inject it.
@@ -41,10 +52,13 @@ The test enforces step 2. Keep the classification honest.
 - **Tier 1 — model providers (proxied today).** Base-URL override
   (`OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL`); the proxy swaps the presented token
   for the real key. This is what ships in `prax-secrets-proxy` now.
-- **Tier 2 — REST APIs (planned).** These SDKs don't expose a base-URL knob, so
-  they can only be proxied by a **transparent forward proxy** (`HTTPS_PROXY` + a CA
-  Prax trusts) that injects auth by destination host. Until that ships, these keys
-  stay in Prax. See [secrets-proxy.md → Tier 2](secrets-proxy.md#tier-2--general-egress-future).
+- **Tier 2 — REST APIs (forward proxy, opt-in).** These SDKs don't expose a
+  base-URL knob, so they can only be proxied by a **transparent forward proxy**
+  (`HTTPS_PROXY` + a CA Prax trusts) that injects auth by destination host. That
+  proxy is built and verified for several providers (see the ledger); a
+  deployment that does not run it keeps these keys in Prax. See
+  [deployment-topology.md](deployment-topology.md) and
+  [secrets-proxy.md → Tier 2](secrets-proxy.md#tier-2--general-egress).
 - **Not proxyable.** In-process (`FLASK_SECRET_KEY`), inbound (`MCP_BEARER_TOKEN`),
   Prax's own infra (`NEO4J_PASSWORD`, sandbox/TeamWork), or non-HTTP
   (git-over-SSH keys). By design these live only in Prax.
@@ -62,7 +76,7 @@ The test enforces step 2. Keep the classification honest.
 ¹ Proxyable via the openai leg (`PROXY_OPENAI_BASE_URL=…openrouter…`) or its own
 upstream; needs Prax's openrouter base URL pointed at the proxy.
 
-### Tier 2 — REST APIs · proxyable only via the transparent forward proxy (PLANNED)
+### Tier 2 — REST APIs · proxyable only via the transparent forward proxy (opt-in `forward` profile)
 
 | Env | Service | Purpose | Host | Inject |
 |---|---|---|---|---|
@@ -81,18 +95,28 @@ upstream; needs Prax's openrouter base URL pointed at the proxy.
 | `NYT_PASSWORD` | New York Times | news access | www.nytimes.com | basic |
 | `HF_TOKEN_RO` | Hugging Face | gated dataset fetch² | huggingface.co | bearer |
 | `TWILIO_ACCOUNT_SID` | Twilio | SMS/voice (basic user) | api.twilio.com | basic |
-| `TWILIO_AUTH_TOKEN` | Twilio | SMS/voice (basic pass) | api.twilio.com | basic |
+| `TWILIO_AUTH_TOKEN` | Twilio | SMS/voice (basic pass) — **also the inbound webhook HMAC secret**³ | api.twilio.com | basic |
+
+³ `prax/blueprints/twilio_auth.py` validates `X-Twilio-Signature` with this same
+value, and an inbound signature check cannot be proxied. If only the proxy holds
+the real token, Prax's copy is empty (validation skipped) or a placeholder
+(validation can never pass). **Known gap (2026-09):** there is no keyless
+configuration in which Twilio signature validation works; see
+[configuration.md → Twilio](configuration.md#option-c-twilio-voice--sms) for the
+related `https`-behind-ngrok failure.
 
 ² Used at dataset-fetch time (scripts), not agent runtime — low priority.
 
-⚠️ **Google keys are deliberately UNSET (2026-07-22).** They remain classified
-`PROXY_FORWARD` (forward-proxyable in principle), but we hold **no** Google key.
-Google Cloud billing is **not** a hard-capped pay-as-you-go product — a runaway loop
-or a prompt-injected agent could run up **unbounded** charges with no ceiling to stop
-it, which is a categorically worse failure mode than a metered per-call API. So the
-safe default is to hold no Google key at all: Prax degrades to the keyless search
-providers and non-Google vision. Only set `GOOGLE_API_KEY` behind a Google Cloud
-budget/quota cap you have configured yourself.
+⚠️ **Google keys: the recommended stance is to hold none (2026-07-22).** They
+remain classified `PROXY_FORWARD` (forward-proxyable in principle). Google Cloud
+billing is **not** a hard-capped pay-as-you-go product — a runaway loop or a
+prompt-injected agent could run up **unbounded** charges with no ceiling to stop
+it, which is a categorically worse failure mode than a metered per-call API. So
+the safe default is to hold no Google key at all: Prax degrades to the keyless
+search providers and non-Google vision. Only set `GOOGLE_API_KEY` behind a Google
+Cloud budget/quota cap you have configured yourself. Whether a given proxy
+deployment actually holds one is the operator's choice and lives in the proxy's
+own `.env`; this page cannot assert its absence.
 
 _Verified live 2026-07-22: Serper, OpenAI, and **Twilio** (basic auth) all inject +
 work through the forward proxy; **ElevenLabs** injects correctly but the held key is
