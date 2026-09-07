@@ -68,6 +68,10 @@ TEST_ENV = {
     "AUTO_TIER_ESCALATION": "false",
     # Discord (disabled in tests by default)
     "DISCORD_BOT_TOKEN": "",
+    # Inbound API-key check off, as shipped: pydantic reads .env itself, so a
+    # dev box with PRAX_API_KEY set would otherwise 401 every blueprint test.
+    # tests/test_inbound_auth.py sets the key explicitly per test.
+    "PRAX_API_KEY": "",
     "DISCORD_ALLOWED_USERS": '{"999000000000000001": "TestUser"}',
     "DISCORD_ALLOWED_CHANNELS": "",
     "DISCORD_TO_PHONE_MAP": "",

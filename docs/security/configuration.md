@@ -15,7 +15,7 @@ Key fields:
 | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` | Twilio console credentials (not needed for TeamWork- or Discord-only setups) | `None` |
 | `OPENAI_KEY` | OpenAI API key | *(required unless using other provider)* |
 | `ANTHROPIC_KEY` | Anthropic API key (Claude provider for the main agent) | `None` |
-| `LLM_PROVIDER` | LLM provider: `openai`, `anthropic`, `google_vertex`, `ollama`, `vllm` | `openai` |
+| `LLM_PROVIDER` | LLM provider: `openai`, `anthropic`, `openrouter`, `google` (alias `google-vertex`), `ollama` (alias `local`), `vllm` — the names `prax/agent/llm_factory.py` matches; `google_vertex` with an underscore is **not** recognised | `openai` |
 | `BASE_MODEL` | Model name for the main agent | `gpt-5.4-nano` |
 | `AGENT_NAME` | Display name for the agent across all channels, greetings, and prompts | `Prax` |
 | `PHONE_TO_NAME_MAP` | JSON: `{"+15551234567": "Alice"}` — whitelists callers | `None` |
@@ -25,13 +25,13 @@ Key fields:
 | `TS_AUTHKEY` | Tailscale auth key; prefer a non-ephemeral identity with persisted state. Pre-approve if tailnet device approval requires it. Current Compose also requires a nonempty value when this profile is disabled; see below. | `None` |
 | `TS_HOSTNAME` | Tailnet hostname for the sidecar (becomes `<hostname>.<tailnet>.ts.net`) | `prax` |
 | `COMPOSE_PROFILES` | Set to `tailscale` to activate the sidecar; without this it's silently skipped | *(unset)* |
-| `WORKSPACE_DIR` | Path to workspace root | `./workspaces` |
+| `WORKSPACE_DIR` | Path to workspace root | `../workspaces` (`prax/settings.py`; the compose file overrides it to `./workspaces` inside the container) |
 | **Sandbox** | | |
 | `SANDBOX_IMAGE` | Docker image for sandbox | `prax-sandbox:latest` |
 | `SANDBOX_TIMEOUT` | Max sandbox session duration (seconds) | `1800` |
 | `SANDBOX_MAX_CONCURRENT` | Max simultaneous sandbox sessions | `5` |
-| `SANDBOX_DEFAULT_MODEL` | Default model for sandbox coding | `openai/gpt-5.4` |
-| `SANDBOX_MAX_ROUNDS` | Max message rounds per sandbox session | `10` |
+| `SANDBOX_DEFAULT_MODEL` | Legacy — the coding-session feature it configured was removed in 2026-07 (#142); still defined and forwarded to the sandbox client, governs nothing in Prax | `openai/gpt-5.4` |
+| `SANDBOX_MAX_ROUNDS` | Legacy — same as above | `10` |
 | `SANDBOX_MEM_LIMIT` | Container memory limit | `1g` |
 | `SANDBOX_CPU_LIMIT` | Container CPU limit (nanocpus) | `2000000000` |
 | **Fine-Tuning (optional)** | | |
@@ -65,11 +65,18 @@ You need at least one messaging channel. You can run multiple simultaneously.
 
 ### Option A: TeamWork Web UI (Included)
 
-[TeamWork](https://github.com/praxagent/teamwork) is included in `docker-compose.yml` and starts automatically. No extra configuration needed.
+[TeamWork](https://github.com/praxagent/teamwork) is bundled **inside the `prax`
+container image** (the `Dockerfile` builds it from `TEAMWORK_PATH`, default
+`../teamwork`; there is no separate `teamwork` service in `docker-compose.yml`)
+and starts with it.
 
 ```bash
-docker compose up --build    # TeamWork is at http://localhost:3000
+docker compose up --build    # TeamWork is at http://localhost:3000 (container :8000 → host :3000)
 ```
+
+> (Until 2026-09 this command could not bring `prax` up at all — the `sandbox`
+> service's compose healthcheck probed a server no longer in the image; closed,
+> see the note in [docker.md](../infrastructure/docker.md).)
 
 TeamWork provides Slack-like chat channels, a Kanban board, an in-browser terminal, browser screencast, and a file browser. Prax connects to it automatically on startup via the `TEAMWORK_URL` environment variable.
 
@@ -77,8 +84,9 @@ To link TeamWork conversations with your SMS/Discord identity (shared workspace 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TEAMWORK_URL` | `http://teamwork:8000` | TeamWork API URL (set by docker-compose) |
-| `TEAMWORK_API_KEY` | *(empty)* | API key for authentication (optional) |
+| `TEAMWORK_URL` | *(empty)* — inside the bundled image `scripts/watchdog-launch.sh` defaults it to `http://localhost:8000`; `make run-local-all` passes the same | TeamWork API URL. **This is the on/off switch**: set → Prax connects; empty → TeamWork integration off (`TEAMWORK_ENABLED` is legacy). Neither compose file sets it. |
+| `TEAMWORK_API_KEY` | *(empty)* | Shared key Prax sends (`X-API-Key`) to TeamWork's `/api/external` — **required whenever `TEAMWORK_URL` is set** (TeamWork answers 503 without it; see `.env-example`). Outbound only: Prax does not check it on the requests TeamWork makes *to* Prax — that is `PRAX_API_KEY`'s job. |
+| `PRAX_API_KEY` | *(empty)* — no inbound check | Inbound counterpart: when set, Prax's own `/teamwork/*`, `/plugins/*` and `/api/users/*` routes require a matching `X-API-Key` header (or `Authorization: Bearer`) and answer 401 otherwise (`prax/blueprints/inbound_auth.py`). Set TeamWork's `PRAX_API_KEY` to the same value so its proxy routers send the header. Anything else that calls those routes directly does not yet send it (the k8s operator's `/teamwork/health` probe, `scripts/smoke_test.py`, TeamWork's MCP Library bridge) — add the header there before turning the key on in such a deployment. Twilio routes keep signature validation, `/mcp` its bearer, `/health` and `/healthz/*` stay open. |
 | `TEAMWORK_USER_PHONE` | *(empty)* | Phone number to share workspace with SMS/Discord |
 
 ### Option B: Discord (Free)
@@ -192,6 +200,35 @@ they're served by TeamWork on the local network unless the user
 explicitly opts a specific page into the share registry.  See
 [`docs/infrastructure/content-publishing.md`](../infrastructure/content-publishing.md).)
 
+> **⚠️ Read before you open the tunnel (Known gaps, 2026-09).**
+>
+> - **`ngrok http 5001` publishes every Prax route, not just Twilio's.** An ngrok
+>   port tunnel is not path-scoped. Behind it sit routes with **no inbound
+>   authentication unless `PRAX_API_KEY` is set** — `POST /teamwork/webhook`
+>   (starts an agent turn as the configured TeamWork user), the rest of
+>   `/teamwork/*` (schedules, memory, library delete), `/plugins/*` (git-clones
+>   a repo), `/api/users/*`. `PRAX_HOST=127.0.0.1` does not help: ngrok dials
+>   localhost. Do not run this shape on the open internet without **both**
+>   setting `PRAX_API_KEY` (see *Option A: TeamWork Web UI* above) **and** restricting
+>   the tunnel to the Twilio paths (a path-filtering rule at the tunnel, or a
+>   reverse proxy that forwards only `/sms`, `/transcribe`, `/respond`,
+>   `/reader`, `/read`, `/conference`, `/say`, `/play`, `/shared/`) — the key
+>   guards those three route groups only, not `/execution/*`, `/courses/`,
+>   `/notes/` or anything else on `:5001`. The same applies to the in-container
+>   ngrok started by `scripts/ngrok-launch.sh` when `NGROK_AUTHTOKEN` is set.
+> - **Signature validation is fail-open and does not work behind the HTTPS
+>   tunnel.** `prax/blueprints/twilio_auth.py` skips validation entirely when
+>   `TWILIO_AUTH_TOKEN` is empty (one warning, then every request is accepted —
+>   the only remaining gate is the spoofable `From` allow-list). When the token
+>   *is* set, it signs `request.url`, and Flask sees `http://…` for a request that
+>   arrived at ngrok over `https://…` (no `ProxyFix` / `X-Forwarded-Proto`
+>   handling anywhere in the app), while Twilio signed the `https://` URL — so
+>   every genuine webhook is rejected with 403. Until the app builds the signed
+>   URL from `NGROK_URL` or trusts the forwarded scheme, the Twilio channel is
+>   either unauthenticated or non-functional; there is no working configuration
+>   in which it is both. Under the keyless (forward-proxy) setup Prax holds only
+>   a placeholder token, which cannot validate either.
+
 1. Start the Flask server locally (see Running below).
 2. In another terminal, run ngrok against the Flask port (default 5001):
    ```bash
@@ -230,7 +267,12 @@ Tailscale.
    ```
 3. `docker compose up -d` — the sidecar joins the tailnet automatically.
    Visit `https://prax.<tailnet>.ts.net/` for TeamWork and
-   `https://prax.<tailnet>.ts.net:3001/` for Grafana.
+   `https://prax.<tailnet>.ts.net:3001/` for Grafana. Note that the compose
+   Grafana has anonymous access enabled at the **Admin** role
+   (`GF_AUTH_ANONYMOUS_ENABLED=true`, `GF_AUTH_ANONYMOUS_ORG_ROLE=Admin` in
+   `docker-compose.yml`), so every tailnet member who can reach `:3001` is a
+   Grafana admin without logging in. Neither TeamWork nor Prax has a
+   browser-session login of its own; the tailnet ACL is the access control.
 
 The checked-in sidecar uses kernel TUN mode with `NET_ADMIN` and `/dev/net/tun`, and
 persists state in a Docker volume so the node identity survives restarts
@@ -261,11 +303,11 @@ uv run python -c "from prax.services.state_paths import ensure_conversation_db; 
 ```bash
 uv run python app.py
 ```
-The server listens on `0.0.0.0:5001` (configurable via `.env`). The scheduler starts automatically and loads any existing `schedules.yaml` files from user workspaces.
+The server listens on `127.0.0.1:5001` by default (`PRAX_HOST` / `PORT` in `.env`; see [network-exposure.md](network-exposure.md) before changing the bind address). The scheduler starts automatically and loads any existing `schedules.yaml` files from user workspaces.
 
 ### Production / Deployment
 
-- **Gunicorn**: `uv run gunicorn 'app:app' --bind 0.0.0.0:5001 --workers 2 --threads 4`
+- **Process manager**: `gunicorn` is not a dependency of this project. The shipped unit, `deploy/systemd/prax.service`, runs `uv run --python 3.13 python app.py` under systemd (`Restart=always`); use that (or your own supervisor around the same command).
 - **Environment**: copy `.env` to the server, point `LOG_PATH` and `WORKSPACE_DIR` to persistent volumes. `DATABASE_NAME` is optional; leaving it as `conversations.db` stores history under the workspace service-state directory.
 - **Docker**: see `Dockerfile` and `docker-compose.yml` in the repo root. The app container needs `/var/run/docker.sock` mounted for sandbox functionality.
 - **TLS / DNS**: for inbound from your own laptops, prefer the Tailscale sidecar (HTTPS via MagicDNS, see Remote access above).  For inbound from external services that aren't on your tailnet (e.g. Twilio webhooks), terminate TLS via ngrok (dev) or a reverse proxy (Nginx/Cloudflare/etc.).

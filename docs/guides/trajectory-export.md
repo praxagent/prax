@@ -83,9 +83,15 @@ Each trajectory is tagged with one of:
 
 ### Approach 1: Train on successes only
 ```bash
-# Use completed.jsonl directly — every line is a good example
-uv run python -m prax.services.finetune_service train --data completed.jsonl
+# Use completed.jsonl directly — every line is a good example.
+# scripts/finetune_train.py is the training entry point (Unsloth QLoRA, needs a GPU);
+# --base-model, --data and --output are required.
+uv run python scripts/finetune_train.py --base-model <hf-model-id> --data completed.jsonl --output <adapter-dir>
 ```
+
+There is no `python -m prax.services.finetune_service` CLI — the service calls the
+same script as a subprocess. Inside Prax, the `finetune_*` tools (behind
+`FINETUNE_ENABLED=true`) drive it.
 
 ### Approach 2: Train on corrections (DPO/ORPO)
 Failed trajectories contain the *wrong* response. When paired with the corrected follow-up (which becomes a `success` trajectory), you can build preference pairs for DPO (Direct Preference Optimization):

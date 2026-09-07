@@ -12,6 +12,7 @@ from langchain_core.tools import tool
 from prax_sandbox import cdp_service
 
 from prax.agent.action_policy import RiskLevel, risk_tool
+from prax.services.browser_service import check_navigation_url
 
 
 @tool
@@ -95,6 +96,9 @@ def sandbox_browser_act(action: str, value: str = "") -> str:
     if action == "navigate":
         if not value:
             return "Error: provide a URL to navigate to"
+        refusal = check_navigation_url(value)
+        if refusal:
+            return f"Browser error: {refusal}"
         result = cdp_service.navigate(value)
         if "error" in result:
             return f"Browser error: {result['error']}"
@@ -181,6 +185,9 @@ def _run_step(step: dict) -> dict:
     verb, arg = next(iter(step.items()))
     try:
         if verb == "goto":
+            refusal = check_navigation_url(str(arg))
+            if refusal:
+                return {"step": verb, "ok": False, "detail": refusal}
             r = cdp_service.navigate(str(arg))
             if "error" in r:
                 return {"step": verb, "ok": False, "detail": r["error"]}

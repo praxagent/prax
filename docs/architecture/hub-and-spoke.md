@@ -4,7 +4,7 @@
 
 Prax uses a hub-and-spoke model: the orchestrator stays near the 50-tool ceiling (kernel + planning/meta + trace introspection + `delegate_*` per spoke + a tiny core-reviewed plugin promotion allowlist) and delegates domain-specific work to focused spoke agents.  This keeps the orchestrator's context lean — [research shows](../research/production-patterns.md#9-tool-overload-and-selection-degradation) that tool selection accuracy degrades significantly past 20–50 tools, with Anthropic documenting a hard cliff around 50.
 
-> **Fallback:** If a delegated agent fails or can't handle the task, Prax can read the full tool catalog from a generated markdown file and call any tool directly. The spoke system is the fast path; direct tool access is the safety net.
+> **Note (2026-09):** an earlier version of this page described a fallback where Prax "reads the full tool catalog from a generated markdown file and calls any tool directly". No such mechanism exists in `orchestrator.py`, `tool_registry.py` or `tools.py`; the orchestrator's callable set is the fixed hub roster below, and a failed delegation is reported back to the orchestrator as the spoke's result.
 
 #### Orchestrator (Hub)
 
@@ -80,22 +80,15 @@ mechanical boundaries:
 Grandfathered violations live in an `ALLOWLIST` in the linter itself;
 new code must not add to it.
 
-#### Media Agent
+#### Media / reader tools
 
-Handles images, PDFs, audio, video transcripts, and web content extraction.
-
-```mermaid
-graph LR
-    Media["📰 Media Agent"] --> analyze["analyze_image"]
-    Media --> pdf["pdf_summary_tool"]
-    Media --> yt["youtube_transcribe"]
-    Media --> arxiv["arxiv_fetch_papers"]
-    Media --> npr["npr_podcast_tool"]
-    Media --> web["web_summary_tool"]
-    Media --> dlf["deutschlandfunk_tool"]
-    Media --> fetch["fetch_url_content"]
-    style Media fill:#9013FE,color:#fff
-```
+There is no separate "Media Agent". PDF, audio, transcript and web-extraction tools
+are **plugins** under `prax/plugins/tools/` (`pdf_reader` → `pdf_summary_tool`,
+`youtube_reader` → `youtube_transcribe`, `arxiv_reader` → `arxiv_fetch_papers`,
+`npr_podcast`, `web_summary`, `deutschlandfunk`), loaded by the plugin system
+(`prax/plugins/loader.py`) and exposed through the plugin-routing spokes described
+below rather than a dedicated agent; `analyze_image` lives in the Browser spoke and
+`fetch_url_content` stays on the orchestrator kernel.
 
 #### Sandbox Agent
 
@@ -110,6 +103,15 @@ Executes code in an isolated Docker container with a full dev environment.
 > `sandbox_shell`). The spoke and all sandbox tools below are available whenever
 > `SANDBOX_ENABLED` is set. See
 > [sandbox-execution-boundary](../security/sandbox-execution-boundary.md).
+>
+> **Known gap (2026-09) — where `desktop_*` actually runs.** `sandbox_shell`,
+> `sandbox_view/scroll/goto` and `sandbox_install` go through the sandbox client and
+> execute in the container. The six `desktop_*` tools instead call
+> `prax.utils.shell.run_command`, which routes to the sandbox **only when
+> `RUNNING_IN_DOCKER=true`** (`settings.sandbox_persistent`) and otherwise falls back
+> to `subprocess.run` on the Prax host. On a native deployment (`make run-local-*`,
+> the systemd unit) with the sandbox enabled, `desktop_open` therefore runs its
+> model-supplied command via `bash -c` on the host, not in the container.
 
 ```mermaid
 graph LR
@@ -250,15 +252,15 @@ graph LR
 | `prax/agent/spokes/plugins/agent.py` | Plugin spoke: manifest-routed end-user plugin execution via `delegate_plugins` |
 | `prax/agent/course_author_agent.py` | Content author sub-agent: produces rich course materials (mermaid, code, LaTeX) via iterative sandbox drafting |
 | `prax/agent/tools.py` | Kernel tool wrappers (search, datetime, fetch_url) — reader tools migrated to plugins |
-| `prax/agent/plugin_tools.py` | 17 plugin management tools: plugin CRUD, catalog, prompt CRUD, LLM config, source_read/list |
-| `prax/agent/workspace_tools.py` | 26 workspace tools: notes, files, links, todos, task planning, instructions, conversation history/search, system status, diff-aware patch, self_upgrade_tier, run_python |
-| `prax/agent/sandbox_tools.py` | 16 sandbox tools: code execution sessions + 6 desktop interaction tools (xdotool/scrot) |
-| `prax/agent/scheduler_tools.py` | 9 scheduler tools: recurring cron + one-time reminders |
-| `prax/agent/finetune_tools.py` | 8 fine-tuning tools (harvest, train, verify, promote, rollback) |
-| `prax/agent/codegen_tools.py` | 10 self-improvement tools (worktree, edit, test, lint, verify, deploy, PR) |
-| `prax/agent/note_tools.py` | 7 note tools (create, update, list, search, note_from_url, pdf_to_note, note_link) |
-| `prax/agent/project_tools.py` | 6 research project tools (create, status, add note/link/source, brief) |
-| `prax/agent/browser_tools.py` | 14 browser tools (navigate, click, fill, screenshot, login, VNC) |
+| `prax/agent/plugin_tools.py` | Plugin management tools: plugin CRUD/import/update, catalog, prompt CRUD, LLM config, `source_read`/`source_list`/`source_grep`, workspace remote/share tools |
+| `prax/agent/workspace_tools.py` | Workspace tools: files, links, todos, task planning, progress, instructions, conversation history/search, system status, diff-aware patch, `self_upgrade_tier`, `run_python` |
+| `prax/agent/sandbox_tools.py` | Direct-execution tools (`sandbox_shell`, `terminal_history`, `sandbox_install`, `sandbox_rebuild`, `sandbox_view/scroll/goto`) + 6 desktop interaction tools (xdotool/scrot) |
+| `prax/agent/scheduler_tools.py` | Scheduler tools: recurring cron + one-time reminders |
+| `prax/agent/finetune_tools.py` | Fine-tuning tools (harvest, train, verify, promote, rollback) |
+| `prax/agent/codegen_tools.py` | Self-improvement tools (worktree, read/write/patch, test, lint, verify, deploy, rollback; `self_improve_submit` is disabled — git push is not allowed) |
+| `prax/agent/note_tools.py` | Note tools (create, update, read, list, ...) |
+| `prax/agent/project_tools.py` | Research project tools (create, status, add note/link/source, brief) |
+| `prax/agent/browser_tools.py` | Browser tools (navigate, click, fill, screenshot, login, profiles) |
 | `prax/agent/tool_registry.py` | Tool aggregation: built-in + spoke delegates + tiny manifest-backed plugin promotions + manually registered |
 | `prax/agent/llm_factory.py` | Multi-provider LLM factory (OpenAI, Anthropic, Google, Ollama, vLLM) |
 | `prax/plugins/loader.py` | Recursive plugin discovery (folder-per-plugin + flat), hot-swap, version tracking, auto-rollback, catalog generation |
@@ -274,7 +276,7 @@ graph LR
 | `prax/services/sms_service.py` | SMS workflow: media handling, PDF pipeline, agent routing |
 | `prax/services/voice_service.py` | Voice workflow: speech processing, TTS buffer management |
 | `prax/services/conversation_service.py` | Shared conversation layer with workspace context injection |
-| `prax/services/sandbox_service.py` | Docker sandbox execution: shell commands, file viewer, package install, container rebuild |
+| `prax/services/sandbox_bridge.py` | Bridge to the sibling `prax_sandbox_client`: builds the `SandboxConfig` from prax settings and hands out the configured client that the sandbox tools use |
 | `prax/services/scheduler_service.py` | APScheduler-backed cron service reading YAML definitions |
 | `prax/services/finetune_service.py` | LoRA fine-tuning pipeline: harvest → train → verify → hot-swap |
 | `prax/services/note_service.py` | Note CRUD, search, knowledge graph (related notes), Hugo page generation |

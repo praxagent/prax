@@ -8,16 +8,90 @@ from __future__ import annotations
 
 import base64
 import logging
+import re
+import tempfile
+from pathlib import Path
 
-import requests
 from langchain_core.tools import tool
 
 from prax.settings import settings
+from prax.utils.ssrf import safe_request
 
 logger = logging.getLogger(__name__)
 
 # Maximum image size to download for base64 encoding (10 MB).
 _MAX_IMAGE_BYTES = 10 * 1024 * 1024
+
+# The only files OUTSIDE the user's workspace that analyze_image may read: the
+# temp-dir screenshots the harness's own tools write, matched by exact
+# directory + basename pattern per writer. Nothing else on the host filesystem.
+#   prax_sandbox.cdp_service.screenshot          -> <tempdir>/cdp_screenshot_<epoch>.jpg
+#   browser_service.screenshot(save_to_workspace=False) -> <tempdir>/browser_<mkstemp>.png
+#   sandbox_tools.desktop_screenshot             -> /tmp/screenshot_<epoch>.png (literal /tmp)
+_CDP_SCREENSHOT_RE = re.compile(r"cdp_screenshot_\d+\.jpg")
+_BROWSER_SCREENSHOT_RE = re.compile(r"browser_[A-Za-z0-9_]+\.png")
+_DESKTOP_SCREENSHOT_RE = re.compile(r"screenshot_\d+\.png")
+
+
+def _screenshot_allowlist() -> list[tuple[Path, re.Pattern[str]]]:
+    tmp = Path(tempfile.gettempdir()).resolve()
+    return [
+        (tmp, _CDP_SCREENSHOT_RE),
+        (tmp, _BROWSER_SCREENSHOT_RE),
+        (Path("/tmp").resolve(), _DESKTOP_SCREENSHOT_RE),
+    ]
+
+
+def _is_harness_screenshot(resolved: Path) -> bool:
+    return any(
+        resolved.parent == d and rx.fullmatch(resolved.name) is not None
+        for d, rx in _screenshot_allowlist()
+    )
+
+
+def _resolve_local_image_path(ref: str) -> Path:
+    """Map a local image reference to a readable path, or raise.
+
+    Allowed: a bare/relative name, resolved inside the current user's
+    workspace (``active/`` first — where browser_screenshot saves — then the
+    root); an absolute path inside that workspace; or one of the harness's
+    own temp-dir screenshot files (``_screenshot_allowlist``). Everything
+    else is refused with ``PermissionError``: this tool used to read any path
+    the model named (``/etc/hostname``, or ``.env`` relative to the process
+    CWD) and ship the bytes to the vision provider.
+    """
+    p = Path(ref).expanduser()
+    ws_root: Path | None = None
+    try:
+        from prax.agent.user_context import current_user_id
+        from prax.services.workspace_service import workspace_root
+        uid = current_user_id.get()
+        if uid:
+            ws_root = Path(workspace_root(uid)).resolve()
+    except Exception:
+        logger.debug("workspace path resolution failed for %s", ref, exc_info=True)
+
+    if not p.is_absolute():
+        if ws_root is None:
+            raise PermissionError(
+                f"analyze_image: cannot resolve relative path {ref!r} without a user workspace"
+            )
+        for candidate in (ws_root / "active" / p, ws_root / p):
+            if candidate.is_file():
+                p = candidate
+                break
+        else:
+            raise FileNotFoundError(f"analyze_image: {ref!r} not found in the workspace")
+
+    resolved = p.resolve()
+    if ws_root is not None and resolved.is_relative_to(ws_root):
+        return resolved
+    if _is_harness_screenshot(resolved):
+        return resolved
+    raise PermissionError(
+        f"analyze_image: refusing to read {ref!r} — a local path must be inside "
+        "your workspace or be a harness screenshot file"
+    )
 
 
 def _media_type_for_suffix(suffix: str) -> str:
@@ -39,26 +113,12 @@ def _fetch_image_base64(url: str) -> tuple[str, str]:
     Sends an explicit ``User-Agent`` for http(s) because several image hosts
     (Wikimedia, some news CDNs) reject ``python-requests``'s default UA with 403.
     """
-    # Local file path (or file:// URL): read straight off disk.
+    # Local file path (or file:// URL): read off disk, but only from the user's
+    # workspace or a harness screenshot file (see _resolve_local_image_path).
     if url.startswith("file://"):
         url = url[len("file://"):]
     if not url.startswith(("http://", "https://")):
-        from pathlib import Path
-        p = Path(url).expanduser()
-        if not p.is_file() and not p.is_absolute():
-            # Harness tools (browser_screenshot etc.) save into the user's
-            # workspace and hand back a bare filename — resolve it there the
-            # same way workspace_send_file does, so tool outputs compose.
-            try:
-                from prax.agent.user_context import current_user_id
-                from prax.services.workspace_service import workspace_root
-                uid = current_user_id.get()
-                if uid:
-                    candidate = Path(workspace_root(uid)) / url
-                    if candidate.is_file():
-                        p = candidate
-            except Exception:
-                logger.debug("workspace path resolution failed for %s", url, exc_info=True)
+        p = _resolve_local_image_path(url)
         data = p.read_bytes()[:_MAX_IMAGE_BYTES]
         return base64.standard_b64encode(data).decode("ascii"), _media_type_for_suffix(p.suffix)
     headers = {
@@ -68,7 +128,8 @@ def _fetch_image_base64(url: str) -> tuple[str, str]:
         ),
         "Accept": "image/*,*/*;q=0.8",
     }
-    resp = requests.get(url, timeout=30, stream=True, headers=headers)
+    # SSRF guard with per-hop redirect revalidation — the URL is model-controlled.
+    resp = safe_request("get", url, timeout=30, stream=True, headers=headers)
     resp.raise_for_status()
     content_type = resp.headers.get("content-type", "image/jpeg")
     # Normalize content type.

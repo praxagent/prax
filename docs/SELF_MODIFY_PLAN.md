@@ -1,5 +1,12 @@
 # Self-Modification Architecture Plan
 
+> **Status (2026-09): design plan from 2026-04, superseded by what shipped.** The
+> implemented self-modification flow (staging clone + git worktree + verify +
+> hot-swap / PR) is documented in [`agents/self-modification.md`](agents/self-modification.md),
+> and the hot-swappable plugin system it proposes lives in `prax/plugins/`. The
+> `prax/core/` kernel layout sketched below was not adopted (no such directory
+> exists). Retained as design rationale; not kept in sync with the code.
+
 ## Problem
 
 The agent needs to modify its own behavior — fix bugs it encounters, add tools, tune prompts — without risking the stability of the running system. The current approach (codegen_service.py) copies files into the live repo and hopes Werkzeug reloads cleanly. This is fragile: a bad import kills the process, there's no real isolation, and rollback means git-reverting and restarting.

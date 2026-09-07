@@ -14,14 +14,14 @@
   fuser -k 5001/tcp                     # free the port
   pkill -9 -f "python3 app.py"          # stop any lingering/reloader-thrashing app.py
   pgrep -af app.py ; ss -ltnp | grep 5001   # both should print nothing
-  cd /home/ubuntu/PRAX/prax && nohup uv run --python 3.13 python app.py > .local-run/prax.log 2>&1 &
+  cd <your prax checkout> && nohup uv run --python 3.13 python app.py > .local-run/prax.log 2>&1 &
   ```
   `pkill -f "app.py"` is safe from an interactive shell (your shell's command line doesn't contain `app.py`) but **not** from `bash -c "…app.py…"`, where the pattern matches the wrapper itself. Prefer this plain start over `make restart-prax` while actively editing code — the latter runs `DEBUG=true`, whose reloader restarts on every file change.
 - **Course/note URL 404 over ngrok:** Course/note pages no longer auto-publish to ngrok — they're served by TeamWork at `TEAMWORK_BASE_URL` by default. To make a specific page publicly reachable, the user must explicitly opt in (e.g. `course_publish(course_id, public=True)`), which adds an entry to `workspaces/{user}/.shares.json`. Use `workspace_list_shares` to inspect the registry.
 - **Tailscale sidecar doesn't start:** Confirm both `TS_AUTHKEY` and `COMPOSE_PROFILES=tailscale` are set in `.env` — without `COMPOSE_PROFILES`, Compose silently skips the service. If it starts but doesn't appear in the tailnet, check `docker compose logs tailscale` for an auth error (most common cause: ephemeral or one-off key — must be reusable + non-ephemeral + pre-approved).
 - **PDF extraction fails:** Ensure Java 11+ is installed (`java -version`).
 - **LangChain provider errors:** `prax/agent/llm_factory.py` validates missing API keys; double-check `.env`.
-- **Sandbox won't start:** In Docker Compose mode, check `docker compose logs sandbox` — the app waits for the sandbox health check. In local mode, verify Docker Desktop is running (`docker info`). Build the sandbox image: `docker build -t prax-sandbox:latest sandbox/`.
+- **Sandbox won't start:** In Docker Compose mode, check `docker compose logs sandbox` — the app waits for the sandbox health check. In local mode, verify Docker Desktop is running (`docker info`). Build the sandbox image from the sibling repo: `cd ../prax-sandbox && make build` (there is no `sandbox/` directory in this repo).
 - **sandbox_install fails:** Only works in Docker Compose mode (`RUNNING_IN_DOCKER=true`). In local mode, install packages on your machine directly.
 - **Shared file link returns 404:** The file may have been deleted or the share token revoked. Re-publish with `workspace_share_file`.
 - **Schedule fires at wrong time:** Check the `timezone` field in `schedules.yaml`. Use IANA names like `America/Los_Angeles`, not abbreviations like `PST`.
@@ -51,6 +51,7 @@
 
   # Reset the stuck agent
   curl -X PATCH "http://localhost:8000/api/external/projects/PROJECT_ID/agents/AGENT_ID/status" \
+    -H "X-API-Key: $TEAMWORK_API_KEY" \
     -H "Content-Type: application/json" -d '{"status":"idle"}'
   ```
 
@@ -105,15 +106,21 @@
   A healthy response starts with the RFB protocol version (`RFB 003.008`). `ConnectionClosedError ... 1011 Failed to connect to downstream server` means websockify is up but x11vnc (port 5900) is not.
 
 - **`.env` visible inside sandbox at `/source/.env`:**
-  The full repo is bind-mounted at `/source/` **only** during the gated, HIGH-risk
-  self-improvement flow (Prax editing its own code natively). The everyday
-  persistent sandbox mounts only `/workspace`. During self-improvement the `.env`
-  file is visible inside the sandbox — see
+  It depends on how the sandbox was started. A sandbox started from
+  `../prax-sandbox`'s own compose file — the `make run-local-all` /
+  `make restart-sandbox` path — mounts **only `/workspace`** and receives no
+  model keys. **Known gap (2026-09):** prax's own `docker-compose.yml` and
+  `docker-compose.lite.yml` still bind-mount the **whole repo read-write at
+  `/source`** (so `.env`, `identity.db*` and `.git` are readable and writable by
+  anything running in the container) and pass `ANTHROPIC_API_KEY` /
+  `OPENAI_API_KEY` from `.env` into the sandbox service, unconditionally — not
+  only during self-improvement. See
   [sandbox-execution-boundary](../security/sandbox-execution-boundary.md) for the
-  `/source`-mount exposure and its mitigations.
+  intended posture; until the compose files are changed, treat the Docker Compose
+  sandbox as having full access to the repo checkout.
 
 - **Neo4j telemetry warning:**
-  Set `NEO4J_dbms_usage__report_enabled=false` in the Neo4j environment in `docker-compose.yml` (already done in the default config).
+  Neo4j is compiled into the `prax` image, not a compose service; usage reporting is switched off in the image's `neo4j.conf` (`Dockerfile`: `dbms.usage_report.enabled=false`). If you run Neo4j yourself, set the same key in its `neo4j.conf`.
 
 - **Data lost after `docker compose down`:**
   All persistent data (memory, models, agent configs) is stored in `WORKSPACE_DIR` (default: `../workspaces/`), not Docker volumes. Only observability data (Tempo, Loki, Prometheus, Grafana) uses Docker volumes. Copy the workspace directory to migrate to a new machine.
@@ -124,7 +131,9 @@ Prax codes **natively**: `run_python`, `workspace_save`/`workspace_patch`
 (syntax-linted), `source_read`/`source_grep`, and `sandbox_shell`. The
 self-improvement flow is likewise native (`self_improve_read/write/patch/test/
 verify/deploy`). **The sandbox image no longer ships the OpenCode / Claude-Code /
-Codex CLIs or a coding-agent server**, and takes no model API keys.
+Codex CLIs or a coding-agent server**, and the image itself takes no model API
+keys (prax's `docker-compose.yml` still passes them in — see the `/source/.env`
+entry above).
 
 - **Where did the coding-session tools go?**
   The multi-round OpenCode coding-session tools (`sandbox_start`/`message`/
@@ -148,4 +157,4 @@ Codex CLIs or a coding-agent server**, and takes no model API keys.
   Check that `MEMORY_ENABLED=true` and that the embedding provider is configured. For Ollama embeddings, verify the model was pulled: `docker compose logs ollama-init`.
 
 - **Consolidation not running:**
-  Consolidation runs every `MEMORY_CONSOLIDATION_INTERVAL` seconds (default: 3600 = hourly). Check logs: `docker compose logs prax | grep consolidation`.
+  Consolidation is triggered by a per-user turn counter — every 5 turns (`_CONSOLIDATE_EVERY_N_TURNS` in `prax/services/memory_service.py`), not on a timer. `MEMORY_CONSOLIDATION_INTERVAL` still exists in `settings.py` / `.env-example` but nothing reads it (as of 2026-09). Check logs: `docker compose logs prax | grep consolidation`.

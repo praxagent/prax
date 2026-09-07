@@ -1011,6 +1011,13 @@ class AppSettings(BaseSettings):
     # a host Xvfb/x11vnc session.  Keeps the harness host dedicated to
     # orchestration — browser rendering stays in the sandbox container.
     browser_sandbox_only: bool = Field(default=False, alias="BROWSER_SANDBOX_ONLY")
+    # When true, browser navigation (browser_navigate, sandbox_browser_act
+    # "navigate", browser_verify goto) runs the URL through the SSRF guard
+    # (`prax.utils.ssrf.validate_url`) before Chromium loads it, refusing
+    # private/internal hosts. Off by default because a personal assistant is
+    # legitimately asked to open http://localhost:3000; the scheme allowlist
+    # (http/https only — never file://) is unconditional regardless of this flag.
+    browser_navigate_ssrf_guard: bool = Field(default=False, alias="BROWSER_NAVIGATE_SSRF_GUARD")
 
     # Self-improvement (code modification via PRs)
     self_improve_enabled: bool = Field(default=False, alias="SELF_IMPROVE_ENABLED")
@@ -1135,6 +1142,13 @@ class AppSettings(BaseSettings):
     # teamwork_active) so an existing .env cannot suddenly start connecting.
     teamwork_url: str = Field(default="", alias="TEAMWORK_URL")  # e.g. "http://teamwork:8000"
     teamwork_api_key: str = Field(default="", alias="TEAMWORK_API_KEY")
+    # Inbound counterpart: the shared secret TeamWork (or any trusted caller)
+    # presents on Prax's own HTTP routes (/teamwork/*, /plugins/*, /api/users/*).
+    # Empty (the default) = unchanged behaviour, no inbound check. Set = those
+    # routes require a matching `X-API-Key` header (constant-time compare) and
+    # fail closed. The Twilio routes keep their signature validation; MCP keeps
+    # its bearer; /health stays open.
+    prax_api_key: str = Field(default="", alias="PRAX_API_KEY", repr=False)
 
     @property
     def teamwork_active(self) -> bool:

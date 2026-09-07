@@ -44,7 +44,7 @@ restart — so the user can continue from the failure point instead of re-runnin
 
 | Setting | Default | Effect |
 |---|---|---|
-| `CHECKPOINT_BACKEND` | `memory` | `sqlite` persists checkpoint **data** to `CHECKPOINT_DB_PATH` (`.prax/checkpoints.sqlite`) so it survives a restart. Falls back to in-memory if `langgraph-checkpoint-sqlite` isn't installed. |
+| `CHECKPOINT_BACKEND` | `memory` | `sqlite` persists checkpoint **data** to `CHECKPOINT_DB_PATH` (`.prax/checkpoints.sqlite`) so it survives a restart. Falls back to in-memory (with a logged warning) if `langgraph-checkpoint-sqlite` isn't installed — and as of 2026-09 it is **not** a declared dependency (`pyproject.toml` pins only `langgraph`), so on a stock install `sqlite` silently behaves like `memory`. Install the package yourself to get durable data; see `prax/agent/checkpoint.py`. |
 | `CHECKPOINT_RESUME_ENABLED` | `false` | When on, a failed/timed-out turn's checkpoints are **kept** (not purged) for `CHECKPOINT_RESUME_TTL` seconds (default 3600), and a pointer to the thread is persisted to `CHECKPOINT_RESUME_STATE_PATH` (`.prax/resumable.json`). |
 
 How it fits together:

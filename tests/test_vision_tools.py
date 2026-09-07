@@ -98,12 +98,17 @@ def test_analyze_openai_remote_inlines_image(monkeypatch):
     assert fetched["called"] is True
 
 
-def test_fetch_image_base64_reads_local_file(tmp_path):
+def test_fetch_image_base64_reads_local_file(tmp_path, monkeypatch):
     """analyze_image must be able to inspect a local file (e.g. a saved
     screenshot), not only a remote URL — read straight off disk, infer the
-    media type from the suffix."""
+    media type from the suffix. Local reads are confined to the user's
+    workspace, so the file lives there."""
+    import prax.services.workspace_service as ws
     from prax.agent import vision_tools
+    from prax.agent.user_context import current_user_id
 
+    monkeypatch.setattr(ws, "workspace_root", lambda uid: str(tmp_path))
+    current_user_id.set("usr_test")  # conftest resets the ContextVar per test
     png = tmp_path / "shot.png"
     png.write_bytes(b"\x89PNG\r\n\x1a\n fake-image-bytes")
     b64, media = vision_tools._fetch_image_base64(str(png))
@@ -119,10 +124,15 @@ def test_fetch_image_base64_reads_local_file(tmp_path):
 def test_openai_payload_inlines_local_path(tmp_path, monkeypatch):
     """A local path (a screenshot) must become a base64 data URI for the model —
     a remote server obviously can't open a host file path."""
+    import prax.services.workspace_service as ws
     from prax.agent import vision_tools
+    from prax.agent.user_context import current_user_id
     from prax.settings import settings
 
     monkeypatch.setattr(settings, "vision_base_url", None, raising=False)  # hosted path
+    # Local reads are confined to the user's workspace.
+    monkeypatch.setattr(ws, "workspace_root", lambda uid: str(tmp_path))
+    current_user_id.set("usr_test")  # conftest resets the ContextVar per test
     jpg = tmp_path / "cdp_screenshot_1.jpg"
     jpg.write_bytes(b"\xff\xd8\xff fake-jpeg")
     block = vision_tools._openai_image_payload(str(jpg))

@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from prax.services.library_service import _space_path, ensure_library
+from prax.services.library_service import _require_slug, _space_path, ensure_library
 
 logger = logging.getLogger(__name__)
 
@@ -53,11 +53,14 @@ class ProgressSections:
 
 
 def _progress_path(user_id: str, slug: str) -> Path:
-    return _space_path(user_id, slug) / PROGRESS_FILE
+    # ``_space_path`` validates too; the explicit check keeps this file's
+    # containment independent of how library_service evolves. A raw join used
+    # to let ``slug="../.."`` write a .progress.md into any existing directory.
+    return _space_path(user_id, _require_slug(slug, "space")) / PROGRESS_FILE
 
 
 def _detail_dir(user_id: str, slug: str) -> Path:
-    return _space_path(user_id, slug) / DETAIL_DIR
+    return _space_path(user_id, _require_slug(slug, "space")) / DETAIL_DIR
 
 
 def _parse(content: str) -> ProgressSections:
@@ -106,7 +109,10 @@ def _render(slug: str, sections: ProgressSections) -> str:
 
 
 def _space_exists(user_id: str, slug: str) -> bool:
-    return _space_path(user_id, slug).is_dir()
+    try:
+        return _space_path(user_id, slug).is_dir()
+    except ValueError:
+        return False  # not a valid space slug → no such space
 
 
 def read_progress(user_id: str, slug: str) -> str:
@@ -115,10 +121,10 @@ def read_progress(user_id: str, slug: str) -> str:
     Returns a short placeholder if the space has no progress file yet.
     Never returns unbounded content — the file is capped by construction.
     """
+    if not _space_exists(user_id, slug):
+        return f"Space '{slug}' does not exist."
     path = _progress_path(user_id, slug)
     if not path.is_file():
-        if not _space_exists(user_id, slug):
-            return f"Space '{slug}' does not exist."
         return (
             f"# Progress: {slug}\n\n_No progress recorded yet for this space. "
             f"Use progress_append to log session outcomes._"
@@ -207,10 +213,10 @@ def read_session_detail(user_id: str, slug: str, date: str) -> str:
     day's worth (docs/research/tencentdb-agent-memory.md).
     """
     if re.match(r"^\d{4}-\d{2}-\d{2}-\S+$", date):
-        details_dir = _detail_dir(user_id, slug)
-        target = details_dir / f"{date}.md"
         if not _space_exists(user_id, slug):
             return f"Space '{slug}' does not exist."
+        details_dir = _detail_dir(user_id, slug)
+        target = details_dir / f"{date}.md"
         if not target.is_file():
             return f"No session detail {date} for {slug}."
         try:

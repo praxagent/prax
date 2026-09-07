@@ -9,7 +9,11 @@ import logging
 
 from flask import Blueprint, jsonify, request
 
+from prax.blueprints.inbound_auth import require_prax_api_key
+
 plugin_routes = Blueprint("plugins", __name__)
+# Inbound credential check — a no-op until PRAX_API_KEY is set (see inbound_auth).
+plugin_routes.before_request(require_prax_api_key)
 
 logger = logging.getLogger(__name__)
 

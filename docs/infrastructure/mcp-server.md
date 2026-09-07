@@ -106,7 +106,11 @@ Semantics: enforcement is **flag-gated** (off → `expires_at` is ignored, so ex
 tokens are unaffected). A client with no `expires_at` never expires. Past expiry, the token is
 rejected with `401` as if it had never been issued; a malformed timestamp is treated as expired
 (fail-closed). The check is on every request, so you can shorten/extend a lease by editing the
-registry file with no restart.
+registry file with no restart. That live re-read covers **expiry and token matching only**: a
+client's exposed tool map is built once and cached by client *name* for the life of the process
+(`MCPServer._tools_by_client`, `prax/mcp/server.py`), so edits to `allow` or `user_id` take effect
+only after a restart — and two registry entries sharing a name (including the legacy single-token
+client, named `default`) share that cache slot.
 
 Expose the endpoint to other machines the same way as the rest of Prax (tailscale serve / a
 reverse proxy with TLS) — the bearer token is the auth boundary; put TLS in front of it.

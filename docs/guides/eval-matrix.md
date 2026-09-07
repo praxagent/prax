@@ -6,8 +6,8 @@ Prax is measured on a **matrix of standard benchmarks** run through the full
 harness on real data. This guide covers two things:
 
 1. **[Running the full matrix yourself](#running-the-full-matrix)** — one command.
-2. **[The historical results record](#the-historical-results-record)** — the plan
-   for tracking progress over time with public accountability.
+2. **[The historical results record](#the-historical-results-record)** — the
+   committed, aggregates-only scorecard under `docs/eval-results/`.
 
 ---
 
@@ -43,7 +43,9 @@ It is **secret-free by construction** — only booleans and whitelisted non-secr
 names are captured; API keys never are. This is the answer to "you cheated": a
 reproduction that gets a different number under a different config is visibly
 running a different config, and the flags to match are published *with* the
-result. When the historical record lands, its per-run row derives from this block.
+result. (The committed record's per-run JSON under `docs/eval-results/` pins only
+`git_commit`, model/provider and `matrix_limit`; the full flag block stays in the
+run's `summary.json` under `$PRAX_EVAL_DIR`.)
 
 **Statistical honesty (added after the July-2026 external review, see
 [`docs/research/eval-rigor-review-2026-07.md`](../research/eval-rigor-review-2026-07.md)):**
@@ -62,13 +64,15 @@ HuggingFace test sets** for the benchmarks that have them wired, capped at
 `MATRIX_LIMIT` cases (a representative subset — the "-lite"/-500 configs labs
 report — so a pass costs a few dollars, not hundreds).
 
-| Real dataset wired | Seed set only (bespoke format) |
+| Real dataset wired (fetched by `scripts/fetch_eval_datasets.py`) | Seed set only (bespoke format) |
 |---|---|
-| gsm8k, mmlu_pro, math (MATH-500), humaneval, truthfulqa, **gpqa** (Diamond) | ifeval, injecagent, sycophancy, bfcl, halueval |
+| gsm8k, mmlu_pro, math (MATH-500), humaneval, truthfulqa, **gpqa** (Diamond), arc_agi_2 (public tasks from GitHub) | agentsafety, bfcl, halueval, hotpotqa, ifeval, injecagent, locomo, longcontext, simpleqa, sycophancy, terminal_bench |
 
-The seed-only ones still run — they just measure against their inline set until
-their real loaders are wired. `simpleqa` is model-graded (not in the deterministic
-matrix).
+(As of 2026-09: 18 adapters in `prax/eval/benchmarks/`, 7 real + 11 seed.) The
+seed-only ones still run — they just measure against their inline set until their
+real loaders are wired, and `MATRIX.md` marks them with `*`. `simpleqa` is graded
+deterministically here (normalized reference-answer match, no LLM judge — see
+`prax/eval/benchmarks/simpleqa.py`), unlike the official model-graded protocol.
 
 ### Prerequisites (one-time)
 
@@ -119,11 +123,11 @@ make eval-benchmark BENCH=mmlu_pro LIFT=1 CHEAP=1   # + the harness-lift number
 
 ## The historical results record
 
-**Status: planned, not yet started.** We deliberately hold off until (a) the
-matrix has been shaken down so every benchmark runs end-to-end, and (b) the last
-planned benchmark is added — so the *first* committed record is a clean baseline.
-
-The plan, once we start it:
+**Status: live.** The record lives in [`docs/eval-results/`](../eval-results/README.md)
+(`MATRIX.md` dashboard + one immutable JSON per run); the first committed record
+is the 2026-07-24 run at commit `3848ef7`. Read its README for how to interpret
+the numbers — every run is a *sample* (`MATRIX_LIMIT` cases per benchmark), never
+a suite score.
 
 ### One non-negotiable: aggregates only, never the data
 
@@ -146,7 +150,7 @@ docs/eval-results/
   MATRIX.md                     # rolling public dashboard: one row per run,
                                 #   columns per benchmark — the progress trend
   2026/
-    2026-07-16-<runid>.json     # one immutable record per run
+    2026-07-24-3848ef7.json     # one immutable record per run: <date>-<commit>.json
 ```
 
 Each per-run record captures what makes it **reproducible and comparable**:
@@ -157,10 +161,12 @@ cost.
 
 ### Populated automatically
 
-A `--record` flag on the eval runner will write the aggregate JSON and append a
+The `--record` flag on the eval runner writes the aggregate JSON and appends a
 `MATRIX.md` row at the end of a run, so recording is a byproduct of running, not a
-manual chore (manual matrices rot). `make eval-matrix` will pass it by default.
+manual chore (manual matrices rot). `make eval-matrix` passes it by default
+(`RECORD=1`; set `RECORD=0` to skip), and `assert_run_healthy` refuses to record a
+run with a high error rate.
 
-Until then, the campaign write-ups in
-[`docs/research/`](../research/) (e.g. the flag-eval and validation campaigns) and
-the [Verification Ledger](../VERIFICATION_LEDGER.md) are the narrative record.
+The campaign write-ups in [`docs/research/`](../research/) (e.g. the flag-eval and
+validation campaigns) and the [Verification Ledger](../VERIFICATION_LEDGER.md)
+remain the narrative record alongside it.

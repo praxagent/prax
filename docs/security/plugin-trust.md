@@ -2,11 +2,11 @@
 
 [← Security](README.md)
 
-- **Twilio webhook validation** — all webhook routes (`/transcribe`, `/respond`, `/sms`, `/reader`, `/read`, `/say`, `/play`, `/conference`) validate the `X-Twilio-Signature` header using your `TWILIO_AUTH_TOKEN`. If the token is not set (e.g. Discord-only or local dev), validation is skipped with a one-time warning.
-- **Path traversal protection** — workspace file operations (`save_file`, `read_file`, `archive_file`, etc.) and self-improvement file operations validate that resolved paths stay within the expected root directory. Attempts to escape via `../` or absolute paths are blocked.
-- **Sandbox auth** — each app process generates a random per-process auth key (`secrets.token_urlsafe(32)`) for sandbox container communication. Never committed to source.
+- **Twilio webhook validation** — all Twilio routes (`/transcribe`, `/respond`, `/sms`, `/reader`, `/read`, `/say`, `/play`, `/conference`) validate the `X-Twilio-Signature` header using your `TWILIO_AUTH_TOKEN` (`prax/blueprints/twilio_auth.py`). If the token is not set (e.g. Discord-only or local dev), validation is skipped with a one-time warning — fail-open. **Known gap (2026-09):** it signs `request.url`, and behind the documented HTTPS ngrok tunnel Flask sees `http://…` (no forwarded-scheme handling), so with the token set every genuine Twilio request is rejected; see [configuration.md → Twilio](configuration.md#option-c-twilio-voice--sms). The TeamWork webhook and the rest of `/teamwork/*`, `/plugins/*` and `/api/users/*` are checked by `prax/blueprints/inbound_auth.py` **only when `PRAX_API_KEY` is set** (`X-API-Key` or `Authorization: Bearer`, constant-time compare, 401 otherwise); unset — the default — they carry no inbound validation and the network perimeter is the only control (see [configuration.md → TeamWork](configuration.md#option-a-teamwork-web-ui-included)).
+- **Path traversal protection** — workspace file operations (`save_file`, `read_file`, `archive_file`, etc.) and self-improvement file operations validate that resolved paths stay within the expected root directory (`safe_join`). The Library layer does the same since 2026-09: `_require_slug` in `prax/services/library_service.py` accepts only a single path component for every model- or request-supplied `space`/`notebook`/`slug` (wiki notes, raw, outputs, archive; `library_tasks` and `progress_service` reuse it) and `_assert_in_library` checks the resolved path against the library root before any I/O. `workspace_root()`'s legacy fallback in `prax/services/workspace_service.py` `fullmatch`es the id to one component and `safe_join`s it, and `ensure_workspace` refuses (`_check_workspace_root_containment`) a root whose realpath is outside `WORKSPACE_DIR` or inside another workspace's git repository.
+- **Sandbox access** — there is no per-process sandbox auth key. Local mode drives the container through the Docker socket (`docker exec`); remote mode uses the operator-set `SANDBOX_DAEMON_TOKEN` bearer (optional mTLS via `SANDBOX_CLIENT_CERT`/`_KEY`). The sandbox's own ports (CDP `:9223`, noVNC `:6080`, clipboard `:6090`) are unauthenticated and published on `127.0.0.1` only by prax-sandbox's compose.
 - **Docker socket** — the app container needs `/var/run/docker.sock` mounted for sandbox management. This grants host Docker access; only run in trusted environments.
-- **VNC** — when enabled, VNC ports are mapped to the host's `127.0.0.1` only (not exposed on `0.0.0.0`). Remote access requires an SSH tunnel to the host: `ssh -NL 5901:localhost:5901 your-server`.
+- **VNC** — the manual-login browser flow (`prax/services/browser_service.py`) starts `x11vnc` on the Prax host with `-listen 127.0.0.1 -nopw`, so it is loopback-only and reachable remotely through an SSH tunnel (`ssh -NL 5901:localhost:5901 your-server`). No compose file publishes a VNC port; the sandbox desktop is noVNC on `127.0.0.1:6080` (prax-sandbox's compose).
 - **Secret key validation** — the app warns on startup if `FLASK_SECRET_KEY` is set to a weak placeholder like `change-me`.
 
 ## Plugin security
@@ -20,12 +20,14 @@ Plugins imported from external repos pass through multiple security gates before
 | **Built-in tool name protection** | Plugins cannot register tools with the same name as built-in tools. A plugin trying to override `browser_read_page` or `get_current_datetime` is rejected at load time. |
 | **Subprocess sandbox testing** | Before activation, plugins are imported in a separate subprocess with a stripped environment and 30-second timeout. Failures prevent activation. |
 | **Runtime monitoring + auto-rollback** | Active plugin tools are wrapped with failure tracking. After consecutive failures, the plugin is automatically rolled back to its previous version. |
-| **Governance layer** | All tools (built-in and plugin) pass through a single governance choke point with risk classification (LOW/MEDIUM/HIGH), confirmation gating for HIGH-risk actions, and audit logging to the workspace trace. |
-| **Blocking security scan** | `import_plugin_repo()` and `update_plugin_repo()` flag security warnings and require explicit acknowledgement before activation. The flag is recorded in the registry (`requires_acknowledgement`) and **enforced at load time**: `loader.load_all()` refuses to activate a flagged IMPORTED plugin until `acknowledge_warnings()` clears it — not a prompt the model can skip. `plugin_import` / `plugin_import_activate` are themselves HIGH-risk (confirmation-gated). |
+| **Governance layer** | Tools handed to the **hub** (`tool_registry.get_registered_tools()`) and to the MCP server pass through `wrap_with_governance` (risk classification LOW/MEDIUM/HIGH, confirmation gating for HIGH, audit logging to the workspace trace). **Known gap (2026-09):** spoke-internal tools — including plugin tools routed through the `plugins`/`sysadmin` spokes — are not wrapped (`prax/agent/spokes/_runner.py`), so the HIGH gate reaches only plugin tools promoted into the hub. See [tool-risk.md](tool-risk.md). |
+| **Blocking security scan** | `import_plugin_repo()` and `update_plugin_repo()` flag security warnings and require explicit acknowledgement before activation. The flag is recorded in the registry (`requires_acknowledgement`) and **enforced at load time**: `loader.load_all()` refuses to activate a flagged IMPORTED plugin until `acknowledge_warnings()` clears it — not a prompt the model can skip. `plugin_import` / `plugin_import_activate` are classified HIGH-risk (the confirmation gate does not currently reach them — spoke-internal; see above). |
 
 ## Subprocess isolation
 
-IMPORTED plugins execute in **isolated subprocesses** — separate OS processes with no access to API keys, secrets, or the parent's memory. The OS process boundary is the primary security guarantee, not Python-level tricks.
+IMPORTED plugins execute in **separate host subprocesses** whose *environment* is stripped of API keys and whose memory is separate from the parent's. The OS process boundary is the primary security guarantee, not Python-level tricks.
+
+**Known gap (2026-09): the environment is the only thing stripped.** `prax/plugins/bridge.py` spawns `python -m prax.plugins.host` with `env=_SAFE_ENV` (`PATH`, `HOME`, `LANG`, `PYTHONPATH`) but no `cwd=`, no user change and no filesystem or network restriction. The child therefore inherits Prax's working directory and `PYTHONPATH`, and because Pydantic settings load `.env` from the working directory, `from prax.settings import settings` inside the child returns every credential the parent holds. Read the table below with that in mind: it describes what the *environment* no longer contains, not what the child can obtain.
 
 ### Architecture
 
@@ -37,7 +39,7 @@ flowchart LR
     end
     subgraph Sub["Plugin Subprocess"]
         HP["host.py\n• import plugin module\n• call tool.invoke()\n• CapsProxy\n  – http_get(url)\n  – build_llm()\n  – save_file()\n  – get_config()"]
-        ENV["Env: PATH, HOME, LANG only\nNo API keys. No secrets.\nNo Docker socket."]
+        ENV["Env: PATH, HOME, LANG, PYTHONPATH\nNo API keys in env\n(but cwd + .env inherited)"]
     end
     Parent <-->|"JSON-lines\non stdin/stdout"| Sub
 ```
@@ -50,14 +52,14 @@ When a plugin calls `caps.http_get(url)`, the proxy in the subprocess serializes
 |---------------|--------|
 | `os.environ["OPENAI_KEY"]` | `KeyError` — key is not in the subprocess environment |
 | `os.environ["ANTHROPIC_KEY"]` | `KeyError` — same reason |
-| `gc.get_objects()` to find `prax.settings` | Returns nothing — settings object is in a different process |
-| `().__class__.__base__.__subclasses__()` → `BuiltinImporter` | Can import modules, but there are no secrets in memory to steal |
+| `gc.get_objects()` to find `prax.settings` | Returns nothing — the parent's settings object is in a different process. **Not isolated:** `from prax.settings import settings` builds a fresh one from the inherited cwd's `.env` (Known gap above) |
+| `().__class__.__base__.__subclasses__()` → `BuiltinImporter` | Can import modules — including `prax.settings`, which loads the keys from `.env` (Known gap above) |
 | `open("/proc/self/environ")` | Contains only `PATH`, `HOME`, `LANG`, `PYTHONPATH` |
 | Infinite loop / memory bomb | `SIGALRM` → `SIGTERM` → `SIGKILL` (uncatchable) |
-| `ctypes` memory writes to bypass audit hooks | Nothing to find — no API keys in process memory |
-| Docker socket access | Not mounted in subprocess environment |
-| Read other plugins' files | Blocked — `save_file`/`read_file`/`workspace_path` scoped to `plugin_data/{plugin}/`; path traversal blocked by `safe_join` |
-| Read user workspace (`active/`) | Blocked — IMPORTED plugins' filesystem ops are confined to their scoped directory |
+| `ctypes` memory writes to bypass audit hooks | No audit hook is installed to bypass (see Defence-in-depth below); keys are obtainable via `prax.settings` regardless |
+| Docker socket access | **Not isolated** — the child is an ordinary host process running as the same OS user; if the host has `/var/run/docker.sock`, the child can open it |
+| Read other plugins' files | Blocked **through `caps.*`** — `save_file`/`read_file`/`workspace_path` scoped to `plugin_data/{plugin}/`; path traversal blocked by `safe_join`. Plain `open()` in the child is unrestricted |
+| Read user workspace (`active/`) | Blocked **through `caps.*`** only — same caveat |
 
 ### Capabilities proxy
 
@@ -81,9 +83,9 @@ These limits are enforced in the **parent process** (in `MonitoredTool`), outsid
 | Limit | Value | Enforcement |
 |-------|-------|-------------|
 | Tool calls per message | 10 | `_increment_call_count()` in parent, checked before each bridge invocation |
-| HTTP requests per invocation | 50 | Counted in `PluginCapabilities._check_http()` in parent |
+| HTTP requests | 50 **per `PluginCapabilities` instance, for its lifetime** | Counted in `PluginCapabilities._check_http()` in parent. **Known gap (2026-09):** the policy field is named `max_http_requests_per_invocation`, but `_http_request_count` is set to 0 only in `__init__` and never reset, and caps instances live as long as the loader — so a plugin that has made 50 requests in total gets `PermissionError` until the next `load_all()`/restart |
 | Invocation timeout | 30 seconds | `SIGALRM` in parent → `SIGTERM` → 5s grace → `SIGKILL` |
-| Risk classification | HIGH | All IMPORTED tools require user confirmation before first execution |
+| Risk classification | HIGH | IMPORTED tools are classified HIGH (`get_risk_level`), so they require user confirmation before first execution **where the governance wrapper is in front** — i.e. tools promoted into the hub registry or exposed via MCP (which refuses HIGH). Spoke-routed plugin tools are not wrapped; see [tool-risk.md](tool-risk.md) |
 
 ### Subprocess lifecycle
 
@@ -98,20 +100,22 @@ These limits are enforced in the **parent process** (in `MonitoredTool`), outsid
 
 ### Defence-in-depth (in-process layers)
 
-The following in-process guards remain active as a secondary defense. They are no longer the primary security boundary — the subprocess is — but they catch bugs in the bridge and provide redundancy:
+Two of the layers below exist in code but are **not installed** anywhere; two are live.
 
 | Control | What it does |
 |---------|-------------|
-| **Python audit hook** (PEP 578) | `sys.addaudithook` blocks `subprocess.Popen`, `os.system`, `ctypes.dlopen`, etc. during IMPORTED execution |
-| **Import blocker** (`sys.meta_path`) | Blocks `subprocess`, `ctypes`, `pickle`, `marshal`, `shutil`, `multiprocessing`, `signal` |
+| **Python audit hook** (PEP 578) | Defined in `prax/plugins/sandbox_guard.py` (`install_audit_hook`: `sys.addaudithook` blocking `subprocess.Popen`, `os.system`, `ctypes.dlopen`, …). **Known gap (2026-09): never installed** — `install_all_guards()` / `install_audit_hook()` / `install_import_blocker()` have no callers outside that module (neither `prax/plugins/host.py` nor the bridge calls them), so this layer is inactive in both processes. |
+| **Import blocker** (`sys.meta_path`) | Defined in the same module (`install_import_blocker`: blocks `subprocess`, `ctypes`, `pickle`, `marshal`, `shutil`, `multiprocessing`, `signal`). **Same Known gap — never installed.** |
 | **`PluginCapabilities` gateway** | `build_llm()`, `http_get/post()`, `save_file()`, `read_file()`, `get_config()` — all without exposing API keys; filesystem scoped to `plugin_data/{plugin}/` |
 | **Per-tier policy** | `PluginPolicy` dataclass controls `can_access_env`, `can_make_http`, `can_use_llm`, `max_http_requests_per_invocation`, etc. |
 
 ### Migration for plugin authors
 
-If your plugin's `register()` function accepts a parameter, it receives a `PluginCapabilities` instance (or a proxy that behaves identically in the subprocess). Use `caps.http_get()` instead of `requests.get()`, `caps.build_llm()` instead of importing the LLM factory, and `caps.get_config("workspace_dir")` instead of `settings.workspace_dir`. Zero-arg `register()` still works for backward-compatible built-in plugins.
+If your plugin's `register()` function accepts a parameter, it receives a `PluginCapabilities` instance (or a proxy that behaves identically in the subprocess) when the loader imports it (`prax/plugins/loader.py` inspects the signature). Use `caps.http_get()` instead of `requests.get()`, `caps.build_llm()` instead of importing the LLM factory, and `caps.get_config("workspace_dir")` instead of `settings.workspace_dir`. Zero-arg `register()` still works for backward-compatible built-in plugins.
 
-BUILTIN and WORKSPACE plugins remain fully in-process with no overhead — subprocess isolation applies only to IMPORTED plugins from external repos.
+**Known gap (2026-09):** the pre-activation sandbox test (`prax/plugins/sandbox.py`, `sandbox_test_plugin`) calls `mod.register()` with **no** argument, so a contract-conformant `register(caps)` plugin fails it with `TypeError` — `plugin_write` then removes the file and `plugin_activate`/`hot_swap` refuse to activate. Plugins written to the published `register(caps)` contract can be loaded by `load_all()` but not created or activated through those tools.
+
+BUILTIN and WORKSPACE plugins remain fully in-process with no overhead — subprocess isolation applies only to IMPORTED plugins from external repos. **Known gap (2026-09):** WORKSPACE plugins (`<workspace>/plugins/custom/`) are imported in-process by `load_all()` with no security scan, no sandbox test and no acknowledgement (those run only in `plugin_write` / `hot_swap` / `import_plugin_repo`), and `get_approved_secret` auto-approves every secret for the tier (`prax/plugins/capabilities.py`). Anything that can write into the workspace — the sandbox container has `/workspace` read-write — can therefore get in-process code execution in Prax at the next load (a user's first turn per process, or the unauthenticated `POST /plugins/<name>/acknowledge` route, which calls `load_all()`). See [sandbox-execution-boundary.md](sandbox-execution-boundary.md).
 
 ## Plugin trust tiers
 

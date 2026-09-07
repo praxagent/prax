@@ -19,13 +19,26 @@ channels all work without it.
 
 ## Local sandbox (the default, and the functional example)
 
-Run the sandbox container next to Prax. With docker-compose it comes up
-automatically (`docker compose up`). Standalone, the **prax-sandbox repo is the
-functional reference**:
+Run the sandbox container next to Prax. The **prax-sandbox repo's compose is the
+functional reference** — it is what `make run-local-all` and `deploy/update.sh`
+start:
 
 ```bash
 cd ../prax-sandbox && make build && docker compose up -d
 ```
+
+> **Known gap (2026-09):** prax's own `docker-compose.yml` also defines a
+> `sandbox` service, but its compose-level healthcheck still curls the removed
+> OpenCode `:4096`, so under `docker compose up` the sandbox never turns healthy
+> and `prax` never starts; that service also injects `ANTHROPIC_API_KEY` /
+> `OPENAI_API_KEY` and mounts the repo at `/source`. Details and the fix
+> direction: [docker.md](docker.md), [sandbox-execution-boundary.md](../security/sandbox-execution-boundary.md).
+
+**What `/workspace` is depends on how you started it.** `make run-local-all`
+passes `WORKSPACE_DIR=<workspaces>/<PRAX_USER_ID>` (the user's own workspace);
+`deploy/update.sh` passes `WORKSPACE_DIR` through and defaults it to the whole
+`workspaces/` tree, so set it to the per-user directory on a multi-user box or
+every user's files are visible from the container.
 
 Prax reaches it in-process — the control plane holds the docker socket, `exec`s
 into the container for shell/file ops, and talks to `sandbox:9223` (CDP) for the
@@ -44,10 +57,11 @@ SANDBOX_TLS_VERIFY=true            # true | false | path to a CA bundle
 ```
 
 The same `SandboxClient` switches to an HTTPS + bearer transport — shell, the file
-API, and CDP all work over the wire (live output streams back over SSE; artifacts
-are pulled into Prax's git workspace). Empty `SANDBOX_DAEMON_URL` → in-process. See
-the prax-sandbox repo's `docs/remote.md` for deploying the daemon (TLS, tokens,
-Tailscale-or-not).
+API, and CDP all work over the wire as plain request/response calls (there is no
+SSE streaming: the client's `_iter_sse` helper has no callers and the daemon has no
+event-stream route; the client's `pull_tar`/`push_tar` exist but Prax does not call
+them). Empty `SANDBOX_DAEMON_URL` → in-process. See the prax-sandbox repo's
+`docs/remote.md` for deploying the daemon (TLS, tokens, Tailscale-or-not).
 
 ## How Prax uses it
 
@@ -58,8 +72,9 @@ Tailscale-or-not).
 > flag. Prax codes **directly** — `run_python`, `workspace_save`/`workspace_patch`
 > (syntax-linted), `source_read`/`source_grep`, `sandbox_shell`. This removes a
 > black-box dependency *and* the need for any model key inside the sandbox (see
-> `docs/security/sandbox-execution-boundary.md`). The direct-execution sandbox
-> tools below are unaffected.
+> `docs/security/sandbox-execution-boundary.md` — prax-sandbox's compose passes
+> none; prax's own compose still does, a tracked leftover). The direct-execution
+> sandbox tools below are unaffected.
 
 - `run_python` runs throwaway Python in the sandbox's scratch venv; `sandbox_shell`
   runs a shell command in the container. The **sandbox spoke** (`delegate_sandbox`)
@@ -74,7 +89,10 @@ Tailscale-or-not).
   `/opt/elan`). Spoke-internal (`prax/agent/data_tools.py`); classified LOW —
   it's read/compute in the already-isolated container. Degrades with a clear
   message when the flag, libs, or sandbox are absent.
-- The **desktop spoke** drives the Linux desktop via the `desktop_*` tools.
+- The **desktop spoke** drives the Linux desktop via the `desktop_*` tools. These
+  go through `prax/utils/shell.py:run_command`, which reaches the container only
+  when `RUNNING_IN_DOCKER=true`; on a native install they run on the Prax host
+  (see the Known gap in `docs/security/sandbox-execution-boundary.md`).
 - `browser_service` connects Playwright to the sandbox's Chrome over CDP, and falls
   back to a local headless Chrome when there is no sandbox.
 - Self-improvement runs **natively** (`self_improve_read/write/patch/test/verify/

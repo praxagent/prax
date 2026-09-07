@@ -1,5 +1,12 @@
 # Pipeline Evolution Roadmap
 
+> **Status (2026-09): historical roadmap from 2026-04-08, not maintained.** Phase 0
+> (the coverage-harness fixes below) shipped. Phase 1 onwards was **not built**:
+> `prax/agent/pipelines/` contains only `synthesis.py` — there is no
+> `dynamic_synthesis.py` and no `run_custom_pipeline` tool. Kept for the research
+> context; what is actually queued lives in
+> [`docs/research/adopt-tracker.md`](research/adopt-tracker.md).
+
 A phased plan for evolving Prax beyond hand-crafted spokes toward bounded dynamic synthesis. Each phase has explicit gates — only proceed to the next phase if the previous phase's evidence justifies it.
 
 **Background**: see [docs/research/pipeline-composition.md](research/pipeline-composition.md) for the research synthesis (Anthropic, Voyager, ChatHTN, LLM-Modulo, RAP, MetaGPT, Kambhampati, ADaPT, APE, EvoSkills) and the autonomy levels taxonomy (L0/L1/L2/L3).

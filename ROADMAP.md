@@ -1,5 +1,14 @@
 # Modernization Roadmap
 
+> **Historical document (2026-09 note).** This roadmap dates from the initial
+> commit (2026-03-22) and has not been updated since. It predates the shipped
+> product — the Pydantic settings layer, LangGraph agent, memory service,
+> observability stack, eval harness and most of the items below already exist in
+> some form, and the unticked boxes are not an accurate backlog. It is kept for
+> provenance. For what is actually planned or in flight, see
+> [`docs/IDEAS_BACKLOG.md`](docs/IDEAS_BACKLOG.md) and
+> [`docs/research/adopt-tracker.md`](docs/research/adopt-tracker.md).
+
 This document captures the high-level work items needed to bring the project from its early-LLM architecture to a modern, agentic, multi-provider platform. Treat each checklist as an independently plannable effort.
 
 ## 1. Preserve And Refine Core Integrations

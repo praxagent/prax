@@ -20,10 +20,12 @@ cd ../teamwork/frontend && npx playwright test
 Before opening a pull request, run `make ci` to validate everything locally:
 
 ```bash
-make ci   # actionlint + ruff + pytest
+make ci   # actionlint + ruff + layer linter (scripts/check_layers.py) + pytest
 ```
 
-This mirrors the GitHub Actions CI pipeline and catches issues before they hit remote.
+GitHub Actions (`.github/workflows/ci.yml`) runs ruff + pytest; the layer linter
+runs there indirectly through `tests/test_check_layers.py`, and actionlint runs
+locally only. `make ci` is therefore a superset of what CI enforces.
 
 Coverage configuration (see `pyproject.toml`) focuses on business logic; Twilio blueprints and heavy IO helpers are excluded until integration tests are added.
 

@@ -4,17 +4,27 @@
 
 ### Workspace Layout
 
+> Illustrative layout (updated 2026-09 from `workspace_service.py`, `library_service.py` and the compose mounts); a real workspace contains whichever of these the user has touched.
+
 ```
-workspaces/{user_id}/          ← phone number or Discord user ID
+workspaces/usr_{id8}/          ← opaque id from identity_service (pre-existing phone-number / D{discord_id} dirs are honoured as legacy only)
 ├── .git/                  ← full version history
 ├── schedules.yaml         ← cron schedule definitions (YAML)
 ├── user_notes.md          ← compact quick-reference facts about the user (timezone, aliases, key preferences)
 ├── links.md               ← running log of every URL the user has shared
 ├── todos.json             ← user's personal to-do list
 ├── instructions.md        ← system prompt reference (agent can re-read)
-├── agent_plan.json        ← current task decomposition (transient)
+├── agent_plan.yaml        ← current task decomposition (transient; agent_plan.json is the legacy fallback)
 ├── trace.log              ← conversation trace (rotated at 0.5 MB)
 ├── feeds.yaml             ← RSS/Atom feed subscriptions
+├── library/               ← the Library (see ../library.md)
+│   ├── LIBRARY.md         ← schema / rules
+│   ├── INDEX.md           ← auto-maintained index
+│   ├── raw/  outputs/  archive/
+│   └── spaces/{slug}/     ← .space.yaml, .tasks.yaml, notebooks/{nb}/{note}.md
+├── .services/             ← per-user Qdrant / Neo4j / TeamWork data (compose mounts)
+├── .sandbox/              ← the sandbox container's persisted home dirs (compose mounts)
+├── plugins/               ← custom/ and shared/ per-user plugin dirs
 ├── notes/                 ← markdown notes with YAML frontmatter
 │   ├── eigenvalues.md
 │   └── bayesian-prob.md
@@ -84,11 +94,4 @@ If you still want Dropbox for convenience, sync only a *copy* of the workspace o
 rsync -a --exclude='.git' --exclude='*.db' workspaces/ ~/Dropbox/prax-backups/
 ```
 
-If you move the project, remove the old symlink and re-link:
-
-```bash
-rm ~/Dropbox/prax-workspaces
-ln -s "$PWD/workspaces" ~/Dropbox/prax-workspaces
-```
-
-The Dropbox desktop app will sync all workspace files (notes, todos, links, archives) in real time. No API keys or code changes needed.
+Do **not** symlink the live `workspaces/` directory into Dropbox — that is exactly the live-mount the warning above rules out (an older version of this page suggested it). The scheduled `rsync` of a copy is the supported shape.

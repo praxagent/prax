@@ -26,7 +26,7 @@ proxy route. Then run a small evaluation:
 
 ```bash
 PRAX_EVAL_MAX_CASES=3 make eval CHEAP=1
-make eval-capability CHEAP=1
+make eval-capability CHEAP=1   # prax/eval/capability_cases/ — 30 cases as of 2026-09
 make eval-benchmark BENCH=ifeval CHEAP=1
 ```
 
@@ -81,14 +81,17 @@ credential bills to it. Limits on one provider do not cover charges from another
 ## Prax controls and reporting
 
 - `make ci` runs the automated logic suite with live/integration cases excluded;
-  live evaluation targets are separate. Keep provider credentials out of CI.
+  it is keyless by contract (the suite must pass with no provider credentials),
+  and live evaluation targets are separate. Keep provider credentials out of CI.
 - `run_golden_suite` scores only with `PRAX_EVAL_GOLDENS=1`; otherwise it lists
   tracked targets.
 - `PRAX_EVAL_MAX_CASES` limits recorded-case replay (default 20). It is not a
   universal cap on every benchmark target or every API call within a case.
 - Loop, round, and failure limits reduce runaway work. They are not dollar caps.
-- Evaluation output reports token usage and USD estimates where supported.
-  `prax/eval/pricing.py` is an estimate table, not the provider's billing ledger.
+- Evaluation output reports token usage (the capability report's
+  `pass_per_1k_tokens` / `avg_full_tokens`, `prax/eval/capability.py`) and USD
+  estimates where supported. `prax/eval/pricing.py` is an estimate table, not
+  the provider's billing ledger.
   Use `EVAL_COST_INPUT_PER_M` and `EVAL_COST_OUTPUT_PER_M` to supply current rates;
   unknown models report `n/a`.
 

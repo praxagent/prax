@@ -1,10 +1,16 @@
 # Provenance laundering: untrusted web content becomes "private data"
 
 **Found:** 2026-08-07, while investigating stochastic injection resistance.
-**Status:** Fixed on 2026-08-07. Marker-based taint is unconditional. The initial
-`PROVENANCE_MARKER_TAINT_ENABLED` flag was removed that day because disabling it
-preserved the provenance misclassification. A regression test checks that the
-flag is not reintroduced.
+**Status:** Fixed on 2026-08-07. Marker-based taint has no flag of its own. The
+initial `PROVENANCE_MARKER_TAINT_ENABLED` flag was removed that day because
+disabling it preserved the provenance misclassification. A regression test
+checks that the flag is not reintroduced.
+**Known gap (2026-09):** "no flag of its own" is not "unconditional". The marker
+check (`_carries_untrusted_marker`) runs inside `UntrustedContentTaint`, and
+`prax/agent/loop_middleware.py` adds that middleware to the stack only when
+`AGENT_MIDDLEWARE_ENABLED` is true (`prax/settings.py`, default `True` since
+2026-08-07). Turning the middleware seam off removes every banner — marker-based
+and tool-name-based alike; nothing at the governance perimeter re-applies it.
 **Severity:** the guard it defeats is the lethal-trifecta guard, so this is a
 security finding rather than a quality one.
 
@@ -84,7 +90,7 @@ Provenance is now a property of the **content**, not the transport.
 |---|---|---|
 | `raw_capture` stamps `provenance: untrusted-external` in the front-matter it already writes | no | pure metadata; the harness *knows* it is third-party at that moment |
 | `library_raw_*` reclassified `untrusted_source` | no | they were **neither** — MEDIUM risk with no provenance. A plain misclassification |
-| `UntrustedContentTaint` banners on the **marker**, whatever tool returned it | **no — unconditional** (flag removed same day) | applies the existing external-content banner when marked content is read back through a different tool |
+| `UntrustedContentTaint` banners on the **marker**, whatever tool returned it | **no flag of its own** (flag removed same day; inherits `AGENT_MIDDLEWARE_ENABLED`, see Status) | applies the existing external-content banner when marked content is read back through a different tool; an off-state that preserves a mislabelling is not a choice anyone should be offered |
 
 The marker is read **only from the front-matter head (600 chars)**, so body
 text merely mentioning it cannot self-declare provenance — nor spoof it away.
@@ -96,7 +102,8 @@ the no-overreach cases: a user's own note is never tainted, genuinely private
 readers keep their classification, and tainting stays idempotent.
 
 **Rollback:** revert the change and deploy the reverted version. There is no
-runtime flag to disable marker-based taint.
+runtime flag of its own to disable marker-based taint (the middleware seam it
+lives in is flagged — see the Status known gap).
 
 ### Original fix direction (retained for the reasoning)
 
@@ -131,6 +138,20 @@ punctuation.
   demonstrated. The fix preserves the label; the downstream consequence has
   not been demonstrated end to end.
 - **No exploit was executed.**
+- **Known gap (2026-09): promotion drops the marker.** `promote_raw`
+  (`prax/services/library_service.py`) copies a capture's body into a new note
+  and adds only `promoted_from` / `source_url` to the front-matter — not
+  `provenance`. The note is then read back through `library_note_read`, which
+  `prax/agent/trifecta.py` classifies as `private_data` and which prepends a
+  `# title` header rather than front-matter, so the marker check has nothing to
+  find. The laundering this page describes re-opens one hop later, for every
+  later turn and every other reader.
+- **The guard this defect targets is itself soft.** `LETHAL_TRIFECTA_GUARD` is
+  off by default; in `prax/agent/governed_tool.py` the guard body is wrapped in
+  `except Exception: pass`, so an internal error allows the sink silently; and
+  `trifecta.py` classifies `delegate_<spoke>` tools only by membership in its
+  `_DELEGATE_*` sets, so `delegate_sandbox`, `delegate_content_editor`,
+  `delegate_plugins` and `delegate_tasks` (among others) carry no leg at all.
 - Auto-capture only stores pages the **user chose to share**, which narrows the
   practical attack to "user is induced to share a malicious link" — a real but
   not trivial precondition.

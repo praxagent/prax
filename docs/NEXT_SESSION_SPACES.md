@@ -1,5 +1,14 @@
 # Next Session: Educational Space Features
 
+> **Status (2026-09): historical planning note from 2026-04-09, not maintained and
+> not linked from any index.** Parts of it shipped afterwards — TeamWork's
+> `SpacePage.tsx` has Quiz / Flashcards / Presentations tabs (the frontend's only
+> `requestFullscreen` call is `App.tsx`'s mobile auto-fullscreen for video playback,
+> not `SpacePage.tsx`), and prax serves `/teamwork/library/spaces/<space>/flashcards`
+> and `/wiki` routes (`prax/blueprints/teamwork_routes.py`) — but this note was never
+> updated to match, so treat the details below as the original intent, not the
+> current design.
+
 ## Context
 
 Spaces with `kind="learning"` or `kind="educational"` should get

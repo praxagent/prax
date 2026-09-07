@@ -24,11 +24,30 @@ def test_bare_filename_resolves_via_workspace(monkeypatch, tmp_path):
         current_user_id.reset(token)
 
 
-def test_absolute_path_still_works(tmp_path):
-    img = tmp_path / "direct.png"
-    img.write_bytes(b"\x89PNG\r\n\x1a\n123")
-    b64, media = vt._fetch_image_base64(str(img))
-    assert media == "image/png"
+def test_absolute_path_rule(tmp_path, monkeypatch):
+    """An absolute path is readable only inside the user's workspace or as one
+    of the harness's own temp-dir screenshot files; any other host path is
+    refused (it used to read anything — ``/etc/hostname`` included)."""
+    import tempfile
+
+    import pytest
+
+    tmpdir = tmp_path / "tmp"
+    tmpdir.mkdir()
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmpdir))
+
+    shot = tmpdir / "cdp_screenshot_123.jpg"
+    shot.write_bytes(b"\xff\xd8\xff fake-jpeg")
+    b64, media = vt._fetch_image_base64(str(shot))
+    assert media == "image/jpeg"
+
+    with pytest.raises(PermissionError):
+        vt._fetch_image_base64("/etc/hostname")
+
+    stray = tmp_path / "direct.png"
+    stray.write_bytes(b"\x89PNG\r\n\x1a\n123")
+    with pytest.raises(PermissionError):
+        vt._fetch_image_base64(str(stray))
 
 
 def test_missing_bare_filename_raises(monkeypatch, tmp_path):

@@ -5,6 +5,7 @@ import logging
 
 from flask import Blueprint, jsonify, request
 
+from prax.blueprints.inbound_auth import require_prax_api_key
 from prax.services.identity_service import (
     archive_workspace,
     get_identities,
@@ -18,6 +19,8 @@ from prax.services.identity_service import (
 logger = logging.getLogger(__name__)
 
 user_routes = Blueprint("users", __name__)
+# Inbound credential check — a no-op until PRAX_API_KEY is set (see inbound_auth).
+user_routes.before_request(require_prax_api_key)
 
 
 @user_routes.route("/api/users", methods=["GET"])
