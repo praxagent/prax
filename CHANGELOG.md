@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.44.1](https://github.com/praxagent/prax/compare/v0.44.0...v0.44.1) (2026-09-07)
+
+
+### Bug Fixes
+
+* path containment across library/workspace/source/vision/browser tools, opt-in inbound API key, keyless compose sandbox ([#229](https://github.com/praxagent/prax/issues/229)) ([4ae6920](https://github.com/praxagent/prax/commit/4ae69202ac44a15e8ae1255ee9cd38316c261afe))
+
 ## [0.44.0](https://github.com/praxagent/prax/compare/v0.43.5...v0.44.0) (2026-09-02)
 
 
