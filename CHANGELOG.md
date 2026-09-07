@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.44.0](https://github.com/praxagent/prax/compare/v0.43.5...v0.44.0) (2026-09-02)
+
+
+### Features
+
+* honest eval accounting, a 30-case capability suite, and prefix-cache visibility ([#223](https://github.com/praxagent/prax/issues/223)) ([c3d0d3c](https://github.com/praxagent/prax/commit/c3d0d3c4b5000f094493ba9405e7b2bdd2f78abb))
+
+
+### Bug Fixes
+
+* pin grader temperature, authenticate the forward proxy, count the fan-in ([#225](https://github.com/praxagent/prax/issues/225)) ([dacf713](https://github.com/praxagent/prax/commit/dacf7135dc0755e1d86d1036bf2565201f3d8ce0))
+* silent scheduler-fire failures, fabricated memory vectors, and a drifted CI gate ([#227](https://github.com/praxagent/prax/issues/227)) ([29491eb](https://github.com/praxagent/prax/commit/29491eb2da2786f8439fe94e9011cd66a4b96da2))
+* **workspace:** atomic writes, plus nine research assessments ([#226](https://github.com/praxagent/prax/issues/226)) ([aeda410](https://github.com/praxagent/prax/commit/aeda410f89a8f365c0f62f3401dc99fdacf1ae3f))
+
 ## [0.43.5](https://github.com/praxagent/prax/compare/v0.43.4...v0.43.5) (2026-08-07)
 
 

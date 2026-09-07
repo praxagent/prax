@@ -2,26 +2,38 @@
 
 [← Guides](README.md)
 
-Prax and TeamWork ship without built-in user authentication — they're designed to sit behind an authentication layer that you choose. This guide covers three approaches, from zero-config to production multi-tenant.
+Prax and TeamWork need a configured access layer before being exposed to users.
+This guide describes network access through Tailscale and identity-provider
+integration through an authentication proxy.
+
+**Deployment limit:** the current execution sandbox shares one filesystem.
+Authentication does not isolate mutually untrusted tenants. Use one deployment
+per untrusted tenant, with separate execution, data, and credentials. A trusted
+team sharing an environment is a different arrangement; its members must accept
+that shared boundary. See the [single-tenant limitation](../../README.md#known-limitation--single-tenant-only)
+and [deployment topology](../security/deployment-topology.md).
 
 ## Quick comparison
 
-| Approach | Users | Code changes | Difficulty | Best for |
-|----------|-------|-------------|-----------|----------|
-| [Tailscale](#tailscale) | 1-10 | None | Easy | Solo / small team, headless servers |
-| [OAuth2 Proxy + Google](#oauth2-proxy--google-oauth) | 1-100 | None | Medium | Teams with Google Workspace |
-| [OAuth2 Proxy + GitHub](#oauth2-proxy--github-oauth) | 1-100 | None | Medium | Dev teams, open source |
-| [Authentik (self-hosted)](#authentik-self-hosted-oidc) | 100+ | Minimal | Advanced | Full control, enterprise, multi-tenant |
+| Approach | Access model | Configuration | Best for |
+|----------|--------------|---------------|----------|
+| [Tailscale](#tailscale) | Private network and tailnet policies | Network setup | One owner or a trusted team |
+| [OAuth2 Proxy + Google](#oauth2-proxy--google-oauth) | Google identity in front of the application | Proxy and OAuth configuration | Existing Google Workspace identity |
+| [OAuth2 Proxy + GitHub](#oauth2-proxy--github-oauth) | GitHub identity in front of the application | Proxy and OAuth configuration | Existing GitHub organization identity |
+| [Authentik (self-hosted)](#authentik-self-hosted-oidc) | Self-hosted identity provider | OIDC and proxy configuration | Operators maintaining their own identity service |
 
-All approaches work with both docker-compose and Kubernetes deployments.
+These are access patterns, not capacity or tenant-isolation claims. Verify the
+chosen proxy, application, and network configuration in your deployment.
 
 ---
 
 ## Tailscale
 
-Tailscale creates a private network (tailnet) using WireGuard. Only devices logged into your tailnet can reach your services. No ports exposed to the public internet, no passwords, no OAuth configuration.
+Tailscale provides an encrypted private route governed by your tailnet access
+policy. It does not remove Prax's existing host-published ports. Restrict those
+bindings or firewall them so traffic cannot bypass the intended access layer.
 
-This is the recommended starting point — it takes 5 minutes and requires zero code changes.
+This is a useful starting point for one owner or a trusted team.
 
 ### How it works
 
@@ -37,13 +49,14 @@ Tailscale assigns each device a stable IP on your tailnet (100.x.y.z). Traffic i
 
 ### Step 1: Create a Tailscale account
 
-Go to [https://login.tailscale.com](https://login.tailscale.com) and sign up. Free for personal use (up to 100 devices).
+Create an account at [Tailscale](https://login.tailscale.com). Check the
+[current plan limits](https://tailscale.com/pricing) for your use case.
 
 ### Step 2: Bring Prax onto the tailnet
 
 You have two options here.  **Option 2a (recommended)** runs `tailscaled`
-as a Docker sidecar in the Prax compose stack — your server's host
-network never has to expose Prax, no `tailscaled` install on the host,
+as a Docker sidecar in the Prax compose stack — no host `tailscaled` installation
+is needed, but the default host-published application ports still need restriction,
 and the Tailscale node identity is pinned to a Docker volume so
 container restarts don't burn through device slots.  **Option 2b** runs
 `tailscaled` on the host directly, which is fine if you already manage
@@ -52,10 +65,13 @@ Tailscale system-wide.
 **Option 2a: Dockerized Tailscale sidecar (recommended)**
 
 1. In the Tailscale admin console (Settings → Keys), generate a key
-   with **Reusable ✓**, **Ephemeral ✗**, **Pre-approved ✓**.  Ephemeral
-   nodes count against the free tier's 1,000-min/month minute budget;
-   non-ephemeral nodes don't, so this matters for a long-running
-   server.
+   with a non-ephemeral device identity for this persistent service. A reusable
+   key supports re-enrollment; keep it private and scope it narrowly. Enable
+   pre-approval only if your tailnet uses device approval. Persisted node state
+   keeps the same identity across restarts. Ephemeral nodes are intended for
+   short-lived workloads; their accounting depends on plan and lifetime, with
+   nodes present for four hours treated as standard tagged devices. See
+   [Tailscale's ephemeral-node documentation](https://tailscale.com/docs/features/ephemeral-nodes).
 2. Add the key to your Prax `.env`:
    ```
    TS_AUTHKEY=tskey-auth-...
@@ -63,8 +79,10 @@ Tailscale system-wide.
    COMPOSE_PROFILES=tailscale
    TEAMWORK_BASE_URL=https://prax.<your-tailnet>.ts.net
    ```
-   Without `COMPOSE_PROFILES=tailscale` the sidecar is silently skipped
-   — there's no opt-out flag to set if you don't want it.
+   Without the `tailscale` profile the sidecar does not start. Current Compose
+   files still require a nonempty `TS_AUTHKEY` during interpolation; for local
+   use with `COMPOSE_PROFILES` unset, use `TS_AUTHKEY=unused`. Replace that value
+   with a real key before enabling this profile.
 3. `docker compose up -d`.  The sidecar joins the tailnet automatically
    and serves `https://prax.<tailnet>.ts.net/` (TeamWork) and
    `https://prax.<tailnet>.ts.net:3001/` (Grafana, when the
@@ -442,7 +460,8 @@ For full control over authentication — custom branding, LDAP/Active Directory 
 - You need to support multiple identity sources (Google + GitHub + LDAP)
 - You want branded login pages
 - You need audit trails for compliance
-- You're running multi-tenant and need per-tenant auth policies
+- You need self-hosted identity policies for users of a trusted environment;
+  untrusted tenants still require separate Prax execution and data boundaries
 - You don't want to depend on external OAuth providers
 
 ### Architecture

@@ -36,24 +36,30 @@ Designed to work with the optional [**prax-sandbox**](https://github.com/praxage
 
 ```bash
 git clone https://github.com/praxagent/prax.git && cd prax
-git clone https://github.com/praxagent/teamwork.git ../teamwork          # web UI (build context)
-git clone https://github.com/praxagent/prax-sandbox.git ../prax-sandbox  # sandbox image source (build context)
+git clone https://github.com/praxagent/teamwork.git ../teamwork  # web UI
+git clone https://github.com/praxagent/prax-sandbox.git ../prax-sandbox  # build input
 cp .env-example .env                      # configure (see below)
 ```
 
-**Required `.env` settings** (at minimum):
+**Required `.env` settings** for direct OpenAI access with the example's default provider and models:
 
 | Variable | What | Example |
 |----------|------|---------|
-| `OPENAI_KEY` | OpenAI API key (or set `ANTHROPIC_KEY` for Claude) | `sk-...` |
-| `PRAX_USER_ID` | Your workspace directory name — the sandbox mounts only this user's folder for isolation. Pick any slug. | `usr_alice`, `myworkspace` |
+| `OPENAI_KEY` | OpenAI API key | `sk-...` |
+| `PRAX_USER_ID` | Workspace directory used by the shared sandbox. This is not per-request tenant isolation. Pick any slug. | `usr_alice`, `myworkspace` |
+| `FLASK_SECRET_KEY` | A strong random secret for session signing | Generate a unique value |
+| `TS_AUTHKEY` | Current Compose requires a value even without the Tailscale profile | `unused` for local use only |
 
 ```env
 OPENAI_KEY=sk-...
 PRAX_USER_ID=usr_alice
+FLASK_SECRET_KEY=<strong-random-secret>
+TS_AUTHKEY=unused
 ```
 
-Prax will **refuse to start** without `PRAX_USER_ID` when running in Docker. On first boot it creates `workspaces/<PRAX_USER_ID>` (the service-state path is derived from the variable before any user exists — `prax/services/state_paths.py`).
+Leave `COMPOSE_PROFILES` unset for this local example. Replace `TS_AUTHKEY` with a real key before enabling Tailscale. For Anthropic or a proxy, configure the provider, model names, and credentials together; follow [Setup](docs/guides/setup.md). Stock Compose grants Prax host Docker access (the sandbox gets only your workspace at `/workspace` — no repo mount and no model keys since 2026-09); use it only in a trusted environment. See [Deployment topology](docs/security/deployment-topology.md) before relying on credential isolation.
+
+Prax will **refuse to start** without `PRAX_USER_ID` when running in Docker (`app.py` fails fast). On first boot it creates `workspaces/<PRAX_USER_ID>` (the service-state path is derived from the variable before any user exists — `prax/services/state_paths.py`) and, on later starts, points your identity at it.
 
 > **Known gap (2026-09):** the user record created by your *first message* gets its own `usr_<id8>` workspace (`identity_service._canonical_workspace`), not `<PRAX_USER_ID>`. On the *next* boot `reconcile_workspace_dir()` (`prax/services/identity_service.py`) repoints that user to `<PRAX_USER_ID>` and only symlinks the old directory when the new one does not already exist — which it does, from boot one — so nothing is migrated and notes/files written in the first session drop out of view after the first restart. Deployments whose primary user already has `workspace_dir == PRAX_USER_ID` are unaffected. `make run-local-all` also injects `PRAX_USER_ID`, so the native path is exposed on a fresh identity DB too.
 
@@ -77,25 +83,20 @@ docker compose up --build
 
 **2 containers by default** (`prax` + `sandbox`). Uses the full `Dockerfile` (JDK 21, glibc Qdrant binary) — more memory headroom for Neo4j's JVM and faster GC, suited to servers. Same bundled layout as lite: Prax + TeamWork + Qdrant + Neo4j + ngrok all run inside the `prax` container. Opt-in profiles add services alongside: `--profile local-llm` starts Ollama, `--profile observability` starts Grafana + Tempo + Prometheus + Loki (see below).
 
-> **Known gap (2026-09): as shipped, neither compose file in this repo brings Prax up.**
-> Both `docker-compose.yml` and `docker-compose.lite.yml` health-check the `sandbox`
-> service with `curl http://localhost:4096/global/health`, but the prax-sandbox image
-> removed that server on 2026-07-20 (its own `sandbox/Dockerfile` and `docker-compose.yml`
-> use `pgrep -x supervisord`), and the `prax` service has `depends_on: sandbox:
-> condition: service_healthy` — so the sandbox never reports healthy and `prax` never
-> starts. Until the healthcheck is fixed, use the native path, `make run-local-all`
-> (see [Run without Docker](#run-without-docker)), which starts the sandbox from
-> prax-sandbox's **own** compose file; or start the sandbox from that file directly
-> (`cd ../prax-sandbox && WORKSPACE_DIR=<absolute path of the user's workspace dir> docker compose up -d`)
-> and run Prax on the host.
->
-> Also know what these two compose files do once they are fixed: the `sandbox` service
-> is passed `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` from your `.env` and bind-mounts this
-> whole repo — `.env` included — read-write at `/source`. The keyless, `/workspace`-only
-> sandbox posture described in
+> **Closed 2026-09: both compose files now bring Prax up.** Until then the `sandbox`
+> service in `docker-compose.yml` and `docker-compose.lite.yml` was health-checked with
+> `curl http://localhost:4096/global/health` — the OpenCode server the prax-sandbox image
+> removed on 2026-07-20 — and with `prax` on `depends_on: sandbox: condition:
+> service_healthy` the sandbox never reported healthy and `prax` never started. The
+> compose-level check is gone; the image's own `HEALTHCHECK` (`pgrep -x supervisord`) is
+> what `prax` waits on. The same change dropped the sandbox's
+> `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` injection and the read-write `/source` mount of
+> this whole repo (`.env` included): the sandbox now gets only
+> `${WORKSPACE_DIR}/${PRAX_USER_ID}` at `/workspace` — the keyless posture
 > [`docs/security/sandbox-execution-boundary.md`](docs/security/sandbox-execution-boundary.md)
-> is what prax-sandbox's own compose (and therefore `make run-local-all`) gives you,
-> not what these two files give you today.
+> describes and prax-sandbox's own compose always had. `tests/test_compose_sandbox_service.py`
+> fails CI if any of it comes back. The native path, `make run-local-all`
+> (see [Run without Docker](#run-without-docker)), remains the dev-loop default.
 
 Both modes expose the same UI at **http://localhost:3000** and publish the same host ports (3000, 5001, 8000, 4040). Qdrant and Neo4j run inside the `prax` container and are not published to the host by default — if you want direct access, add a `ports:` entry (`6333:6333`, `7474:7474`) to `docker-compose.yml` or use `docker compose exec prax ...`.
 
@@ -142,7 +143,7 @@ Only the sandbox gets the GPU — Prax itself stays CPU-only by default. If you 
 
 #### Memory, Ollama, and core services
 
-Qdrant and Neo4j are **bundled inside the `prax` container** and start automatically on `docker compose up` — data persists to `workspaces/<PRAX_USER_ID>/.services/{qdrant,neo4j,teamwork}` so it survives restarts and rebuilds, and is scoped per user. Prax talks to them over localhost inside the container; they're not published to the host by default. Prax is nothing without his memory.
+Qdrant and Neo4j are **bundled inside the `prax` container** and start automatically on `docker compose up` — data persists to `workspaces/<PRAX_USER_ID>/.services/{qdrant,neo4j,teamwork}` so it survives restarts and rebuilds, and is scoped per user. Prax talks to them over localhost inside the container; they're not published to the host by default. Set the memory options to match the services you intend to run.
 
 Ollama is opt-in: start it with `docker compose --profile local-llm up` to run a separate Ollama container that Prax reaches at `http://ollama:11434` inside the Docker network.
 
@@ -204,13 +205,13 @@ Accessing Prax from another machine works fine, but the **Desktop** and **Browse
 
 Three easy fixes, in order of recommendation:
 
-**Tailscale sidecar (Docker)** — recommended. Runs `tailscaled` inside the compose stack, so your server's host network never has to expose Prax. State is persisted in a Docker volume so the node keeps its identity across restarts:
+**Tailscale sidecar (Docker)** — recommended. Runs `tailscaled` inside the Compose stack. It adds a private route but does not close the host-published application ports; restrict those separately. State is persisted in a Docker volume so the node keeps its identity across restarts:
 
 ```bash
 # 1. Get a reusable, NON-ephemeral, pre-approved key from
 #    https://login.tailscale.com/admin/settings/keys
-#    (Ephemeral keys count against the free tier's 1,000-min/month
-#    minute budget — non-ephemeral keys do not.)
+#    Use persisted state for this long-running service; see the
+#    Tailscale configuration guide for identity and plan considerations.
 # 2. Add to .env:
 #       TS_AUTHKEY=tskey-auth-...
 #       TS_HOSTNAME=prax            # whatever name you want on the tailnet
@@ -221,7 +222,7 @@ docker compose up -d
 #        https://prax.<tailnet>.ts.net:3001/   (Grafana, if observability is up)
 ```
 
-The sidecar uses Tailscale userspace mode (no `/dev/net/tun` on the host), reads its serve config from [`tailscale/serve-config.json`](tailscale/serve-config.json), and proxies `:443 → prax:8000` and `:3001 → grafana:3000` over the tailnet. HTTPS must be enabled on your tailnet (admin console → DNS → HTTPS Certificates). Compose treats the service as opt-in: with `COMPOSE_PROFILES` unset, the sidecar is silently skipped, so leaving the variables out is identical to not having Tailscale at all.
+The sidecar uses kernel TUN mode (`NET_ADMIN` and `/dev/net/tun`), reads its serve config from [`tailscale/serve-config.json`](tailscale/serve-config.json), and proxies `:443 → prax:8000` and `:3001 → grafana:3000` over the tailnet. HTTPS must be enabled on your tailnet (admin console → DNS → HTTPS Certificates). With `COMPOSE_PROFILES` unset, the sidecar does not start. Current Compose still requires a nonempty `TS_AUTHKEY` during interpolation; the local Quick Start uses `unused` only while this profile is disabled.
 
 **Tailscale on the host** — fallback if you already run `tailscaled` on the server and don't want a sidecar. The Makefile keeps the original mappings:
 
@@ -273,10 +274,12 @@ make shutdown          # stop everything run-local-all started (processes, conta
 > machine you've been hacking on, is proven every night.
 > **Known gap (2026-09):** it is not proving that today. The workflow last passed on
 > 2026-06-29 and every run since 2026-06-30 has failed (69 consecutive failures as of
-> 2026-09-06, per `gh run list --workflow fresh-install.yml`). The 2026-09-06 run fails
-> at `Sandbox OpenCode /global/health :4096` — `scripts/smoke_test.py` still probes the
-> OpenCode endpoint the sandbox image removed in 2026-07 — and the workflow's boot
-> `.env` sets no `TEAMWORK_API_KEY`, which TeamWork's external API now requires.
+> 2026-09-06, per `gh run list --workflow fresh-install.yml`). The 2026-09-06 run failed
+> at `Sandbox OpenCode /global/health :4096` — `scripts/smoke_test.py` still probed the
+> OpenCode endpoint the sandbox image removed in 2026-07 (that probe was removed
+> 2026-09; the next scheduled run will show whether it was the only blocker) — and the
+> workflow's boot `.env` still sets no `TEAMWORK_API_KEY`, which TeamWork's external
+> API now requires.
 
 > **Prerequisite — Node.js (for the TeamWork web UI).** The TeamWork UI is a React app that must
 > be compiled (or run via the Vite dev server). Without **Node.js + npm** on the host, TeamWork's
@@ -292,9 +295,9 @@ make shutdown          # stop everything run-local-all started (processes, conta
 >
 > Verify with `node --version && npm --version`, then re-run the `make` target.
 
-`run-local-all` brings up the whole stack — memory **on**, TeamWork **on**, sandbox **on**. Prax and TeamWork run as plain host processes; **Qdrant, Neo4j and the sandbox run in Docker** (Prax connects to their published ports — note the Makefile publishes Qdrant and Neo4j with plain `-p 6333:6333` / `-p 7474:7474 -p 7687:7687`, i.e. on **all** host interfaces, with Qdrant unauthenticated and Neo4j on the committed default password `prax-memory`; it does not bind them to loopback, so keep the host behind a firewall or security group). Everything persists under the user's workspace (default `PRAX_USER=local`): Qdrant/Neo4j data in `workspaces/$PRAX_USER/.services/{qdrant,neo4j}`, and the sandbox's `/workspace` is bind-mounted to `workspaces/$PRAX_USER` — so memory **and** sandbox files survive restarts rather than vaporizing with the containers. On this path the sandbox container gets **no** provider keys: the Makefile exports `.env`'s `ANTHROPIC_KEY`/`OPENAI_KEY` as `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` into the shell that runs `docker compose`, but prax-sandbox's `docker-compose.yml` declares no `environment:` block, so they never reach the container. That is the keyless posture the security docs describe — it is this repo's own `docker-compose.yml` that still injects the keys (see the Quick Start known gap). PIDs and logs land in `.local-run/`. If the sandbox is expected (Docker + checkout present) but fails to start, `run-local-all` hard-fails instead of silently disabling it.
+`run-local-all` brings up the whole stack — memory **on**, TeamWork **on**, sandbox **on**. Prax and TeamWork run as plain host processes; **Qdrant, Neo4j and the sandbox run in Docker** (Prax connects to their published ports — note the Makefile publishes Qdrant and Neo4j with plain `-p 6333:6333` / `-p 7474:7474 -p 7687:7687`, i.e. on **all** host interfaces, with Qdrant unauthenticated and Neo4j on the committed default password `prax-memory`; it does not bind them to loopback, so keep the host behind a firewall or security group). Everything persists under the user's workspace (default `PRAX_USER=local`): Qdrant/Neo4j data in `workspaces/$PRAX_USER/.services/{qdrant,neo4j}`, and the sandbox's `/workspace` is bind-mounted to `workspaces/$PRAX_USER` — so memory **and** sandbox files survive restarts rather than vaporizing with the containers. On this path the sandbox container gets **no** provider keys: the Makefile exports `.env`'s `ANTHROPIC_KEY`/`OPENAI_KEY` as `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` into the shell that runs `docker compose`, but prax-sandbox's `docker-compose.yml` declares no `environment:` block, so they never reach the container. That is the keyless posture the security docs describe — and since 2026-09 this repo's own compose files match it (see the Quick Start note). PIDs and logs land in `.local-run/`. If the sandbox is expected (Docker + checkout present) but fails to start, `run-local-all` hard-fails instead of silently disabling it.
 
-Each backing service is skipped with an **actionable install hint** (never a hard failure) if it can't start — Qdrant and Neo4j prefer Docker (falling back to a native `qdrant`/`neo4j` binary), plus a sibling TeamWork checkout and a sibling `prax-sandbox` checkout (Docker-only). Override locations/owner with `make run-local-all TEAMWORK_PATH=/path/to/teamwork SANDBOX_PATH=/path/to/prax-sandbox PRAX_USER=alice`. By default the sibling repos are expected next to this one:
+Optional backing services may be skipped with an install hint when unavailable; an expected sandbox that fails to start is a hard failure — Qdrant and Neo4j prefer Docker (falling back to a native `qdrant`/`neo4j` binary), plus a sibling TeamWork checkout and a sibling `prax-sandbox` checkout (Docker-only). Override locations/owner with `make run-local-all TEAMWORK_PATH=/path/to/teamwork SANDBOX_PATH=/path/to/prax-sandbox PRAX_USER=alice`. By default the sibling repos are expected next to this one:
 
 ```bash
 git clone https://github.com/praxagent/teamwork      ../teamwork
@@ -457,7 +460,7 @@ For frontend hot-reload during development, run `npm run dev` in `teamwork/front
 
 #### Sandbox caveat
 
-The code-execution sandbox is itself a Docker container — and it now lives in its own repo, [**prax-sandbox**](https://github.com/praxagent/prax-sandbox) (a sibling directory; Prax depends on it as `prax_sandbox_client`). So "fully Docker-free" means **no sandbox**: set `SANDBOX_ENABLED=false` (or simply don't run the sandbox container) and Prax runs as a pure harness — sandbox features (package auto-install, `sandbox_shell`, the in-browser terminal, the noVNC desktop, the Chrome screencast, `run_python`, and the `delegate_sandbox` / `delegate_desktop` spokes) are unavailable, and no sandbox tools are registered. Core Prax (chat, memory, notes, scheduling, channels) runs fine without it. To run a sandbox locally, build its image from the sibling repo (`make run-local-all` does this on first run; or `cd ../prax-sandbox && make build`). This repo's own `docker compose up` also builds it but, as shipped, then waits forever on a stale healthcheck — see the Quick Start known gap. To run it on a **remote box**, see [providing Prax a sandbox](docs/infrastructure/sandbox.md) and the prax-sandbox repo's `docs/remote.md`.
+The code-execution sandbox is itself a Docker container — and it now lives in its own repo, [**prax-sandbox**](https://github.com/praxagent/prax-sandbox) (a sibling directory; Prax depends on it as `prax_sandbox_client`). So "fully Docker-free" means **no sandbox**: set `SANDBOX_ENABLED=false` (or simply don't run the sandbox container) and Prax runs as a pure harness — sandbox features (package auto-install, `sandbox_shell`, the in-browser terminal, the noVNC desktop, the Chrome screencast, `run_python`, and the `delegate_sandbox` / `delegate_desktop` spokes) are unavailable, and no sandbox tools are registered. Core Prax (chat, memory, notes, scheduling, channels) runs fine without it. To run a sandbox locally, build its image from the sibling repo (`make run-local-all` does this on first run; or `cd ../prax-sandbox && make build`). This repo's own `docker compose up` also builds it (the stale `:4096` healthcheck that used to block `prax` was removed 2026-09 — see the Quick Start note). To run it on a **remote box**, see [providing Prax a sandbox](docs/infrastructure/sandbox.md) and the prax-sandbox repo's `docs/remote.md`.
 
 #### Ports
 
@@ -512,17 +515,20 @@ The [Tailscale / HTTPS](#remote-access-tailscale--https) options below also appl
 
 ## Deploying the suite to a fresh server (keyless, single-tenant)
 
-A complete, reproducible install on a bare Ubuntu VM — the shape that runs Prax
-full-time with **no provider keys on the box**. Written from an actual 4 GB
-Lightsail deployment, including the traps that cost time.
+A native-service deployment recipe based on an earlier Ubuntu VM installation.
+Provider credentials can be kept out of the agent process using the proxy;
+filesystem and administrative isolation must be configured separately. This
+recipe has not been rerun from a clean machine for the September 4 docs revision.
+For the container path, use [Setup](docs/guides/setup.md).
 
 **Target shape.** Prax + TeamWork + sandbox + Qdrant + secrets-proxy. Neo4j and
 the LGTM observability stack are **left off**: they cost ~600 MB together and are
 what make the difference between 4 GB working and not. You keep Qdrant vector
 memory; you lose the graph layer.
 
-**Measured footprint** (idle, everything but a browsing sandbox): **~1 GB**.
-4 GB is enough; 8 GB is what you want if you also run Neo4j + observability.
+**Historical idle footprint:** approximately 1 GB with an inactive browser and
+the reduced service set above. This does not establish peak memory requirements;
+measure the intended workload and leave room for browser, model, and service use.
 
 ### 1. Host prep
 
@@ -551,114 +557,33 @@ for r in prax teamwork prax-sandbox prax-secrets-proxy; do
 done
 ```
 
-### 3. Secrets live in ONE place — the proxy
+### 3. Configure credential isolation
 
-This is the whole point of keyless Prax: the **real** keys go in
-`prax-secrets-proxy/.env` and nowhere else. Prax itself gets non-empty
-**placeholders** so its clients construct, and the proxy substitutes the real
-value in flight.
+Follow the canonical [secrets-proxy guide](docs/security/secrets-proxy.md) for
+reverse-proxy authentication, TLS, and deployment boundaries. The
+[forward-mode procedure](docs/security/deployment-topology.md#wiring-forward-mode)
+covers generated credential maps, CA trust, and its different access controls.
 
-```bash
-cd ~/PRAX/prax-secrets-proxy && cp .env-example .env   # then edit:
-#   OPENAI_KEY / ANTHROPIC_KEY   ← reverse proxy (:8785). NOTE: no "_API_"
-#   PROXY_AUTH_TOKEN             ← python3 -c "import secrets; print(secrets.token_urlsafe(32))"
-#   OPENROUTER_API_KEY, ELEVENLABS_API_KEY, JINA_API_KEY, SERPER_DEV_API_KEY,
-#   TWILIO_AUTH_TOKEN, HF_TOKEN_RO …  ← forward proxy (:8786), injected BY HOST
-#   (TWILIO_AUTH_TOKEN is ALSO the inbound webhook-signature secret, which a
-#    proxy cannot inject: prax/blueprints/twilio_auth.py skips validation when
-#    Prax's own copy is empty — so keyless Prax has no inbound Twilio validation)
-```
+Do not put real provider keys in a sibling `.env` readable by the same user and
+call that isolation. Stock Docker socket access also permits administration of
+other containers on that daemon. An isolated proxy needs a separate administrative
+boundary. Each proxy half authenticates callers only when its token is set in the
+proxy's `.env` — `PROXY_AUTH_TOKEN` for the reverse half (`:8785`),
+`PROXY_FORWARD_AUTH_TOKEN` for the forward half (`:8786`, which answers `407`
+without it) — and **empty means open**: set both, and still keep both ports
+loopback-only. One credential cannot move at all: `TWILIO_AUTH_TOKEN` is also the
+inbound webhook-signature secret, which a proxy cannot inject —
+`prax/blueprints/twilio_auth.py` skips validation when Prax's own copy is empty,
+so keyless Prax has no inbound Twilio validation (see the
+[credential matrix](docs/security/credentials.md)).
 
-> **Naming trap.** The reverse proxy wants `OPENAI_KEY`/`ANTHROPIC_KEY` (no
-> `_API_`); the forward map wants `OPENROUTER_API_KEY`, `ELEVENLABS_API_KEY`,
-> … **with** `_API_`. A typo means "no injection", which surfaces as a confusing
-> **401 from the provider**, not an error from the proxy.
+After configuring the intended path, verify unauthorized requests are rejected
+where authentication is required, then make one small authorized request. A
+successful completion establishes that path's wiring, not filesystem isolation.
+Local session, integration, and SSH credentials remain sensitive even when model
+keys are proxied; see the [credential matrix](docs/security/credentials.md).
 
-### 4. Generate the forward map — it is NOT in git
-
-`forward-map.json` is generated from [the credential registry](prax/services/credential_registry.py)
-and gitignored. If you skip this, Docker bind-mounts a *nonexistent* file and
-**creates a directory in its place**, and the forward proxy crash-loops with
-`IsADirectoryError: /config/forward-map.json`.
-
-```bash
-cd ~/PRAX/prax && uv sync --python 3.13
-FLASK_SECRET_KEY=bootstrap uv run --python 3.13 python -c "
-from prax.services.credential_registry import export_forward_map
-n, skipped = export_forward_map('$HOME/PRAX/prax-secrets-proxy/forward-map.json')
-print(f'{n} rules, {len(skipped)} skipped (no key set)')"
-```
-
-### 5. Start the proxy (both halves)
-
-The forward proxy is behind a compose **profile**, so a plain `up -d` starts only
-the reverse half:
-
-```bash
-cd ~/PRAX/prax-secrets-proxy
-bash scripts/gen-cert.sh                    # TLS cert for the reverse proxy
-chmod 644 certs/proxy.key                   # the container runs as `proxyapp` and
-                                            # cannot read a 0600 key → PermissionError
-docker compose --profile forward up -d      # :8785 reverse + :8786 forward
-```
-
-Then build the CA bundle Prax trusts — system CAs **plus** the mitmproxy CA, so
-the forward proxy can terminate TLS:
-
-```bash
-docker run --rm -v prax-secrets-proxy_mitm-ca:/ca alpine \
-  cat /ca/mitmproxy-ca-cert.pem > /tmp/mitmca.pem
-cat /etc/ssl/certs/ca-certificates.crt > ~/PRAX/prax-proxy-ca-bundle.pem
-sed -n '/BEGIN CERT/,/END CERT/p' /tmp/mitmca.pem >> ~/PRAX/prax-proxy-ca-bundle.pem
-```
-
-> **Both proxy ports must stay loopback-only.** Each half authenticates callers
-> **only when its token is set** in the proxy's `.env` — the reverse proxy via
-> `PROXY_AUTH_TOKEN` (`secrets_proxy/app.py`), the forward proxy via
-> `PROXY_FORWARD_AUTH_TOKEN` (`secrets_proxy/mitm_addon.py`, which answers 407
-> without it). **Empty means open**: anything that can reach the port spends your
-> keys. Set both. The forward token travels in the proxy URL
-> (`HTTPS_PROXY=http://prax:<forward-token>@127.0.0.1:8786` — the username is
-> free-form and lands in the audit line). Even with both tokens set, bind both
-> halves to loopback and run the proxy on the same host as Prax.
-
-### 6. Point Prax at the proxy (placeholders, not keys)
-
-In `prax/.env`:
-
-```env
-HTTPS_PROXY=http://prax:<forward-token>@127.0.0.1:8786
-HTTP_PROXY=http://prax:<forward-token>@127.0.0.1:8786
-NO_PROXY=localhost,127.0.0.1
-REQUESTS_CA_BUNDLE=/home/<user>/PRAX/prax-proxy-ca-bundle.pem
-SSL_CERT_FILE=/home/<user>/PRAX/prax-proxy-ca-bundle.pem
-OPENROUTER_API_KEY=<any non-empty placeholder>   # the proxy substitutes the real one
-DISCORD_ENABLED=false                            # see the warning below
-```
-
-`<forward-token>` is the `PROXY_FORWARD_AUTH_TOKEN` you set in step 3; drop the
-`prax:<forward-token>@` part only if you left that token empty (the proxy is then open
-to any local process).
-
-**Verify keyless actually works** — this is the test that matters, not "the
-container is running":
-
-```bash
-cd ~/PRAX/prax && set -a && . ./.env && set +a
-uv run --python 3.13 python -c "
-import json,os,urllib.request
-r=urllib.request.Request('https://openrouter.ai/api/v1/chat/completions',
-  data=json.dumps({'model':'openai/gpt-4o-mini','max_tokens':12,
-    'messages':[{'role':'user','content':'Reply with exactly: KEYLESS_OK'}]}).encode(),
-  headers={'Authorization':f\"Bearer {os.environ['OPENROUTER_API_KEY']}\",
-           'Content-Type':'application/json'})
-print(json.load(urllib.request.urlopen(r,timeout=60))['choices'][0]['message']['content'])"
-```
-
-A real completion returned while the process holds only a placeholder ⇒ the
-invariant holds.
-
-### 7. TeamWork: frontend build + the credential pair
+### 4. TeamWork: frontend build + the credential pair
 
 ```bash
 cd ~/PRAX/teamwork/frontend && npm ci && npx vite build   # else / 404s
@@ -678,7 +603,7 @@ Generate a **fresh** pair per deployment; don't reuse another box's. Check for
 duplicate `TEAMWORK_API_KEY=` lines afterwards — a stale empty one later in the
 file silently wins under dotenv "last one wins" semantics.
 
-### 8. Start everything
+### 5. Start everything
 
 ```bash
 docker run -d --name prax-qdrant -p 127.0.0.1:6333:6333 --restart unless-stopped \
@@ -699,7 +624,7 @@ sudo tailscale serve --bg --https=443 http://localhost:8000
 > they bind to loopback. (`:4096`/OpenCode no longer exists — removed 2026-07.)
 > Once the tailnet works, close public SSH.
 
-### 9. Verify
+### 6. Verify
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' localhost:8000/health          # 200
@@ -708,7 +633,7 @@ curl -s -o /dev/null -w '%{http_code}\n' localhost:8000/api/external/projects   
 curl -s -o /dev/null -w '%{http_code}\n' localhost:5001/health          # 200
 ```
 
-### 10. Survive a reboot
+### 7. Survive a reboot
 
 Started by hand, Prax and TeamWork are ordinary foreground processes — a reboot
 (or an instance resize) leaves you with a box that answers on no ports. Most of
@@ -757,11 +682,9 @@ read from the environment rather than declared as a setting, and pydantic loads
 `.env` into the settings object, **not** into `os.environ` — so the line looks
 right and does nothing.
 
-**Prove it rather than assume it** — "it starts under systemd" and "it survives
-a reboot" are different claims, and so are "the services are up" and "the
-product works". Checking only the two processes is how a deployment with **no
-sandbox at all** passed as healthy while its terminal, browser and desktop
-panels had nothing behind them:
+After configuring the service units, verify recovery across a planned reboot
+and check the UI, model, and sandbox surfaces. Process health alone does not
+establish that the terminal, browser, and desktop panels work:
 
 ```bash
 sudo systemctl reboot
@@ -782,7 +705,7 @@ message**. The same applies to Twilio/SMS. Exactly one instance may own each
 channel — set `DISCORD_ENABLED=false` (and omit `TWILIO_*`) on the other, and
 restart it: an `.env` edit alone does not take effect.
 
-The Discord token is the one credential that **cannot** be proxied: the gateway
+The Discord token is one of the credentials that remains local in the current integration: the gateway
 carries it inside a WebSocket IDENTIFY payload rather than an HTTP header, so
 there is nothing for a header-injecting proxy to rewrite. See its entry in
 [`credential_registry.py`](prax/services/credential_registry.py) for the full
@@ -928,10 +851,10 @@ What remains of the old wiring:
   `opencode` command line and runs it with `cd /source && …` in the sandbox. That can
   only work if you install the CLI in the container yourself, with a dedicated,
   spend-capped key — the image does not provide it.
-- `/source` exists only under this repo's own `docker-compose.yml` /
-  `docker-compose.lite.yml`, which bind-mount the whole repo read-write into the sandbox
-  (see the Quick Start known gap). prax-sandbox's own compose — what `make run-local-all`
-  uses — mounts only `/workspace`.
+- `/source` no longer exists in either of this repo's compose files: the read-write
+  repo mount was removed 2026-09 (see the Quick Start note), and only the stale
+  `docker-compose.dev.yml` overlay still adds `/source/*` to the sandbox. prax-sandbox's
+  own compose — what `make run-local-all` uses — mounts only `/workspace`.
 - code-server (browser-based VS Code) is installed in the sandbox image.
 
 > **Warning:** any coding-agent CLI you install yourself uses provider API tokens and
@@ -989,7 +912,7 @@ stay off)_
 **Security & governance**
 - [x] Governance wrapper (`prax/agent/governed_tool.py`: risk classify + arg scrub + confirm gate + audit + budget) applied to the orchestrator's tool set (`tool_registry.get_registered_tools`) and to the MCP server's pool. **Known gap (2026-09):** spoke-internal tools are bound without it (`prax/agent/spokes/_runner.py` builds the loop straight from `bind_tools_user_context(tools)`), and every tool classified HIGH in `prax/agent/action_policy.py` (`browser_click`, `schedule_create`, `plugin_write`, `self_improve_deploy`, …) is reached only through such an ungoverned sub-loop — a `spokes/` agent, the self-improvement sub-agent (`prax/agent/self_improve_agent.py`, for `self_improve_deploy`) or the `gpu_power` plugin — and none is in the hub registry, so the HIGH-risk confirm gate does not fire in the shipped topology
 - [x] Scoped HIGH-risk confirmation (`HIGH_RISK_SCOPED_CONFIRM`, default off; subject to the gap above). Unknown tools classify **MEDIUM** — a deny-by-default variant (unknown → HIGH) was measured in the 2026-07-08 campaign, regressed, and was removed rather than left switchable (see [flag-audit.md](docs/guides/flag-audit.md))
-- [x] SSRF egress guard (`prax/utils/ssrf.py`: blocks internal/metadata addresses, per-redirect-hop revalidation) on the plugin capability gateway and the URL reader. **Known gap (2026-09):** it is opt-in per call site and several model-controlled fetchers bypass it — `browser_navigate` / CDP navigate (no scheme or host check before `page.goto` / `Page.navigate`, so nothing in Prax refuses `file://` or internal hosts; `prax/services/browser_service.py`, `prax/agent/cdp_tools.py`), `workspace_download` (`prax/agent/workspace_tools.py`), `pdf_service.download_pdf`, and the arXiv plugin's `arxiv_fetch_papers` use plain `page.goto` / `requests.get`
+- [x] SSRF egress guard (`prax/utils/ssrf.py`: blocks internal/metadata addresses, per-redirect-hop revalidation) on the plugin capability gateway, the URL reader and, since 2026-09, `workspace_download` (`prax/agent/workspace_tools.py` uses `safe_request`; `tests/test_workspace_download_ssrf.py`). **Closed 2026-09 (scheme):** every agent-driven browser navigation — `browser_navigate`, `sandbox_browser_act` navigate, `browser_verify` goto, `browser_page_screenshot`, the interactive-login opener — passes `check_navigation_url` (`prax/services/browser_service.py`, called from `prax/agent/cdp_tools.py`), which unconditionally refuses non-http(s) URLs (`file://`, `javascript:`, `data:`, `about:`) and hostless URLs; `tests/test_browser_navigate_scheme.py` pins it. **Known gap (2026-09):** the *host* leg of that gate — refusing private / loopback / link-local hosts — is opt-in (`BROWSER_NAVIGATE_SSRF_GUARD`, default off, `prax/settings.py`), and two model-controlled fetchers still bypass the guard entirely: `pdf_service.download_pdf` (`prax/services/pdf_service.py`) and the arXiv plugin's `arxiv_fetch_papers` (`prax/plugins/tools/arxiv_reader/plugin.py`) use plain `requests.get`
 - [x] Hard plugin-activation gate for security-flagged imports
 - [x] Earned-trust relaxation + configurable autonomy profiles (guided / balanced / autonomous)
 - [x] Deterministic claim-auditor (numeric + grounding checks) over final responses
