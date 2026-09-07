@@ -21,10 +21,12 @@ import tempfile
 import threading
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 import yaml
 
 from prax.settings import settings
+from prax.utils.ssrf import SSRFError, validate_url
 
 logger = logging.getLogger(__name__)
 
@@ -411,8 +413,46 @@ def get_credentials(domain: str) -> dict[str, Any]:
 # Navigation
 # ---------------------------------------------------------------------------
 
+_NAVIGABLE_SCHEMES = ("http", "https")
+
+
+def check_navigation_url(url: str) -> str | None:
+    """Return a refusal message if *url* must not be loaded in a browser, else ``None``.
+
+    The single gate for every agent-driven navigation (browser_navigate,
+    browser_page_screenshot, sandbox_browser_act "navigate", browser_verify
+    goto, the interactive-login opener).
+
+    Unconditional: only ``http``/``https``. ``file://`` would render the host
+    filesystem in a browser the agent then reads; ``javascript:``, ``data:``
+    and ``about:`` are not pages either. Flag-gated
+    (``BROWSER_NAVIGATE_SSRF_GUARD``, default off because a personal assistant
+    is legitimately asked to open ``http://localhost:3000``): the SSRF guard
+    additionally refuses private / loopback / link-local hosts.
+    """
+    candidate = (url or "").strip()
+    parsed = urlparse(candidate)
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in _NAVIGABLE_SCHEMES:
+        return (
+            f"Refused to navigate to {url!r}: only http(s) URLs can be opened "
+            f"(scheme {scheme or '(none)'!r})."
+        )
+    if not parsed.netloc:
+        return f"Refused to navigate to {url!r}: no host in URL."
+    if settings.browser_navigate_ssrf_guard:
+        try:
+            validate_url(candidate)
+        except SSRFError as exc:
+            return f"Refused to navigate to {url!r}: {exc}"
+    return None
+
+
 def navigate(user_id: str, url: str) -> dict[str, Any]:
     """Navigate to a URL and return page title + text content."""
+    refusal = check_navigation_url(url)
+    if refusal:
+        return {"error": refusal}
     try:
         session = _get_session(user_id)
         session.page.goto(url, wait_until="domcontentloaded", timeout=settings.browser_timeout)
@@ -655,6 +695,10 @@ def start_interactive_login(user_id: str, url: str | None = None) -> dict[str, A
     using the user's persistent profile.  The user SSH-tunnels to the VNC
     port and logs in manually.  Once done, call ``finish_interactive_login``.
     """
+    if url:
+        refusal = check_navigation_url(url)
+        if refusal:
+            return {"error": refusal}
     if settings.browser_sandbox_only:
         # No host Xvfb/x11vnc/Chromium in sandbox-only mode — the sandbox
         # Chrome is already user-visible and interactive via TeamWork.
@@ -779,9 +823,13 @@ def finish_interactive_login(user_id: str) -> dict[str, Any]:
 
 def check_login_status(user_id: str, domain: str) -> dict[str, Any]:
     """Navigate to a domain and check if the browser appears logged in."""
+    target = f"https://{domain}"
+    refusal = check_navigation_url(target)
+    if refusal:
+        return {"error": refusal}
     try:
         session = _get_session(user_id)
-        session.page.goto(f"https://{domain}", wait_until="domcontentloaded", timeout=15000)
+        session.page.goto(target, wait_until="domcontentloaded", timeout=15000)
         _human_delay(session.page, "after_navigate")
         url = session.page.url
         title = session.page.title()

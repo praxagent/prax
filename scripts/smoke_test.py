@@ -14,7 +14,8 @@ configured are reported as skipped, not failed.
 
 Dependency-free (stdlib only) so it runs in any fresh environment. Ports are
 overridable via env: PRAX_PORT, TEAMWORK_PORT, TEAMWORK_DEV_PORT, QDRANT_PORT,
-NEO4J_BOLT_PORT, SANDBOX_OPENCODE_PORT, SANDBOX_CDP_PORT, SANDBOX_NOVNC_PORT.
+NEO4J_BOLT_PORT, SANDBOX_CDP_PORT, SANDBOX_NOVNC_PORT; the sandbox container name
+via SANDBOX_CONTAINER (its liveness is read from Docker's health status).
 """
 from __future__ import annotations
 
@@ -22,6 +23,7 @@ import base64
 import json
 import os
 import socket
+import subprocess
 import time
 import urllib.request
 
@@ -31,7 +33,11 @@ TW = int(os.environ.get("TEAMWORK_PORT", "8000"))
 TW_DEV = int(os.environ.get("TEAMWORK_DEV_PORT", "5173"))
 QDRANT = int(os.environ.get("QDRANT_PORT", "6333"))
 NEO4J = int(os.environ.get("NEO4J_BOLT_PORT", "7687"))
-SB_OPENCODE = int(os.environ.get("SANDBOX_OPENCODE_PORT", "4096"))
+# Sandbox liveness = the image HEALTHCHECK (`pgrep -x supervisord`) as Docker
+# reports it. Name matches what `make run-local-all` starts (prax-sandbox's own
+# compose, project "prax-sandbox") and the SANDBOX_CONTAINER the Makefile hands
+# TeamWork. (The old probe curled OpenCode on :4096, which no longer exists.)
+SB_CONTAINER = os.environ.get("SANDBOX_CONTAINER", "prax-sandbox-sandbox-1")
 SB_CDP = int(os.environ.get("SANDBOX_CDP_PORT", "9223"))
 SB_NOVNC = int(os.environ.get("SANDBOX_NOVNC_PORT", "6080"))
 # Observability stack (LGTM). Grafana publishes on host :3002 (the tailscale
@@ -114,6 +120,25 @@ def _otlp_trace_roundtrip() -> tuple[bool, str]:
             pass
         time.sleep(1)
     return (False, f"span {trace_id[:8]}… ingested but not queryable after 15s")
+
+
+def _container_healthy(name: str) -> tuple[bool, str]:
+    """Docker's health verdict for the sandbox container — the same signal
+    `depends_on: condition: service_healthy` gates on, so this fails exactly
+    when compose would refuse to start Prax against this sandbox (container
+    missing, no HEALTHCHECK in the image, or supervisord not running)."""
+    try:
+        r = subprocess.run(  # noqa: S603 — fixed argv, no shell
+            ["docker", "inspect", "--format", "{{.State.Health.Status}}", name],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return (False, f"{type(e).__name__}: {str(e)[:60]}")
+    if r.returncode != 0:
+        err = (r.stderr or r.stdout).strip().splitlines()
+        return (False, (err[-1] if err else f"docker inspect exit {r.returncode}")[:60])
+    status = r.stdout.strip()
+    return (status == "healthy", status or "no health status")
 
 
 def _tcp_open(host: str, port: int, timeout: float = 4.0) -> bool:
@@ -220,11 +245,11 @@ def main() -> int:  # noqa: C901 — a flat list of independent checks reads cle
     # --- Sandbox (optional) -------------------------------------------------
     print("\nSandbox (browser/terminal/desktop — if enabled):")
     sb_cdp_http = _tcp_open(H, SB_CDP)
-    if not sb_cdp_http and not _tcp_open(H, SB_OPENCODE):
+    if not sb_cdp_http and not _tcp_open(H, SB_NOVNC):
         skip("sandbox", "no sandbox ports open (SANDBOX_ENABLED=false or not started)")
     else:
-        check("Sandbox OpenCode /global/health",
-              _http_ok(f"http://{H}:{SB_OPENCODE}/global/health")[0], f":{SB_OPENCODE}")
+        healthy, hdetail = _container_healthy(SB_CONTAINER)
+        check("Sandbox container health (docker inspect)", healthy, f"{SB_CONTAINER}: {hdetail}")
         # CDP reachable + a real target.
         cdp_ws_path = ""
         try:

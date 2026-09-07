@@ -85,13 +85,17 @@ Then **all** of the following are required:
    **TeamWork backend (`:8000`, run in *prod* mode** so it serves the built SPA +
    proxies to Prax). Set `TEAMWORK_HOST=0.0.0.0`. **Leave `PRAX_HOST=127.0.0.1`**
    — Prax `:5001` is internal (only TeamWork talks to it); never expose it or the
-   Vite dev server. This is a firewall statement, not something the app enforces:
-   Prax cannot tell TeamWork from any other caller. `POST /teamwork/webhook`
-   (which starts an agent turn) and the other `/teamwork/*`,
-   `/plugins/*` and `/api/users/*` routes carry **no inbound credential check** —
-   `TEAMWORK_API_KEY` is sent *outbound* by `prax/services/teamwork_service.py`
-   and never verified inbound (**Known gap, 2026-09**). Whoever can reach `:5001`
-   can drive Prax.
+   Vite dev server. By default this is a firewall statement, not something the
+   app enforces: `POST /teamwork/webhook` (which starts an agent turn) and the
+   other `/teamwork/*`, `/plugins/*` and `/api/users/*` routes carry **no
+   inbound credential check unless `PRAX_API_KEY` is set** — `TEAMWORK_API_KEY`
+   is only sent *outbound* by `prax/services/teamwork_service.py`. With
+   `PRAX_API_KEY` set (`prax/blueprints/inbound_auth.py`), those three route
+   groups require a matching `X-API-Key` header (constant-time compare, 401
+   otherwise); TeamWork's Prax proxy routers (`teamwork/src/teamwork/routers/prax.py`)
+   send it when TeamWork's own `PRAX_API_KEY` matches. Set it in both `.env`
+   files whenever `:5001` is reachable by anything other than TeamWork;
+   **unset (the default), whoever can reach `:5001` can drive Prax.**
 2. **Firewall the app port to the proxy only** — never `0.0.0.0/0`:
    - **Google IAP / GCP LB**: allow the backend port from the Google LB ranges
      **`35.191.0.0/16`** and **`130.211.0.0/22`** (health checks + IAP) only;

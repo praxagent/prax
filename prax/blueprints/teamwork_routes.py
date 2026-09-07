@@ -7,9 +7,13 @@ import threading
 
 from flask import Blueprint, Flask, jsonify, request
 
+from prax.blueprints.inbound_auth import require_prax_api_key
+
 logger = logging.getLogger(__name__)
 
 teamwork_routes = Blueprint("teamwork", __name__)
+# Inbound credential check — a no-op until PRAX_API_KEY is set (see inbound_auth).
+teamwork_routes.before_request(require_prax_api_key)
 
 
 @teamwork_routes.route("/teamwork/observability", methods=["GET"])

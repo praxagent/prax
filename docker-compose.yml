@@ -63,34 +63,27 @@ services:
       retries: 5
       start_period: 30s
 
-  # ── Sandbox (coding agents + Chrome + desktop) ────────────────────
+  # ── Sandbox (pure execution env: Python stack + Chrome/CDP + desktop) ──
   # Image source lives in the sibling prax-sandbox repo (override with
   # PRAX_SANDBOX_PATH).  `docker compose up --build` builds it automatically.
+  # No model API keys are passed in: the image ships no coding-agent CLI, so
+  # nothing inside calls a model — and a keyless container gives a code-exec
+  # tool nothing to exfiltrate.  No compose-level healthcheck either: the
+  # image's own HEALTHCHECK (`pgrep -x supervisord`) is what the `prax`
+  # service's `condition: service_healthy` waits on (the old one curled
+  # OpenCode's :4096, which no longer exists, so `prax` could never start).
+  # Mirrors prax-sandbox's own compose.
   sandbox:
     build:
       context: ${PRAX_SANDBOX_PATH:-../prax-sandbox}/sandbox
     image: prax-sandbox:latest
     restart: unless-stopped
-    environment:
-      - ANTHROPIC_API_KEY=${ANTHROPIC_KEY}
-      - OPENAI_API_KEY=${OPENAI_KEY}
-      - CLAUDE_CODE_DISABLE_NONINTERACTIVE_CHECK=1
     volumes:
-      # User-scoped workspace — only this user's folder is mounted.
+      # User-scoped workspace — only this user's folder is mounted, and nothing
+      # else from the host: no repo source, no persisted /root (both existed
+      # for the removed coding agents, and gave the sandbox write access to
+      # the harness's own code).
       - ${WORKSPACE_DIR:-../workspaces}/${PRAX_USER_ID}:/workspace
-      # Full repo mount — coding agents need read-write access for self-improvement.
-      - .:/source
-      # Persist sandbox home inside the user's workspace.
-      - ${WORKSPACE_DIR:-../workspaces}/${PRAX_USER_ID}/.sandbox/home:/root
-      - ${WORKSPACE_DIR:-../workspaces}/${PRAX_USER_ID}/.sandbox/claude:/root/.claude
-      - ${WORKSPACE_DIR:-../workspaces}/${PRAX_USER_ID}/.sandbox/codex:/root/.codex
-      - ${WORKSPACE_DIR:-../workspaces}/${PRAX_USER_ID}/.sandbox/opencode:/root/.config/opencode
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:4096/global/health"]
-      interval: 5s
-      timeout: 3s
-      start_period: 15s
-      retries: 5
 
   # ── Secrets proxy (KEYLESS Prax — endorsed security path) ─────────
   # Opt-in:  docker compose --profile secrets-proxy up

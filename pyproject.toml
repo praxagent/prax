@@ -4,7 +4,7 @@ version = "0.43.5"
 description = "Multi-channel (Twilio + Discord) AI assistant with agentic workflows"
 readme = "README.md"
 requires-python = ">=3.13"
-license = {text = "MIT"}
+license = {text = "Apache-2.0"}
 dependencies = [
     # PDF text extraction for files uploaded to a space. Pure Python, no system
     # libraries — the tool has to work on a lite deployment with no sandbox,

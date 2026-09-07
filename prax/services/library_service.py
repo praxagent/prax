@@ -170,16 +170,83 @@ def _library_root(user_id: str) -> Path:
     return Path(workspace_root(user_id)) / LIBRARY_DIR
 
 
+# A space / notebook / note slug is ONE path component. ``_slugify`` only ever
+# emits lowercase alphanumerics and hyphens, so a value outside this shape did
+# not come from us — it came from a URL segment, a tool argument or a wikilink.
+_SLUG_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+
+
+def _require_slug(component: str, kind: str = "slug") -> str:
+    """Validate *component* before it is joined onto a library path.
+
+    Refuses ``.``/``..``, anything containing a path separator, and anything
+    outside ``_SLUG_RE``. Until this existed the path helpers joined the raw
+    value: ``delete_space(user, "..")`` resolved to ``<workspace>/library`` and
+    rmtree'd the whole library, and ``"../../<other>/library/spaces/x"``
+    reached another user's data. Raises ``ValueError``; callers that speak in
+    error dicts / ``None`` convert it.
+    """
+    if (
+        not isinstance(component, str)
+        or component in (".", "..")
+        or "/" in component
+        or "\\" in component
+        or not _SLUG_RE.fullmatch(component)
+    ):
+        raise ValueError(
+            f"Invalid {kind} {component!r}: must be a single path component "
+            "(letters, digits, '.', '_', '-'; no separators; not '.' or '..')"
+        )
+    return component
+
+
+def _assert_within(path: Path, base: Path) -> Path:
+    """Belt-and-braces containment before I/O: *path*, fully resolved, must sit
+    under *base*. The slug validator makes traversal impossible by
+    construction; this catches the remaining class — a symlink planted inside
+    the library that points out of it. Raises ``ValueError``."""
+    if not path.resolve().is_relative_to(base.resolve()):
+        raise ValueError(f"Path {path} escapes {base}")
+    return path
+
+
+def _assert_in_library(user_id: str, path: Path) -> Path:
+    return _assert_within(path, _library_root(user_id))
+
+
 def _space_path(user_id: str, project: str) -> Path:
-    return _library_root(user_id) / SPACES_DIR / project
+    return _library_root(user_id) / SPACES_DIR / _require_slug(project, "space")
 
 
 def _notebook_path(user_id: str, project: str, notebook: str) -> Path:
-    return _space_path(user_id, project) / NOTEBOOKS_DIR / notebook
+    return (
+        _space_path(user_id, project) / NOTEBOOKS_DIR
+        / _require_slug(notebook, "notebook")
+    )
 
 
 def _note_path(user_id: str, project: str, notebook: str, slug: str) -> Path:
-    return _notebook_path(user_id, project, notebook) / f"{slug}.md"
+    return (
+        _notebook_path(user_id, project, notebook)
+        / f"{_require_slug(slug, 'note slug')}.md"
+    )
+
+
+def _tier_item_path(user_id: str, tier_dir: str, slug: str, kind: str) -> Path:
+    """``<library>/<tier>/<slug>.md`` for the flat raw / outputs / archive
+    tiers, with the slug validated and the resolved path checked against the
+    library root. Raises ``ValueError``.
+
+    The slugs these tiers issue are ``YYYYMMDD-HHMMSS-<_slugify(title)>``
+    (digit-led, at most 80 chars), so every slug we ever wrote passes
+    ``_SLUG_RE``; what this refuses is a caller-supplied
+    ``../spaces/<s>/notebooks/<n>/<note>`` (a wiki note reached through the
+    raw tier — ``promote_raw`` used to copy it and then unlink the ORIGINAL)
+    or ``../../../usr_other/library/raw/<x>`` (another user's capture).
+    """
+    return _assert_in_library(
+        user_id, _library_root(user_id) / tier_dir / f"{_require_slug(slug, kind)}.md"
+    )
 
 
 def ensure_library(user_id: str) -> Path:
@@ -1047,7 +1114,10 @@ def delete_space(
     Tasks (``.tasks.yaml``) are always deleted with the space — they're
     ephemeral work-tracking, not knowledge worth preserving.
     """
-    proj = _space_path(user_id, project)
+    try:
+        proj = _assert_in_library(user_id, _space_path(user_id, project))
+    except ValueError as exc:
+        return {"error": str(exc)}
     if not proj.exists():
         return {"error": f"Space '{project}' not found"}
 
@@ -1203,7 +1273,13 @@ def list_notebooks(user_id: str, project: str | None = None) -> list[dict]:
     root = _library_root(user_id) / SPACES_DIR
     if not root.exists():
         return []
-    projects = [root / project] if project else [p for p in sorted(root.iterdir()) if p.is_dir()]
+    if project:
+        try:
+            projects = [_assert_in_library(user_id, _space_path(user_id, project))]
+        except ValueError:
+            return []
+    else:
+        projects = [p for p in sorted(root.iterdir()) if p.is_dir()]
     out: list[dict] = []
     for proj in projects:
         if not proj.exists() or not proj.is_dir():
@@ -1234,7 +1310,10 @@ def list_notebooks(user_id: str, project: str | None = None) -> list[dict]:
 
 def delete_notebook(user_id: str, project: str, notebook: str) -> dict[str, Any]:
     """Delete an empty notebook. Refuses if it still has notes."""
-    nb = _notebook_path(user_id, project, notebook)
+    try:
+        nb = _assert_in_library(user_id, _notebook_path(user_id, project, notebook))
+    except ValueError as exc:
+        return {"error": str(exc)}
     if not nb.exists():
         return {"error": f"Notebook '{project}/{notebook}' not found"}
     notes = list(nb.glob("*.md"))
@@ -1337,7 +1416,10 @@ def get_note(
     slug: str,
 ) -> dict[str, Any] | None:
     """Return a single note as ``{meta, content}`` or ``None`` if missing."""
-    path = _note_path(user_id, project, notebook, slug)
+    try:
+        path = _assert_in_library(user_id, _note_path(user_id, project, notebook, slug))
+    except ValueError:
+        return None  # not a valid note address → no such note
     if not path.exists():
         return None
     text = path.read_text(encoding="utf-8")
@@ -1494,7 +1576,10 @@ def update_note(
     ``override_permission`` is explicitly set.  ``override_permission`` is
     only used by the UI's refine action, which the human initiates.
     """
-    path = _note_path(user_id, project, notebook, slug)
+    try:
+        path = _assert_in_library(user_id, _note_path(user_id, project, notebook, slug))
+    except ValueError as exc:
+        return {"error": str(exc)}
     if not path.exists():
         return {"error": f"Note '{project}/{notebook}/{slug}' not found"}
     text = path.read_text(encoding="utf-8")
@@ -1540,7 +1625,10 @@ def delete_note(
     notebook: str,
     slug: str,
 ) -> dict[str, Any]:
-    path = _note_path(user_id, project, notebook, slug)
+    try:
+        path = _assert_in_library(user_id, _note_path(user_id, project, notebook, slug))
+    except ValueError as exc:
+        return {"error": str(exc)}
     if not path.exists():
         return {"error": f"Note '{project}/{notebook}/{slug}' not found"}
     path.unlink()
@@ -2106,7 +2194,10 @@ def list_raw(user_id: str) -> list[dict]:
 
 def get_raw(user_id: str, slug: str) -> dict | None:
     """Fetch a single raw capture."""
-    path = _library_root(user_id) / RAW_DIR / f"{slug}.md"
+    try:
+        path = _tier_item_path(user_id, RAW_DIR, slug, "raw slug")
+    except ValueError:
+        return None
     if not path.exists():
         return None
     meta, body = _parse_frontmatter(path.read_text(encoding="utf-8"))
@@ -2127,6 +2218,12 @@ def promote_raw(
     ``promoted_from`` reference pointing at the original raw slug so the
     provenance chain stays intact.
     """
+    # Validate the raw slug before anything is copied: the unlink at the end
+    # must never follow a caller-supplied path out of raw/.
+    try:
+        raw_path = _tier_item_path(user_id, RAW_DIR, raw_slug, "raw slug")
+    except ValueError as exc:
+        return {"error": str(exc)}
     raw = get_raw(user_id, raw_slug)
     if raw is None:
         return {"error": f"Raw item '{raw_slug}' not found"}
@@ -2156,14 +2253,17 @@ def promote_raw(
         path.write_text(_serialize_frontmatter(meta, body), encoding="utf-8")
 
     # Remove the original raw capture — it now lives in the notebook
-    (_library_root(user_id) / RAW_DIR / f"{raw_slug}.md").unlink(missing_ok=True)
+    raw_path.unlink(missing_ok=True)
     rebuild_index(user_id)
     return {"status": "promoted", "note": result["note"]}
 
 
 def delete_raw(user_id: str, slug: str) -> dict[str, Any]:
     """Delete a raw capture without promoting it."""
-    path = _library_root(user_id) / RAW_DIR / f"{slug}.md"
+    try:
+        path = _tier_item_path(user_id, RAW_DIR, slug, "raw slug")
+    except ValueError as exc:
+        return {"error": str(exc)}
     if not path.exists():
         return {"error": f"Raw item '{slug}' not found"}
     path.unlink()
@@ -2223,7 +2323,10 @@ def list_outputs(user_id: str) -> list[dict]:
 
 def get_output(user_id: str, slug: str) -> dict | None:
     """Fetch a single output file."""
-    path = _library_root(user_id) / OUTPUTS_DIR / f"{slug}.md"
+    try:
+        path = _tier_item_path(user_id, OUTPUTS_DIR, slug, "output slug")
+    except ValueError:
+        return None
     if not path.exists():
         return None
     meta, body = _parse_frontmatter(path.read_text(encoding="utf-8"))
@@ -2233,7 +2336,10 @@ def get_output(user_id: str, slug: str) -> dict | None:
 
 def delete_output(user_id: str, slug: str) -> dict[str, Any]:
     """Delete a generated output."""
-    path = _library_root(user_id) / OUTPUTS_DIR / f"{slug}.md"
+    try:
+        path = _tier_item_path(user_id, OUTPUTS_DIR, slug, "output slug")
+    except ValueError as exc:
+        return {"error": str(exc)}
     if not path.exists():
         return {"error": f"Output '{slug}' not found"}
     path.unlink()
@@ -2330,7 +2436,10 @@ def list_archive(user_id: str) -> list[dict]:
 
 def get_archive(user_id: str, slug: str) -> dict | None:
     """Fetch a single archive entry (meta + extracted markdown)."""
-    path = _library_root(user_id) / ARCHIVE_DIR / f"{slug}.md"
+    try:
+        path = _tier_item_path(user_id, ARCHIVE_DIR, slug, "archive slug")
+    except ValueError:
+        return None
     if not path.exists():
         return None
     meta, body = _parse_frontmatter(path.read_text(encoding="utf-8"))
@@ -2341,7 +2450,10 @@ def get_archive(user_id: str, slug: str) -> dict | None:
 def delete_archive(user_id: str, slug: str) -> dict:
     """Remove an archive entry.  Does not touch the original binary
     in the workspace archive dir — that's the user's to manage."""
-    path = _library_root(user_id) / ARCHIVE_DIR / f"{slug}.md"
+    try:
+        path = _tier_item_path(user_id, ARCHIVE_DIR, slug, "archive slug")
+    except ValueError as exc:
+        return {"error": str(exc)}
     if not path.exists():
         return {"error": f"Archive entry '{slug}' not found"}
     path.unlink()
@@ -3128,7 +3240,11 @@ def get_space_file(
 ) -> tuple[Path, str] | None:
     """Return ``(path, mime_type)`` for a stored file, or ``None``."""
     safe_name = _sanitize_filename(filename)
-    p = _files_dir(user_id, space) / safe_name
+    try:
+        files_dir = _files_dir(user_id, space)
+        p = _assert_within(files_dir / safe_name, files_dir)
+    except ValueError:
+        return None  # not a valid space/file address → no such file
     if not p.is_file():
         return None
     mt, _ = mimetypes.guess_type(safe_name)
@@ -3138,7 +3254,11 @@ def get_space_file(
 def delete_space_file(user_id: str, space: str, filename: str) -> bool:
     """Delete a file from the space. Returns ``True`` if deleted."""
     safe_name = _sanitize_filename(filename)
-    p = _files_dir(user_id, space) / safe_name
+    try:
+        files_dir = _files_dir(user_id, space)
+        p = _assert_within(files_dir / safe_name, files_dir)
+    except ValueError:
+        return False
     if not p.is_file():
         return False
     p.unlink()

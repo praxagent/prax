@@ -149,6 +149,8 @@ REGISTRY: tuple[Credential, ...] = (
                PROXY_LOCAL, caveat="A TLS client key, not an API token; Prax's own infra."),
     Credential("TEAMWORK_API_KEY", "TeamWork UI", "Prax↔TeamWork API (own UI)",
                PROXY_LOCAL, caveat="Prax's own co-located UI, typically loopback/tailnet."),
+    Credential("PRAX_API_KEY", "Prax inbound API", "Shared secret callers present on Prax's own /teamwork, /plugins, /api/users routes",
+               PROXY_LOCAL, caveat="Inbound to Prax itself (checked, never sent); empty = no inbound check."),
     Credential("GPU_POWER_BROKER_TOKEN", "GPU power broker", "Optional GPU-broker control token",
                PROXY_LOCAL, caveat="Infra control token; classify FORWARD if it ever calls a third party."),
     Credential("NEO4J_PASSWORD", "Neo4j", "Knowledge-graph database password",

@@ -597,7 +597,7 @@ _local-sandbox:
 	        docker compose -f docker-compose.yml up -d; } ) \
 	      >$(LOCAL_RUN)/sandbox.log 2>&1 \
 	    && { touch $(LOCAL_RUN)/.sandbox-on; \
-	         echo "Sandbox started -> :4096 (OpenCode) :9223 (CDP) :6080 (desktop)"; } \
+	         echo "Sandbox started -> :9223 (CDP) :6080 (desktop) :6090 (clipboard)"; } \
 	    || { echo "ERROR: sandbox failed to start - see $(LOCAL_RUN)/sandbox.log"; \
 	         echo "       run-local-all aborts here: the sandbox was expected to come up (Docker + checkout present)."; \
 	         echo "       Fix the error above, or run without it via 'make run-local-all SANDBOX_PATH='."; \
@@ -743,7 +743,13 @@ local-status:
 	    echo " up   -> :7687"; else echo " down -> :7687"; fi
 	@printf "  %-9s" "TeamWork"; curl -s -o /dev/null --max-time 3 http://localhost:8000/health        && echo " up   -> :8000 (API)" || echo " down -> :8000 (API)"
 	@printf "  %-9s" "TW UI";    curl -s -o /dev/null --max-time 3 http://localhost:5173/             && echo " up   -> :5173 (Vite dev)" || echo " n/a  -> :5173 (Vite dev; prod serves UI from :8000)"
-	@printf "  %-9s" "Sandbox";  curl -s -o /dev/null --max-time 3 http://localhost:4096/global/health && echo " up   -> :4096" || echo " down -> :4096"
+	@# Sandbox: Docker's view of the image HEALTHCHECK (`pgrep -x supervisord`) —
+	@# the same signal compose's service_healthy waits on. (The old probe curled
+	@# OpenCode's :4096, which no longer exists, so it always said "down".)
+	@printf "  %-9s" "Sandbox"; \
+	  st=$$(docker inspect --format '{{.State.Health.Status}}' prax-sandbox-sandbox-1 2>/dev/null); \
+	  if [ "$$st" = "healthy" ]; then echo " up   -> prax-sandbox-sandbox-1 healthy (:9223 CDP, :6080 desktop)"; \
+	  else echo " down -> prax-sandbox-sandbox-1 ($${st:-not running})"; fi
 	@printf "  %-9s" "Prax";     curl -s -o /dev/null --max-time 3 http://localhost:5001/health        && echo " up   -> :5001" || echo " down -> :5001"
 	@printf "  %-9s" "Grafana";  curl -s -o /dev/null --max-time 3 http://localhost:3002/api/health    && echo " up   -> :3002 (Loki/Tempo/Prometheus; tailnet :3001)" || echo " n/a  -> :3002 (observability stack not running)"
 	@echo "Logs: make local-logs   Stop: make shutdown   Connectivity: make smoke"

@@ -177,7 +177,7 @@ def workspace_download(url: str, filename: str = "") -> str:
     from pathlib import Path
     from urllib.parse import unquote, urlparse
 
-    import requests as _requests
+    from prax.utils.ssrf import safe_request
 
     try:
         uid = _get_user_id()
@@ -191,17 +191,24 @@ def workspace_download(url: str, filename: str = "") -> str:
             if not Path(filename).suffix:
                 filename += ".bin"
 
-        # Sanitize filename
+        # Sanitize filename (the character class keeps ".", so an all-dots name
+        # like ".." would survive — safe_join below refuses it; give it a name).
         filename = re.sub(r'[^\w\-_. ]', '_', filename)
+        if not filename.strip("."):
+            filename = "download.bin"
 
-        resp = _requests.get(url, timeout=60, stream=True, allow_redirects=True, headers={
+        # The URL is model-controlled: SSRF guard with every redirect hop
+        # re-validated (a public URL 302'ing to 169.254.169.254 is refused).
+        resp = safe_request("get", url, timeout=60, stream=True, headers={
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
         })
         resp.raise_for_status()
 
-        # Save binary content to workspace
+        # Save binary content to the workspace root (prior placement —
+        # workspace_send_file looks in active/ and then the root, so it is
+        # deliverable from here). safe_join keeps a hostile name inside it.
         ws_root = workspace_service.workspace_root(uid)
-        file_path = Path(ws_root) / filename
+        file_path = Path(workspace_service.safe_join(ws_root, filename))
         file_path.parent.mkdir(parents=True, exist_ok=True)
         with open(file_path, "wb") as f:
             for chunk in resp.iter_content(chunk_size=8192):

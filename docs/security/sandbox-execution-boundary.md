@@ -60,10 +60,10 @@ may call*, not *which strings a shell may run*.
 
 | Target | Reachable? | Notes |
 |---|---|---|
-| **Prax host filesystem** | ❌ No — *with prax-sandbox's compose* | prax-sandbox's `docker-compose.yml` mounts only `${WORKSPACE_DIR}:/workspace`. `FROM '/etc/passwd'` reads the *container's* `/etc`, not the host's. **Prax's own `docker-compose.yml` / `docker-compose.lite.yml` are different — see the next rows.** |
+| **Prax host filesystem** | ❌ No | prax-sandbox's `docker-compose.yml` and (since 2026-09) prax's own `docker-compose.yml` / `docker-compose.lite.yml` all mount only the workspace at `/workspace`. `FROM '/etc/passwd'` reads the *container's* `/etc`, not the host's. The `docker-compose.dev.yml` overlay is the one exception — see the `/source` row. |
 | **`/workspace`** | ✅ Yes (rw) | Which directory that is depends on how the sandbox was started. `make run-local-all` (`Makefile`, `_local-sandbox`) mounts the **user's own** workspace, `WORKSPACE_DIR/<PRAX_USER_ID>`. `deploy/update.sh` passes `WORKSPACE_DIR` through unchanged and defaults it to the **whole `workspaces/` tree**, so unless the operator sets it to the per-user directory, every user's workspace is visible from the container. Either way the mount includes `plugins/` — see the Known gap below. |
 | **Container's own image fs** (`/opt`, `/etc`, `/tmp`, installed pkgs) | ✅ Yes | It's the image — no host secrets live here. `/tmp` is internal (never delivered to the user). |
-| **Prax source / host `.env` / DB / secrets on disk** | ❌ No with prax-sandbox's compose · ⚠️ **Yes with prax's compose** | prax-sandbox's compose does not mount them. **Known gap (2026-09):** prax's `docker-compose.yml` and `docker-compose.lite.yml` bind-mount the whole checkout **read-write at `/source`** on the `sandbox` service (the line is commented "coding agents need read-write access for self-improvement", a feature that was removed), so `.env`, `.git`, `identity.db*` and `conversations.db*` are all readable and writable from any `sandbox_shell`/`run_python` call in that deployment. They also mount `<workspace>/.sandbox/{home,claude,codex,opencode}` at `/root`, `/root/.claude`, `/root/.codex`, `/root/.config/opencode`. The `make run-local-all` and `deploy/update.sh` paths start the sandbox from prax-sandbox's compose and are not affected. |
+| **Prax source / host `.env` / DB / secrets on disk** | ❌ No · ⚠️ partial with the dev overlay | Neither prax-sandbox's compose nor prax's `docker-compose.yml` / `docker-compose.lite.yml` mount them: the `sandbox` service's only volume is the workspace. (Until 2026-09 prax's two compose files bind-mounted the whole checkout **read-write at `/source`** — `.env`, `.git`, `identity.db*`, `conversations.db*` included — plus `<workspace>/.sandbox/*` at `/root`, `/root/.claude`, `/root/.codex`, `/root/.config/opencode`, leftovers of the removed coding agents. Removed; `tests/test_compose_sandbox_service.py` fails CI if any mount outside `/workspace` comes back.) **Residual:** the `docker-compose.dev.yml` overlay still bind-mounts `./prax`, `./app.py`, `./config.py` and `./tests` read-write at `/source/*` — the harness's own code, though not `.env`, `.git` or the DBs — grandfathered in that test as a ratchet and tracked separately. |
 | **Container ENVIRONMENT variables** | ⚠️ **Yes — and they can hold secrets** | See below — this is a real exposure. |
 | **Network egress** (pip, curl, DuckDB `httpfs`, …) | ✅ Yes (unrestricted, default) | The container has outbound network — see the residual-risk below. |
 
@@ -74,25 +74,22 @@ The container's env is fully readable by any code-exec tool (`printenv`,
 in the sandbox's environment is reachable by every exec tool* — treat the sandbox
 env as readable-by-the-model.
 
-**Status (2026-07): keyless — but only on the prax-sandbox compose path.**
-Previously the compose passed `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` into the
-container (for OpenCode), so those keys were readable + exfiltratable by a
-code-exec tool driven by untrusted content — a live lethal-trifecta pair. The
-coding-agent CLIs were **removed from the sandbox image** (prax-sandbox #4), the
-multi-round coding-session tools were **removed** from Prax entirely (#142), and
+**Status (2026-09): keyless on every compose path.** Previously the compose
+passed `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` into the container (for OpenCode),
+so those keys were readable + exfiltratable by a code-exec tool driven by
+untrusted content — a live lethal-trifecta pair. The coding-agent CLIs were
+**removed from the sandbox image** (prax-sandbox #4), the multi-round
+coding-session tools were **removed** from Prax entirely (#142), and
 prax-sandbox's own `docker-compose.yml` passes **no** keys — that is the container
-`make run-local-all` and `deploy/update.sh` start. A user who reinstalls a
+`make run-local-all` and `deploy/update.sh` start. Prax's own `docker-compose.yml`
+and `docker-compose.lite.yml` lagged until 2026-09: their `sandbox` service still
+set `ANTHROPIC_API_KEY=${ANTHROPIC_KEY}`, `OPENAI_API_KEY=${OPENAI_KEY}` and
+`CLAUDE_CODE_DISABLE_NONINTERACTIVE_CHECK=1`, so whatever Prax's `.env` held under
+those names was `printenv`-readable in the `docker compose up` deployment the
+Quick Start documents. Those lines are gone; `tests/test_compose_sandbox_service.py`
+fails CI if any credential-shaped env key (`*_KEY`, `*_TOKEN`, `*_SECRET`,
+`*_PASSWORD`) reappears on a `sandbox` service. A user who reinstalls a
 coding-agent CLI themselves adds a *dedicated, spend-capped* key.
-
-**Known gap (2026-09): prax's own compose files still inject the keys.** The
-`sandbox` service in prax's `docker-compose.yml` and `docker-compose.lite.yml`
-still sets `ANTHROPIC_API_KEY=${ANTHROPIC_KEY}` and `OPENAI_API_KEY=${OPENAI_KEY}`
-(plus `CLAUDE_CODE_DISABLE_NONINTERACTIVE_CHECK=1`). Whatever Prax's `.env` holds
-under those names — real provider keys on the keys-in-Prax path, the proxy token
-on the keyless path — is therefore `printenv`-readable from the sandbox in the
-`docker compose up` deployment that the Quick Start documents. The fix is to
-delete those lines (mirroring prax-sandbox's compose); until then, treat the
-compose-started sandbox as key-bearing.
 
 **Residual + stronger mitigations (tracked):**
 - **Secret-injecting egress proxy (strongest — the real wall).** Run Prax with NO
@@ -116,11 +113,14 @@ compose-started sandbox as key-bearing.
 Earlier revisions of this page described `/source` as mounted "only during" the
 HIGH-gated self-improvement flow. **There is no such mechanism** (as of 2026-09,
 nothing in `prax/services/codegen_service.py` or `prax/agent/self_improve_agent.py`
-adds or removes a mount). The mount is a static line in the compose file that
-started the sandbox: **always present** on prax's `docker-compose.yml` /
-`docker-compose.lite.yml` (whole repo, read-write, including the gitignored
-`.env`), **never present** on prax-sandbox's `docker-compose.yml` (the
-`make run-local-all` / `deploy/update.sh` path). The self-improve tools
+adds or removes a mount). The mount was a static line in the compose file that
+started the sandbox: until 2026-09 **always present** on prax's
+`docker-compose.yml` / `docker-compose.lite.yml` (whole repo, read-write,
+including the gitignored `.env`) — now **removed** from both — and **never
+present** on prax-sandbox's `docker-compose.yml` (the `make run-local-all` /
+`deploy/update.sh` path). What remains is the `docker-compose.dev.yml` overlay,
+which still mounts `./prax`, `./app.py`, `./config.py` and `./tests` read-write at
+`/source/*` whenever it is used — equally static. The self-improve tools
 (`self_improve_read/write/patch/…`) are HIGH-risk and human-gated for their own
 reasons; that gate does not control what the container can see. Check the live
 shape with `docker inspect prax-sandbox-sandbox-1 --format '{{range .Mounts}}…'`.
@@ -128,8 +128,8 @@ shape with `docker inspect prax-sandbox-sandbox-1 --format '{{range .Mounts}}…
 ## Residual risks & hardening (status)
 
 1. **Unrestricted container egress → data-exfiltration leg.** The model keys are
-   out of the container on the prax-sandbox compose path (removed 2026-07; prax's
-   own compose still injects them — see above), but the container
+   out of the container on every compose path (prax-sandbox's since 2026-07,
+   prax's own since 2026-09 — see above), but the container
    still has **open outbound network**, so a code-exec tool driven by *untrusted
    content* (indirect prompt injection in a fetched page, a poisoned CSV) could
    still POST `/workspace` data — or any secret a user opted back in — outward
@@ -142,10 +142,12 @@ shape with `docker inspect prax-sandbox-sandbox-1 --format '{{range .Mounts}}…
    (allowlist/proxy) — kills the leg for env *and* files; **(c)** a dedicated,
    spend-capped, rotatable key for any opted-in coding-agent CLI; **(d)** a
    no-network / read-only DuckDB compute mode.
-2. **`/source` mount exposes secrets (prax's compose only)** — see "The
-   `/source` mount is static" above. The self-improve flow stays HIGH-risk +
-   human-gated (do not relax that), but the gate does not scope the mount; the
-   fix is removing the mount from the everyday sandbox service.
+2. **`/source` mount — removed from the everyday compose files 2026-09; residual
+   in the dev overlay** — see "The `/source` mount is static" above.
+   `docker-compose.yml` / `docker-compose.lite.yml` no longer mount it;
+   `docker-compose.dev.yml` still mounts four source paths read-write (no `.env`
+   or DBs). The self-improve flow stays HIGH-risk + human-gated (do not relax
+   that), but that gate does not scope any mount.
 3. **Known gap (2026-09): `/workspace/plugins/` is auto-imported in-process.**
    `prax/plugins/loader.py` tags any plugin under a workspace plugins dir that is
    not `shared/…` as `PluginTrust.WORKSPACE` and imports it **in the Prax
@@ -182,7 +184,9 @@ shape with `docker inspect prax-sandbox-sandbox-1 --format '{{range .Mounts}}…
 - Treat the container's network egress as reachable by untrusted content; design
   new code-exec tools accordingly (compose with the trifecta guard).
 - The persistent sandbox should mount only `/workspace`. If a feature needs more
-  mounted in, that's a security-review change, not a convenience one. (prax's own
-  compose files currently violate this with `/source` — tracked above.)
+  mounted in, that's a security-review change, not a convenience one.
+  (`docker-compose.yml` / `.lite.yml` comply since 2026-09 and
+  `tests/test_compose_sandbox_service.py` enforces it; the `docker-compose.dev.yml`
+  overlay's `/source/*` mounts are the grandfathered exception — tracked above.)
 - Do not add another caller of `prax.utils.shell.run_command` for model-supplied
   strings until it stops falling back to the host.

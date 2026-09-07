@@ -185,7 +185,17 @@ def workspace_root(user_id: str) -> str:
     # Refuses to create new directories named after phone numbers or raw IDs;
     # callers must go through resolve_user() for new users.
     safe_id = user_id.lstrip("+")
-    legacy_path = os.path.join(settings.workspace_dir, safe_id)
+    # A legacy id is a phone number, ``D<discord_id>`` or a raw id: ONE path
+    # component. Anything else (``../prax``, ``a/b``) is not a legacy id and
+    # must not be joined — ``workspace_root("../prax")`` used to resolve to the
+    # source checkout, and ensure_workspace then rewrote its .gitignore and ran
+    # ``git add -A`` on it.
+    if not re.fullmatch(r"[A-Za-z0-9_+\-]+", safe_id):
+        raise ValueError(
+            f"Invalid user_id for workspace lookup: {user_id[:12]!r} "
+            "(not a resolved user and not a single-component legacy id)"
+        )
+    legacy_path = safe_join(settings.workspace_dir, safe_id)
     if not os.path.isdir(legacy_path):
         logger.warning(
             "workspace_root called with unresolvable user_id %s and no "
@@ -195,9 +205,54 @@ def workspace_root(user_id: str) -> str:
     return legacy_path
 
 
+def _git_toplevel(path: str) -> str | None:
+    """Realpath of the git worktree enclosing *path*, or ``None`` if not in one."""
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=path, capture_output=True, text=True, timeout=15,
+        )
+    except Exception:
+        return None
+    if r.returncode != 0 or not r.stdout.strip():
+        return None
+    return os.path.realpath(r.stdout.strip())
+
+
+def _check_workspace_root_containment(root: str) -> None:
+    """Refuse to adopt *root* unless it is a per-user directory strictly inside
+    ``settings.workspace_dir`` and not nested inside another workspace's repo.
+
+    ``ensure_workspace`` git-inits *root*, rewrites its ``.gitignore`` and runs
+    ``git add -A`` there, so it must never be pointed anywhere else. Both sides
+    are realpath'd: ``usr_*`` entries are legitimately symlinks to a canonical
+    directory, and a symlink pointing OUT of the workspace dir is exactly what
+    has to be caught. Raises ``ValueError``.
+    """
+    ws_real = os.path.realpath(settings.workspace_dir)
+    root_real = os.path.realpath(root)
+    if not root_real.startswith(ws_real + os.sep):
+        raise ValueError(
+            f"Refusing to adopt {root} as a workspace: it is not inside WORKSPACE_DIR"
+        )
+    # An existing directory with no .git of its own may sit inside some other
+    # repo. Another user's workspace repo (toplevel inside WORKSPACE_DIR) must
+    # not get a nested repo + ``git add -A``. A repo that encloses the whole
+    # workspaces dir (WORKSPACE_DIR kept inside a project tree) is the
+    # deployment's own choice and keeps the prior behaviour (nested init).
+    if os.path.isdir(root_real) and not os.path.isdir(os.path.join(root_real, ".git")):
+        top = _git_toplevel(root_real)
+        if top and top != root_real and top.startswith(ws_real + os.sep):
+            raise ValueError(
+                f"Refusing to adopt {root} as a workspace: it is inside another "
+                f"workspace's git repository ({top})"
+            )
+
+
 def ensure_workspace(user_id: str) -> str:
     """Create workspace dirs + git init if they don't exist. Returns workspace root."""
     root = workspace_root(user_id)
+    _check_workspace_root_containment(root)
     active = os.path.join(root, "active")
     archive = os.path.join(root, "archive")
     plugins_custom = os.path.join(root, "plugins", "custom")
@@ -223,10 +278,12 @@ def ensure_workspace(user_id: str) -> str:
     # Ensure the .gitignore exists AND is current — a workspace created before
     # ``.sandbox/`` was ignored would fail every ``git add -A`` on the
     # root-owned sandbox dir. Refresh a stale one (write BEFORE committing so
-    # the very next add already skips the offending dir).
+    # the very next add already skips the offending dir). Only ever for a repo
+    # rooted at *root* itself: the containment check above guarantees that is
+    # a workspace repo, never a checkout this code did not create.
     gitignore_path = os.path.join(root, ".gitignore")
-    needs_refresh = True
-    if os.path.isfile(gitignore_path):
+    needs_refresh = os.path.isdir(os.path.join(root, ".git"))
+    if needs_refresh and os.path.isfile(gitignore_path):
         try:
             with open(gitignore_path, encoding="utf-8") as f:
                 needs_refresh = ".sandbox/" not in f.read()

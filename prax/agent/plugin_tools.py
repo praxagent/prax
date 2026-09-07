@@ -648,12 +648,27 @@ _SECRET_FILE_GLOBS = (
 )
 
 
+# Never searched by source_grep, regardless of the (model-controlled) file_glob:
+# these are runtime data / session state / vendored deps, not the codebase.
+# workspaces/ is users' private data (the repo carries a stray one), *.log and
+# checkpoint.md hold live session content, .git is the object store (its config
+# can carry remote URLs). grep's --exclude-dir/--exclude win over --include.
+_GREP_EXCLUDE_DIRS = ("workspaces", ".git", ".local-run", ".venv", "node_modules")
+_GREP_EXCLUDE_FILES = ("*.log", "checkpoint.md")
+
+
 def _is_secret_file(name: str) -> bool:
     """True if *name* (a basename) is a secrets/credentials/runtime-data file."""
     from fnmatch import fnmatch
     if name == ".env-example":
         return False
     return any(fnmatch(name, g) for g in _SECRET_FILE_GLOBS)
+
+
+def _inside_project_root(abs_path: Path) -> bool:
+    """Path-semantics containment (``is_relative_to``), not a string prefix —
+    ``str.startswith`` let a sibling checkout named ``prax-evals`` through."""
+    return abs_path.is_relative_to(_PROJECT_ROOT)
 
 
 @tool
@@ -670,7 +685,7 @@ def source_read(path: str) -> str:
     """
     # Block path traversal.
     abs_path = (_PROJECT_ROOT / path).resolve()
-    if not str(abs_path).startswith(str(_PROJECT_ROOT)):
+    if not _inside_project_root(abs_path):
         return f"Path traversal blocked: {path}"
 
     # Never expose secrets/credentials/runtime data (defense-in-depth on top of
@@ -712,7 +727,7 @@ def source_list(path: str = "prax") -> str:
         path: Relative directory path from project root (default: "prax").
     """
     abs_path = (_PROJECT_ROOT / path).resolve()
-    if not str(abs_path).startswith(str(_PROJECT_ROOT)):
+    if not _inside_project_root(abs_path):
         return f"Path traversal blocked: {path}"
 
     if not abs_path.is_dir():
@@ -750,6 +765,10 @@ def source_grep(pattern: str, file_glob: str = "*.py") -> str:
     # by extension; source_grep did not).
     excludes: list[str] = []
     for g in _SECRET_FILE_GLOBS:
+        excludes += ["--exclude", g]
+    for d in _GREP_EXCLUDE_DIRS:
+        excludes += ["--exclude-dir", d]
+    for g in _GREP_EXCLUDE_FILES:
         excludes += ["--exclude", g]
 
     try:

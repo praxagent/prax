@@ -9,17 +9,15 @@ cp .env-example .env    # configure API keys
 docker compose up --build
 ```
 
-> **Known gap (2026-09): this path does not currently start `prax`.** The
-> `sandbox` service in `docker-compose.yml` (and `docker-compose.lite.yml`)
-> carries a compose-level `healthcheck` that curls `http://localhost:4096/global/health`
-> — the OpenCode server that was removed from the image in 2026-07 (prax-sandbox
-> #4). A compose `healthcheck:` overrides the image's own `HEALTHCHECK`
-> (`pgrep -x supervisord`, which is correct), so the sandbox never reports
-> healthy, and `prax` (`depends_on: sandbox: condition: service_healthy`) never
-> starts. The `make run-local-all` and `deploy/update.sh` paths start the sandbox
-> from prax-sandbox's own compose (which uses the `pgrep` check) and are not
-> affected. Fix direction: drop the override or replace it with
-> `["CMD-SHELL", "pgrep -x supervisord || exit 1"]`.
+> The `sandbox` service carries **no compose-level `healthcheck`**: the image's
+> own `HEALTHCHECK` (`pgrep -x supervisord`) is what `prax`'s
+> `depends_on: sandbox: condition: service_healthy` waits on. (Until 2026-09 both
+> `docker-compose.yml` and `docker-compose.lite.yml` overrode it with a curl of
+> `http://localhost:4096/global/health` — the OpenCode server removed from the
+> image in 2026-07, prax-sandbox #4 — so the sandbox never reported healthy and
+> `prax` never started from this path. `tests/test_compose_sandbox_service.py`
+> now fails CI if a `:4096` probe, or a `service_healthy` dependency with no
+> health source, comes back.)
 
 **Day-to-day usage** — once images are built, skip the rebuild to start in seconds:
 
@@ -45,11 +43,11 @@ This starts two core services (the `prax` container is all-in-one):
 
 | Service | Description |
 |---------|-------------|
-| **prax** | All-in-one container that bundles the Flask app (port 5001), the TeamWork web UI (port 3000) + API (port 8000), Qdrant, Neo4j, and ngrok (dashboard on 4040). `.env` injected, Docker socket for sandbox management. When `NGROK_AUTHTOKEN` is set, `scripts/ngrok-launch.sh` runs `ngrok http 5001` — a **port tunnel that publishes every Flask route** to the public internet, not only the Twilio webhooks (`/transcribe`, `/sms`) and `/shared/<token>`; the share registry (`workspaces/{user}/.shares.json`) gates only what `/shared/<token>` will serve. The `/teamwork/*`, `/plugins/*` and `/api/users/*` routes behind it have no inbound authentication — see [network-exposure.md](../security/network-exposure.md) and the Twilio section of [configuration.md](../security/configuration.md) before enabling it. |
-| **sandbox** | Always-on **pure-execution** sandbox with Python + scientific stack, DuckDB, Lean, LaTeX, ffmpeg, poppler, pandoc, headless Chrome, and desktop. The image ships **no coding-agent server** (no OpenCode/Claude-Code/Codex) — Prax codes natively. Mounts `${WORKSPACE_DIR}/${PRAX_USER_ID}` at `/workspace`. **Known gap (2026-09):** this compose still passes `ANTHROPIC_API_KEY=${ANTHROPIC_KEY}` / `OPENAI_API_KEY=${OPENAI_KEY}` into the container and bind-mounts the whole repo read-write at `/source` (plus `.sandbox/*` homes at `/root/…`) — leftovers from the removed coding agents. See [sandbox-execution-boundary.md](../security/sandbox-execution-boundary.md). prax-sandbox's own compose passes no keys and mounts only `/workspace`. |
+| **prax** | All-in-one container that bundles the Flask app (port 5001), the TeamWork web UI (port 3000) + API (port 8000), Qdrant, Neo4j, and ngrok (dashboard on 4040). `.env` injected, Docker socket for sandbox management. When `NGROK_AUTHTOKEN` is set, `scripts/ngrok-launch.sh` runs `ngrok http 5001` — a **port tunnel that publishes every Flask route** to the public internet, not only the Twilio webhooks (`/transcribe`, `/sms`) and `/shared/<token>`; the share registry (`workspaces/{user}/.shares.json`) gates only what `/shared/<token>` will serve. The `/teamwork/*`, `/plugins/*` and `/api/users/*` routes behind it have no inbound authentication unless `PRAX_API_KEY` is set — see [network-exposure.md](../security/network-exposure.md) and the Twilio section of [configuration.md](../security/configuration.md) before enabling it. |
+| **sandbox** | Always-on **pure-execution** sandbox with Python + scientific stack, DuckDB, Lean, LaTeX, ffmpeg, poppler, pandoc, headless Chrome, and desktop. The image ships **no coding-agent server** (no OpenCode/Claude-Code/Codex) — Prax codes natively. Mounts `${WORKSPACE_DIR}/${PRAX_USER_ID}` at `/workspace` and nothing else from the host; no model API keys are passed in (the `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` injection, the read-write `/source` repo mount and the `.sandbox/*` homes at `/root/…` — leftovers from the removed coding agents — were dropped in 2026-09; `tests/test_compose_sandbox_service.py` pins this). Same shape as prax-sandbox's own compose. The `docker-compose.dev.yml` overlay still mounts `./prax`, `./app.py`, `./config.py`, `./tests` at `/source/*` — see [sandbox-execution-boundary.md](../security/sandbox-execution-boundary.md). |
 | **tailscale** *(opt-in)* | Userspace `tailscaled` sidecar that joins your tailnet and serves TeamWork (`:443`) + Grafana (`:3001`) over MagicDNS HTTPS. Activated by setting `TS_AUTHKEY` + `COMPOSE_PROFILES=tailscale` in `.env`; silently skipped otherwise. State persists in a Docker volume so the node identity survives restarts. |
 
-The `prax` service depends on the sandbox health check (`condition: service_healthy`; see the Known gap at the top — that check currently never passes). Environment detection is automatic — `RUNNING_IN_DOCKER=true` and `SANDBOX_HOST=sandbox` are set by compose.
+The `prax` service depends on the sandbox being healthy (`condition: service_healthy`, satisfied by the image `HEALTHCHECK` — see the note at the top). Environment detection is automatic — `RUNNING_IN_DOCKER=true` and `SANDBOX_HOST=sandbox` are set by compose.
 
 **With observability** — add `--profile observability` to start Tempo, Loki, Prometheus, Promtail, and Grafana alongside the core services:
 

@@ -82,6 +82,7 @@ import yaml
 from prax.services.library_service import (
     SPACES_DIR,
     _library_root,
+    _require_slug,
     _slugify,
 )
 
@@ -103,11 +104,13 @@ _VALID_CHANNELS = {"all", "sms", "discord", "teamwork"}
 # ---------------------------------------------------------------------------
 
 def _tasks_path(user_id: str, project: str) -> Path:
-    return _library_root(user_id) / SPACES_DIR / project / TASKS_FILE
+    return _project_dir(user_id, project) / TASKS_FILE
 
 
 def _project_dir(user_id: str, project: str) -> Path:
-    return _library_root(user_id) / SPACES_DIR / project
+    # Same single-component rule as library_service: a raw join used to let
+    # ``project="../.."`` write a .tasks.yaml into any existing directory.
+    return _library_root(user_id) / SPACES_DIR / _require_slug(project, "space")
 
 
 def _now_iso() -> str:
@@ -153,7 +156,10 @@ def _serialised(fn):
 def _read(user_id: str, project: str) -> dict[str, Any] | None:
     """Read .tasks.yaml if the project exists. Returns None if the project
     is missing; seeds the default columns if the file is missing."""
-    proj_dir = _project_dir(user_id, project)
+    try:
+        proj_dir = _project_dir(user_id, project)
+    except ValueError:
+        return None  # not a valid space slug → no such project
     if not proj_dir.exists():
         return None
     path = _tasks_path(user_id, project)

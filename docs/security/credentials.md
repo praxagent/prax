@@ -131,6 +131,7 @@ stale (401 → rotate)._
 | `MCP_BEARER_TOKEN` | **inbound** — authenticates other agents *to* Prax |
 | `SANDBOX_DAEMON_TOKEN` / `SANDBOX_CLIENT_KEY` | Prax's own remote-sandbox infra (bearer / mTLS key) |
 | `TEAMWORK_API_KEY` | Prax's own co-located UI (loopback/tailnet) |
+| `PRAX_API_KEY` | Inbound to Prax itself — checked on `/teamwork/*`, `/plugins/*`, `/api/users/*` when set; never sent anywhere |
 | `NEO4J_PASSWORD` | Prax's own graph DB over `bolt://` |
 | `GPU_POWER_BROKER_TOKEN` | infra control token (reclassify FORWARD if it ever calls a third party) |
 | `PRAX_SSH_KEY_B64` / `PLUGIN_REPO_SSH_KEY_B64` | git-over-SSH — not an HTTP API the egress proxy can inject |

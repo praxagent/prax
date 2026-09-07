@@ -74,8 +74,9 @@ and starts with it.
 docker compose up --build    # TeamWork is at http://localhost:3000 (container :8000 → host :3000)
 ```
 
-> **Known gap (2026-09):** this command cannot currently bring `prax` up — see the
-> sandbox health-check note in [docker.md](../infrastructure/docker.md).
+> (Until 2026-09 this command could not bring `prax` up at all — the `sandbox`
+> service's compose healthcheck probed a server no longer in the image; closed,
+> see the note in [docker.md](../infrastructure/docker.md).)
 
 TeamWork provides Slack-like chat channels, a Kanban board, an in-browser terminal, browser screencast, and a file browser. Prax connects to it automatically on startup via the `TEAMWORK_URL` environment variable.
 
@@ -84,7 +85,8 @@ To link TeamWork conversations with your SMS/Discord identity (shared workspace 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `TEAMWORK_URL` | *(empty)* — inside the bundled image `scripts/watchdog-launch.sh` defaults it to `http://localhost:8000`; `make run-local-all` passes the same | TeamWork API URL. **This is the on/off switch**: set → Prax connects; empty → TeamWork integration off (`TEAMWORK_ENABLED` is legacy). Neither compose file sets it. |
-| `TEAMWORK_API_KEY` | *(empty)* | Shared key Prax sends (`X-API-Key`) to TeamWork's `/api/external` — **required whenever `TEAMWORK_URL` is set** (TeamWork answers 503 without it; see `.env-example`). Outbound only: Prax does not check it on the requests TeamWork makes *to* Prax. |
+| `TEAMWORK_API_KEY` | *(empty)* | Shared key Prax sends (`X-API-Key`) to TeamWork's `/api/external` — **required whenever `TEAMWORK_URL` is set** (TeamWork answers 503 without it; see `.env-example`). Outbound only: Prax does not check it on the requests TeamWork makes *to* Prax — that is `PRAX_API_KEY`'s job. |
+| `PRAX_API_KEY` | *(empty)* — no inbound check | Inbound counterpart: when set, Prax's own `/teamwork/*`, `/plugins/*` and `/api/users/*` routes require a matching `X-API-Key` header (or `Authorization: Bearer`) and answer 401 otherwise (`prax/blueprints/inbound_auth.py`). Set TeamWork's `PRAX_API_KEY` to the same value so its proxy routers send the header. Anything else that calls those routes directly does not yet send it (the k8s operator's `/teamwork/health` probe, `scripts/smoke_test.py`, TeamWork's MCP Library bridge) — add the header there before turning the key on in such a deployment. Twilio routes keep signature validation, `/mcp` its bearer, `/health` and `/healthz/*` stay open. |
 | `TEAMWORK_USER_PHONE` | *(empty)* | Phone number to share workspace with SMS/Discord |
 
 ### Option B: Discord (Free)
@@ -202,15 +204,18 @@ explicitly opts a specific page into the share registry.  See
 >
 > - **`ngrok http 5001` publishes every Prax route, not just Twilio's.** An ngrok
 >   port tunnel is not path-scoped. Behind it sit routes with **no inbound
->   authentication at all** — `POST /teamwork/webhook` (starts an agent turn
->   as the configured TeamWork user), the rest of `/teamwork/*` (schedules,
->   memory, library delete), `/plugins/*` (git-clones a repo), `/api/users/*`.
->   `PRAX_HOST=127.0.0.1` does not help: ngrok dials localhost. Do not run this
->   shape on the open internet without restricting the tunnel to the Twilio
->   paths (a path-filtering rule at the tunnel, or a reverse proxy that forwards
->   only `/sms`, `/transcribe`, `/respond`, `/reader`, `/read`, `/conference`,
->   `/say`, `/play`, `/shared/`). The same applies to the in-container ngrok
->   started by `scripts/ngrok-launch.sh` when `NGROK_AUTHTOKEN` is set.
+>   authentication unless `PRAX_API_KEY` is set** — `POST /teamwork/webhook`
+>   (starts an agent turn as the configured TeamWork user), the rest of
+>   `/teamwork/*` (schedules, memory, library delete), `/plugins/*` (git-clones
+>   a repo), `/api/users/*`. `PRAX_HOST=127.0.0.1` does not help: ngrok dials
+>   localhost. Do not run this shape on the open internet without **both**
+>   setting `PRAX_API_KEY` (see *Option A: TeamWork Web UI* above) **and** restricting
+>   the tunnel to the Twilio paths (a path-filtering rule at the tunnel, or a
+>   reverse proxy that forwards only `/sms`, `/transcribe`, `/respond`,
+>   `/reader`, `/read`, `/conference`, `/say`, `/play`, `/shared/`) — the key
+>   guards those three route groups only, not `/execution/*`, `/courses/`,
+>   `/notes/` or anything else on `:5001`. The same applies to the in-container
+>   ngrok started by `scripts/ngrok-launch.sh` when `NGROK_AUTHTOKEN` is set.
 > - **Signature validation is fail-open and does not work behind the HTTPS
 >   tunnel.** `prax/blueprints/twilio_auth.py` skips validation entirely when
 >   `TWILIO_AUTH_TOKEN` is empty (one warning, then every request is accepted —
