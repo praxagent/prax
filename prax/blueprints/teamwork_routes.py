@@ -619,11 +619,6 @@ def library_generate_space_cover(space: str):
         return jsonify({"error": "Failed to generate cover"}), 500
 
 
-def _space_conversation_key(space_slug: str) -> int:
-    """Derive a stable conversation_key from a space slug."""
-    return int(abs(hash(f"space:{space_slug}")) % (10**15))
-
-
 # --- Space files (per-space reference-file store) ---
 
 @teamwork_routes.route(
@@ -959,11 +954,14 @@ def library_space_chat_history(space: str):
     """Return the conversation history for a space's scoped chat."""
     try:
         from prax.conversation_memory import retrieve_dict
-        from prax.services.state_paths import ensure_conversation_db
+        from prax.services.conversation_service import conversation_service
 
         user_id = _get_teamwork_user_id()
-        space_key = _space_conversation_key(space)
-        history = retrieve_dict(ensure_conversation_db(user_id), space_key)
+        # The space key is derived in ONE place (resolve_conversation) so the
+        # history read here and the chat turn below can never disagree.
+        database_name, space_key = conversation_service.resolve_conversation(
+            user_id, space_slug=space)
+        history = retrieve_dict(database_name, space_key)
         if not history:
             return jsonify({"messages": []})
         # Filter to user + assistant messages (skip system messages
@@ -1085,8 +1083,6 @@ def library_space_chat(space: str):
         )
         context = "\n".join(context_parts) + "\n\n"
 
-        space_key = _space_conversation_key(space)
-
         # A space's chat answers with the space's model when one is pinned. Set
         # before the agent runs: the pin is applied per turn from this var, so a
         # space chat that did not set it would silently use the global default
@@ -1099,7 +1095,8 @@ def library_space_chat(space: str):
         response = svc.reply(
             user_id,
             context + message,
-            conversation_key=space_key,
+            space_slug=space,
+            source="teamwork",
         )
         return jsonify({"response": response})
     except Exception:

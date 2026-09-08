@@ -96,9 +96,9 @@ ALLOWLIST: set[str] = {
     "prax/plugins/tools/rss_reader/plugin.py:11 -> prax.agent.user_context",
     # Services reaching back into agent.  Each is a real architectural
     # smell to pay down; none are load-bearing enough to fix right now.
-    "prax/services/conversation_service.py:27 -> prax.agent",
+    "prax/services/conversation_service.py:28 -> prax.agent",
     "prax/services/feedback_service.py:214 -> prax.agent.trace",
-    "prax/services/scheduler_service.py:241 -> prax.agent.orchestrator",
+    "prax/services/scheduler_service.py:296 -> prax.agent.orchestrator",
     # task_runner_service spawns a synthetic orchestrator turn per
     # picked-up task — same pattern as scheduler_service.  Both
     # should long-term route through a background-work abstraction

@@ -147,34 +147,50 @@ If any check fails, the runner refuses to run.  Fail-fast.
 ## Eval-mode tool denylist
 
 `EVAL_MODE_TOOL_DENYLIST` (`prax/eval/_guards.py`) names the tools that must
-not be available while a suite runs.  As of 2026-09 it contains exactly:
+not be available while a suite runs — the ones that reach the *repo* (source,
+plugins, worktrees) rather than the run's isolated workspace.  As of
+2026-09-08 it contains exactly these real tool names (a test fails if a name
+stops resolving to a built tool):
 
-- `self_improve_start`, `self_improve_deploy`, `self_improve_rollback`,
-  `self_improve_status` (can touch the repo itself)
-- `plugin_write`, `plugin_activate`, `plugin_remove` (can write arbitrary
-  files)
+- `delegate_sysadmin` — the hub's delegation into the sysadmin spoke
+  (`prax/agent/spokes/sysadmin/agent.py`), and `delegate_self_improve` — that
+  spoke's sub-delegation into the self-improve agent
+  (`prax/agent/self_improve_agent.py`)
+- `source_read`, `source_list`, `source_grep` — repo source readers
+  (`prax/agent/plugin_tools.py`; sysadmin spoke + self-improve agent)
+- `plugin_write`, `plugin_activate`, `plugin_remove` — write/activate
+  arbitrary plugin code (`prax/agent/plugin_tools.py`; sysadmin spoke)
+- the fifteen `self_improve_*` worktree tools in
+  `prax/agent/codegen_tools.py` — `start`, `read`, `write`, `test`, `lint`,
+  `verify`, `deploy`, `submit`, `rollback`, `pending`, `list`, `cleanup`,
+  `patch`, `diff`, `search` (self-improve agent; `pending`/`rollback` are also
+  hub-level when `SELF_IMPROVE_ENABLED` is on, default off)
 
 There is **no** shell-access entry: `sandbox_shell` and `run_python` stay
 available (they execute in the sandbox container), as do browser, fetch,
 notes, memory, research and scheduler tools.
 
-**How it is applied, and its limits (2026-09):** `_isolated_prax_scope`
-(`prax/eval/gaia_single.py`) applies the list by replacing
-`tool_registry.get_registered_tools` with a filtering wrapper for the duration
-of the run.  That only reaches tools the *hub* registers by name.  Two known
-gaps follow:
+**How it is applied (2026-09-08):** `_isolated_prax_scope`
+(`prax/eval/gaia_single.py`) sets the
+`prax.agent.tool_registry.eval_tool_denylist` ContextVar to the set for the
+duration of the run and resets it on exit.  Every tool-list build site — the
+hub registry (`get_registered_tools`), the spoke runner, sub-agents, the
+research and self-improve agents — filters through
+`tool_registry.apply_eval_denylist`, so spoke-internal names are dropped too.
+This replaced a monkey-patch of `get_registered_tools` that the orchestrator
+never saw (it binds the name by from-import at module load) and that no spoke
+consulted.  Tests: `tests/test_eval_denylist_applies.py` (the scope sets and
+resets the ContextVar, a tool list built inside it omits `source_read`, the
+hub registry built inside it omits `delegate_sysadmin`, every name is real)
+and `tests/test_eval_denylist_contextvar.py` (each build site honours it).
 
-- The `plugin_*` and `self_improve_*` entries are spoke-internal tools of the
-  sysadmin spoke (`prax/agent/spokes/sysadmin/agent.py`, reached through
-  `delegate_sysadmin`, which is not denylisted), so the filter never sees
-  them.  `self_improve_*` tools are additionally only built when
-  `SELF_IMPROVE_ENABLED` is on (default off).
-- `prax/agent/orchestrator.py` binds `get_registered_tools` with a
-  from-import at module load, so an orchestrator module imported before the
-  scope is entered keeps calling the unfiltered function.
-
-No test exercises the denylist today.  Treat it as intent, not as an
-enforced boundary, until the filter is applied at the point of use.
+**Remaining limit:** a ContextVar is per-context.  The scope is entered in
+the thread that runs the agent, and the governance layer re-binds request
+context into tool bodies (`prax/agent/user_context.py`), but a thread a tool
+hand-spawns without `contextvars.copy_context()` starts from the defaults —
+a tool list built there is unfiltered.  The denylist holds wherever the
+ContextVar is visible; that is enforced, tested, and not a guarantee
+everywhere.
 
 ## Running
 

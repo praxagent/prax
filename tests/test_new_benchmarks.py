@@ -120,10 +120,17 @@ def test_executor_failure_detects_swallowed_orchestrator_error():
     assert _executor_failure(_Run(answer="")) is None
 
 
-def test_failed_cases_are_excluded_from_pass_rate(monkeypatch):
-    # A run where every model call fails must NOT report pass_rate 0.0 — it must
-    # report the cases as errors and grade nothing. This is the fix for the voided
-    # first matrix (401s parsed as wrong answers → fake 0.00).
+def test_failed_cases_are_excluded_from_pass_rate(monkeypatch, tmp_path):
+    """Two halves of one contract (prax.eval.is_infrastructure_error):
+
+    1. A run where every call fails on OUR credentials grades nothing — the
+       cases are infra exclusions, reported as such (the voided first matrix
+       parsed 401s as wrong answers → a fake 0.00).
+    2. A run that fails HARDER can never score BETTER: an agent-attributable
+       error is a failure in the denominator, exactly like a wrong answer. The
+       old aggregator dropped every error, so crashing on the hard cases raised
+       the pass rate.
+    """
     from prax.eval.benchmarks import get_adapter, run_benchmark
     from prax.eval.rate_limit import ExecutorError
 
@@ -131,13 +138,33 @@ def test_failed_cases_are_excluded_from_pass_rate(monkeypatch):
         raise ExecutorError("401 Missing Authentication header", transient=False)
 
     adapter = get_adapter("gsm8k")  # seed set, keyless
-    import tempfile
-    with tempfile.TemporaryDirectory() as d:
-        summary = run_benchmark(adapter, always_fail, out_dir=d, resume=False)
+    summary = run_benchmark(adapter, always_fail, out_dir=tmp_path / "auth", resume=False)
     agg = summary["aggregate"]
     assert agg["graded"] == 0            # nothing was scored
-    assert agg["errors"] == agg["attempted"] > 0   # all cases recorded as errors
+    assert agg["errors"] == agg["excluded_infra"] == agg["attempted"] > 0
+    assert agg["errored_as_failure"] == 0
     assert agg["pass_rate"] == 0.0       # (0/0 → 0.0, but graded is 0 — not a real score)
+
+    # The invariant. Same adapter; the agent gets one case right and, on the
+    # rest, either answers wrong or blows up (not an infra pattern).
+    first = adapter.prompt(adapter.cases()[0])
+    right = adapter.cases()[0]["answer"]
+
+    def wrong_elsewhere(prompt):
+        return right if prompt == first else "no idea"
+
+    def crash_elsewhere(prompt):
+        if prompt == first:
+            return right
+        raise RuntimeError("agent blew up mid-turn")
+
+    wrong = run_benchmark(adapter, wrong_elsewhere, out_dir=tmp_path / "wrong", resume=False)["aggregate"]
+    crashed = run_benchmark(adapter, crash_elsewhere, out_dir=tmp_path / "crash", resume=False)["aggregate"]
+    assert crashed["graded"] == crashed["attempted"] == wrong["graded"]  # nothing dropped
+    assert crashed["errored_as_failure"] == crashed["attempted"] - 1
+    assert crashed["excluded_infra"] == 0
+    assert crashed["pass_rate"] <= wrong["pass_rate"]  # failing harder never scores better
+    assert crashed["pass_rate"] == wrong["pass_rate"] == round(1 / wrong["attempted"], 3)
 
 
 def test_resolved_dataset_reflects_actual_load(monkeypatch, tmp_path):
@@ -156,20 +183,21 @@ def test_resolved_dataset_reflects_actual_load(monkeypatch, tmp_path):
 
 # ── Task-budget timeout scores 0 (real miss), auth failure is excluded ───────
 
-def test_is_task_timeout_distinguishes_budget_from_network():
-    from prax.eval.benchmarks import _is_task_timeout
-    # Orchestrator/executor budget-timeout phrasings → real capability failure.
-    assert _is_task_timeout("agent run exceeded 120s maximum runtime") is True
-    assert _is_task_timeout("I hit a turn timeout while working on that request") is True
-    assert _is_task_timeout("task exceeded 120.0s wall-clock limit") is True
-    # A bare network connect-timeout is NOT a task-budget timeout (stays transient).
-    assert _is_task_timeout("connect timeout") is False
-    assert _is_task_timeout("401 Missing Authentication header") is False
+def test_task_timeout_is_agent_attributable_not_infra():
+    # The ONE attribution rule (replaced a benchmark-local timeout classifier):
+    # a task-budget timeout is the agent's outcome; provider auth is ours.
+    from prax.eval import is_infrastructure_error
+    assert is_infrastructure_error("agent run exceeded 120s maximum runtime") is False
+    assert is_infrastructure_error("I hit a turn timeout while working on that request") is False
+    assert is_infrastructure_error("task exceeded 120.0s wall-clock limit") is False
+    assert is_infrastructure_error("401 Missing Authentication header") is True
 
 
 def test_task_timeout_scores_zero_not_excluded(monkeypatch):
-    # A task-budget timeout must fall through as a (failing) answer — scored 0, NOT
-    # raised as an ExecutorError (which would exclude it and retry it 4x).
+    # A task-budget timeout must fall through as an EMPTY answer — scored 0, NOT
+    # raised as an ExecutorError (which would exclude it and retry it 4x), and
+    # not the failure text either: "exceeded 120s" carries a digit a numeric
+    # grader would happily extract.
     import prax.eval.benchmarks as bench
     from prax.eval.capability import CaseRun
 
@@ -178,9 +206,7 @@ def test_task_timeout_scores_zero_not_excluded(monkeypatch):
                               "agent run exceeded 120s maximum runtime.")
     monkeypatch.setattr("prax.eval.capability.orchestrator_executor", fake_executor)
     replay = bench.live_orchestrator_replay(tier="low")
-    # Must return (not raise) — the timeout text scores 0 on any grader.
-    out = replay("solve this")
-    assert "turn timeout" in out
+    assert replay("solve this") == ""
 
 
 def test_auth_failure_still_raises_and_excludes(monkeypatch):

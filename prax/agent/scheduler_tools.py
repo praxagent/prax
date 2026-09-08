@@ -4,7 +4,7 @@ from __future__ import annotations
 from langchain_core.tools import tool
 
 from prax.agent.action_policy import RiskLevel, risk_tool
-from prax.agent.user_context import current_user_id
+from prax.agent.user_context import current_turn_source, current_user_id
 from prax.services import scheduler_service
 
 
@@ -13,6 +13,19 @@ def _get_user_id() -> str:
     if not uid:
         return "unknown"
     return uid
+
+
+def _turn_source() -> str:
+    """The channel the current turn arrived on (``teamwork`` / ``discord`` /
+    ``sms`` / …); "" outside a turn.
+
+    ``ConversationService.reply`` sets ``current_turn_source`` on the request
+    thread; this tool runs on a different thread (the graph worker, or a
+    spoke's tool executor), so the value arrives here via the
+    ``UserContextSnapshot`` that ``bind_tools_user_context`` / the governed-tool
+    wrapper restore around every tool call — not via thread inheritance.
+    """
+    return current_turn_source.get() or ""
 
 
 @risk_tool(risk=RiskLevel.HIGH)
@@ -166,13 +179,13 @@ def schedule_reminder(
         timezone: IANA timezone like "America/New_York".  If omitted, uses the
             user's default.  Check user_notes for their timezone before creating
             a reminder — ask if unknown.
-        channel: Delivery channel — "sms", "discord", or "all".  If omitted,
-            defaults to the same channel the user is currently using.
-            Use "all" to deliver on every channel.
+        channel: Delivery channel — "sms", "discord", "teamwork", or "all".
+            If omitted, defaults to the same channel the user is currently
+            using.  Use "all" to deliver on every channel.
     """
     result = scheduler_service.create_reminder(
         _get_user_id(), description, prompt, fire_at,
-        timezone=timezone, channel=channel,
+        timezone=timezone, channel=channel, source=_turn_source(),
     )
     if "error" in result:
         return f"Failed to create reminder: {result['error']}"

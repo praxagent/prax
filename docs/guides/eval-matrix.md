@@ -56,6 +56,18 @@ real-vs-seed dataset, sampling seed). Subsets are a **seeded random sample**
 (`PRAX_EVAL_SAMPLE_SEED`, default 0) — *not* first-N, which biases an ordered
 dataset. Report intervals, not bare points, for anything you cite.
 
+**Error accounting changed 2026-09-08 — rows before and after are not
+comparable.** The benchmark adapters, harness-lift and the GAIA suite now use
+the capability suite's rule (PR #223): an agent-attributable error (task
+timeout, crash, unrecognised error) is a **failure with its tokens kept**, and
+only infrastructure faults are excluded, reported as `excluded_infra` /
+`errored_as_failure` and in `pass_rate_str`; before that date every errored
+case silently left those three aggregators' pass rate *and* token sum, so an
+older `MATRIX.md` row can only be equal to or *higher* than the same run scored
+today. From the same date an answer's content
+never triggers a retry (`prax/eval/rate_limit.py`), so the protocol block's
+`pass@1` is literal.
+
 ### What "real data" means here
 
 Adapters ship a tiny **inline seed set** so keyless `make ci` never touches the

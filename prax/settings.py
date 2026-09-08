@@ -931,6 +931,23 @@ class AppSettings(BaseSettings):
         ),
     )
 
+    # Govern spoke-internal tools. Spokes build their own tool lists and run them
+    # through build_agent_loop without wrap_with_governance, so every HIGH-risk
+    # tool (browser_click, schedule_create, plugin_write, self_improve_deploy, …)
+    # executes with no first-call block, no audit entry and no trifecta leg
+    # (suite review 2026-09-05). Recording — audit entries and trifecta legs for
+    # spoke tools — is unconditional. This flag turns on the ENFORCEMENT half
+    # (HIGH confirmation gate, trifecta escalation) inside spokes. Off by default:
+    # it is a behaviour change the 2026-07-08 campaign showed can strand a turn
+    # (deny-by-default regression), so the eval gate governs the flip.
+    spoke_governance_enabled: bool = Field(default=False, alias="SPOKE_GOVERNANCE_ENABLED")
+    # Serialise turns per user. The ConversationAgent is a shared instance that
+    # rebinds self.llm/self.graph per turn; two concurrent turns for the SAME
+    # user can clobber each other's checkpoint slot and turn budget. Off by
+    # default (prior behaviour: no lock); per-turn governance state is per-turn
+    # regardless of this flag.
+    turn_lock_per_user: bool = Field(default=False, alias="TURN_LOCK_PER_USER")
+
     @property
     def sandbox_persistent(self) -> bool:
         """True when the sandbox is always-on (docker-compose deployment)."""

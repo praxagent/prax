@@ -358,7 +358,8 @@ def _scorer_fingerprint() -> str:
     return h.hexdigest()
 
 
-def _gate_on_private_holdout(patch: str, *, tier: str, gate_fn=None) -> dict:
+def _gate_on_private_holdout(patch: str, *, tier: str, gate_fn=None,
+                             replicates: int = 2) -> dict:
     """Select on the HELD-OUT private score, never the score we optimized.
 
     `accept_change` has existed since the AIDE² assessment with no caller. This
@@ -368,24 +369,57 @@ def _gate_on_private_holdout(patch: str, *, tier: str, gate_fn=None) -> dict:
     on the golden suite, which carries the visibility split, and `accept_change`
     decides.
 
+    REPLICATED. Baseline and candidate each run the golden suite ``replicates``
+    times (never fewer than 2), and the accept threshold is the MEASURED spread
+    between replicates — the larger of the two arms. One baseline run against
+    one candidate run cannot tell an improvement from the judge's own flip rate
+    (~30% of criteria flip on an identical re-grade at temperature 0 —
+    docs/research/judge-noise-floor.md), so the old single-run gate accepted
+    noise. ``JUDGE_VOTES`` steadies the judge but not the agent replay, so it
+    does not substitute for a replicate; the spread is measured, not assumed.
+
     Fail-closed by inheritance: with no private goldens, `accept_change` refuses,
     so the loop proposes nothing rather than adopting on an untrustworthy signal.
     """
     if gate_fn is not None:
         return gate_fn(patch)
-    from prax.eval.goldens import accept_change, run_golden_suite
+    from prax.eval.goldens import accept_change, aggregate_replicates, run_golden_suite
 
-    baseline_run = run_golden_suite(replay=True, tier=tier)
+    n = max(2, int(replicates or 0))
+    baseline = aggregate_replicates(
+        [run_golden_suite(replay=True, tier=tier) for _ in range(n)])
     with override_system_prompt(_apply_overlay(_base_system_prompt(), patch)):
-        candidate_run = run_golden_suite(replay=True, tier=tier)
-    return accept_change(baseline_run, candidate_run)
+        candidate = aggregate_replicates(
+            [run_golden_suite(replay=True, tier=tier) for _ in range(n)])
+    noise_floor = max(baseline["private_spread"], candidate["private_spread"])
+    verdict = accept_change(baseline, candidate, noise_floor=noise_floor)
+    verdict.update({
+        "replicates": n,
+        "baseline_private_values": baseline["private_values"],
+        "candidate_private_values": candidate["private_values"],
+        "baseline_public_values": baseline["public_values"],
+        "candidate_public_values": candidate["public_values"],
+    })
+    return verdict
+
+
+def _capability_case_count() -> int:
+    """Size of the capability suite — the unit the keep-margin is expressed in.
+    Falls back to 1 (margin = a full 1.0, nothing is ever kept) if the suite
+    cannot be loaded: fail-closed, never a permissive default."""
+    try:
+        from prax.eval.capability import load_capability_cases
+        return len(load_capability_cases()) or 1
+    except Exception:
+        return 1
 
 
 def run_self_regen(*, rounds: int = 3, apply: bool = False,
                    proposer=None, evaluator=None, auditor=None,
-                   weak_signal: str | None = None, min_margin: float = 0.02,
+                   weak_signal: str | None = None,
+                   min_margin: float | None = None, min_margin_cases: int = 1,
                    out_dir: Path | None = None, tier: str = "high",
-                   gate: bool = True, gate_fn=None) -> dict:
+                   gate: bool = True, gate_fn=None, gate_replicates: int = 2) -> dict:
     """Run the propose → verify → keep loop over the system-prompt overlay.
 
     Args:
@@ -395,12 +429,24 @@ def run_self_regen(*, rounds: int = 3, apply: bool = False,
             PROPOSAL only (graded autonomy).
         proposer/evaluator/auditor: injected for key-free testing.  Defaults call
             the live LLM (proposer/auditor) and the capability suite (evaluator).
+        min_margin_cases: the keep-margin on the capability suite, in CASES
+            (default 1): a candidate is kept only if it gains at least this many
+            cases' worth of average total (``cases / len(capability suite)``).
+            The old default was a bare 0.02 fraction — less than one case of a
+            30-case suite, i.e. inside a single flaky check.
+        min_margin: an explicit fraction that overrides ``min_margin_cases``.
+        gate_replicates: golden-suite runs per arm in the held-out gate (min 2).
 
     Returns a summary dict (also archived under
     ``$PRAX_EVAL_DIR/self_regen/<run>/``) with baseline, best, the winning patch,
-    every variant + lineage, and whether it was applied.
+    the margin used, every variant + lineage, the gate verdict, and whether it
+    was applied.
     """
     from prax.eval import PRAX_EVAL_DIR
+
+    n_cases = _capability_case_count()
+    margin = (float(min_margin) if min_margin is not None
+              else max(1, int(min_margin_cases)) / n_cases)
 
     base_prompt = _base_system_prompt()
     ev = evaluator or (lambda p: _default_evaluator(p, base_prompt=base_prompt, tier=tier))
@@ -443,8 +489,8 @@ def run_self_regen(*, rounds: int = 3, apply: bool = False,
         # Theorize the World" — see docs/research/learning-to-theorize.md): among
         # candidates that don't move the score, prefer the SIMPLER (shorter) theory
         # — a compact change generalizes better than accreting prompt bloat.
-        real_gain = delta >= min_margin
-        occam_tie = bool(best_patch and abs(delta) < min_margin and len(patch) < len(best_patch))
+        real_gain = delta >= margin
+        occam_tie = bool(best_patch and abs(delta) < margin and len(patch) < len(best_patch))
         kept = audit_ok and (real_gain or occam_tie)
         v = Variant(
             id=uuid.uuid4().hex[:8], round=r, parent_id=best_id, patch=patch,
@@ -482,7 +528,8 @@ def run_self_regen(*, rounds: int = 3, apply: bool = False,
     if best_patch and gate:
         try:
             gate_result = _gate_on_private_holdout(best_patch, tier=tier,
-                                                   gate_fn=gate_fn)
+                                                   gate_fn=gate_fn,
+                                                   replicates=gate_replicates)
         except Exception as exc:  # noqa: BLE001 — a broken gate must not adopt
             gate_result = {"accept": False,
                            "reason": f"gate failed to run: {type(exc).__name__}: {exc}"}
@@ -491,7 +538,8 @@ def run_self_regen(*, rounds: int = 3, apply: bool = False,
                         gate_result.get("reason"))
             best_patch, best_id = "", "baseline"
 
-    applied = _finalize(out_dir, base_prompt, best_patch, best_score, baseline, apply)
+    applied = _finalize(out_dir, base_prompt, best_patch, best_score, baseline, apply,
+                        gate_result=gate_result)
     summary = {
         "scorer_fingerprint": scorer_before,
         "scorer_tampered": tampered,
@@ -499,6 +547,9 @@ def run_self_regen(*, rounds: int = 3, apply: bool = False,
         "run_id": run_id, "out_dir": str(out_dir),
         "baseline": round(baseline, 4), "best": round(best_score, 4),
         "improvement": round(best_score - baseline, 4),
+        "margin": round(margin, 4),
+        "margin_cases": None if min_margin is not None else max(1, int(min_margin_cases)),
+        "n_capability_cases": n_cases,
         "rounds": rounds, "variants_kept": sum(1 for v in variants if v.kept),
         "best_patch": best_patch, "applied": applied,
         "variants": [asdict(v) for v in variants],
@@ -515,18 +566,51 @@ def _self_regen_enabled() -> bool:
         return False
 
 
+def _fmt_delta(v) -> str:
+    return "n/a" if v is None else f"{float(v):+.3f}"
+
+
+def _gate_report(gate_result: dict | None) -> str:
+    """Render the held-out gate for PROPOSAL.md. The caveats a reviewer needs —
+    n_private, the measured noise floor, and the tuning-vs-held-out gap — ride
+    WITH the verdict; a caveat in a sibling JSON field is not a caveat."""
+    if not gate_result:
+        return ""
+    g = gate_result
+    return "\n".join([
+        "",
+        "## Held-out gate (golden suite, private split)",
+        f"- verdict: {'ACCEPT' if g.get('accept') else 'REJECT'} — {g.get('reason', '')}",
+        f"- n_private: {g.get('n_private')} held-out goldens; "
+        f"replicates per arm: {g.get('replicates')}",
+        f"- private delta: {_fmt_delta(g.get('private_delta'))} "
+        f"(baseline {g.get('baseline_private_values')} → "
+        f"candidate {g.get('candidate_private_values')})",
+        f"- noise floor (baseline-vs-replicate spread, larger arm): "
+        f"{_fmt_delta(g.get('noise_floor'))} — the private delta must exceed it",
+        f"- public (tuning-visible) delta: {_fmt_delta(g.get('public_delta'))}; "
+        f"tuning-vs-held-out gap: {_fmt_delta(g.get('generalization_gap'))} "
+        "(public gain that did not transfer to the held-out set)",
+        "",
+    ])
+
+
 def _finalize(out_dir: Path, base_prompt: str, best_patch: str, best: float,
-              baseline: float, apply: bool) -> bool:
+              baseline: float, apply: bool, gate_result: dict | None = None) -> bool:
     """Write the reviewable PROPOSAL, and auto-apply only under graded autonomy."""
+    report = _gate_report(gate_result)
     if not best_patch or best <= baseline:
+        why = ("the held-out gate rejected the capability-suite winner"
+               if gate_result is not None and not gate_result.get("accept")
+               else "no candidate beat the baseline")
         (out_dir / "PROPOSAL.md").write_text(
-            f"# Self-regen: no improvement\nbaseline={baseline:.3f} best={best:.3f} — "
-            "no candidate beat the baseline; nothing to apply.\n", encoding="utf-8")
+            f"# Self-regen: no change proposed\nbaseline={baseline:.3f} best={best:.3f} — "
+            f"{why}; nothing to apply.\n{report}", encoding="utf-8")
         return False
     (out_dir / "PROPOSAL.md").write_text(
         f"# Self-regen proposal (+{best - baseline:.3f} on the capability suite)\n\n"
         f"Baseline {baseline:.3f} → {best:.3f}. Add this to the system prompt:\n\n"
-        f"---\n{best_patch}\n---\n\n"
+        f"---\n{best_patch}\n---\n{report}\n"
         "Auto-applied only when apply=True AND SELF_REGEN_ENABLED; otherwise this "
         "is a human-review proposal (graded autonomy).\n", encoding="utf-8")
 

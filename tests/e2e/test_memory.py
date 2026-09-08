@@ -569,35 +569,9 @@ class TestMemoryContextInjection:
         )
 
 
-# ===========================================================================
-# 6. Interaction-Based Decay
-# ===========================================================================
-
-@pytest.mark.skipif(not _OLLAMA_OK, reason="Ollama not available")
-class TestInteractionDecay:
-    """Verify that the interaction epoch counter works with real Qdrant."""
-
-    def test_epoch_increment(self, test_user):
-        from prax.services.memory.vector_store import (
-            get_interaction_epoch,
-            increment_interaction_epoch,
-        )
-
-        assert get_interaction_epoch(test_user) == 0
-        assert increment_interaction_epoch(test_user) == 1
-        assert increment_interaction_epoch(test_user) == 2
-        assert get_interaction_epoch(test_user) == 2
-
-    def test_track_interaction_via_service(self, test_user):
-        from prax.services.memory_service import MemoryService
-
-        ms = MemoryService()
-        ms._available = True
-
-        epoch = ms.track_interaction(test_user)
-        assert epoch == 1
-        epoch = ms.track_interaction(test_user)
-        assert epoch == 2
+# (Section 6, interaction-based decay, was removed in 2026-09 together with
+#  the code it exercised — an epoch counter that never had a production
+#  caller.  Decay is time-based only; see docs/infrastructure/memory.md.)
 
 
 # ===========================================================================
@@ -653,9 +627,6 @@ class TestFullPipeline:
         merge_entity(test_user, "polars", "tool", importance=0.7)
         merge_entity(test_user, "pandas", "tool", importance=0.5)
         add_relation(test_user, "user", "prefers", "polars")
-
-        # Track interaction
-        ms.track_interaction(test_user)
 
         # ---- Turn 3: Verify all memory layers are populated ----
 

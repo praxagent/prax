@@ -3,10 +3,34 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  # main itself was never tested: the required `test` check only ran on the
+  # PR head, while what lands on main is a squash commit (or an admin push)
+  # that release-please then tags a release from. Running the same job on
+  # every push to main means a release is only ever cut from a tree CI saw.
+  push:
+    branches: [main]
+
+# Least privilege: this job only reads the checkout. Without this block the
+# default GITHUB_TOKEN carries write scopes (contents, packages, pull-requests,
+# …) into a job that runs third-party code (uv sync, pytest) on every PR.
+# release.yml declares the write scopes it needs itself.
+permissions:
+  contents: read
+
+# One live run per ref: a new push to a PR supersedes the run in flight; runs
+# on main are never cancelled (each is a release candidate's verdict) — they
+# queue behind each other instead.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    # Recent runs finish in ~4–5 min. The default job timeout is 6 hours, so a
+    # hung test (a socket wait, a stuck subprocess) would otherwise hold a
+    # runner all day and report nothing.
+    timeout-minutes: 30
     env:
       FLASK_SECRET_KEY: "ci-test-key"
     steps:

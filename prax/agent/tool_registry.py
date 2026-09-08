@@ -6,12 +6,36 @@ confirmation gating.  See :mod:`prax.agent.governed_tool` for details.
 """
 from __future__ import annotations
 
+from contextvars import ContextVar
+
 from langchain_core.tools import BaseTool
 
 from prax.agent.governed_tool import wrap_with_governance
 from prax.agent.tools import build_default_tools
 
 _registered: list[BaseTool] = []
+
+#: Tool names withheld from EVERY tool-list build in the current context — the
+#: orchestrator's registry build and each spoke / sub-agent build.  Set by the
+#: eval runners (an isolated eval scope) so a benchmark run cannot reach tools
+#: that would leak the answer or touch the real deployment.  A ContextVar, not a
+#: monkey-patch of ``get_registered_tools``: the orchestrator binds that name by
+#: ``from``-import at module load, so patching the module attribute never
+#: reached it, and spokes never consulted the registry at all.
+eval_tool_denylist: ContextVar[frozenset[str]] = ContextVar(
+    "eval_tool_denylist", default=frozenset(),
+)
+
+
+def apply_eval_denylist(tools: list[BaseTool]) -> list[BaseTool]:
+    """Drop tools named in :data:`eval_tool_denylist` (a no-op when unset).
+
+    Called at every tool-list build site the orchestrator and the spokes use.
+    """
+    deny = eval_tool_denylist.get()
+    if not deny:
+        return list(tools)
+    return [t for t in tools if getattr(t, "name", None) not in deny]
 
 # Keep the orchestrator's tool list close to the ~50-tool target while still
 # exposing artifact plugins whose absence makes the agent improvise with
@@ -44,7 +68,7 @@ def get_registered_tools() -> list[BaseTool]:
     logging) before being handed to the agent.
     """
     raw = build_default_tools() + _promoted_plugin_tools() + list(_registered)
-    raw = _dedupe_tools(raw)
+    raw = apply_eval_denylist(_dedupe_tools(raw))
     return [wrap_with_governance(t) for t in raw]
 
 

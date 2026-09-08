@@ -37,6 +37,7 @@ Usage::
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 
@@ -93,14 +94,35 @@ _INFRA_ERROR_PATTERNS = (
     "temporarily unavailable",
     "name or service not known",
     "rate limit",
-    "429",
     "502 bad gateway",
     "503 service unavailable",
     "504 gateway timeout",
     "insufficient_quota",
     "invalid api key",
     "authenticationerror",
+    # Provider rejected OUR credentials/config. A missing or revoked key is the
+    # harness's fault, not the agent's — the first matrix run parsed these as
+    # wrong answers and published a fake 0.00. Run-level errors only reach
+    # this classifier (tool-level HTTP failures are tool results, not errors).
+    "unauthorized",
+    "missing authentication",
     "no space left on device",
+)
+
+# HTTP statuses that mean the provider refused OUR request as such: bad
+# credentials (401/403) or throttling (429).  They count only in an HTTP-status
+# context — the number followed by its reason phrase, or introduced by
+# "HTTP" / "status [code]" / "error code".  As bare substrings they matched
+# "agent run exceeded 403s maximum runtime", "recursion limit of 401 reached"
+# and "expected 1403 tokens": agent failures that were then EXCLUDED from the
+# score, so a run that crashed hard on a case outscored one that got it wrong.
+_INFRA_HTTP_STATUS_RE = re.compile(
+    r"\b(?:401|403|429)\b\s*[-:\u2014\u2013]?\s*"
+    r"(?:unauthorized|forbidden|too many requests|missing authentication|"
+    r"authentication|permission denied|client error|rate limit)"
+    r"|\b(?:https?(?:/\d(?:\.\d)?)?|status(?:[\s_]?code)?|error[\s_]?code)"
+    r"\s*[:=]?\s*(?:401|403|429)\b",
+    re.IGNORECASE,
 )
 
 
@@ -109,8 +131,21 @@ def is_infrastructure_error(error: str | None) -> bool:
 
     An agent timeout is NOT infrastructure — running out of budget on a task is
     a capability outcome and must be scored as one.
+
+    This is THE attribution rule for every eval aggregator (capability suite,
+    benchmark adapters, harness-lift, GAIA suite): an infra-classified error is
+    excluded from the pass rate and reported as ``excluded_infra``; any other
+    error is scored as a failure, keeps its tokens on the cost axis, and is
+    reported as ``errored_as_failure``.
+
+    Fail-closed: an unrecognised error is the agent's.  Adding a pattern here
+    is a deliberate act of saying "this was our fault", and a pattern must not
+    match text an agent failure can plausibly contain (digits in a timeout or
+    recursion message, for instance — hence ``_INFRA_HTTP_STATUS_RE``).
     """
     if not error:
         return False
     low = str(error).lower()
-    return any(p in low for p in _INFRA_ERROR_PATTERNS)
+    if any(p in low for p in _INFRA_ERROR_PATTERNS):
+        return True
+    return _INFRA_HTTP_STATUS_RE.search(low) is not None

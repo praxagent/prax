@@ -2,15 +2,27 @@ import concurrent.futures
 import logging
 
 import openai
-from openai import OpenAI
 
+from prax.clients import get_twilio_client
 from prax.convo_states import convo_states
 from prax.settings import settings
 
 logger = logging.getLogger(__name__)
 
-client = OpenAI(api_key=settings.openai_key)
-BASE_MODEL = settings.base_model
+
+def _spoken(conversation):
+    """One LaTeX→spoken-English completion via ``build_llm`` (returns the text).
+
+    Was ``client.chat.completions.create(model=BASE_MODEL, ...)`` on a
+    module-level raw ``OpenAI(api_key=...)`` client with no base URL, which
+    bypassed provider / tier / OPENAI_BASE_URL routing (under keyless Prax the
+    proxy token went to api.openai.com).  Conversation unchanged; the legacy
+    ``max_tokens=4096`` field is not carried over — see
+    ``conversation_memory.summarize_and_replace`` for why.
+    """
+    from prax.agent.llm_factory import build_llm
+
+    return build_llm(tier="low").invoke(conversation).text
 
 
 def chunk_latex_file(filepath, max_chunk_size=2096):
@@ -64,10 +76,7 @@ def latex_chunk_to_english(input_text, call_sid=None):
 
     output_text = None
     try:
-        response = client.chat.completions.create(model=BASE_MODEL,
-        messages=conversation,
-        max_tokens=4096)
-        output_text = [response.choices[0].message.content]
+        output_text = [_spoken(conversation)]
     except openai.RateLimitError as e:
         logger.error("RateLimitError occurred: %s", e)
 
@@ -111,12 +120,12 @@ def latex_to_english(reader_data, call_sid):
         ]
         logger.info("calling chatGPT with: %s", conversation)
 
-        client.calls(call_sid).update(url=f"{ngrok_url}/conference", method='POST')
+        # The call redirects were written against the (removed) OpenAI client
+        # object, which has no ``.calls`` — they always meant the Twilio client
+        # its sibling ``latext_gpt_tools`` uses.
+        get_twilio_client().calls(call_sid).update(url=f"{ngrok_url}/conference", method='POST')
         try:
-            response = client.chat.completions.create(model=BASE_MODEL,
-            messages=conversation,
-            max_tokens=4096)
-            convo_states[call_sid]['read_buffer'] = [response.choices[0].message.content]
+            convo_states[call_sid]['read_buffer'] = [_spoken(conversation)]
         except openai.RateLimitError as e:
             convo_states[call_sid]['read_buffer'] = ["Sorry friend, OpenAI is overloaded at the moment. Please try again in a few moments."]
             logger.error("RateLimitError occurred: %s", e)
@@ -124,4 +133,4 @@ def latex_to_english(reader_data, call_sid):
         convo_states[call_sid]['read_buffer'] = ["No content was found where expected."]
 
     convo_states[call_sid]['buffer_redirect'] = f"{ngrok_url}/reader"
-    client.calls(call_sid).update(url=f"{ngrok_url}/read", method='POST')
+    get_twilio_client().calls(call_sid).update(url=f"{ngrok_url}/read", method='POST')

@@ -6,10 +6,6 @@ import os
 import re
 import tempfile
 
-from openai import OpenAI
-
-from prax.settings import settings
-
 logger = logging.getLogger(__name__)
 
 YOUTUBE_URL_RE = re.compile(
@@ -18,12 +14,6 @@ YOUTUBE_URL_RE = re.compile(
 
 # Whisper API accepts files up to 25 MB.
 MAX_FILE_SIZE_MB = 25
-
-
-def _openai_client() -> OpenAI:
-    if not settings.openai_key:
-        raise RuntimeError("OPENAI_KEY is required for YouTube transcription")
-    return OpenAI(api_key=settings.openai_key)
 
 
 def is_youtube_url(url: str) -> bool:
@@ -95,8 +85,16 @@ def download_audio(url: str) -> tuple[str, dict]:
 
 
 def transcribe_audio(audio_path: str) -> str:
-    """Transcribe an audio file using OpenAI Whisper API."""
-    client = _openai_client()
+    """Transcribe an audio file using OpenAI Whisper API.
+
+    The raw SDK client comes from ``llm_factory.openai_client()`` — the one
+    sanctioned constructor, which applies ``OPENAI_BASE_URL`` (the secrets
+    proxy) exactly as ``build_llm`` does.  A bare ``OpenAI(api_key=...)`` here
+    sent the proxy token to api.openai.com under keyless Prax.
+    """
+    from prax.agent.llm_factory import openai_client
+
+    client = openai_client()
     with open(audio_path, "rb") as f:
         result = client.audio.transcriptions.create(model="whisper-1", file=f)
     return result.text

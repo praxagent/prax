@@ -272,11 +272,48 @@ def _run_pickup(user_id: str, pickup: dict) -> None:
         _report_failure(user_id, pickup, str(e))
         return
 
+    failure = failure_reason(response)
+    if failure:
+        logger.error("task_runner: turn for %s did not produce an answer: %s",
+                     user_id, failure)
+        _report_failure(user_id, pickup, failure)
+        return
+
     _report_success(user_id, pickup, response)
 
 
+# The orchestrator never lets an exception escape a turn: ``_run_turn`` turns a
+# failure or a timeout into a fixed apology string and returns it as if it were
+# the answer (see the ``except`` arms at the end of
+# ``prax/agent/orchestrator.py::_run_turn``).  A caller that treats "did not
+# raise" as "succeeded" therefore marks failed work Completed — which is what
+# the runner did.  These are the openers of those fixed strings; a response
+# starting with one is a failed turn, not a result.
+FAILED_TURN_OPENERS = (
+    "I hit an internal error while working on that request",
+    "I hit a turn timeout while working on that request",
+)
+
+
+def failure_reason(response: str | None) -> str | None:
+    """Why *response* is NOT a completed answer, or None if it may be one.
+
+    Completion requires a non-empty answer that is not the orchestrator's
+    fixed failure/timeout text (:data:`FAILED_TURN_OPENERS`).  Anything else
+    is reported as a failure and the card stays where it is — a task the user
+    handed off must not be moved to Done on the strength of an apology.
+    """
+    text = (response or "").strip()
+    if not text:
+        return "the turn produced no response"
+    for opener in FAILED_TURN_OPENERS:
+        if text.startswith(opener):
+            return f"the turn failed: {text[:300]}"
+    return None
+
+
 def _report_success(user_id: str, pickup: dict, response: str) -> None:
-    response = (response or "").strip() or "(no response)"
+    response = (response or "").strip()
     if pickup["source"] == "kanban":
         try:
             library_tasks.add_comment(

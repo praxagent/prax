@@ -54,6 +54,17 @@ current_active_view: ContextVar[str] = ContextVar("current_active_view", default
 #: the main view are different surfaces with potentially different answers.
 current_space_slug: ContextVar[str | None] = ContextVar("current_space_slug", default=None)
 
+#: The channel the CURRENT turn arrived on — ``sms`` / ``voice`` / ``discord`` /
+#: ``teamwork`` / ``scheduler`` / ``task_runner`` — as passed to
+#: ``ConversationService.reply(source=…)`` by every channel handler, which
+#: sets it for the turn and resets it after.  Tools that create deferred work
+#: (a reminder) record where the user was when they asked instead of guessing
+#: the delivery channel later from the shape of the user id.  Part of
+#: :class:`UserContextSnapshot`, so it survives the thread hops between the
+#: request thread, the graph worker, and a spoke's tool execution.  Empty
+#: outside a turn.
+current_turn_source: ContextVar[str] = ContextVar("current_turn_source", default="")
+
 
 @dataclass(frozen=True)
 class UserContextSnapshot:
@@ -66,6 +77,9 @@ class UserContextSnapshot:
     user_message: str
     component: str
     active_view: str
+    # Origin channel of the turn (see ``current_turn_source``).  Defaulted so a
+    # snapshot built positionally by older code still constructs.
+    turn_source: str = ""
 
 
 def capture_user_context() -> UserContextSnapshot:
@@ -78,6 +92,7 @@ def capture_user_context() -> UserContextSnapshot:
         user_message=current_user_message.get(),
         component=current_component.get(),
         active_view=current_active_view.get(),
+        turn_source=current_turn_source.get(),
     )
 
 
@@ -92,6 +107,7 @@ def use_user_context(snapshot: UserContextSnapshot) -> Iterator[None]:
         (current_user_message, current_user_message.set(snapshot.user_message)),
         (current_component, current_component.set(snapshot.component)),
         (current_active_view, current_active_view.set(snapshot.active_view)),
+        (current_turn_source, current_turn_source.set(snapshot.turn_source)),
     ]
     try:
         yield

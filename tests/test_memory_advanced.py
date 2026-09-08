@@ -1,11 +1,14 @@
 """Unit tests for advanced memory features.
 
 Covers bi-temporal edges, consolidation validation gate, multi-graph
-separation, query-adaptive retrieval weights, and interaction-based decay.
+separation, query-adaptive retrieval weights, and torn-write safety of the
+memory state files.
 """
 import json
 import os
 from unittest.mock import patch
+
+import pytest
 
 from prax.services.memory.models import MemoryResult
 from prax.services.memory.retrieval import _classify_query_weights, rrf_fuse
@@ -249,55 +252,105 @@ class TestQueryAdaptiveWeights:
 
 
 # ===========================================================================
-# 5. Interaction-based decay
+# 5. Torn-write safety of the memory state files
 # ===========================================================================
+#
+# stm.json and consolidation_state.json were written with `open(path, "w")` +
+# `json.dump`, which truncates the file first and then streams into it.  A
+# crash (or an exception) mid-write left a torn file, and both loaders treat
+# an unparseable file as "empty" — the whole scratchpad, or the consolidation
+# pointer, silently reset.  Both now go through workspace_service.atomic_write
+# (same-directory temp file + os.replace).
+#
+# The interaction-based decay tests that used to live in this slot asserted
+# the existence of a code path (`track_interaction`, `interaction_epoch`,
+# `halflife_interactions`) that never had a production caller; that path was
+# deleted in 2026-09 rather than armed.  tests/test_decay_idempotence.py
+# guards against it coming back.
 
-class TestInteractionBasedDecay:
-    def test_upsert_includes_interaction_epoch(self):
-        """upsert_memory should include interaction_epoch in payload."""
-        import inspect
 
-        from prax.services.memory.vector_store import upsert_memory
-        # The function should work — we just verify the payload structure
-        # by checking the source code includes interaction_epoch
-        src = inspect.getsource(upsert_memory)
-        assert "interaction_epoch" in src
+class _Poison:
+    """Not JSON-serialisable: the encoder raises when it reaches this value."""
 
-    def test_reinforce_accepts_interaction_epoch(self):
-        """reinforce_memory should accept interaction_epoch parameter."""
-        import inspect
 
-        from prax.services.memory.vector_store import reinforce_memory
-        sig = inspect.signature(reinforce_memory)
-        assert "interaction_epoch" in sig.parameters
+@pytest.fixture
+def _user_workspace(tmp_path):
+    def _root(user_id: str) -> str:
+        path = os.path.join(str(tmp_path), user_id)
+        os.makedirs(path, exist_ok=True)
+        return path
 
-    def test_interaction_epoch_functions_exist(self):
-        """get_interaction_epoch and increment_interaction_epoch should be importable."""
-        import inspect
+    with patch("prax.services.workspace_service.workspace_root", side_effect=_root):
+        yield tmp_path
 
-        from prax.services.memory.vector_store import (
-            get_interaction_epoch,
-            increment_interaction_epoch,
-        )
-        assert "user_id" in inspect.signature(get_interaction_epoch).parameters
-        assert "user_id" in inspect.signature(increment_interaction_epoch).parameters
 
-    def test_decay_memories_accepts_halflife_interactions(self):
-        """decay_memories should accept halflife_interactions parameter."""
-        import inspect
+def _fail_replace_for(monkeypatch, filename: str):
+    """os.replace raises only for the file under test; everything else is real."""
+    real_replace = os.replace
 
-        from prax.services.memory.vector_store import decay_memories
-        sig = inspect.signature(decay_memories)
-        assert "halflife_interactions" in sig.parameters
+    def _replace(src, dst, *a, **kw):
+        if str(dst).endswith(filename):
+            raise OSError("simulated crash before rename")
+        return real_replace(src, dst, *a, **kw)
 
-    def test_memory_service_has_track_interaction(self):
-        """MemoryService should expose track_interaction method."""
-        from prax.services.memory_service import MemoryService
-        assert hasattr(MemoryService, "track_interaction")
+    monkeypatch.setattr("prax.services.workspace_service.os.replace", _replace)
 
-    def test_dual_decay_takes_stronger_signal(self):
-        """The decay function should use min(time_factor, interaction_factor)."""
-        from prax.services.memory.vector_store import decay_memories
-        src = __import__("inspect").getsource(decay_memories)
-        # Verify the min() pattern is present
-        assert "min(time_factor, interaction_factor)" in src
+
+class TestAtomicMemoryStateWrites:
+    def test_stm_failed_serialisation_leaves_previous_file_intact(self, _user_workspace):
+        """A write that dies part-way through must not destroy the scratchpad.
+
+        With the old streaming write, the file on disk after this call was
+        `[{"key": "kept", ...}, {"key": "bad", "content": "v", "tags": [` —
+        unparseable — and stm_read() "reset" it to [].
+        """
+        from prax.services.memory.stm import stm_read, stm_write
+
+        stm_write("user1", "kept", "the entry that must survive")
+        stm_path = _user_workspace / "user1" / "memory" / "stm.json"
+        before = stm_path.read_text()
+
+        with pytest.raises(TypeError):
+            stm_write("user1", "bad", "v", tags=[_Poison()])
+
+        assert stm_path.read_text() == before
+        assert json.loads(stm_path.read_text())[0]["key"] == "kept"
+        assert [e.key for e in stm_read("user1")] == ["kept"]
+        debris = [p for p in stm_path.parent.iterdir() if p.name.endswith(".tmp")]
+        assert debris == [], f"temp-file debris left behind: {debris}"
+
+    def test_stm_crash_before_rename_leaves_previous_file_intact(
+        self, _user_workspace, monkeypatch
+    ):
+        from prax.services.memory.stm import stm_read, stm_write
+
+        stm_write("user1", "kept", "survivor")
+        stm_path = _user_workspace / "user1" / "memory" / "stm.json"
+        before = stm_path.read_text()
+
+        _fail_replace_for(monkeypatch, "stm.json")
+        with pytest.raises(OSError):
+            stm_write("user1", "second", "never lands")
+
+        assert stm_path.read_text() == before
+        assert [e.key for e in stm_read("user1")] == ["kept"]
+        debris = [p for p in stm_path.parent.iterdir() if p.name.endswith(".tmp")]
+        assert debris == []
+
+    def test_consolidation_state_crash_before_rename_keeps_pointer(
+        self, _user_workspace, monkeypatch
+    ):
+        """A torn consolidation_state.json is loaded as 'line 0' — the whole
+        trace would be consolidated again.  The previous state must survive."""
+        from prax.services.memory import consolidation
+
+        consolidation._save_state("user1", {"last_consolidated_line": 42})
+        state_path = _user_workspace / "user1" / "memory" / "consolidation_state.json"
+        before = state_path.read_text()
+
+        _fail_replace_for(monkeypatch, "consolidation_state.json")
+        with pytest.raises(OSError):
+            consolidation._save_state("user1", {"last_consolidated_line": 99})
+
+        assert state_path.read_text() == before
+        assert consolidation._load_state("user1")["last_consolidated_line"] == 42

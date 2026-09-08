@@ -3,8 +3,9 @@
 
 Verifies that everything is not just *running* but actually *connected* — the
 cross-service wiring a fresh clone needs and that has regressed before
-(TeamWork serving its SPA, TeamWork→Prax proxy, TeamWork→sandbox panels, Prax→
-sandbox CDP, Prax→memory). Run it after `make run-local-all[-dev]`:
+(TeamWork serving its SPA, TeamWork→Prax proxy, Prax→TeamWork external-API
+credential pair, TeamWork→sandbox panels, Prax→sandbox CDP, Prax→memory). Run it
+after `make run-local-all[-dev]`, from the repo root:
 
     make smoke            # or: python scripts/smoke_test.py
 
@@ -16,6 +17,12 @@ Dependency-free (stdlib only) so it runs in any fresh environment. Ports are
 overridable via env: PRAX_PORT, TEAMWORK_PORT, TEAMWORK_DEV_PORT, QDRANT_PORT,
 NEO4J_BOLT_PORT, SANDBOX_CDP_PORT, SANDBOX_NOVNC_PORT; the sandbox container name
 via SANDBOX_CONTAINER (its liveness is read from Docker's health status).
+
+The Prax→TeamWork check needs the credential Prax sends (TEAMWORK_API_KEY): it is
+taken from this process's environment, else from `./.env` (last-one-wins, the
+same precedence pydantic-settings gives Prax). It is sent to TeamWork on loopback
+exactly as Prax sends it and never printed. Without it that check is a WARN
+("unverified"), never a silent pass.
 """
 from __future__ import annotations
 
@@ -25,6 +32,7 @@ import os
 import socket
 import subprocess
 import time
+import urllib.error
 import urllib.request
 
 H = "127.0.0.1"
@@ -209,6 +217,85 @@ def _prax_scrape_status(targets: list[dict], prax_healthy: bool) -> tuple[bool, 
     return False, True, "no healthy prax target"
 
 
+def _status(url: str, headers: dict | None = None, timeout: float = 6.0) -> int | None:
+    """HTTP status of a GET, including 4xx/5xx (urllib raises on those); None
+    when there was no HTTP response at all (refused, timeout, reset)."""
+    try:
+        return _get(url, timeout, headers).status
+    except urllib.error.HTTPError as e:
+        return e.code
+    except Exception:
+        return None
+
+
+def _dotenv_value(path: str, key: str) -> str:
+    """Read KEY from a dotenv file the way pydantic-settings does for Prax:
+    last assignment wins, `export ` prefix and surrounding quotes stripped,
+    `#` comment lines skipped. '' when the file or key is absent."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return ""
+    value = ""
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        k, sep, v = line.partition("=")
+        if not sep or k.strip() != key:
+            continue
+        v = v.strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+            v = v[1:-1]
+        else:
+            v = v.split(" #", 1)[0].rstrip()
+        value = v
+    return value
+
+
+def _teamwork_external_status(unauth: int | None, keyed: int | None) -> tuple[bool, bool, str]:
+    """Classify the Prax→TeamWork link from two loopback probes of TeamWork's
+    GET /api/external/projects → (ok, critical, detail).
+
+    `unauth` is the status with NO X-API-Key; `keyed` the status with the
+    TEAMWORK_API_KEY Prax was started with (None when this script could not
+    find one — see the module docstring). TeamWork's external agent API fails
+    closed: 503 when it has no credential configured at all, 401 when the
+    presented one does not match. Either way Prax's startup create_project /
+    create_agent calls fail, the workspace comes up empty — and /health, the
+    SPA and the TeamWork→Prax proxy all still pass, which is how every
+    nightly fresh-install from 2026-06-30 to 2026-09-07 ran with this link
+    broken (the 503s were only visible in the dumped TeamWork log).
+    """
+    if unauth is None:
+        return False, True, "no HTTP response from /api/external/projects"
+    if unauth == 503:
+        return (False, True,
+                "503 — TeamWork has NO agent credential configured: set EXTERNAL_API_KEY in "
+                "teamwork/.env to the same value as TEAMWORK_API_KEY in prax/.env")
+    if unauth == 200:
+        # ALLOW_UNAUTHENTICATED_AGENTS: the link works, but any caller is any agent.
+        return (False, False,
+                "200 with no key — ALLOW_UNAUTHENTICATED_AGENTS is on (local dev only, never production)")
+    if unauth != 401:
+        return False, True, f"unexpected HTTP {unauth} with no key"
+    # TeamWork requires a credential. Was Prax's accepted?
+    if keyed is None:
+        return (False, False,
+                "TeamWork requires a credential (401 without one) but no TEAMWORK_API_KEY was found "
+                "in this shell's env or ./.env — Prax→TeamWork auth UNVERIFIED")
+    if keyed == 200:
+        return True, True, "credential required (401 without key); Prax's TEAMWORK_API_KEY accepted (200)"
+    if keyed == 401:
+        return (False, True,
+                "401 — Prax's TEAMWORK_API_KEY is rejected: it must equal TeamWork's EXTERNAL_API_KEY "
+                "(or a token in its agent-clients registry)")
+    return False, True, f"unexpected HTTP {keyed} with Prax's key"
+
+
 def check(name: str, ok: bool, detail: str = "", *, critical: bool = True) -> bool:
     status = "PASS" if ok else ("FAIL" if critical else "WARN")
     _results.append((status, name, detail))
@@ -295,6 +382,16 @@ def main() -> int:  # noqa: C901 — a flat list of independent checks reads cle
             check("TeamWork → Prax proxy (/api/prax/deployment)", False, str(e)[:60])
         check("TeamWork → Prax (/api/observability/config)",
               _http_ok(f"http://{H}:{tw_port}/api/observability/config")[0], "", critical=False)
+        # Prax → TeamWork: the external agent API Prax posts to, probed on the
+        # API port directly (the Vite dev server only proxies it). No key must
+        # give 401 (configured, fail-closed); the key Prax was started with must
+        # give 200. See _teamwork_external_status for why this is critical.
+        ext_url = f"http://{H}:{TW}/api/external/projects"
+        prax_key = os.environ.get("TEAMWORK_API_KEY") or _dotenv_value(".env", "TEAMWORK_API_KEY")
+        unauth = _status(ext_url)
+        keyed = _status(ext_url, headers={"X-API-Key": prax_key}) if prax_key else None
+        ok, crit, detail = _teamwork_external_status(unauth, keyed)
+        check("Prax → TeamWork external API (credential pair)", ok, detail, critical=crit)
 
     # --- Observability (optional) + data-flow -------------------------------
     # Not just "is it up" — prove telemetry is actually arriving: logs in Loki,

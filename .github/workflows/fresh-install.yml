@@ -9,10 +9,34 @@ name: Fresh-install integration
 # manual + nightly, NOT per-PR. If the sandbox (Chrome + desktop) OOMs the default
 # runner, run on a larger runner or drop it for a core-only check by cloning
 # without ../prax-sandbox.
+#
+# History: this workflow failed every night from 2026-06-30 to 2026-09-07 (69
+# runs) and nobody noticed — a scheduled run's failure email goes only to
+# whoever last touched this file, and the README claimed it "proves
+# fresh-install every night". Two causes: the smoke test still probed the
+# OpenCode :4096 endpoint the sandbox image dropped in 2026-07 (probe removed
+# 2026-09), and this workflow never wrote the credential pair TeamWork's now
+# fail-closed external API needs, so Prax's startup reconnect got 503 on every
+# /api/external call (visible only in the dumped TeamWork log). The steps
+# below write that pair, and a failure now leaves a job summary and an open
+# tracking issue instead of a red icon nobody opens.
 on:
   workflow_dispatch:
   schedule:
     - cron: "0 7 * * *"  # nightly 07:00 UTC
+
+# Least privilege: read the checkout; write issues only for the tracking-issue
+# steps below (the default GITHUB_TOKEN would otherwise be writable everywhere).
+permissions:
+  contents: read
+  issues: write
+
+# A manual run kicked off while the nightly is still going queues behind it
+# instead of racing it (each run owns a whole runner, so this is only about
+# keeping the tracking issue's comments in order).
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
 
 jobs:
   fresh-install:
@@ -34,29 +58,48 @@ jobs:
         with:
           python-version: "3.13"
 
-      - uses: actions/setup-node@v4  # TeamWork SPA build needs Node 18+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0 — TeamWork SPA build needs Node 18+
         with:
           node-version: "20"
 
-      # Boot-only env. The smoke test makes NO LLM calls, so dummy keys are fine —
-      # we are verifying connectivity, not model behaviour. (CI never touches .env
-      # on a real deploy; this file is created only inside the runner.)
-      - name: Write a minimal boot .env
+      # Boot-only env. The smoke test makes NO LLM calls, so dummy model keys are
+      # fine — we are verifying connectivity, not model behaviour. (CI never
+      # touches .env on a real deploy; these files exist only inside the runner.)
+      #
+      # The Prax<->TeamWork credential pair is NOT optional: TeamWork's external
+      # agent API fails closed (503 with no credential configured, 401 on a
+      # mismatch), so without it Prax's startup create_project/create_agent
+      # calls fail and the workspace comes up empty. Exactly as in the README's
+      # manual flow ("TeamWork: frontend build + the credential pair"), ONE
+      # random value goes into both repos' .env under their two names:
+      # TeamWork checks EXTERNAL_API_KEY, Prax sends TEAMWORK_API_KEY.
+      # TeamWork loads `.env` from its own repo root (the Makefile starts it
+      # with `cd ../teamwork`); Prax loads `./.env` via pydantic-settings.
+      # The value is fresh per run and masked so it never appears in the log.
+      - name: Write boot .env files (dummy model keys + the Prax↔TeamWork credential pair)
         run: |
+          KEY=$(openssl rand -hex 32)
+          echo "::add-mask::$KEY"
           {
             echo "FLASK_SECRET_KEY=ci-test-key"
             echo "OPENAI_KEY=sk-ci-dummy"
             echo "ANTHROPIC_KEY=sk-ant-ci-dummy"
+            echo "TEAMWORK_API_KEY=$KEY"
           } > .env
+          echo "EXTERNAL_API_KEY=$KEY" > ../teamwork/.env
 
       # The exact command a developer runs locally before opening a PR
       # (`make integration`) — single source of truth. On this clean runner the
       # cleanup it does (shutdown + clearing the built SPA / .local-run) is a
       # no-op; it then brings up Qdrant + Neo4j + the sandbox (builds the image)
       # + TeamWork (builds the SPA, runs the API) + Prax, and runs the
-      # connectivity smoke test. Fails the job on any critical disconnect.
-      - name: Fresh-install integration (make integration)
-        run: make integration
+      # connectivity smoke test. Its exit code IS the job's verdict — never
+      # soft-failed. Output is also kept for the summary step (`.local-run/` is
+      # wiped by the target itself, so the copy lives in RUNNER_TEMP).
+      - name: Fresh-install integration (make integration) — the verdict
+        continue-on-error: false
+        shell: bash  # -eo pipefail: make's exit code survives the tee
+        run: make integration 2>&1 | tee "$RUNNER_TEMP/integration.log"
 
       - name: Dump service logs on failure
         if: failure()
@@ -64,6 +107,66 @@ jobs:
           for f in .local-run/*.log; do
             echo "===== $f ====="; tail -150 "$f" || true
           done
+
+      # Put the smoke verdict on the run's front page (the Summary tab) so a
+      # failure is readable without opening the raw log. Falls back to the
+      # tail of the integration output when the run died before the smoke test.
+      - name: Job summary on failure
+        if: failure()
+        run: |
+          log="$RUNNER_TEMP/integration.log"
+          {
+            echo "## Fresh-install integration FAILED"
+            echo
+            echo '```'
+            if [ -f "$log" ] && grep -q "Prax stack connectivity smoke test" "$log"; then
+              sed -n '/Prax stack connectivity smoke test/,$p' "$log" | sed -E 's/\x1b\[[0-9;]*m//g' | tail -60
+            elif [ -f "$log" ]; then
+              sed -E 's/\x1b\[[0-9;]*m//g' "$log" | tail -60
+            else
+              echo "(no integration output captured — the run failed before make integration)"
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # A scheduled failure otherwise notifies nobody who reads it (see the
+      # header). Keep ONE open tracking issue: comment on it while the
+      # failures continue, close it when a run passes again.
+      - name: Open or update the tracking issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TITLE: "Nightly fresh-install integration is failing"
+        run: |
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 1 \
+            --search "\"$TITLE\" in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" \
+              --body "Still failing: $RUN_URL (smoke verdict is on the run's Summary tab)."
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+              --body "The \`Fresh-install integration\` workflow (\`.github/workflows/fresh-install.yml\`) failed: $RUN_URL
+
+          The smoke verdict is on the run's Summary tab; service logs are in the \`Dump service logs on failure\` step. This issue is updated by the workflow on every further failure and closed automatically by the next passing run."
+          fi
+
+      - name: Close the tracking issue on success
+        if: success()
+        # A notification courtesy, not part of the verdict: an API hiccup here
+        # must not turn a passing integration run red.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TITLE: "Nightly fresh-install integration is failing"
+        run: |
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 1 \
+            --search "\"$TITLE\" in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue close "$existing" --repo "$GITHUB_REPOSITORY" \
+              --comment "Passing again: $RUN_URL"
+          fi
 
       - name: Shut everything down
         if: always()

@@ -4,35 +4,43 @@ The reasoning floor everyone reports, and Prax had zero coverage of it. Multi-st
 arithmetic with a single numeric answer, so grading is deterministic: extract the
 final number and compare. No LLM judge.
 
-Inline keyless seed set here (answers hand-verified); the full 1,319-problem test
-split can be layered on via a gated loader.
+Inline keyless seed set here — problems AUTHORED for this repo, neither copied
+nor paraphrased from the dataset (a public repo must never carry benchmark
+items: contamination firewall).  Each is a multi-step word problem with a single
+numeric answer; the answer is hand-verified in the trailing comment and checked
+independently by ``tests/test_gsm8k.py``.  The real test split is layered on
+via ``datasets.cases_for`` when ``PRAX_EVAL_FULL_DATASETS`` is set.
 """
 from __future__ import annotations
 
 import re
 
 SEED_CASES: list[dict] = [
-    {"id": "gsm_clips",
-     "question": "Natalia sold clips to 48 friends in April, then sold half as many "
-                 "clips in May. How many clips did she sell altogether in April and May?",
-     "answer": "72"},   # 48 + 24
-    {"id": "gsm_robe",
-     "question": "A robe takes 2 bolts of blue fiber and half that much white fiber. "
-                 "How many bolts in total does it take?",
-     "answer": "3"},    # 2 + 1
-    {"id": "gsm_weng",
-     "question": "Weng earns $12 an hour for babysitting. Yesterday she babysat for "
-                 "50 minutes. How many dollars did she earn?",
-     "answer": "10"},   # 12 * 50/60
-    {"id": "gsm_betty",
-     "question": "Betty has only half the money she needs for a $100 wallet. Her "
-                 "parents give her $15 and her grandparents give twice as much as her "
-                 "parents. How many more dollars does Betty need to buy the wallet?",
-     "answer": "5"},     # 100 - (50 + 15 + 30)
-    {"id": "gsm_trees",
-     "question": "There are 15 trees in the grove. Workers will plant more today. "
-                 "After they are done there will be 21 trees. How many did they plant?",
-     "answer": "6"},     # 21 - 15
+    {"id": "gsm_seedlings",
+     "question": "A garden centre sells seedling trays for $7 each. Lena buys 9 trays "
+                 "and hands over a $12 voucher at the till. How many dollars does she "
+                 "pay?",
+     "answer": "51"},   # 9 * 7 = 63; 63 - 12 = 51
+    {"id": "gsm_sprint_avg",
+     "question": "Over four practice runs a sprinter clocked 13, 12, 14 and 13 seconds. "
+                 "Her personal best is 11 seconds. How many seconds slower than her "
+                 "personal best was her average practice time?",
+     "answer": "2"},    # (13 + 12 + 14 + 13) / 4 = 52 / 4 = 13; 13 - 11 = 2
+    {"id": "gsm_trough",
+     "question": "A hose delivers 12 litres of water a minute. Farida runs it into an "
+                 "empty 250-litre trough for a quarter of an hour. How many more litres "
+                 "are needed to fill the trough?",
+     "answer": "70"},   # quarter hour = 15 min; 12 * 15 = 180; 250 - 180 = 70
+    {"id": "gsm_chairs",
+     "question": "A school ordered 240 chairs. 25% arrived damaged and were sent back, "
+                 "and the school then lent 30 of the remaining chairs to a neighbouring "
+                 "school. How many chairs did the school keep?",
+     "answer": "150"},  # 25% of 240 = 60; 240 - 60 = 180; 180 - 30 = 150
+    {"id": "gsm_bill_split",
+     "question": "Three friends split a $96 restaurant bill in the ratio 1 : 2 : 5, "
+                 "according to what each ordered. How many dollars does the friend "
+                 "who ordered the most pay?",
+     "answer": "60"},   # 1 + 2 + 5 = 8 shares; 96 / 8 = 12; 5 * 12 = 60
 ]
 
 _NUM = re.compile(r"-?\d[\d,]*(?:\.\d+)?")

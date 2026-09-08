@@ -36,12 +36,33 @@ def _effective_user_id(user_id: str | None = None) -> str:
     if user_id:
         return user_id
     if settings.prax_user_id:
-        return settings.prax_user_id
+        return _primary_user_id(settings.prax_user_id)
     try:
         from prax.agent.user_context import current_user_id
         return current_user_id.get() or ""
     except Exception:
         return ""
+
+
+def _primary_user_id(prax_user_id: str) -> str:
+    """Map ``PRAX_USER_ID`` — a workspace DIRECTORY name, per its documentation —
+    to the id of the user whose workspace it is.
+
+    Treating the directory name as a user id was half of the first-boot
+    orphaning: service state was derived for a "user" that does not exist while
+    the real one was minted under a different directory on the first message.
+    The boot sequence now creates the primary user before this is called
+    (``identity_service.ensure_primary_user``), so the lookup normally hits.  If
+    no user owns the directory (no identity DB, a test, a fallback deployment)
+    the raw value is returned — the prior behaviour — because the path it yields
+    is the same directory either way.
+    """
+    try:
+        from prax.services.identity_service import get_user_by_workspace
+        user = get_user_by_workspace(prax_user_id)
+    except Exception:
+        user = None
+    return user.id if user else prax_user_id
 
 
 def service_state_dir(user_id: str | None = None) -> str:

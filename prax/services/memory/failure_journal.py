@@ -205,29 +205,58 @@ def _store_neo4j(case: FailureCase) -> None:
         logger.debug("Neo4j storage failed for failure case %s (degrading gracefully)", case.id)
 
 
+FAILURE_SOURCE = "failure_journal"
+
+
+def _failure_point_id(case_id: str) -> str:
+    """Deterministic Qdrant point id for a failure case.
+
+    Qdrant point ids must be UUIDs or unsigned ints; the previous
+    `f"failure-{case.id}"` was neither, so the server would have rejected
+    the point even if the vector had been supplied.  uuid5 keeps the mapping
+    reversible from the local journal side (see search_similar_failures).
+    """
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"prax:failure:{case_id}"))
+
+
+def _failure_text(case: FailureCase) -> str:
+    """The text that is embedded — the same on write and on (query) read."""
+    return (
+        f"FAILURE: {case.user_input}\n"
+        f"OUTPUT: {case.agent_output[:500]}\n"
+        f"FEEDBACK: {case.feedback_comment}"
+    )
+
+
 def _store_qdrant(case: FailureCase) -> None:
-    """Embed failure case in Qdrant for semantic similarity search."""
+    """Embed the failure case in Qdrant for semantic similarity search.
+
+    Best-effort: the local JSONL is the source of truth and a failure here
+    is logged at WARNING (not swallowed at DEBUG — this leg was broken for
+    its entire life until 2026-09 because `upsert_memory` was called without
+    the dense vector it requires, and nothing ever said so).
+    """
     try:
+        from prax.services.memory.embedder import embed_text, sparse_encode
         from prax.services.memory.vector_store import upsert_memory
 
-        # Build a searchable text from the failure details
-        content = (
-            f"FAILURE: {case.user_input}\n"
-            f"OUTPUT: {case.agent_output[:500]}\n"
-            f"FEEDBACK: {case.feedback_comment}"
-        )
-
+        content = _failure_text(case)
         upsert_memory(
             user_id=case.user_id,
             content=content,
-            source="failure_journal",
+            dense_vector=embed_text(content),
+            sparse_vector=sparse_encode(content),
+            source=FAILURE_SOURCE,
             importance=case.importance,
             tags=["failure", case.failure_category] if case.failure_category else ["failure"],
-            memory_id=f"failure-{case.id}",
+            memory_id=_failure_point_id(case.id),
         )
         logger.debug("Failure case %s embedded in Qdrant", case.id)
-    except Exception:
-        logger.debug("Qdrant storage failed for failure case %s (degrading gracefully)", case.id)
+    except Exception as exc:
+        logger.warning(
+            "Qdrant leg of the failure journal failed for case %s (local JSONL "
+            "still written): %s", case.id, exc,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -361,26 +390,27 @@ def search_similar_failures(
     is similar to existing ones, it's a pattern worth addressing.
     """
     try:
+        from prax.services.memory.embedder import embed_text
         from prax.services.memory.vector_store import search_dense
 
-        results = search_dense(user_id, query, top_k=top_k * 2)
-        # Filter to failure journal entries
-        failure_ids = []
+        # search_dense takes a QUERY VECTOR, not text; and results are
+        # MemoryResult objects (memory_id, source, ...), not raw payloads —
+        # the previous call passed the string and read `.payload`, so this
+        # returned [] on every call.
+        results = search_dense(user_id, embed_text(query), top_k=top_k * 2)
+
+        # Map hits back to journal cases via the deterministic point id.
+        by_point_id = {_failure_point_id(c.id): c for c in _load_local()}
+        matches: list[FailureCase] = []
         for r in results:
-            mid = r.payload.get("memory_id", "") if hasattr(r, "payload") else ""
-            if isinstance(mid, str) and mid.startswith("failure-"):
-                failure_ids.append(mid.replace("failure-", ""))
-
-        if not failure_ids:
-            return []
-
-        # Look up full failure cases
-        all_cases = _load_local()
-        id_set = set(failure_ids)
-        matches = [c for c in all_cases if c.id in id_set]
+            if r.source != FAILURE_SOURCE:
+                continue
+            case = by_point_id.get(str(r.memory_id))
+            if case is not None:
+                matches.append(case)
         return matches[:top_k]
-    except Exception:
-        logger.debug("Semantic failure search failed (degrading gracefully)")
+    except Exception as exc:
+        logger.debug("Semantic failure search failed (degrading gracefully): %s", exc)
         return []
 
 

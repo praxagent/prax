@@ -1,24 +1,30 @@
 """Self-rate-limiting + retry for eval LLM calls.
 
 Heavy benchmark runs — and several eval processes hitting ONE prepaid endpoint at
-once — draw transient failures from the provider: connect timeouts, 429s, or just
-an empty/blank answer. Untreated, those score as *wrong* and silently deflate a
-benchmark number (an empty answer is a guaranteed miss). Worse, some providers
-return the error *as the answer text* ("Connect timeout, please try again
-later."), so the harness can't even tell it was infra.
+once — draw transient failures from the provider: connect timeouts, 429s, 5xx.
 
 This wraps a per-case executor call with:
   - a client-side **throttle** (a minimum interval between calls, process-global),
     so a run paces itself instead of bursting; and
-  - **retry with exponential backoff + jitter** on a transient failure, where a
-    failure is an exception, an empty answer, OR a known transient-error response
-    string.
+  - **retry with exponential backoff + jitter** on a TRANSPORT failure — an
+    exception raised by the executor (a transient :class:`ExecutorError`, or any
+    other exception). A non-transient ``ExecutorError`` (bad key, forbidden,
+    quota) is re-raised at once.
 
-Env-configured with safe defaults — retries ON (they only turn a flake into a
-real result), throttle OFF (0s, so normal runs aren't slowed). A genuine *wrong*
-answer is NOT retried (only empty / transient-error / exception), so cost impact
-is bounded to actually-broken calls. Set ``PRAX_EVAL_LLM_MAX_RETRIES=0`` to
-disable entirely. Keyless-CI safe (a fake replay_fn never trips the retry path).
+**A returned answer is never retried, whatever it looks like.** This module used
+to re-run a case up to four times when the answer came back empty or short and
+"transient-looking" ("Connect timeout, please try again later."). That is a
+second, third, fourth attempt at the SAME case, selected on the content of the
+first one — pass@4-on-bad-luck reported under a ``pass@1`` protocol label. The
+executors are the source of truth for "did the call fail": they raise
+``ExecutorError`` (or surface ``run.error``) when it did, and the aggregators
+classify that error. An empty answer the executor returned is an attempt the
+agent made, and it scores as one.
+
+Env-configured with safe defaults — retries ON (they only turn a transport flake
+into a real attempt), throttle OFF (0s, so normal runs aren't slowed). Set
+``PRAX_EVAL_LLM_MAX_RETRIES=0`` to disable entirely. Keyless-CI safe (a fake
+replay_fn never trips the retry path).
 
 Note: ``time``/``sleep`` live here deliberately — this is eval infra, not a
 workflow script.
@@ -34,10 +40,9 @@ from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
-# Phrases a provider/harness emits *as the answer* when the call actually failed
-# transiently. Matched case-insensitively against a short response — deliberately
-# specific so a real answer that happens to discuss "rate limits" isn't caught
-# (we only test SHORT responses; see _looks_transient).
+# Phrases in an executor FAILURE REASON (an exception message / ``run.error``)
+# that mark it as a retryable blip. Consulted by ``classify_transient`` only —
+# never matched against an answer the executor returned.
 _TRANSIENT_MARKERS = (
     "connect timeout",
     "please try again later",
@@ -121,24 +126,6 @@ def min_interval() -> float:
     return max(0.0, _env_float("PRAX_EVAL_LLM_MIN_INTERVAL_S", 0.0))
 
 
-def _looks_transient(resp: object) -> bool:
-    """True if *resp* is an empty answer or a short transient-error string.
-
-    Only SHORT responses (<= 400 chars) are scanned for markers, so a long,
-    genuine answer that merely mentions 'rate limit' in its prose is never
-    mistaken for an infra failure.
-    """
-    if resp is None:
-        return True
-    text = resp if isinstance(resp, str) else str(resp)
-    if not text.strip():
-        return True
-    if len(text) <= 400:
-        low = text.lower()
-        return any(m in low for m in _TRANSIENT_MARKERS)
-    return False
-
-
 def _throttle() -> None:
     """Block until at least ``min_interval`` has elapsed since the last call start."""
     gap = min_interval()
@@ -163,16 +150,18 @@ def _sleep_backoff(attempt: int) -> None:
 
 def call_with_rate_limit(fn: Callable[[str], str], prompt: str, *,
                          label: str = "eval") -> str:
-    """Run ``fn(prompt)`` with self-throttling + retry-on-transient-failure.
+    """Run ``fn(prompt)`` with self-throttling + retry on TRANSPORT failure only.
 
-    Returns ``fn``'s result. On a transient failure (exception, empty answer, or a
-    short transient-error response) it retries up to ``max_retries()`` times with
-    backoff; if every attempt is transient it returns the last result (or re-raises
-    the last exception) so the case still scores — just honestly as a failure.
+    Returns the first answer ``fn`` returns — empty, short, or otherwise. Only an
+    exception is retried (up to ``max_retries()`` times with backoff): a transient
+    :class:`ExecutorError` or any other exception. A non-transient
+    ``ExecutorError`` is re-raised immediately, and when every attempt raised the
+    last exception propagates so the batch records the case as an error.
+
+    INVARIANT (pass@1): the content of an answer never triggers a retry. See the
+    module docstring; pinned by ``tests/test_eval_rate_limit.py``.
     """
     retries = max_retries()
-    last_exc: Exception | None = None
-    last_resp: str | None = None
     for attempt in range(retries + 1):
         _throttle()
         try:
@@ -182,7 +171,6 @@ def call_with_rate_limit(fn: Callable[[str], str], prompt: str, *,
             # retry — surface it now so it's recorded as an error, not a wrong answer.
             if not exc.transient:
                 raise
-            last_exc = exc
             if attempt < retries:
                 logger.warning("eval call %s transient executor error (%s), retry %d/%d",
                                label, exc, attempt + 1, retries)
@@ -190,24 +178,15 @@ def call_with_rate_limit(fn: Callable[[str], str], prompt: str, *,
                 continue
             raise
         except Exception as exc:  # noqa: BLE001 — any provider error is retryable here
-            last_exc = exc
             if attempt < retries:
                 logger.warning("eval call %s raised (%s), retry %d/%d",
                                label, exc, attempt + 1, retries)
                 _sleep_backoff(attempt)
                 continue
             raise
-        last_resp = resp
-        if not _looks_transient(resp):
-            return resp
-        if attempt < retries:
-            logger.warning("eval call %s returned a transient failure, retry %d/%d",
-                           label, attempt + 1, retries)
-            _sleep_backoff(attempt)
-    # Exhausted retries: prefer the last response; if we only ever saw exceptions,
-    # re-raise the last one.
-    if last_resp is not None:
-        return last_resp
-    if last_exc is not None:
-        raise last_exc
-    return ""
+        if resp is None or not str(resp).strip():
+            # Logged, NOT retried: an empty answer is the agent's attempt and
+            # scores as a miss under the pass@1 protocol the summary reports.
+            logger.warning("eval call %s returned an empty answer — scored as-is", label)
+        return resp
+    raise AssertionError("unreachable: the loop returns or raises on every path")

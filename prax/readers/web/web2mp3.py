@@ -2,26 +2,16 @@ import base64
 import logging
 import os
 import uuid
-from functools import lru_cache
 
 import requests
 from mutagen.id3 import ID3, TIT2
 from mutagen.mp3 import MP3
-from openai import OpenAI
 from playwright.sync_api import sync_playwright
 
 from prax.settings import settings
 
 logger = logging.getLogger(__name__)
 NGROK_URL = settings.ngrok_url or ""
-BASE_MODEL = settings.base_model
-
-
-@lru_cache(maxsize=1)
-def _openai_client():
-    if not settings.openai_key:
-        raise RuntimeError("OPENAI_KEY is not configured")
-    return OpenAI(api_key=settings.openai_key)
 
 
 def convert_web_to_mp3(url, user_id):
@@ -45,17 +35,24 @@ def convert_web_to_mp3(url, user_id):
     {text}
     """
     try:
-        client = _openai_client()
-        response = client.chat.completions.create(model=BASE_MODEL,
-            messages=[{'role': 'system', 'content': _message}],
-            max_tokens=4096
-            )
-        logger.debug(f"convert_web_to_mp3: {response.choices[0]}")
+        # The summary goes through build_llm (provider / tier / OPENAI_BASE_URL
+        # routing); TTS needs the raw SDK, so it comes from openai_client(),
+        # the one sanctioned constructor.  Both used to share a raw
+        # ``OpenAI(api_key=...)`` client with no base URL, which under keyless
+        # Prax sent the proxy token to api.openai.com (see
+        # docs/security/secrets-proxy.md).  Prompt unchanged; the legacy
+        # ``max_tokens=4096`` field is not carried over — see
+        # conversation_memory.summarize_and_replace for why.
+        from prax.agent.llm_factory import build_llm, openai_client
 
-        response2 = client.audio.speech.create(
+        response = build_llm(tier="low").invoke([{'role': 'system', 'content': _message}])
+        summary = response.text
+        logger.debug(f"convert_web_to_mp3: {summary}")
+
+        response2 = openai_client().audio.speech.create(
           model="tts-1",
           voice="shimmer",
-          input=response.choices[0].message.content
+          input=summary
         )
 
         if not os.path.exists(f"./static/temp/{user_id}/"):
@@ -68,7 +65,7 @@ def convert_web_to_mp3(url, user_id):
         audio['TIT2'] = TIT2(encoding=3, text=base64.b64encode(url.encode()).decode())
         audio.save()
 
-        return f"{NGROK_URL}/static/temp/{user_id}/{id}.mp3", response.choices[0].message.content
+        return f"{NGROK_URL}/static/temp/{user_id}/{id}.mp3", summary
     except Exception:
         logger.error("Error getting summary", exc_info=True)
         return "Unable to fetch this, sorry.", "I was unable to fetch the summary."

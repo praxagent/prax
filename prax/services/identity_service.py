@@ -514,30 +514,169 @@ def get_identities(user_id: str) -> list[dict]:
 # Migration — import existing phone/Discord users
 # ---------------------------------------------------------------------------
 
-def reconcile_workspace_dir() -> None:
-    """Ensure the active user's workspace_dir matches PRAX_USER_ID.
+def primary_user_identity() -> tuple[str, str]:
+    """The ``(provider, external_id)`` the TeamWork UI resolves to — i.e. the
+    single-user deployment's *primary* user.
 
-    Called on startup.  If the user already exists in the identity DB but
-    their ``workspace_dir`` doesn't match the ``PRAX_USER_ID`` env var
-    (e.g. first deploy after setting the var, or a migration), update it
-    so the Docker volume mount and the identity service agree.
+    Mirrors ``teamwork_routes._get_teamwork_user_id``: the configured phone when
+    there is one (so TeamWork shares a user with SMS/Discord), otherwise the
+    standing ``teamwork:default`` identity.
+    """
+    phone = getattr(settings, "teamwork_user_phone", "") or ""
+    if phone:
+        return "sms", phone
+    return "teamwork", "default"
+
+
+def _tree_collisions(src: str, dst: str, rel: str = "") -> list[str]:
+    """Relative paths that exist under both *src* and *dst*.
+
+    Two real directories at the same path are not a collision — their contents
+    are compared instead.  Anything else at the same path (file vs file, file
+    vs dir, a symlink on either side) is, because moving it would overwrite.
+    """
+    collisions: list[str] = []
+    for name in sorted(os.listdir(src)):
+        s = os.path.join(src, name)
+        d = os.path.join(dst, name)
+        r = os.path.join(rel, name)
+        if not os.path.lexists(d):
+            continue
+        if (os.path.isdir(s) and not os.path.islink(s)
+                and os.path.isdir(d) and not os.path.islink(d)):
+            collisions.extend(_tree_collisions(s, d, r))
+        else:
+            collisions.append(r)
+    return collisions
+
+
+def _merge_tree(src: str, dst: str) -> list[str]:
+    """Move every entry of *src* into *dst*; returns the paths that could NOT be
+    moved.  Only call after :func:`_tree_collisions` came back empty — a
+    collision found here is a bug, not something to resolve by overwriting.
+    """
+    import shutil
+
+    failed: list[str] = []
+    for name in sorted(os.listdir(src)):
+        s = os.path.join(src, name)
+        d = os.path.join(dst, name)
+        try:
+            if os.path.lexists(d):
+                if (os.path.isdir(s) and not os.path.islink(s)
+                        and os.path.isdir(d) and not os.path.islink(d)):
+                    failed.extend(_merge_tree(s, d))
+                    if not os.listdir(s):
+                        os.rmdir(s)
+                    continue
+                raise FileExistsError(d)
+            shutil.move(s, d)
+        except OSError as exc:
+            logger.error("Could not move %s → %s: %s", s, d, exc)
+            failed.append(s)
+    return failed
+
+
+def _relocate_workspace(old_dir: str, new_dir: str) -> str | None:
+    """Make *new_dir* hold the workspace that lives at *old_dir*.
+
+    Returns ``None`` when *new_dir* now holds the data (or there was nothing to
+    carry over), or a reason string when it REFUSED — in which case nothing was
+    changed and the caller must not repoint the identity row.
+
+    History: this used to be "symlink old → new unless new exists".  On a first
+    boot ``new_dir`` had already been created as an empty skeleton before the
+    user existed, so the symlink was skipped, the row was repointed at the empty
+    directory, and everything written in session one became invisible.  Now an
+    existing ``new_dir`` is merged into: entries that exist only on one side are
+    moved, and any path present on both sides is a collision that stops the
+    whole operation before a single file moves.
+    """
+    if not os.path.isdir(old_dir):
+        return None  # nothing to carry over; new_dir is created on first use
+    if not os.path.lexists(new_dir):
+        os.symlink(os.path.abspath(old_dir), new_dir)
+        logger.info("Symlinked workspace %s → %s", new_dir, old_dir)
+        return None
+    if os.path.realpath(old_dir) == os.path.realpath(new_dir):
+        return None  # the same directory under two names — nothing to move
+    if os.path.islink(old_dir):
+        return (f"{old_dir} is a symlink to {os.path.realpath(old_dir)}; "
+                "refusing to move data out of a shared target")
+    if not os.path.isdir(new_dir):
+        return f"{new_dir} exists but is not a directory"
+    collisions = _tree_collisions(old_dir, new_dir)
+    if collisions:
+        shown = ", ".join(collisions[:10]) + (" …" if len(collisions) > 10 else "")
+        return (f"{len(collisions)} path(s) exist in both {old_dir} and {new_dir} "
+                f"and would be overwritten: {shown}")
+    failed = _merge_tree(old_dir, new_dir)
+    if failed:
+        # Everything that could move has moved; what is left is named in the log.
+        # The caller still repoints (the moved majority must not go invisible),
+        # but this is an error state the operator has to finish by hand.
+        logger.error(
+            "Workspace merge %s → %s is INCOMPLETE: %d entr%s could not be moved "
+            "and remain at the old path: %s",
+            old_dir, new_dir, len(failed), "y" if len(failed) == 1 else "ies",
+            ", ".join(failed[:10]),
+        )
+        return None
+    os.rmdir(old_dir)
+    os.symlink(os.path.abspath(new_dir), old_dir)
+    logger.info("Merged workspace %s into %s (symlink left at the old path)", old_dir, new_dir)
+    return None
+
+
+def ensure_primary_user() -> User | None:
+    """Resolve — creating on first boot — the primary user, and make its
+    ``workspace_dir`` agree with ``PRAX_USER_ID``.  Returns ``None`` when
+    ``PRAX_USER_ID`` is unset (multi-user deployments have no primary user).
+
+    Must run at boot BEFORE any per-user service state is derived from
+    ``PRAX_USER_ID`` (see ``state_paths._effective_user_id``).  The order used
+    to be the other way round: the conversation DB was created under
+    ``workspaces/<PRAX_USER_ID>`` while no user existed yet, the first message
+    then created the user under ``usr_<id8>``, and the NEXT boot repointed the
+    user at ``<PRAX_USER_ID>`` — an existing, near-empty directory — so the
+    symlink was skipped and session one's notes and history vanished.
+
+    A mismatch between the row and ``PRAX_USER_ID`` is resolved by
+    :func:`_relocate_workspace`; when that refuses (colliding files on both
+    sides) the row is left alone and the refusal is logged at ERROR — the row
+    is never silently repointed at a directory that does not hold the data.
     """
     prax_user_id = settings.prax_user_id
     if not prax_user_id:
-        return
+        return None
 
-    # Find the user that TeamWork will resolve to
-    phone = getattr(settings, "teamwork_user_phone", "")
-    if phone:
-        user = get_user_by_identity("sms", phone)
-    else:
-        user = get_user_by_identity("teamwork", "default")
+    provider, external_id = primary_user_identity()
+    user = resolve_user(provider, external_id)
+    if user.workspace_dir == prax_user_id:
+        return user
 
-    if user and user.workspace_dir != prax_user_id:
-        logger.info(
-            "Reconciling workspace_dir: %s → %s (to match PRAX_USER_ID)",
-            user.workspace_dir, prax_user_id,
+    old_dir = os.path.join(settings.workspace_dir, user.workspace_dir)
+    new_dir = os.path.join(settings.workspace_dir, prax_user_id)
+    try:
+        refusal = _relocate_workspace(old_dir, new_dir)
+    except OSError as exc:
+        # An unreadable directory or a failed symlink must not take the boot
+        # down — but it is a refusal, not a success: the row stays put.
+        refusal = f"{type(exc).__name__}: {exc}"
+    if refusal:
+        logger.error(
+            "NOT reconciling workspace_dir %s → %s for user %s: %s. The identity "
+            "row still points at %s, which is where this user's data is; merge "
+            "the two directories by hand, then restart.",
+            user.workspace_dir, prax_user_id, user.id[:8], refusal, old_dir,
         )
+        return user
+
+    logger.info(
+        "Reconciling workspace_dir: %s → %s (to match PRAX_USER_ID)",
+        user.workspace_dir, prax_user_id,
+    )
+    with _lock:
         conn = _connect()
         try:
             conn.execute(
@@ -547,13 +686,12 @@ def reconcile_workspace_dir() -> None:
             conn.commit()
         finally:
             conn.close()
+    return get_user(user.id)
 
-        # Create a symlink from the old dir to the new one if needed
-        old_dir = os.path.join(settings.workspace_dir, user.workspace_dir)
-        new_dir = os.path.join(settings.workspace_dir, prax_user_id)
-        if os.path.isdir(old_dir) and not os.path.exists(new_dir):
-            os.symlink(os.path.abspath(old_dir), new_dir)
-            logger.info("Symlinked workspace %s → %s", old_dir, new_dir)
+
+def reconcile_workspace_dir() -> None:
+    """Boot hook, kept under its historical name — see :func:`ensure_primary_user`."""
+    ensure_primary_user()
 
 
 def migrate_legacy_users() -> int:

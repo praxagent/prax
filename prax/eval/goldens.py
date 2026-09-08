@@ -430,7 +430,39 @@ def summarize_split(results: list[dict]) -> dict:
     return {"avg_public": pub, "avg_private": priv, "n_public": n_pub, "n_private": n_priv}
 
 
+def aggregate_replicates(runs: list[dict]) -> dict:
+    """Fold N replicate ``run_golden_suite`` results into one suite-shaped dict
+    plus the replicate SPREAD — the measured noise floor ``accept_change`` needs.
+
+    Pure and keyless. ``avg_private`` / ``avg_public`` become the mean over
+    replicates, or ``None`` (fail-closed) if ANY replicate lacks that split — a
+    missing holdout on one run is not averaged away. ``private_spread`` /
+    ``public_spread`` are max−min across replicates: 0.0 for a single run, which
+    measures nothing, so the caller must supply at least two. ``n_private`` is
+    the smallest private count any replicate scored.
+    """
+    def _fold(key: str) -> tuple[float | None, float, list[float]]:
+        vals = [r.get(key) for r in runs]
+        if not vals or any(not isinstance(v, (int, float)) for v in vals):
+            return None, 0.0, []
+        return (round(sum(vals) / len(vals), 3), round(max(vals) - min(vals), 3),
+                [round(float(v), 3) for v in vals])
+
+    priv, priv_spread, priv_vals = _fold("avg_private")
+    pub, pub_spread, pub_vals = _fold("avg_public")
+    n_priv = [int(r.get("n_private") or 0) for r in runs]
+    n_pub = [int(r.get("n_public") or 0) for r in runs]
+    return {
+        "avg_private": priv, "avg_public": pub,
+        "n_private": min(n_priv) if n_priv else 0, "n_public": min(n_pub) if n_pub else 0,
+        "replicates": len(runs),
+        "private_spread": priv_spread, "public_spread": pub_spread,
+        "private_values": priv_vals, "public_values": pub_vals,
+    }
+
+
 def accept_change(baseline: dict, candidate: dict, *, min_private_delta: float = 0.0,
+                  noise_floor: float = 0.0,
                   baseline_cost: float | None = None, candidate_cost: float | None = None,
                   max_cost_ratio: float = 1.0) -> dict:
     """Decide whether a proposed self-modification should be ADOPTED — the AIDE²
@@ -438,25 +470,45 @@ def accept_change(baseline: dict, candidate: dict, *, min_private_delta: float =
 
     Select on the **held-out private** score, never the public score the change was
     optimized against, and only at equal-or-lower cost. *baseline* / *candidate* are
-    ``run_golden_suite`` results (each carrying ``avg_private`` / ``avg_public``).
+    ``run_golden_suite`` results (each carrying ``avg_private`` / ``avg_public``),
+    or ``aggregate_replicates`` folds of several.
+
+    The private delta must exceed ``max(min_private_delta, noise_floor)``.
+    *noise_floor* is the MEASURED baseline-vs-replicate spread (the judge flips
+    ~30% of criteria on an identical re-grade at temperature 0 — see
+    docs/research/judge-noise-floor.md), so a delta inside it is
+    indistinguishable from re-running the baseline and is rejected. The default
+    0.0 keeps the pure rule for callers that have no replicate; the self-regen
+    gate always passes a measured one.
 
     **Fail-closed**: with no private holdout on either side there is no trustworthy
     accept signal, so the change is REJECTED — this is the whole point of the split,
     and the reason a self-improvement loop must not run without one. Also flags the
     **reward-hacking signature**: public up while private down.
 
-    Pure and keyless. No loop consumes it yet — it's the gate #29 will call; cost
-    metering (``*_cost`` as tokens/dollars) is wired by the caller when available.
-    Returns ``{accept, reason, private_delta, gamed_public, cost_ratio}``.
+    Pure and keyless; ``prax.eval.self_regen._gate_on_private_holdout`` is the
+    caller (cost metering via ``*_cost`` when available). Returns ``{accept,
+    reason, private_delta, public_delta, generalization_gap, noise_floor,
+    n_private, gamed_public, cost_ratio}`` — ``generalization_gap`` is
+    ``public_delta − private_delta``: the part of the tuning-visible gain that did
+    not transfer to the held-out set.
     """
     b_priv, c_priv = baseline.get("avg_private"), candidate.get("avg_private")
     b_pub, c_pub = baseline.get("avg_public"), candidate.get("avg_public")
+    n_private = min(int(baseline.get("n_private") or 0), int(candidate.get("n_private") or 0))
+    noise_floor = round(max(0.0, float(noise_floor or 0.0)), 3)
 
     if b_priv is None or c_priv is None:
         return {"accept": False, "reason": "no private holdout — cannot decide (fail-closed)",
-                "private_delta": None, "gamed_public": False, "cost_ratio": None}
+                "private_delta": None, "public_delta": None, "generalization_gap": None,
+                "noise_floor": noise_floor, "n_private": n_private,
+                "gamed_public": False, "cost_ratio": None}
 
     private_delta = round(c_priv - b_priv, 3)
+    public_delta = (round(c_pub - b_pub, 3)
+                    if b_pub is not None and c_pub is not None else None)
+    generalization_gap = (round(public_delta - private_delta, 3)
+                          if public_delta is not None else None)
     gamed_public = (
         b_pub is not None and c_pub is not None and c_pub > b_pub and c_priv < b_priv
     )
@@ -467,20 +519,28 @@ def accept_change(baseline: dict, candidate: dict, *, min_private_delta: float =
         cost_ratio = round(candidate_cost / baseline_cost, 3)
         cost_ok = cost_ratio <= max_cost_ratio
 
+    threshold = max(min_private_delta, noise_floor)
     # A reward-hacking signature (public up, private down) is a HARD reject
     # regardless of the threshold — never adopt a change that gamed the visible
     # metric, even under a noise-absorbing negative min_private_delta.
-    accept = private_delta > min_private_delta and cost_ok and not gamed_public
+    accept = private_delta > threshold and cost_ok and not gamed_public
     if accept:
         reason = (f"private +{private_delta} at cost×{cost_ratio}"
                   if cost_ratio is not None else f"private +{private_delta}")
+        if noise_floor:
+            reason += f" (clears noise floor {noise_floor})"
     elif gamed_public:
         reason = "REJECT: public improved but private regressed — reward-hacking signature"
-    elif private_delta <= min_private_delta:
-        reason = f"REJECT: private not improved ({private_delta:+})"
+    elif private_delta <= threshold:
+        reason = (f"REJECT: private {private_delta:+} does not clear the noise floor "
+                  f"{noise_floor} (baseline-vs-replicate spread)"
+                  if noise_floor and private_delta > min_private_delta
+                  else f"REJECT: private not improved ({private_delta:+})")
     else:
         reason = f"REJECT: cost×{cost_ratio} exceeds budget ×{max_cost_ratio}"
     return {"accept": accept, "reason": reason, "private_delta": private_delta,
+            "public_delta": public_delta, "generalization_gap": generalization_gap,
+            "noise_floor": noise_floor, "n_private": n_private,
             "gamed_public": gamed_public, "cost_ratio": cost_ratio}
 
 

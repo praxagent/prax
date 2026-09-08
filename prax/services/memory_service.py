@@ -93,7 +93,12 @@ class MemoryService:
         tags: list[str] | None = None,
         entity_ids: list[str] | None = None,
     ) -> str:
-        """Store a memory in the vector store.  Returns memory_id."""
+        """Store a memory in the vector store.
+
+        Returns the memory_id, or "" when the write did not happen (memory
+        disabled, embedding unavailable, or the store rejected the write —
+        `upsert_memory` raises on failure rather than handing back an id).
+        """
         if not self._available:
             return ""
         try:
@@ -295,21 +300,6 @@ class MemoryService:
     # Context injection — for orchestrator prompt assembly
     # ------------------------------------------------------------------
 
-    def track_interaction(self, user_id: str) -> int:
-        """Increment the interaction epoch for a user.
-
-        Called once per user message by the orchestrator to advance the
-        interaction counter used by interaction-based decay.
-        Returns the new epoch value.
-        """
-        if not self._available:
-            return 0
-        try:
-            from prax.services.memory.vector_store import increment_interaction_epoch
-            return increment_interaction_epoch(user_id)
-        except Exception:
-            return 0
-
     def build_memory_context(self, user_id: str, user_input: str, max_tokens: int = 500) -> str:
         """Retrieve relevant memories and format as system prompt context.
 
@@ -438,12 +428,16 @@ def maybe_consolidate(user_id: str) -> bool:
     _consolidation_turns_since[user_id] = 0
     try:
         result = get_memory_service().consolidate(user_id)
+        # These are the real field names on ConsolidationResult; the previous
+        # `getattr(result, "entities_added", 0)` etc. named fields that do not
+        # exist, so this line logged 0/0/0 on every run.
         logger.info(
-            "Auto-consolidation for %s: entities=%d, relations=%d, memories=%d",
+            "Auto-consolidation for %s: entities=%d, relations=%d, memories=%d (failed=%d)",
             user_id,
-            getattr(result, "entities_added", 0),
-            getattr(result, "relations_added", 0),
-            getattr(result, "memories_added", 0),
+            result.entities_upserted,
+            result.relations_upserted,
+            result.memories_created,
+            result.memories_failed,
         )
         return True
     except Exception:

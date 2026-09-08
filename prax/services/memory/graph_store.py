@@ -159,10 +159,22 @@ def add_relation(
     evidence: str = "",
     valid_from: str | None = None,
 ) -> bool:
-    """Create or strengthen a relation between two entities.
+    """Create or strengthen the CURRENT relation between two entities.
 
     Both entities must already exist (matched by user_id + name).
-    If the relation exists, its weight is incremented and last_seen is updated.
+    If a current edge of this type exists (valid_until IS NULL), its weight is
+    incremented and last_seen updated.  Otherwise a NEW edge is created —
+    including when a superseded (closed) edge of the same type exists.
+
+    # INVARIANT: a closed edge stays closed.  The previous statement was
+    # `MERGE (s)-[r:RELATES_TO {type: $rtype}]->(t)`, which matches on type
+    # alone, so once `supersede_relation` had closed A→B, re-learning A→B
+    # matched the closed edge and only bumped its weight: after
+    # lives_in Paris → Berlin → Paris the graph held two closed edges and no
+    # current one, and `current_targets` / `get_entity` answered "nowhere".
+    # MERGE cannot express "match only if valid_until IS NULL" (null is not a
+    # mergeable property value), hence the OPTIONAL MATCH + conditional
+    # FOREACH-CREATE below, which is one atomic statement.
 
     Bi-temporal: valid_from records when the fact became true (defaults to now).
     valid_until is null (currently valid) on creation.  Use supersede_relation()
@@ -179,18 +191,24 @@ def add_relation(
                 """
                 MATCH (s:Entity {user_id: $uid, name: $src})
                 MATCH (t:Entity {user_id: $uid, name: $tgt})
-                MERGE (s)-[r:RELATES_TO {type: $rtype}]->(t)
-                ON CREATE SET
-                    r.weight = $weight,
-                    r.first_seen = $now,
-                    r.last_seen = $now,
-                    r.evidence = $evidence,
-                    r.valid_from = $vf,
-                    r.valid_until = null
-                ON MATCH SET
-                    r.weight = r.weight + $weight,
-                    r.last_seen = $now,
-                    r.evidence = r.evidence + '; ' + $evidence
+                OPTIONAL MATCH (s)-[open:RELATES_TO {type: $rtype}]->(t)
+                WHERE open.valid_until IS NULL
+                WITH s, t, collect(open) AS current
+                FOREACH (r IN current |
+                    SET r.weight = r.weight + $weight,
+                        r.last_seen = $now,
+                        r.evidence = r.evidence + '; ' + $evidence)
+                FOREACH (_ IN CASE WHEN size(current) = 0 THEN [1] ELSE [] END |
+                    CREATE (s)-[:RELATES_TO {
+                        type: $rtype,
+                        weight: $weight,
+                        first_seen: $now,
+                        last_seen: $now,
+                        evidence: $evidence,
+                        valid_from: $vf,
+                        valid_until: null
+                    }]->(t))
+                RETURN size(current) AS strengthened
                 """,
                 uid=user_id,
                 src=src,
@@ -454,72 +472,88 @@ def search_entities(user_id: str, query: str, limit: int = 10) -> list[dict]:
         return []
 
 
-def decay_graph(user_id: str, halflife_days: float = 14.0, prune_threshold: float = 0.05) -> int:
-    """Apply exponential decay to entity importance and relation weights.
+# Elapsed time in TOTAL days between a stored ISO timestamp and $now, as a
+# Cypher expression.  `duration.between(a, b).days` — what this used to be —
+# is the DAYS COMPONENT of a (months, days, seconds) duration, so a 45-day
+# gap reported 15 and decay ran ~3x slower than configured for anything older
+# than a month.  Epoch arithmetic has no components to misread and matches
+# the Python formula in vector_store.effective_importance.
+_DAYS_SINCE = "((datetime($now).epochSeconds - datetime({ts}).epochSeconds) / 86400.0)"
 
-    Returns the number of entities/relations pruned.
+
+def decay_graph(
+    user_id: str,
+    halflife_days: float = 14.0,
+    prune_threshold: float = 0.05,
+    now: datetime | None = None,
+) -> int:
+    """Prune entities and relations whose time-decayed weight is below threshold.
+
+    # INVARIANT: idempotent for a given `now`.  Effective importance/weight is
+    # stored × exp(-λ × total days since last_seen), evaluated in the WHERE
+    # clause of the prune statements; the stored values are never rewritten.
+    # The previous shape SET the decayed value back on every pass (the same
+    # compounding defect as vector_store.decay_memories) and measured days as
+    # the days COMPONENT of a duration (see _DAYS_SINCE).
+
+    Entities are pruned only when they have no relations left, so a weak node
+    that still anchors an edge survives until the edge itself is pruned.
+    Relation prune threshold is half the entity threshold, as before.
+
+    `now` is injectable for tests; production callers leave it None.
+    Returns the number of entities + relations pruned.
     """
     import math
 
     lambda_ = math.log(2) / halflife_days
-    now = datetime.now(UTC)
+    now = now or datetime.now(UTC)
     pruned = 0
 
     try:
         with _session() as session:
-            # Decay entity importance
-            # NB: passed as a dict, not kwargs — the Cypher parameter is named
-            # `lambda`, which cannot be a Python keyword argument.  Passing it
-            # as `lambda_=` silently produced a ParameterMissing error for the
-            # entire life of this function (caught by the except below, so the
-            # decay never ran and `memories_forgotten` was always 0).
-            session.run(
-                """
-                MATCH (e:Entity {user_id: $uid})
-                WITH e,
-                     duration.between(datetime(e.last_seen), datetime($now)).days AS days_elapsed
-                SET e.importance = e.importance * exp(-$lambda * days_elapsed)
-                RETURN count(e) AS updated
-                """,
-                {"uid": user_id, "now": now.isoformat(), "lambda": lambda_},
-            )
-
-            # Decay relation weights
-            session.run(
-                """
-                MATCH (:Entity {user_id: $uid})-[r:RELATES_TO]-(:Entity)
-                WITH r,
-                     duration.between(datetime(r.last_seen), datetime($now)).days AS days_elapsed
-                SET r.weight = r.weight * exp(-$lambda * days_elapsed)
-                """,
-                {"uid": user_id, "now": now.isoformat(), "lambda": lambda_},
-            )
-
-            # Prune low-importance entities without relations
+            # NB: params are passed as a dict, not kwargs — the Cypher parameter
+            # is named `lambda`, which cannot be a Python keyword argument.
+            # Passing it as `lambda_=` silently produced ParameterMissing for
+            # the entire early life of this function.
             result = session.run(
                 """
                 MATCH (e:Entity {user_id: $uid})
-                WHERE e.importance < $threshold
+                WHERE e.last_seen IS NOT NULL
                   AND NOT (e)-[:RELATES_TO]-()
+                  AND e.importance * exp(-$lambda * """
+                + _DAYS_SINCE.format(ts="e.last_seen")
+                + """) < $threshold
                 DELETE e
                 RETURN count(e) AS pruned
                 """,
-                uid=user_id,
-                threshold=prune_threshold,
+                {
+                    "uid": user_id,
+                    "now": now.isoformat(),
+                    "lambda": lambda_,
+                    "threshold": prune_threshold,
+                },
             )
             record = result.single()
             pruned = record["pruned"] if record else 0
 
-            # Prune weak relations
+            # Directed match so each relation is counted (and deleted) once;
+            # both endpoints carry the same user_id by construction.
             result = session.run(
                 """
-                MATCH (:Entity {user_id: $uid})-[r:RELATES_TO]-(:Entity)
-                WHERE r.weight < $threshold
+                MATCH (:Entity {user_id: $uid})-[r:RELATES_TO]->(:Entity)
+                WHERE r.last_seen IS NOT NULL
+                  AND r.weight * exp(-$lambda * """
+                + _DAYS_SINCE.format(ts="r.last_seen")
+                + """) < $threshold
                 DELETE r
                 RETURN count(r) AS pruned
                 """,
-                uid=user_id,
-                threshold=prune_threshold / 2,
+                {
+                    "uid": user_id,
+                    "now": now.isoformat(),
+                    "lambda": lambda_,
+                    "threshold": prune_threshold / 2,
+                },
             )
             record = result.single()
             pruned += record["pruned"] if record else 0

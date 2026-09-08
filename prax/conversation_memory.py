@@ -12,9 +12,6 @@ import json
 import logging
 import sqlite3
 from datetime import UTC, datetime
-from functools import lru_cache
-
-from openai import OpenAI
 
 from prax.settings import settings
 from prax.token_management import chat_to_string, get_encoding_for_model, num_tokens_from_string
@@ -23,13 +20,6 @@ BASE_MODEL = settings.base_model
 
 
 logger = logging.getLogger(__name__)
-
-
-@lru_cache(maxsize=1)
-def _openai_client():
-    if not settings.openai_key:
-        raise RuntimeError("OPENAI_KEY is not configured")
-    return OpenAI(api_key=settings.openai_key)
 
 
 def add_dict_to_list(database_name, id, new_dict):
@@ -81,20 +71,28 @@ def summarize_and_replace(list_of_dicts, max_size=100000):
     if num_tokens_from_string(chat_to_string(list_of_dicts), get_encoding_for_model(BASE_MODEL)) >= max_size:
         text_to_summarize = "; ".join([f"role: {entry['role']}, content: {entry['content']}" for entry in list_of_dicts[1:4]])
 
+        # Routed through build_llm so provider / tier / OPENAI_BASE_URL routing
+        # applies.  This used to be a raw ``OpenAI(api_key=...)`` client with no
+        # base URL sending BASE_MODEL to api.openai.com — under keyless Prax
+        # (proxy token, non-OpenAI model ids) every scheduled fire that crossed
+        # the summarisation threshold died with ``invalid model ID``
+        # (2026-09-07).  Prompt text and role are unchanged.  The legacy
+        # ``max_tokens=4096`` / ``n=1`` / ``stop=None`` request fields are not
+        # carried over: n/stop were the API defaults, and max_tokens is an
+        # OpenAI-specific field that not every provider binding accepts at
+        # invoke time (ChatOllama forwards unknown kwargs to a client that
+        # rejects them) — provider defaults apply, as for every other
+        # build_llm caller in the repo.
+        from prax.agent.llm_factory import build_llm
 
-        client = _openai_client()
-        response = client.chat.completions.create(model=BASE_MODEL,
-        messages=[{
+        llm = build_llm(tier="low", temperature=0.3)
+        response = llm.invoke([{
             "role": "assistant",
             "content": (f"Please succinctly summarize the following text, including both"
                         f"what the user and system said: {text_to_summarize}")
-            }],
-        max_tokens=4096,
-        n=1,
-        stop=None,
-        temperature=0.3)
+            }])
 
-        summary = response.choices[0].message.content
+        summary = response.text
         try:
             summary_dict = {"date": list_of_dicts[3]["date"],
                             "role": "assistant",

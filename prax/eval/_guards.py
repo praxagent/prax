@@ -137,17 +137,47 @@ def ensure_eval_dir(eval_dir: Path) -> Path:
     return eval_dir
 
 
-# Tools that must be disabled in eval mode because they have filesystem
-# access outside Prax's designed scope.  This is defense-in-depth beyond
-# the directory-isolation of PRAX_EVAL_DIR.
+# Tools that must not be available while an eval runs: they reach the REPO
+# (source, plugins, worktrees) rather than the run's isolated workspace, so an
+# agent holding them could read the eval code or edit its own scorer. This is
+# defense-in-depth beyond the directory-isolation of PRAX_EVAL_DIR.
+#
+# Applied by ``gaia_single._isolated_prax_scope`` through the
+# ``prax.agent.tool_registry.eval_tool_denylist`` ContextVar, which every tool-
+# list build site (hub registry, spokes, sub-agents) filters through
+# ``apply_eval_denylist`` — so spoke-internal names here are filtered too, not
+# just the hub's. Every name below is a real tool; ``prax/eval/README.md`` lists
+# the same set and where each one lives.
 EVAL_MODE_TOOL_DENYLIST: frozenset[str] = frozenset({
-    # Code generation tools — can touch the repo itself
-    "self_improve_start",
-    "self_improve_deploy",
-    "self_improve_rollback",
-    "self_improve_status",
-    # Plugin writing — can write arbitrary files
+    # The sysadmin spoke as a whole (hub-level delegation): plugin/source/AST/
+    # deployment tools, plus its sub-delegation into the self-improve agent.
+    "delegate_sysadmin",
+    "delegate_self_improve",
+    # Repo source readers (sysadmin spoke + self-improve agent) — the eval code
+    # and its scorers live in this repo.
+    "source_read",
+    "source_list",
+    "source_grep",
+    # Plugin writing — writes/activates arbitrary code under the plugin dir.
     "plugin_write",
     "plugin_activate",
     "plugin_remove",
+    # Self-improve worktree tools (prax/agent/codegen_tools.py) — can edit and
+    # deploy the repo itself. Hub-level only under SELF_IMPROVE_ENABLED
+    # (pending/rollback); the rest live in the self-improve agent.
+    "self_improve_start",
+    "self_improve_read",
+    "self_improve_write",
+    "self_improve_test",
+    "self_improve_lint",
+    "self_improve_verify",
+    "self_improve_deploy",
+    "self_improve_submit",
+    "self_improve_rollback",
+    "self_improve_pending",
+    "self_improve_list",
+    "self_improve_cleanup",
+    "self_improve_patch",
+    "self_improve_diff",
+    "self_improve_search",
 })

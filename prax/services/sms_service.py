@@ -9,8 +9,6 @@ import uuid
 from collections.abc import Mapping
 from urllib.parse import urlparse
 
-from openai import OpenAI
-
 from prax import helpers_dictionaries
 from prax.services.conversation_service import conversation_service
 from prax.services.pdf_service import detect_pdf_url, process_pdf_url_with_paths
@@ -125,7 +123,12 @@ class SmsAccessError(Exception):
 class SmsService:
     def __init__(self, database_name: str, openai_key: str, base_model: str) -> None:
         self.database_name = database_name
-        self.client = OpenAI(api_key=openai_key) if openai_key else None
+        # ``openai_key`` is kept for signature compatibility only.  It used to
+        # build a raw ``OpenAI(api_key=openai_key)`` client that nothing in this
+        # service ever read (every model call goes through conversation_service
+        # → build_llm) and that bypassed OPENAI_BASE_URL — so it is removed, not
+        # rerouted.  A raw SDK client, where one is genuinely needed, comes from
+        # ``prax.agent.llm_factory.openai_client``.
         self.base_model = base_model
 
     def _ensure_authorized(self, from_number: str) -> None:

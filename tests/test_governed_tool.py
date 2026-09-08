@@ -17,13 +17,14 @@ def _make_tool(name: str, func=None):
 
 
 def _reset():
-    """Clear governed_tool module state between tests."""
+    """Reset the current context's per-turn governance state between tests.
+
+    ``drain_audit_log`` resets the whole state in place (audit buffer, HIGH
+    and trifecta latches, budget) — the same reset the orchestrator performs at
+    the end of every turn.
+    """
     import prax.agent.governed_tool as _gov
-    _gov._audit_buffer.clear()
-    _gov._high_risk_seen.clear()
-    _gov._high_risk_confirmed = False
-    _gov._tool_call_count = 0
-    _gov._tool_call_budget = 0
+    _gov.drain_audit_log()
 
 
 # ---------------------------------------------------------------------------
@@ -276,88 +277,100 @@ class TestEpistemicTagging:
 
 
 class TestSmartConfirmation:
-    """Smart auto-approve for browser tools when the user explicitly requested the action."""
+    """Smart auto-approve for browser interaction tools.
 
-    def test_browser_click_auto_approved_when_user_said_click(self):
+    The rule (``governed_tool._USER_ACTION_VERB_PATTERN``): the user's own
+    message must contain an interaction VERB (click/press/tap/fill/submit/
+    enter/type/open/select/choose/log in/sign in) AND a browser OBJECT word
+    (link/button/page/site/form/field/login), and a match unlocks ONLY the
+    browser tool that asked — never the turn-wide HIGH-risk latch.  Read-only
+    verbs (check/read/scroll/search/browse/visit/navigate) never qualify.
+    """
+
+    @staticmethod
+    def _high(name: str):
+        from prax.agent.action_policy import RiskLevel
+        inner = _make_tool(name)
+        inner._risk_level = RiskLevel.HIGH
+        return inner
+
+    def test_browser_click_auto_approved_when_user_said_click_the_button(self):
         from prax.agent.governed_tool import wrap_with_governance
         from prax.agent.user_context import current_user_message
         _reset()
         current_user_message.set("click the login button")
-        inner = _make_tool("browser_click")
-        # browser_click is HIGH risk in the central map
-        inner._risk_level = __import__("prax.agent.action_policy", fromlist=["RiskLevel"]).RiskLevel.HIGH
-        governed = wrap_with_governance(inner)
-        result = governed.invoke({"x": "login"})
+        governed = wrap_with_governance(self._high("browser_click"))
         # Should execute immediately — not blocked
-        assert "executed:login" in result
+        assert "executed:login" in governed.invoke({"x": "login"})
 
-    def test_browser_fill_auto_approved_when_user_said_fill(self):
-        from prax.agent.action_policy import RiskLevel
+    def test_browser_fill_auto_approved_when_user_said_fill_the_field(self):
+        from prax.agent.governed_tool import wrap_with_governance
+        from prax.agent.user_context import current_user_message
+        _reset()
+        current_user_message.set("fill in the email field with test@example.com")
+        governed = wrap_with_governance(self._high("browser_fill"))
+        assert "executed:test@example.com" in governed.invoke({"x": "test@example.com"})
+
+    def test_verb_without_a_browser_object_does_not_auto_approve(self):
+        """'fill in my email address' names an action but no page element."""
         from prax.agent.governed_tool import wrap_with_governance
         from prax.agent.user_context import current_user_message
         _reset()
         current_user_message.set("fill in my email address")
-        inner = _make_tool("browser_fill")
-        inner._risk_level = RiskLevel.HIGH
-        governed = wrap_with_governance(inner)
-        result = governed.invoke({"x": "test@example.com"})
-        assert "executed:test@example.com" in result
+        governed = wrap_with_governance(self._high("browser_fill"))
+        assert "HIGH risk" in governed.invoke({"x": "test@example.com"})
+
+    def test_read_only_verb_does_not_auto_approve(self):
+        """'check' / 'read' used to unlock every HIGH tool for the turn."""
+        from prax.agent.governed_tool import wrap_with_governance
+        from prax.agent.user_context import current_user_message
+        _reset()
+        current_user_message.set("check the page and read the form for me")
+        governed = wrap_with_governance(self._high("browser_click"))
+        assert "HIGH risk" in governed.invoke({"x": "something"})
 
     def test_browser_click_blocked_when_no_user_message(self):
-        from prax.agent.action_policy import RiskLevel
         from prax.agent.governed_tool import wrap_with_governance
         from prax.agent.user_context import current_user_message
         _reset()
         current_user_message.set("")
-        inner = _make_tool("browser_click")
-        inner._risk_level = RiskLevel.HIGH
-        governed = wrap_with_governance(inner)
-        result = governed.invoke({"x": "something"})
-        assert "HIGH risk" in result
+        governed = wrap_with_governance(self._high("browser_click"))
+        assert "HIGH risk" in governed.invoke({"x": "something"})
 
     def test_non_browser_tool_not_auto_approved(self):
-        from prax.agent.action_policy import RiskLevel
         from prax.agent.governed_tool import wrap_with_governance
         from prax.agent.user_context import current_user_message
         _reset()
         current_user_message.set("click the deploy button")
-        inner = _make_tool("self_improve_deploy")
-        inner._risk_level = RiskLevel.HIGH
-        governed = wrap_with_governance(inner)
-        result = governed.invoke({"x": "code"})
-        # Should still be blocked — self_improve_deploy is not a browser tool
-        assert "HIGH risk" in result
+        governed = wrap_with_governance(self._high("self_improve_deploy"))
+        # Still blocked — self_improve_deploy is not a browser interaction tool
+        assert "HIGH risk" in governed.invoke({"x": "code"})
 
-    def test_browser_navigate_auto_approved_when_user_said_go_to(self):
-        from prax.agent.action_policy import RiskLevel
+    def test_navigation_request_does_not_approve_a_click(self):
+        """'go to twitter.com' asks for navigation, not for a click."""
         from prax.agent.governed_tool import wrap_with_governance
         from prax.agent.user_context import current_user_message
         _reset()
         current_user_message.set("go to twitter.com")
-        inner = _make_tool("browser_click")
-        inner._risk_level = RiskLevel.HIGH
-        governed = wrap_with_governance(inner)
-        result = governed.invoke({"x": "nav"})
-        assert "executed:nav" in result
+        governed = wrap_with_governance(self._high("browser_click"))
+        assert "HIGH risk" in governed.invoke({"x": "nav"})
 
-    def test_auto_approve_unlocks_all_high_risk(self):
-        """Once smart auto-approve fires, all HIGH-risk tools are unlocked for the turn."""
-        from prax.agent.action_policy import RiskLevel
-        from prax.agent.governed_tool import wrap_with_governance
+    def test_auto_approve_unlocks_only_the_matched_tool(self):
+        """Smart auto-approve is per-tool: it never sets the turn-wide latch,
+        so an unrelated HIGH tool still gets its own confirmation prompt."""
+        from prax.agent.governed_tool import current_turn_state, wrap_with_governance
         from prax.agent.user_context import current_user_message
         _reset()
         current_user_message.set("click the button and then deploy")
-        browser = _make_tool("browser_click")
-        browser._risk_level = RiskLevel.HIGH
-        deploy = _make_tool("plugin_write")
-        governed_browser = wrap_with_governance(browser)
-        governed_deploy = wrap_with_governance(deploy)
-        # browser_click auto-approved → sets _high_risk_confirmed
-        result1 = governed_browser.invoke({"x": "btn"})
-        assert "executed:btn" in result1
-        # plugin_write should now also execute immediately
-        result2 = governed_deploy.invoke({"x": "data"})
-        assert "executed:data" in result2
+        governed_browser = wrap_with_governance(self._high("browser_click"))
+        governed_deploy = wrap_with_governance(_make_tool("plugin_write"))
+        # browser_click auto-approved → executes, unlocked for this tool only
+        assert "executed:btn" in governed_browser.invoke({"x": "btn"})
+        assert "executed:again" in governed_browser.invoke({"x": "again"})
+        assert current_turn_state().high_risk_confirmed is False
+        assert current_turn_state().high_risk_confirmed_tools == {"browser_click"}
+        # plugin_write is NOT unlocked by it — first call still blocks
+        assert "HIGH risk" in governed_deploy.invoke({"x": "data"})
 
 
 class TestBudgetTracking:

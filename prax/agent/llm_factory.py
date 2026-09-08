@@ -10,6 +10,7 @@ from langchain_core.language_models import BaseLanguageModel
 from langchain_google_vertexai import ChatVertexAI
 from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
+from openai import OpenAI
 
 from prax.settings import settings
 
@@ -332,3 +333,57 @@ def build_llm(
         )
 
     raise ValueError(f"Unsupported LLM provider: {provider}")
+
+
+def openai_client(**kwargs) -> OpenAI:
+    """Build the raw OpenAI SDK client with ``build_llm``'s OpenAI routing.
+
+    This is the ONLY place Prax may construct ``openai.OpenAI`` (enforced by
+    ``tests/test_keyless_clients.py``).  Non-chat endpoints — Whisper
+    transcription, TTS, image generation — need the raw SDK rather than a
+    LangChain chat model, and every such client used to be built as
+    ``OpenAI(api_key=settings.openai_key)`` with no base URL.  Under keyless
+    Prax (``OPENAI_BASE_URL`` → the secrets proxy, ``OPENAI_KEY`` = the proxy's
+    access token) that sent the proxy token straight to api.openai.com and
+    failed on every call — see ``docs/security/secrets-proxy.md``.
+
+    Key / base-URL semantics are exactly the ``provider == "openai"`` branch
+    of :func:`build_llm` (equivalence-tested against the client ``ChatOpenAI``
+    builds):
+
+    * ``OPENAI_KEY`` is required — the real key on a direct deployment, the
+      proxy access token on a keyless one.  There is no placeholder path
+      because the proxy is token-gated: an empty key fails here, loudly,
+      instead of as a 401 from the proxy.
+    * ``OPENAI_BASE_URL``, when set, is the client's ``base_url`` (secrets
+      proxy or third-party provider); unset → the SDK default, api.openai.com.
+    * ``OPENAI_BASE_URL_IS_OPENAI`` selects chat-model features (logprobs,
+      Responses API) in ``build_llm``; a raw client has no per-call switch, so
+      here it only informs the log line.  A third-party base URL generally
+      serves no ``/audio`` or ``/images`` — callers get that provider's error
+      rather than a silent fallback to api.openai.com, which would leak the
+      third party's key.
+
+    ``api_key`` and ``base_url`` cannot be overridden through *kwargs*: that
+    would re-open the bypass this helper closes.  Other ``OpenAI()`` keyword
+    arguments (``timeout``, ``max_retries``, ``default_headers`` …) pass
+    through unchanged, and the SDK's own defaults apply when omitted — no
+    ``llm_request_timeout`` is imposed, because audio uploads legitimately
+    outlive a chat-completion budget and the direct clients this replaces
+    used the SDK default too.
+    """
+    for pinned in ("api_key", "base_url"):
+        if pinned in kwargs:
+            raise TypeError(
+                f"openai_client() derives {pinned!r} from settings (OPENAI_KEY / "
+                "OPENAI_BASE_URL); passing it would bypass keyless routing"
+            )
+    if not settings.openai_key:
+        raise ValueError("OPENAI_KEY is required for OpenAI provider")
+    base_url = getattr(settings, "openai_base_url", None) or None
+    third_party = bool(base_url) and not getattr(settings, "openai_base_url_is_openai", False)
+    logger.info(
+        "openai_client → base_url=%s third_party=%s",
+        base_url or "<sdk default>", third_party,
+    )
+    return OpenAI(api_key=settings.openai_key, base_url=base_url, **kwargs)

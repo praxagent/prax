@@ -2,6 +2,11 @@
 
 No network, no keys — a fake replay_fn drives the retry/throttle logic; sleep is
 monkeypatched so tests are instant.
+
+The load-bearing invariant: only a TRANSPORT failure (an exception) is retried.
+A returned answer — empty, blank, or a short "transient-looking" string — is the
+agent's attempt and is returned as-is, because the summary labels the protocol
+``pass@1`` and a content-triggered re-run would have been a silent pass@k.
 """
 from __future__ import annotations
 
@@ -17,42 +22,32 @@ def rl(monkeypatch):
     return mod
 
 
-def test_transient_detection(rl):
-    assert rl._looks_transient("") is True
-    assert rl._looks_transient("   ") is True
-    assert rl._looks_transient(None) is True
-    assert rl._looks_transient("Connect timeout, please try again later.") is True
-    assert rl._looks_transient("429 Too Many Requests") is True
-    # A real answer is not transient...
-    assert rl._looks_transient("Answer: B") is False
-    # ...even a long one that discusses rate limits in prose (only short msgs scanned).
-    long_ans = "The system uses a rate limit of 60 req/min. " * 20
-    assert rl._looks_transient(long_ans) is False
-
-
-def test_retries_empty_then_succeeds(rl, monkeypatch):
+@pytest.mark.parametrize("first_answer", [
+    "",                                            # empty
+    "   ",                                         # blank
+    None,                                          # no content at all
+    "Connect timeout, please try again later.",    # provider error AS the answer
+    "429 Too Many Requests",
+])
+def test_answer_content_never_triggers_a_retry(rl, monkeypatch, first_answer):
+    """pass@1 means pass@1: whatever the first answer looks like, it is the
+    attempt that gets scored. A second call here would be a second attempt at
+    the same case, selected on the content of the first."""
     monkeypatch.setenv("PRAX_EVAL_LLM_MAX_RETRIES", "4")
     calls = {"n": 0}
 
-    def flaky(_prompt):
+    def would_succeed_on_retry(_prompt):
         calls["n"] += 1
-        return "" if calls["n"] < 3 else "Answer: C"
+        return first_answer if calls["n"] == 1 else "Answer: C"
 
-    out = rl.call_with_rate_limit(flaky, "q")
-    assert out == "Answer: C"
-    assert calls["n"] == 3  # two empties retried, third succeeded
+    assert rl.call_with_rate_limit(would_succeed_on_retry, "q") == first_answer
+    assert calls["n"] == 1
 
 
-def test_retries_transient_string_then_succeeds(rl, monkeypatch):
-    monkeypatch.setenv("PRAX_EVAL_LLM_MAX_RETRIES", "4")
-    calls = {"n": 0}
-
-    def flaky(_prompt):
-        calls["n"] += 1
-        return "Connect timeout, please try again later." if calls["n"] < 2 else "real answer"
-
-    assert rl.call_with_rate_limit(flaky, "q") == "real answer"
-    assert calls["n"] == 2
+def test_transient_markers_still_classify_failure_reasons(rl):
+    # The marker list survives for classify_transient — it decides whether an
+    # EXCEPTION's reason is worth retrying, never whether an answer is.
+    assert rl.classify_transient("Connect timeout, please try again later.") is True
 
 
 def test_retries_exception_then_succeeds(rl, monkeypatch):
@@ -68,9 +63,9 @@ def test_retries_exception_then_succeeds(rl, monkeypatch):
     assert rl.call_with_rate_limit(flaky, "q") == "ok"
 
 
-def test_exhausted_returns_last_response_not_raise(rl, monkeypatch):
-    # All-empty: after retries it returns the (empty) response so the case still
-    # scores as a normal miss rather than crashing the batch.
+def test_empty_answer_is_returned_once_not_raised(rl, monkeypatch):
+    # An empty answer is returned (the case scores as a normal miss, the batch
+    # keeps going) — and it is NOT re-attempted.
     monkeypatch.setenv("PRAX_EVAL_LLM_MAX_RETRIES", "2")
     calls = {"n": 0}
 
@@ -79,7 +74,7 @@ def test_exhausted_returns_last_response_not_raise(rl, monkeypatch):
         return ""
 
     assert rl.call_with_rate_limit(always_empty, "q") == ""
-    assert calls["n"] == 3  # 1 + 2 retries
+    assert calls["n"] == 1
 
 
 def test_exhausted_all_exceptions_reraises(rl, monkeypatch):

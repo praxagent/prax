@@ -181,9 +181,14 @@ def run_spoke(
 
     # Set component context for earned trust and apply autonomy-aware limits.
     from prax.agent.autonomy import get_recursion_limit
-    from prax.agent.user_context import bind_tools_user_context, current_component
+    from prax.agent.governed_tool import govern_spoke_tools
+    from prax.agent.tool_registry import apply_eval_denylist
+    from prax.agent.user_context import current_component
     current_component.set(label)
-    tools = bind_tools_user_context(tools)
+    # Bind request context, then spoke-layer governance: every spoke-internal
+    # tool call is audited and its lethal-trifecta legs recorded; the
+    # confirmation gates enforce only under SPOKE_GOVERNANCE_ENABLED.
+    tools = govern_spoke_tools(apply_eval_denylist(tools))
     graph = build_agent_loop(llm, tools)
     effective_limit = get_recursion_limit(recursion_limit)
 
