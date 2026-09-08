@@ -118,10 +118,14 @@ def _run_subagent(task: str, category: str) -> str:
 
     # Set component context for earned trust and autonomy-aware limits.
     from prax.agent.autonomy import get_recursion_limit
-    from prax.agent.user_context import bind_tools_user_context, current_component
+    from prax.agent.governed_tool import govern_spoke_tools
+    from prax.agent.tool_registry import apply_eval_denylist
+    from prax.agent.user_context import current_component
     current_component.set(f"subagent_{category}")
 
-    tools = bind_tools_user_context(_get_tools_for_category(category))
+    # Bind request context, then spoke-layer governance (audit + trifecta legs
+    # always; confirmation gates only under SPOKE_GOVERNANCE_ENABLED).
+    tools = govern_spoke_tools(apply_eval_denylist(_get_tools_for_category(category)))
     if not tools:
         span.end(status="failed", summary="No tools available")
         return f"No tools available for category '{category}'."
@@ -445,14 +449,18 @@ def delegate_parallel(tasks: list[dict]) -> str:
     # is the third surface.
     outcomes: list[str] = ["ok"] * len(tasks)
 
-    # Copy the current context (ContextVars: user_id, channel_id, active_view, etc.)
-    # so worker threads inherit them.  Without this, ContextVars default to None in
-    # thread-pool workers, breaking user resolution and browser session lookup.
-    ctx = contextvars.copy_context()
-
+    # Each worker runs in its OWN copy of the current context (ContextVars:
+    # user_id, channel_id, active_view, turn governance state, etc.).  Without a
+    # copy, ContextVars default to None in thread-pool workers, breaking user
+    # resolution and browser session lookup.  Without a copy PER WORKER, every
+    # worker shares one Context object and ``Context.run`` refuses to re-enter
+    # a context that another thread is already inside ("cannot enter context")
+    # — so with three overlapping tasks, two failed before doing any work.
+    # Same pattern as ``agent_loop.invoke_isolated``: one copy per invocation.
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks)) as pool:
         future_to_idx: dict[concurrent.futures.Future, int] = {}
         for idx, spec in enumerate(tasks):
+            ctx = contextvars.copy_context()
             future = pool.submit(ctx.run, _run_spoke_or_subagent, spec)
             future_to_idx[future] = idx
 

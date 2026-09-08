@@ -178,16 +178,29 @@ class MCPServer:
             raise JsonRpcError(-32602, f"unknown or non-exposed tool: {name!r}")
         if get_risk_level(name) == RiskLevel.HIGH:  # defense-in-depth
             raise JsonRpcError(-32602, f"tool {name!r} is HIGH-risk and not callable over MCP")
-        try:
-            with use_user_context(_identity_for(client)):
-                result = tool.invoke(arguments or {})
-            return {"content": [{"type": "text", "text": _stringify(result)}], "isError": False}
-        except Exception as exc:
-            logger.warning("MCP[%s] tool %s failed: %s", client.name, name, exc)
-            return {
-                "content": [{"type": "text", "text": f"Tool error: {type(exc).__name__}: {exc}"}],
-                "isError": True,
-            }
+        # Each MCP call is its own governance "turn": bind a fresh state for the
+        # duration of the call so the governed wrapper's audit entry lands here
+        # (not in whichever chat turn drains next) and log it on the way out.
+        # Scoped binding — whatever state this context held before is restored.
+        from prax.agent.governed_tool import TurnGovernanceState, use_turn_state
+        with use_turn_state(TurnGovernanceState()) as state:
+            try:
+                with use_user_context(_identity_for(client)):
+                    result = tool.invoke(arguments or {})
+                return {"content": [{"type": "text", "text": _stringify(result)}], "isError": False}
+            except Exception as exc:
+                logger.warning("MCP[%s] tool %s failed: %s", client.name, name, exc)
+                return {
+                    "content": [{"type": "text", "text": f"Tool error: {type(exc).__name__}: {exc}"}],
+                    "isError": True,
+                }
+            finally:
+                for entry in state.audit:
+                    logger.info(
+                        "MCP[%s] audit: %s [%s] result=%s",
+                        client.name, entry.get("tool_name"), entry.get("risk"),
+                        (entry.get("result") or "")[:120],
+                    )
 
     # -- JSON-RPC dispatch --------------------------------------------------
 

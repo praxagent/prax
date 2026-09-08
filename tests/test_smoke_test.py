@@ -133,3 +133,86 @@ def test_missing_or_filtered_job_stays_critical():
         assert ok is False
         assert critical is True
         assert "no prax scrape job" in detail
+
+
+# --- Prax → TeamWork external-API credential pair ----------------------------
+# `_teamwork_external_status` classifies two loopback probes of TeamWork's
+# GET /api/external/projects (no key / Prax's key). This is the link every
+# nightly fresh-install from 2026-06-30 to 2026-09-07 ran with broken (503 on
+# every Prax call) while all other smoke checks passed — so a missing or
+# mismatched pair must be CRITICAL, dev-mode and "key not findable" WARN.
+
+
+def test_teamwork_external_unconfigured_is_critical():
+    """503 with no key = TeamWork has no credential at all: Prax can never post."""
+    smoke = _load_module()
+    ok, critical, detail = smoke._teamwork_external_status(503, None)
+    assert ok is False
+    assert critical is True
+    assert "503" in detail and "EXTERNAL_API_KEY" in detail
+
+
+def test_teamwork_external_pair_accepted_passes():
+    smoke = _load_module()
+    ok, critical, detail = smoke._teamwork_external_status(401, 200)
+    assert ok is True
+    assert critical is True
+    assert "accepted" in detail
+
+
+def test_teamwork_external_mismatch_is_critical():
+    """401 with Prax's key = the two .env values drifted apart."""
+    smoke = _load_module()
+    ok, critical, detail = smoke._teamwork_external_status(401, 401)
+    assert ok is False
+    assert critical is True
+    assert "EXTERNAL_API_KEY" in detail
+
+
+def test_teamwork_external_unfindable_key_warns_as_unverified():
+    """Credential required but this script found no TEAMWORK_API_KEY: it cannot
+    prove the link either way, so it must say so — WARN, never a silent pass."""
+    smoke = _load_module()
+    ok, critical, detail = smoke._teamwork_external_status(401, None)
+    assert ok is False
+    assert critical is False
+    assert "UNVERIFIED" in detail
+
+
+def test_teamwork_external_dev_mode_warns():
+    """200 with no key = ALLOW_UNAUTHENTICATED_AGENTS: connected, but flagged."""
+    smoke = _load_module()
+    ok, critical, detail = smoke._teamwork_external_status(200, None)
+    assert ok is False
+    assert critical is False
+    assert "ALLOW_UNAUTHENTICATED_AGENTS" in detail
+
+
+def test_teamwork_external_no_response_and_odd_codes_are_critical():
+    smoke = _load_module()
+    for unauth, keyed in ((None, None), (404, None), (500, None), (401, 500)):
+        ok, critical, _ = smoke._teamwork_external_status(unauth, keyed)
+        assert ok is False, (unauth, keyed)
+        assert critical is True, (unauth, keyed)
+
+
+def test_dotenv_value_matches_pydantic_precedence(tmp_path):
+    """Last assignment wins (the README's 'stale empty line later in the file
+    silently wins' gotcha must be reproduced, not papered over), quotes and an
+    `export ` prefix are stripped, comments are skipped, missing file = ''."""
+    smoke = _load_module()
+    env = tmp_path / ".env"
+    env.write_text(
+        "# comment\n"
+        "OTHER=1\n"
+        'TEAMWORK_API_KEY="first"\n'
+        "export TEAMWORK_API_KEY='second'  \n"
+        "TEAMWORK_API_KEY=third # trailing comment\n",
+        encoding="utf-8",
+    )
+    assert smoke._dotenv_value(str(env), "TEAMWORK_API_KEY") == "third"
+    assert smoke._dotenv_value(str(env), "OTHER") == "1"
+    assert smoke._dotenv_value(str(env), "MISSING") == ""
+    env.write_text('TEAMWORK_API_KEY="real"\nTEAMWORK_API_KEY=\n', encoding="utf-8")
+    assert smoke._dotenv_value(str(env), "TEAMWORK_API_KEY") == ""  # the stale empty line wins
+    assert smoke._dotenv_value(str(tmp_path / "nope"), "TEAMWORK_API_KEY") == ""

@@ -38,8 +38,6 @@ def create_app():
         except Exception:
             pass
 
-    ensure_conversation_db(database_name=app.config['DATABASE_NAME'])
-
     app.register_blueprint(main_routes)
     app.register_blueprint(conference_routes)
     app.register_blueprint(plugin_routes)
@@ -117,7 +115,6 @@ def create_app():
     from prax.agent.model_tiers import tier_summary
     logger.info("Model tiers:\n%s", tier_summary())
 
-    ensure_conversation_db(database_name=settings.database_name)
     init_identity_db()
     migrate_legacy_users()
 
@@ -131,8 +128,15 @@ def create_app():
             "This determines which user's workspace the sandbox mounts."
         )
 
-    # Ensure the identity service's workspace_dir matches PRAX_USER_ID
+    # Resolve (creating on first boot) the primary user and make its
+    # workspace_dir match PRAX_USER_ID — BEFORE any per-user service state is
+    # derived below.  The conversation DB used to be created first, under a
+    # directory no user owned yet; the first message then minted the real user
+    # under usr_<id8>, and the next boot's reconcile repointed it at the
+    # already-existing empty directory, orphaning session one.
     reconcile_workspace_dir()
+
+    ensure_conversation_db(database_name=settings.database_name)
 
     # In debug mode Werkzeug spawns a reloader process + a child process.
     # Both the parent and child would otherwise call init_scheduler() and

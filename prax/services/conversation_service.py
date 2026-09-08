@@ -19,13 +19,14 @@ new call sites into ``conversation_memory``.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 from collections.abc import Callable
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from prax.agent import ConversationAgent
-from prax.agent.user_context import current_user, current_user_id
+from prax.agent.user_context import current_turn_source, current_user, current_user_id
 from prax.conversation_memory import add_dict_to_list, retrieve_dict
 from prax.services.state_paths import ensure_conversation_db
 from prax.services.workspace_service import get_workspace_context
@@ -71,9 +72,28 @@ class ConversationService:
         self._database = database_name or settings.database_name
         self._uses_real_sqlite = retriever is retrieve_dict and saver is add_dict_to_list
 
+    @staticmethod
+    def scoped_conversation_key(scope: str, ident: str) -> int:
+        """A process-stable conversation key for a ``(scope, id)`` pair, e.g.
+        ``("space", "<slug>")`` — the first 15 hex digits of
+        ``sha256("<scope>:<id>")`` as an int, the same scheme the TeamWork
+        per-channel key uses.
+
+        The space key used to be ``abs(hash(f"space:{slug}"))``.  ``hash()`` of
+        a str is salted per interpreter (PYTHONHASHSEED), so every restart
+        derived a different key and orphaned every space's chat history.
+        """
+        digest = hashlib.sha256(f"{scope}:{ident}".encode()).hexdigest()
+        return int(digest[:15], 16)
+
     def resolve_conversation(self, user_id: str,
-                             conversation_key: int | None = None) -> tuple[str, int]:
+                             conversation_key: int | None = None, *,
+                             space_slug: str | None = None) -> tuple[str, int]:
         """Derive ``(database_name, db_key)`` for a user's conversation history.
+
+        ``space_slug`` selects a Library space's own conversation (see
+        :meth:`scoped_conversation_key`); an explicit ``conversation_key`` wins
+        over it.
 
         This derivation used to live inline in ``reply()``, and two blueprint
         endpoints re-implemented half of it by hand — so when ``_build_history``
@@ -82,6 +102,8 @@ class ConversationService:
         stats", found live 2026-08-30). One derivation, importable by every
         caller, so a signature change breaks loudly at the callsite.
         """
+        if conversation_key is None and space_slug:
+            conversation_key = self.scoped_conversation_key("space", space_slug)
         user_obj = None
         try:
             from prax.services.identity_service import get_user
@@ -106,7 +128,6 @@ class ConversationService:
                 try:
                     db_key = int(user_id.replace("-", "")[:15], 16)
                 except ValueError:
-                    import hashlib
                     db_key = int(
                         hashlib.sha256(user_id.encode()).hexdigest()[:15], 16)
         database_name = (
@@ -132,6 +153,7 @@ class ConversationService:
         conversation_key: int | None = None,
         trigger: str | None = None,
         source: str | None = None,
+        space_slug: str | None = None,
     ) -> str:
         """Process a user message and return the agent's response.
 
@@ -144,8 +166,36 @@ class ConversationService:
             trigger: The raw user message for display in execution graphs.
                 When ``None``, falls back to ``text``.
             source: Origin channel (discord | sms | voice | teamwork |
-                scheduler | task_runner) — recorded on the execution graph.
+                scheduler | task_runner) — recorded on the execution graph and
+                set on :data:`prax.agent.user_context.current_turn_source` for
+                the duration of the turn.  The graph runs on a worker thread
+                (fresh ``contextvars`` context), so the value reaches tools
+                only because it is part of ``UserContextSnapshot`` — captured
+                by the governed-tool wrapper on this thread and restored around
+                each tool call (and re-captured at each spoke's build site).
+            space_slug: Run this turn in a Library space's own conversation
+                (see :meth:`resolve_conversation`); ignored when
+                ``conversation_key`` is given.
         """
+        source_token = current_turn_source.set(source or "")
+        try:
+            return self._reply(
+                user_id, text, conversation_key=conversation_key, trigger=trigger,
+                source=source, space_slug=space_slug,
+            )
+        finally:
+            current_turn_source.reset(source_token)
+
+    def _reply(
+        self,
+        user_id: str,
+        text: str,
+        *,
+        conversation_key: int | None,
+        trigger: str | None,
+        source: str | None,
+        space_slug: str | None,
+    ) -> str:
         # Set user context so workspace tools know which user to operate on.
         current_user_id.set(user_id)
 
@@ -161,7 +211,8 @@ class ConversationService:
 
         # Derive the database key for conversation history (shared with the
         # TeamWork context endpoints — see resolve_conversation).
-        database_name, db_key = self.resolve_conversation(user_id, conversation_key)
+        database_name, db_key = self.resolve_conversation(
+            user_id, conversation_key, space_slug=space_slug)
 
         history = self._build_history(database_name, db_key)
         if not history:

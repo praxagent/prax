@@ -15,9 +15,12 @@ Determinism is the point: it keeps grading un-gameable and CPU/keyless (the
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol, runtime_checkable
+
+logger = logging.getLogger(__name__)
 
 
 @runtime_checkable
@@ -58,15 +61,23 @@ def run_benchmark(
 
     def _run_one(case_id: str) -> dict:
         case = by_id[case_id]
+        error: str | None = None
+        response = ""
         with collect_usage() as usage:
-            # Self-rate-limit: throttle + retry transient provider failures (connect
-            # timeouts, 429s, empty answers) so infra flakiness doesn't score as a
-            # wrong answer and deflate the number. See prax/eval/rate_limit.py.
-            response = call_with_rate_limit(
-                replay_fn, adapter.prompt(case), label=f"{adapter.name}:{case_id}")
+            # Self-rate-limit: throttle + retry TRANSPORT failures (connect
+            # timeouts, 429s) so infra flakiness doesn't score as a wrong answer.
+            # A returned answer is never retried (pass@1) — see rate_limit.py.
+            try:
+                response = call_with_rate_limit(
+                    replay_fn, adapter.prompt(case), label=f"{adapter.name}:{case_id}")
+            except Exception as exc:  # noqa: BLE001 — recorded; _summarize attributes it
+                # Caught HERE rather than left to run_batch so the tokens the
+                # failed attempt burned stay on the case (run_batch's own error
+                # row carries none). Same "error" key → same resume/retry semantics.
+                error = f"{type(exc).__name__}: {exc}"
         snap = usage.snapshot()
-        graded = adapter.score(case, response) or {}
-        return {
+        graded = (adapter.score(case, response) or {}) if error is None else {}
+        row = {
             "id": case_id,
             "passed": bool(graded.get("passed")),
             "score": float(graded.get("score", 0.0)),
@@ -75,27 +86,43 @@ def run_benchmark(
             "completion_tokens": int(snap.get("completion_tokens", 0)),
             "answer_preview": (response or "")[:300],
         }
+        if error is not None:
+            row["error"] = error
+        return row
 
     def _summarize(results: list[dict]) -> dict:
+        from prax.eval import is_infrastructure_error
         from prax.eval.pricing import estimate_cost
-        graded = [r for r in results if not r.get("error")]
-        errored = [r for r in results if r.get("error")]
-        n = len(graded)
-        passed = sum(1 for r in graded if r.get("passed"))
-        pt = sum(int(r.get("prompt_tokens", 0)) for r in graded)
-        ct = sum(int(r.get("completion_tokens", 0)) for r in graded)
+        # INVARIANT: pass_rate is MONOTONE IN FAILURES — a case that errors can
+        # never raise it, and its tokens stay on the cost axis. Same attribution
+        # rule as summarize_capability_results (prax/eval/capability.py): only
+        # an infra-classified error is excluded, and the exclusion is reported;
+        # every other error is a failure at its token cost. Before this, ANY
+        # error left the numerator, the denominator AND the token sum, so a run
+        # that crashed on its hardest cases outscored one that answered them
+        # wrong. Pinned by tests/test_eval_error_accounting_all_paths.py.
+        counted = [r for r in results if not is_infrastructure_error(r.get("error"))]
+        excluded = len(results) - len(counted)
+        n = len(counted)
+        errored = sum(1 for r in results if r.get("error"))
+        passed = sum(1 for r in counted if r.get("passed") and not r.get("error"))
+        scores = [0.0 if r.get("error") else float(r.get("score", 0.0) or 0.0) for r in counted]
+        pt = sum(int(r.get("prompt_tokens", 0) or 0) for r in counted)
+        ct = sum(int(r.get("completion_tokens", 0) or 0) for r in counted)
         from prax.eval.benchmarks.datasets import resolved_dataset, sample_seed
         return {
             "benchmark": adapter.name,
             "graded": n,
             "passed": passed,
-            # Cases that failed to run (auth/timeout/provider). Excluded from
-            # pass_rate — an infra failure is not a wrong answer. A high count
-            # means the number is untrustworthy (the scorecard refuses to record).
-            "errors": len(errored),
+            # Every case that failed to execute, whoever's fault — the run-health
+            # signal (the scorecard refuses to record a high error rate). The two
+            # attribution buckets below sum to it.
+            "errors": errored,
+            "excluded_infra": excluded,
+            "errored_as_failure": errored - excluded,
             "attempted": len(results),
             "pass_rate": round(passed / n, 3) if n else 0.0,
-            "avg_score": round(sum(r.get("score", 0.0) for r in graded) / n, 3) if n else 0.0,
+            "avg_score": round(sum(scores) / n, 3) if n else 0.0,
             "prompt_tokens": pt,
             "completion_tokens": ct,
             "total_tokens": pt + ct,
@@ -216,33 +243,26 @@ def _executor_failure(run) -> str | None:
     return None
 
 
-# A task/turn wall-clock timeout is NOT infra flakiness — it means the agent
-# genuinely couldn't finish the task in its time budget, which for a benchmark is a
-# real capability FAILURE (score 0), not an excludable error and not worth retrying
-# (a retry just times out again). Distinct from a network "connect timeout" (a real
-# transient blip), so we match the orchestrator/executor's own budget-timeout
-# phrasings specifically, never the bare word "timeout".
-_TASK_TIMEOUT_MARKERS = (
-    "turn timeout", "wall-clock", "maximum runtime", "maximum wall",
-    "task exceeded", "exceeded 120",
-)
-
-
-def _is_task_timeout(reason: str) -> bool:
-    low = (reason or "").lower()
-    return any(m in low for m in _TASK_TIMEOUT_MARKERS)
-
-
 def live_orchestrator_replay(*, tier: str = "low", model: str | None = None):
     """A ``replay_fn(prompt) -> str`` backed by the REAL Prax orchestrator (isolated
     workspace + telemetry), reusing the capability suite's executor. Needs API keys
     or a local model at run time — keyless CI never calls it. Pair with
     ``run_benchmark(adapter, live_orchestrator_replay(), ...)``.
 
-    Raises :class:`~prax.eval.rate_limit.ExecutorError` when the run failed (auth,
-    timeout, provider error) so the batch records it as an *error* — excluded from
-    the score — instead of grading the failure string as a wrong answer.
+    Failure attribution follows ``prax.eval.is_infrastructure_error`` — the one
+    rule every aggregator uses:
+
+    - an INFRA-classified failure (auth, provider outage, rate limit) raises
+      :class:`~prax.eval.rate_limit.ExecutorError` so the batch records an
+      *error* (retried if transient, then excluded and reported as
+      ``excluded_infra``) instead of grading the failure text as a wrong answer;
+    - any other failure (task-budget timeout, internal crash, an unrecognised
+      error) falls through as an EMPTY answer, which no grader matches, so the
+      case scores an honest 0 against the agent. It used to return the
+      failure text itself; that text can carry digits ("exceeded 120s") a
+      numeric grader would extract.
     """
+    from prax.eval import is_infrastructure_error
     from prax.eval.capability import orchestrator_executor
     from prax.eval.rate_limit import ExecutorError, classify_transient
     counter = {"n": 0}
@@ -254,15 +274,13 @@ def live_orchestrator_replay(*, tier: str = "low", model: str | None = None):
             fold_artifacts=False,  # benchmarks score the direct answer, not workspace files
         )
         reason = _executor_failure(run)
-        if reason is not None and not _is_task_timeout(reason):
-            # Auth/provider/internal failure → record as an error (excluded).
+        if reason is None:
+            return run.answer or ""
+        if is_infrastructure_error(reason):
             raise ExecutorError(reason, transient=classify_transient(reason))
-        # A task-budget timeout (or a clean run) falls through: return the answer so
-        # the timeout scores an honest 0 (the timeout/empty text won't match any
-        # grader) rather than being retried-then-excluded — a hard benchmark the
-        # cheap model can't finish in budget is a real miss, and the scorecard should
-        # show it, not hide it.
-        return run.answer or ""
+        logger.warning("benchmark case bench-%d failed (agent-attributable, scored 0): %s",
+                       counter["n"], reason[:200])
+        return ""
 
     return _replay
 
@@ -317,8 +335,8 @@ def run_benchmark_lift(name: str, *, tier: str = "low", model: str | None = None
                                      case_id=f"lift-{name}-{counter['n']}",
                                      fold_artifacts=False)  # score the direct answer
         bare = bare_executor(prompt, tier=tier, model_override=model)
-        # Detect swallowed executor failures (auth/timeout) so a broken run is
-        # excluded, not scored as a wrong answer that fakes a lift signal.
+        # Detect swallowed executor failures so the failure TEXT is never graded as
+        # an answer; _summarize attributes each (infra → excluded, else failure).
         full_err = _executor_failure(full)
         bare_err = bare.error or _executor_failure(bare)
         gf = adapter.score(case, full.answer or "") if not full_err else {}
@@ -331,16 +349,34 @@ def run_benchmark_lift(name: str, *, tier: str = "low", model: str | None = None
         }
 
     def _summarize(results: list[dict]) -> dict:
-        ok = [r for r in results if not r.get("full_error") and not r.get("bare_error")]
-        n = len(ok)
-        fr = round(sum(1 for r in ok if r["full_passed"]) / n, 3) if n else 0.0
-        br = round(sum(1 for r in ok if r["bare_passed"]) / n, 3) if n else 0.0
+        from prax.eval import is_infrastructure_error
+        # Paired comparison, same attribution rule as every other aggregator: a
+        # case leaves BOTH arms only when an arm hit an infra fault (reported as
+        # excluded_infra); an agent-attributable error on an arm is that arm's
+        # failure, at its token cost. Dropping every errored pair let a full-
+        # harness crash on a hard case vanish from the lift instead of costing it.
+        def _infra(r: dict) -> bool:
+            return any(is_infrastructure_error(r.get(k))
+                       for k in ("error", "full_error", "bare_error"))
+
+        counted = [r for r in results if not _infra(r)]
+        n = len(counted)
+        fp = sum(1 for r in counted
+                 if r.get("full_passed") and not r.get("full_error") and not r.get("error"))
+        bp = sum(1 for r in counted
+                 if r.get("bare_passed") and not r.get("bare_error") and not r.get("error"))
+        fr = round(fp / n, 3) if n else 0.0
+        br = round(bp / n, 3) if n else 0.0
         return {
-            "benchmark": name, "cases": n,
+            "benchmark": name, "cases": n, "attempted": len(results),
+            "excluded_infra": len(results) - n,
+            "errored_as_failure": sum(
+                1 for r in counted
+                if r.get("error") or r.get("full_error") or r.get("bare_error")),
             "full_pass_rate": fr, "bare_pass_rate": br,
             "harness_lift": round(fr - br, 3),
-            "avg_full_tokens": round(sum(r.get("full_tokens", 0) for r in ok) / n) if n else 0,
-            "avg_bare_tokens": round(sum(r.get("bare_tokens", 0) for r in ok) / n) if n else 0,
+            "avg_full_tokens": round(sum(int(r.get("full_tokens", 0) or 0) for r in counted) / n) if n else 0,
+            "avg_bare_tokens": round(sum(int(r.get("bare_tokens", 0) or 0) for r in counted) / n) if n else 0,
         }
 
     if out_dir is None:

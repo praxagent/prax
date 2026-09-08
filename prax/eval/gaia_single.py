@@ -362,52 +362,48 @@ class CostTracker:
 def _isolated_prax_scope(run_workspace: Path, task_id: str, user_prefix: str = "gaia-eval"):
     """Context manager that sets up an isolated Prax scope for one run.
 
-    - Monkey-patches ``settings.workspace_dir`` to the run-scoped
-      workspace so Prax's tools write there instead of the real
-      workspace.
+    - Points ``settings.workspace_dir`` (a process-global) at the run-scoped
+      workspace so Prax's tools write there instead of the real workspace —
+      the reason the live suites run at concurrency 1.
     - Sets ``current_user_id`` to a synthetic eval user.
-    - Filters out denylisted tools from the registered set for the
-      duration of the context.
+    - Sets the ``prax.agent.tool_registry.eval_tool_denylist`` ContextVar to
+      ``EVAL_MODE_TOOL_DENYLIST`` so every tool-list build site (hub registry,
+      spoke runner, sub-agents) drops those tools via ``apply_eval_denylist``.
+      This replaced a monkey-patch of ``tool_registry.get_registered_tools``
+      that the orchestrator never saw (it binds the name by from-import at
+      module load) and that no spoke consulted at all.
+
+    Both ContextVars live in THIS thread's context: enter the scope inside the
+    thread that runs the agent (the runners do). A thread the agent hand-spawns
+    without ``contextvars.copy_context()`` starts from the defaults, so a tool
+    list built there is NOT filtered — the denylist holds wherever the
+    ContextVar is visible, which is not a guarantee everywhere.
 
     Reused by both the GAIA runner and the capability suite (``user_prefix``
     distinguishes their synthetic users).
     """
-    from prax.agent import tool_registry
+    from prax.agent.tool_registry import eval_tool_denylist
     from prax.agent.user_context import current_user_id
     from prax.settings import settings
-
-    # Save originals
-    original_workspace_dir = settings.workspace_dir
-    original_get_registered = tool_registry.get_registered_tools
-    original_user_id = current_user_id.get(None)
 
     # Synthetic user — a UUID-like string so workspace_service treats
     # it as a regular user id (no + prefix etc.)
     eval_user_id = f"{user_prefix}-{task_id[:8]}"
+    run_workspace.mkdir(parents=True, exist_ok=True)
 
+    original_workspace_dir = settings.workspace_dir
+    settings.workspace_dir = str(run_workspace)
+    user_token = current_user_id.set(eval_user_id)
+    deny_token = eval_tool_denylist.set(frozenset(EVAL_MODE_TOOL_DENYLIST))
     try:
-        # Point settings at the run-scoped workspace
-        run_workspace.mkdir(parents=True, exist_ok=True)
-        settings.workspace_dir = str(run_workspace)
-        current_user_id.set(eval_user_id)
-
-        # Wrap tool_registry to filter the denylist
-        def _filtered_get_registered_tools():
-            tools = original_get_registered()
-            return [
-                t for t in tools
-                if getattr(t, "name", None) not in EVAL_MODE_TOOL_DENYLIST
-            ]
-
-        tool_registry.get_registered_tools = _filtered_get_registered_tools
-
         yield eval_user_id
     finally:
-        # Restore
         settings.workspace_dir = original_workspace_dir
-        tool_registry.get_registered_tools = original_get_registered
-        if original_user_id is not None:
-            current_user_id.set(original_user_id)
+        # Token resets restore the exact prior state (unset stays unset) — the
+        # old code re-set the previous user id only when there was one, and
+        # otherwise left the synthetic eval user bound after the scope.
+        eval_tool_denylist.reset(deny_token)
+        current_user_id.reset(user_token)
 
 
 # ---------------------------------------------------------------------------
@@ -494,10 +490,9 @@ def run_gaia_task(
     # _isolated_prax_scope restore never executes; without this main-thread
     # guard, settings.workspace_dir would stay pointed inside PRAX_EVAL_DIR and
     # trip assert_eval_isolation on EVERY subsequent task (one hang poisons the
-    # whole overnight suite).
-    from prax.agent import tool_registry as _tr
+    # whole overnight suite).  The scope's ContextVars need no such guard: they
+    # live in the abandoned worker's own context and never reach this thread.
     _orig_ws = settings.workspace_dir
-    _orig_get = _tr.get_registered_tools
 
     # collect_usage() instruments every LLM call (orchestrator, spokes, retries)
     # so we record REAL token counts — not a len()//4 guess.
@@ -512,7 +507,6 @@ def run_gaia_task(
             logger.exception("GAIA run crashed for task %s", task_id)
         finally:
             settings.workspace_dir = _orig_ws
-            _tr.get_registered_tools = _orig_get
 
     duration_s = round(time.monotonic() - start, 2)
 
@@ -675,6 +669,10 @@ def run_gaia_suite(
             "pass": bool(g.get("pass")),
             "match_type": g.get("match_type"),
             "crashed": bool(g.get("crashed")),
+            # The error run_gaia_task caught around the agent run (timeout /
+            # crash), kept under its own key: a top-level "error" is run_batch's
+            # (this function raised) and drives resume/retry semantics.
+            "run_error": g.get("error") or None,
             "total_tokens": c.get("total_tokens"),
             "llm_calls": c.get("llm_calls"),
             "duration_s": r.get("duration_s"),
@@ -682,14 +680,31 @@ def run_gaia_suite(
         }
 
     def _summarize(results: list[dict]) -> dict:
-        graded = [r for r in results if not r.get("error")]
-        passed = sum(1 for r in graded if r.get("pass"))
-        n = len(graded)
+        from prax.eval import is_infrastructure_error
+        # Same attribution rule as every other aggregator (see
+        # is_infrastructure_error): an infra fault — at the harness level
+        # (run_batch's "error") or inside the agent run ("run_error") — is
+        # excluded and reported; any other error is a failure at its token
+        # cost. Before this, a harness-level error left the pass rate and the
+        # token sum silently, and an infra crash inside the run was blamed on
+        # the agent.
+        def _reason(r: dict) -> str | None:
+            return r.get("error") or r.get("run_error") or None
+
+        counted = [r for r in results if not is_infrastructure_error(_reason(r))]
+        n = len(counted)
+        errored = sum(1 for r in results if _reason(r))
+        excluded = len(results) - n
+        passed = sum(1 for r in counted if r.get("pass") and not _reason(r))
         return {
             "graded": n,
             "passed": passed,
+            "attempted": len(results),
+            "errors": errored,
+            "excluded_infra": excluded,
+            "errored_as_failure": errored - excluded,
             "pass_rate": round(passed / n, 3) if n else 0.0,
-            "total_tokens": sum(int(r.get("total_tokens") or 0) for r in graded),
+            "total_tokens": sum(int(r.get("total_tokens") or 0) for r in counted),
         }
 
     return run_batch(

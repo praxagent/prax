@@ -46,25 +46,41 @@ isolation. Turning the proxy on needs no code change for the agent's model calls
 (`OPENAI_BASE_URL` already existed; `ANTHROPIC_BASE_URL` was added so
 `ChatAnthropic` can point at the proxy too).
 
-**Known gap (2026-09): only `build_llm()` reads `OPENAI_BASE_URL` /
-`ANTHROPIC_BASE_URL`.** The `prax/agent/llm_factory.py` path reads
-`settings.openai_base_url` / `settings.anthropic_base_url` (the embedder and the
-vision client have their own `EMBEDDING_BASE_URL` / `VISION_BASE_URL`); the direct `OpenAI(api_key=settings.openai_key)`
-clients elsewhere do not — `prax/plugins/capabilities.py` (TTS, Whisper),
-`prax/conversation_memory.py`, `prax/services/sms_service.py`,
-`prax/services/youtube_service.py`, `prax/services/library_service.py` (covers),
-`prax/readers/latex/latext_gpt_tools.py`, `prax/readers/latex/latex_functions.py`,
-`prax/readers/web/web2mp3.py`, `prax/plugins/tools/image/plugin.py`. The OpenAI SDK
-would pick up `OPENAI_BASE_URL` from the process environment, but Pydantic loads
-`.env` without exporting it, and the startup allow-list that does export proxy
-variables (`_PROXY_ENV_ALLOWLIST` in `prax/settings.py`) covers only
-`HTTP(S)_PROXY`/`NO_PROXY`/CA-bundle names. So under a base-URL-only reverse-proxy
-path those features send the proxy token to `api.openai.com` and fail. The forward
-(MITM) mode does not depend on a base URL, so it should cover them (the SDK's
-httpx transport honours `HTTPS_PROXY`), but this has not been checked per client
-— see the [ledger](../VERIFICATION_LEDGER.md) row; the 2026-07-22 forward-proxy
-verification recorded OpenAI returning 200 through it without exercising these
-clients individually.
+**Known gap (2026-09) — closed 2026-09 for the harness-owned clients.** Only
+`build_llm()` used to read `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL`; the direct
+`OpenAI(api_key=settings.openai_key)` clients elsewhere did not, so under a
+base-URL-only reverse-proxy path they sent the proxy token to `api.openai.com`
+and failed (live symptom, 2026-09-07: an hourly schedule dying with
+`invalid model ID` from the legacy history summariser in
+`prax/conversation_memory.py`). The OpenAI SDK would pick up `OPENAI_BASE_URL`
+from the process environment, but Pydantic loads `.env` without exporting it,
+and the startup allow-list that does export proxy variables
+(`_PROXY_ENV_ALLOWLIST` in `prax/settings.py`) covers only
+`HTTP(S)_PROXY`/`NO_PROXY`/CA-bundle names — so the fix is in code, not
+config. `prax/agent/llm_factory.py` now has `openai_client()`, the **only**
+sanctioned constructor of a raw `openai.OpenAI` client, with exactly
+`build_llm`'s OpenAI key/base-URL semantics (`OPENAI_KEY` = the proxy token
+when keyless; `OPENAI_BASE_URL` → the proxy; callers cannot override
+`api_key`/`base_url`). `tests/test_keyless_clients.py` AST-scans `prax/` and
+fails CI on any other construction. Migrated: `prax/conversation_memory.py`
+(summaries via `build_llm(tier="low")`, so tier/provider routing applies as
+well), `prax/services/youtube_service.py` (Whisper via `openai_client()`),
+`prax/readers/web/web2mp3.py` (summary via `build_llm`, TTS via
+`openai_client()`), `prax/readers/latex/latex_functions.py` (via `build_llm`),
+`prax/services/sms_service.py` (its client was never read; removed). **Still
+direct** — grandfathered in that test (new sites fail, stale entries warn, so the
+list only shrinks) and still failing under
+the base-URL-only path until routed through `openai_client()`:
+`prax/plugins/capabilities.py` (TTS, Whisper), `prax/services/library_service.py`
+(covers), `prax/readers/latex/latext_gpt_tools.py`, and
+`prax/plugins/tools/image/plugin.py` (plugins may not import `prax.agent`, so it
+needs a capability). The embedder and the vision client keep their own
+`EMBEDDING_BASE_URL` / `VISION_BASE_URL` deliberately. The forward (MITM) mode
+does not depend on a base URL, so it should cover the remaining clients (the
+SDK's httpx transport honours `HTTPS_PROXY`), but this has not been checked per
+client — see the [ledger](../VERIFICATION_LEDGER.md) row; the 2026-07-22
+forward-proxy verification recorded OpenAI returning 200 through it without
+exercising these clients individually.
 
 ## Why a separate service and repo
 

@@ -51,7 +51,12 @@ def runner_env(tmp_path, monkeypatch):
         orch_mod.ConversationAgent = fake_agent_class
         conv_mod = types.ModuleType("prax.services.conversation_service")
         conv_mod.ConversationService = fake_svc_class
-        sys.modules["prax.agent.orchestrator"] = orch_mod
+        # setitem, not a bare assignment: a bare assignment leaves the stub in
+        # sys.modules for the REST OF THE PROCESS, so every later test that
+        # imports the real ConversationAgent silently gets a MagicMock (it
+        # surfaces as "TypeError: issubclass() arg 1 must be a class" deep in
+        # mock's __new__). monkeypatch restores the real module at teardown.
+        monkeypatch.setitem(sys.modules, "prax.agent.orchestrator", orch_mod)
         # conversation_service is already imported elsewhere; use setattr
         # only for ConversationService so other code keeps working.
         import prax.services.conversation_service as real_conv

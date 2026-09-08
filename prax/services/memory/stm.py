@@ -45,9 +45,13 @@ def _load(user_id: str) -> list[dict]:
 
 
 def _save(user_id: str, entries: list[dict]) -> None:
-    path = _stm_path(user_id)
-    with open(path, "w") as f:
-        json.dump(entries, f, indent=2, ensure_ascii=False)
+    # Serialise first, then same-directory temp file + os.replace.  The old
+    # `open(path, "w") + json.dump` truncated stm.json before streaming into
+    # it, so a crash (or a serialisation error) mid-write left a torn file
+    # that `_load` "resets" to [] — the whole scratchpad, gone silently.
+    from prax.services.workspace_service import atomic_write
+
+    atomic_write(_stm_path(user_id), json.dumps(entries, indent=2, ensure_ascii=False))
 
 
 def stm_write(

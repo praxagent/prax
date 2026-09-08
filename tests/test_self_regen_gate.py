@@ -126,5 +126,6 @@ class TestGateWiringIsReal:
         out = self_regen._gate_on_private_holdout("p", tier="low")
         assert out["accept"] is True
         assert called["accept_change"] is True
-        # baseline and candidate — the comparison must actually be run twice.
-        assert called["suites"] == 2
+        # baseline and candidate, each REPLICATED (default 2 per arm) so the
+        # accept threshold is a measured spread — see test_self_regen_gate_margin.
+        assert called["suites"] == 4

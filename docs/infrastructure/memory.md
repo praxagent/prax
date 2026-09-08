@@ -14,7 +14,7 @@ Prax has a layered, research-grounded memory system inspired by human cognition:
   - [Hybrid Retrieval (RRF Fusion)](#hybrid-retrieval-rrf-fusion)
 - [Knowledge Graph Namespaces](#knowledge-graph-namespaces)
 - [Consolidation Pipeline](#consolidation-pipeline)
-- [Memory Decay (Ebbinghaus Forgetting Curve)](#memory-decay-ebbinghaus-forgetting-curve)
+- [Memory Decay (Time-Based Forgetting Curve)](#memory-decay-time-based-forgetting-curve)
 - [Embedding Providers](#embedding-providers)
 - [Agent Tools](#agent-tools)
 - [AST Code Analysis](#ast-code-analysis)
@@ -62,12 +62,12 @@ Memory Spoke Agent
     └── memory_consolidate / stats          (Maintenance)
            │
            ▼
-    Consolidation Pipeline (scheduled + manual)
-    ├── LLM extraction: entities, relations, key facts
+    Consolidation Pipeline (every 5 turns + manual)
+    ├── LLM extraction: entities, relations, key facts (4 000-char batches)
     ├── Importance scoring (0-1, "poignancy" rating)
-    ├── Graph upsert (MERGE semantics, weight accumulation)
+    ├── Graph upsert (current-edge match, weight accumulation)
     ├── Vector upsert (dense + sparse embeddings)
-    ├── Ebbinghaus decay (exponential, configurable half-life)
+    ├── Time-based decay/prune (≤ once per 24 h, configurable half-life)
     └── Hierarchical summaries (daily → global)
 ```
 
@@ -303,20 +303,20 @@ Qdrant stores memory chunks with both dense and sparse embeddings, enabling hybr
 | `user_id` | Keyword (indexed) | Mandatory filter — all queries scoped to user |
 | `content` | Text | Original memory text |
 | `source` | Keyword | "conversation", "note", "consolidation" |
-| `importance` | Float | 0-1, decays over time, boosted on access |
+| `importance` | Float | 0-1 as assessed when stored. **Not rewritten by decay**: the effective value `importance × exp(-λ × days since last_accessed)` is computed when the prune pass runs (and by retrieval's own recency term) |
 | `created_at` | Datetime | When the memory was stored |
-| `last_accessed` | Datetime | Last retrieval (for decay calculation) |
+| `last_accessed` | Datetime | Last retrieval — the decay clock starts here and is reset by `reinforce_memory` |
 | `access_count` | Integer | Retrieval count (reinforcement metric) |
 | `tags` | Keyword[] | User-defined tags |
 | `entity_ids` | Keyword[] | Cross-references to graph entities |
 | `summary_level` | Keyword | "raw", "daily", "weekly", "global" |
 
 **Operations:**
-- `upsert_memory` — store a chunk with dense + sparse vectors
+- `upsert_memory` — store a chunk with dense + sparse vectors. **Raises `MemoryWriteError`** when the write does not land (since 2026-09; it used to return an id regardless, so `memory_remember`, the TeamWork memory API and consolidation all reported success for writes that never happened)
 - `search_dense` — cosine similarity search on dense vectors
 - `search_sparse` — keyword search on sparse vectors
 - `reinforce_memory` — bump access count and timestamp on retrieval
-- `decay_memories` — apply Ebbinghaus decay, prune below threshold
+- `decay_memories` — prune memories whose time-decayed importance is below threshold (idempotent: nothing is written back)
 
 ### Knowledge Graph (Neo4j)
 
@@ -438,9 +438,7 @@ where `k = 60` (standard constant from Cormack et al., 2009) and `weight_i` come
 
 **Step 6: Reinforcement**
 - Returned memories get their `access_count` and `last_accessed` updated
-  (`vector_store.reinforce_memory`); `interaction_epoch` is only written when a
-  caller passes it, and the retrieval path does not (`retrieval.py` calls
-  `reinforce_memory(r.memory_id)`)
+  (`vector_store.reinforce_memory`), which restarts that memory's decay clock
 - This implements the "strengthen on recall" pattern (MemoryBank, Zhong et al., 2023)
 
 #### Optional precision passes (opt-in)
@@ -587,8 +585,26 @@ Converts episodic conversation traces into durable memories.
 ### Pipeline steps
 
 ```
- 1. Read unconsolidated trace entries from {workspace}/trace.log
-    └── Track position in {workspace}/memory/consolidation_state.json
+ 1. Read unconsolidated trace entries from {workspace}/trace.log, in batches
+    ├── Batch = non-blank lines up to EXTRACTION_CHAR_BUDGET (4 000 chars) —
+    │   the same cap the extractor enforces, so nothing batched is truncated
+    ├── Up to MAX_BATCHES_PER_RUN (8) batches per run — ≤ 32 KB of trace and
+    │   at most 8 extraction calls per consolidation.  What is left is the
+    │   BACKLOG: `pending_lines` / `pending_bytes` on the result and
+    │   `trace_pending_lines` / `trace_pending_bytes` in the state file, logged
+    │   whenever the cap was hit.  Later runs pick it up — the per-run budget is
+    │   a bound on cost, not a guarantee that consolidation keeps up with a
+    │   busy trace (a turn can write several lines of up to 5 000 chars)
+    ├── Pointer in {workspace}/memory/consolidation_state.json advances to one
+    │   past the last RAW line handed to the extractor (blank separators
+    │   included), saved after EVERY batch
+    └── Rotation/replacement of trace.log (512 KB rotation, or a changed first
+        line) resets the pointer to 0.  **Everything past the pointer in the old
+        file is dropped from consolidation** — the archive under
+        archive/trace_logs/ is not read — so the reset logs at WARNING how many
+        content lines were pending at the last run (a floor: lines appended
+        since are lost uncounted).  `rotation_resets`, `last_rotation_reset_at`
+        and `last_rotation_dropped_lines` are recorded in the state file
 
  2. LLM extraction (tier: low, temp: 0.2)
     ├── Entities: {name, type, display_name, importance, confidence}
@@ -603,7 +619,8 @@ Converts episodic conversation traces into durable memories.
 
  4. Entity graph upsert
     ├── MERGE entities (increment mention_count on match)
-    └── MERGE relations (accumulate weight, bi-temporal edges)
+    └── Relations: strengthen the CURRENT edge (valid_until IS NULL) if one
+        exists, else CREATE a new open edge — a superseded edge is never reopened
         └── If supersedes: set valid_until on old edge
 
  5. Temporal + causal graph upsert
@@ -613,23 +630,44 @@ Converts episodic conversation traces into durable memories.
  6. Vector upsert (high-confidence facts only)
     ├── Chunk facts into memory units
     ├── Generate dense + sparse embeddings
-    └── Store with entity cross-references + interaction_epoch
+    └── Store with entity cross-references; a failed write raises and is
+        counted in ConsolidationResult.memories_failed, never as "created"
 
- 7. Dual decay pass
-    ├── Time decay: importance *= exp(-λ_t × days_since_access)
-    ├── Interaction decay: importance *= exp(-λ_i × interactions_since_access)
-    ├── Effective decay = min(time_factor, interaction_factor)
-    ├── Graph: importance/weight *= exp(-λ × days_since_access)
-    └── Prune memories below threshold (0.02)
+ 7. Time-based decay/prune pass — only if `last_decay_run` is ≥ 24 h old
+    ├── Vector: prune where importance × exp(-λ_t × days_since_last_access) < 0.02
+    ├── Graph:  prune entities (no relations) / relations where
+    │           stored × exp(-λ × total_days_since_last_seen) < 0.05 / 0.025
+    └── Nothing is written back, so the pass is idempotent for a given moment
 
- 8. Daily summary (if new day boundary)
+ 8. Daily summary (if new day boundary) — sees the run's FIRST ≤ 4 000-char batch
     ├── Summarise today's memories (3-5 sentences)
     └── Store summary as a "daily" level memory
 
  9. Low-confidence items → STM pending review
 
-10. Update consolidation state
+10. Update consolidation state (pointer, trace fingerprint, last_decay_run
+    when the pass ran) — written atomically (temp file + rename)
 ```
+
+`ConsolidationResult` reports `batches` (extractor batches drained this run),
+`bytes_seen` (UTF-8 bytes handed to the extractor this run), `bytes_skipped`
+(content the pointer passed without the extractor seeing it — only the tail of
+a single trace line longer than the budget; such a line is sent truncated
+rather than dropped), and `pending_lines` / `pending_bytes` (the backlog still
+waiting after this run).
+
+> **History note (2026-09):** the pointer counted raw lines on the way in and
+> non-blank lines on the way out, so every blank separator in a batch caused
+> re-consolidation of the batch tail (13 of 50 lines on a real trace); after
+> the first 512 KB rotation it pointed past the end of the new file and
+> consolidation stopped entirely. Separately, the batch was "50 lines" (up to
+> ~250 KB) while the extractor read `text[:4000]`. The first fix for that
+> processed exactly one 4 000-char batch per run, which could not keep up with
+> an active trace either — the pointer fell further behind every cycle and
+> each rotation silently discarded the backlog. Runs now drain up to
+> `MAX_BATCHES_PER_RUN` batches, report the remaining backlog, and log what a
+> rotation abandons. Coverage of a busy trace is still bounded by that budget;
+> it is a visible lag now, not a silent one.
 
 ### Importance scoring
 
@@ -643,68 +681,64 @@ The LLM rates each extracted fact on a 0-1 scale:
 
 ---
 
-## Memory Decay (Dual: Time + Interaction)
+## Memory Decay (Time-Based Forgetting Curve)
 
-Memory importance decays via **two independent signals**, taking the stronger one. This is inspired by the Ebbinghaus forgetting curve (MemoryBank, Zhong et al. 2023) extended with interaction-based decay (FOREVER, arXiv:2601.03938).
+Memory decay is **time-based only** (as of 2026-09 this is the only decay pass;
+an interaction-count signal existed in code but never had a caller and was
+removed rather than armed). It follows the Ebbinghaus forgetting curve as
+operationalised by MemoryBank (Zhong et al. 2023): retention falls
+exponentially with time since the memory was last recalled, and a recall
+restarts the clock.
 
-### Time-based decay (Ebbinghaus)
+### What is computed
 
 ```
-time_factor = exp(-λ_t × days_since_last_access)
+effective_importance = stored_importance × exp(-λ_t × days_since_last_access)
 where λ_t = ln(2) / MEMORY_DECAY_HALFLIFE_DAYS
 ```
 
-What a **single** pass computes, with the default half-life of 7 days:
-- After 7 days without access: importance halves (0.8 → 0.4)
-- After 14 days: quarters (0.8 → 0.2)
-- After 21 days: eighths (0.8 → 0.1)
+With the default half-life of 7 days a memory stored at 0.8 has effective
+importance 0.4 after 7 unrecalled days, 0.2 after 14, 0.1 after 21. Below the
+prune threshold (0.02) it is deleted — for a 0.5 memory that is ~33 days
+without a recall.
 
-**Known gap (2026-09): repeated passes compound, so the curve above is not what
-the store experiences.** `vector_store.decay_memories` multiplies the **stored**
-importance by `exp(-λ_t × days_since_last_access)` and writes the result back
-(`set_payload`), but nothing advances a "last decayed" timestamp — `days_elapsed`
-is always measured from `last_accessed`. The next pass therefore multiplies the
-already-decayed value by the full factor again, and the exponent accumulates
-(sum of the ages at each pass, not the age). The pass runs unconditionally inside
-every consolidation (`consolidation.py`), i.e. every 5 turns per user
-(`memory_service._CONSOLIDATE_EVERY_N_TURNS`), not once a day; the
-`last_decay_run` value written to consolidation state is never read. Active users
-prune their memories fastest. `graph_store.decay_graph` has the same shape
-(`SET e.importance = e.importance * exp(-$lambda * days_elapsed)`). Only
-memories that surface in the top-k of a recall (and so get `last_accessed`
-reset) escape it.
+### What is (and is not) written
 
-### Interaction-based decay
+The prune pass (`vector_store.decay_memories`) **evaluates** the formula and
+**deletes** below-threshold memories. It never writes the decayed value back
+to the stored `importance`. That makes the pass idempotent: running it twice
+for the same moment is one pass, and its outcome depends only on how long a
+memory has gone unrecalled — not on how often consolidation happened to run.
 
-```
-interaction_factor = exp(-λ_i × interactions_since_last_access)
-where λ_i = ln(2) / HALFLIFE_INTERACTIONS  (default: 100 interactions)
-```
+The same holds for the graph (`graph_store.decay_graph`): entities with no
+relations and relations are pruned where `stored × exp(-λ × total days since
+last_seen)` falls below 0.05 / 0.025, evaluated in the prune predicate with
+epoch-seconds arithmetic (total days, not the days *component* of a
+month/day/second duration). Graph half-life is 2× the vector one (14 days
+default) because entity relationships are more stable than episodic memories.
 
-A user who chats daily and one who chats weekly should have different effective decay rates. Interaction-based decay measures "how much has happened since this memory was last relevant?" rather than just clock time.
+### Cadence
 
-**Known gap (2026-09): interaction decay is inert.** The per-user epoch counter is
-advanced by `vector_store.increment_interaction_epoch`, reached only through
-`MemoryService.track_interaction` — which has no production callers (tests only,
-as of 2026-09; the orchestrator never calls it). The epoch therefore stays at 0,
-`interaction_gap` is 0 for every memory, and `interaction_factor` is 1.0, so
-`min(time_factor, interaction_factor)` is always the time factor.
+Consolidation runs every 5 turns per user, but the decay pass inside it is
+gated on `last_decay_run` in `consolidation_state.json` being at least 24 h
+old (`consolidation.DECAY_MIN_INTERVAL`). The mark is advanced only when the
+pass actually ran.
 
-### Effective decay
+### Reinforcement
 
-```
-effective_importance = importance × min(time_factor, interaction_factor)
-```
+Accessing a memory resets its `last_accessed` timestamp and bumps
+`access_count` (`reinforce_memory`, called by retrieval for the returned
+top-k). Because the pass does not write decayed values back, a recall
+restores the memory to its full stored importance — frequently recalled
+memories persist, unused ones fade.
 
-The stronger decay signal wins. This handles both:
-- **"Gone for a week"** — time-based decay kicks in even with zero interactions
-- **"100 conversations but never mentioned X"** — interaction-based decay catches memories that are technically recent but irrelevant
-
-Below 0.02: memory is pruned.
-
-**Reinforcement:** Accessing a memory resets its `last_accessed` timestamp and bumps `access_count` (`reinforce_memory`). Its `interaction_epoch` is updated only when the caller passes the current epoch, which the retrieval path does not do — so in practice only the time clock restarts. Frequently recalled memories persist; unused ones fade (subject to the compounding gap above).
-
-**Graph decay** uses a 2× longer half-life (14 days default) since entity relationships are more stable than episodic memories.
+> **History note (2026-09):** before this, the pass multiplied the *stored*
+> importance by the full factor and wrote it back on every consolidation
+> (every 5 turns), while still measuring from `last_accessed`, so the exponent
+> accumulated and a "7-day half-life" pruned an active user's memories in
+> 4-8 days; the graph additionally used `duration.between(...).days`, the
+> days *component*, so a 45-day gap counted as 15. `last_decay_run` was
+> written and never read.
 
 ---
 
@@ -832,7 +866,7 @@ The memory spoke provides 10 tools via `delegate_memory`:
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama endpoint (when provider=ollama) |
 | `MEMORY_CONSOLIDATION_INTERVAL` | `3600` | **Unused** — defined in `prax/settings.py` but no code reads it (as of 2026-09). Consolidation cadence is the per-turn trigger, once every 5 turns per user |
 | `MEMORY_STM_MAX_ENTRIES` | `50` | Max STM entries before LLM compaction |
-| `MEMORY_DECAY_HALFLIFE_DAYS` | `7.0` | Ebbinghaus decay half-life in days |
+| `MEMORY_DECAY_HALFLIFE_DAYS` | `7.0` | Ebbinghaus decay half-life in days (vector store; the graph uses 2×). The prune pass runs at most once per 24 h per user |
 
 LLM routing for memory components is configured in `prax/plugins/configs/llm_routing.yaml`:
 
@@ -905,8 +939,17 @@ End-to-end integration tests exercise the full memory stack with real Qdrant, Ne
 | `TestGraphStore` | 4 | Entity lifecycle, bi-temporal edges, temporal events, causal links |
 | `TestMemoryServiceIntegration` | 1 | Full remember→recall through MemoryService facade |
 | `TestMemoryContextInjection` | 3 | Empty context without memory, enriched context with memory, side-by-side comparison |
-| `TestInteractionDecay` | 2 | Epoch counter increment via Qdrant |
 | `TestFullPipeline` | 1 | Realistic multi-turn session: STM + LTM + graph + memory context |
+
+(A `TestInteractionDecay` class was removed in 2026-09 along with the
+interaction-epoch code it exercised.)
+
+Keyless unit coverage of the 2026-09 pipeline fixes: `tests/test_consolidation_pointer.py`,
+`tests/test_extractor_batching.py`, `tests/test_decay_idempotence.py`,
+`tests/test_upsert_failure_surfaces.py`, `tests/test_graph_relation_validity.py`
+(plus an opt-in live Neo4j check via `PRAX_LIVE_NEO4J=1`),
+`tests/test_failure_journal_qdrant.py`, and the atomic-write tests in
+`tests/test_memory_advanced.py`.
 
 ### Sample Output: With vs Without Memory
 
@@ -955,8 +998,10 @@ The memory system follows Prax's pattern of graceful degradation:
 | Condition | Behaviour |
 |-----------|-----------|
 | `MEMORY_ENABLED=false` | STM works normally. LTM tools return "Memory system not available." |
-| Qdrant unreachable | Vector operations log warnings and return empty results |
+| Qdrant unreachable | Vector **reads** log warnings and return empty results. Vector **writes** raise `MemoryWriteError` (since 2026-09), so `MemoryService.remember` returns `""`, the `memory_remember` tool says "Failed to store memory.", the TeamWork API answers 500, and consolidation counts `memories_failed` — never a memory id for a write that did not happen |
 | Neo4j unreachable | Graph operations log warnings and return empty results |
+| Failure journal: embedding or Qdrant fails | Local JSONL is still written (source of truth); the Qdrant leg logs a WARNING and is skipped |
+| STM / consolidation state write interrupted | The previous `stm.json` / `consolidation_state.json` stays intact (same-directory temp file + `os.replace`); no torn file, no silent reset |
 | Embedding API fails | Falls back to local fastembed; if that fails too, `embed_texts` raises `EmbeddingUnavailableError` and the write fails loudly — zero vectors are never fabricated (changed 2026-08) |
 | LLM consolidation fails | Logs warning, skips consolidation run |
 | Memory profile not started | Prax starts normally, memory context injection returns empty |

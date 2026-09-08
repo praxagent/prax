@@ -7,10 +7,11 @@ messages on the configured cron cadence, always respecting the user's timezone.
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 import threading
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -115,17 +116,51 @@ def _validate_timezone(tz_name: str) -> ZoneInfo:
 # Message delivery (SMS or Discord)
 # ---------------------------------------------------------------------------
 
+# A legacy (pre-identity-service) user id is a phone number (``+1555…`` /
+# ``1555…``) or ``D<discord_id>`` — and nothing else.  The old classifier
+# looked only at the FIRST character, so a UUID beginning with a digit was
+# "a phone" and one beginning with ``d`` was "Discord"; a UUID user with only
+# a TeamWork identity could never be routed to TeamWork at all.
+_LEGACY_ID_RE = re.compile(r"^(\+?\d+|D\d+)$")
+
+#: Origin channel (``ConversationService.reply(source=…)``) → delivery channel.
+#: Voice calls are answered by SMS; scheduler/task-runner turns have no user
+#: present and map to nothing (the id-based inference decides).
+_SOURCE_TO_CHANNEL = {
+    "sms": "sms",
+    "voice": "sms",
+    "discord": "discord",
+    "teamwork": "teamwork",
+}
+
+
+def _is_legacy_id(user_id: str) -> bool:
+    return bool(_LEGACY_ID_RE.match(user_id or ""))
+
+
+def _channel_for_source(source: str | None) -> str | None:
+    """The delivery channel implied by the channel a turn arrived on, or None."""
+    return _SOURCE_TO_CHANNEL.get((source or "").strip().lower())
+
+
 def _infer_channel(user_id: str) -> str:
-    """Infer the delivery channel from the user_id format."""
-    if user_id.startswith("D"):
-        return "discord"
-    if user_id.startswith("+") or user_id[0:1].isdigit():
-        return "sms"
-    # UUID — check linked identities
+    """Infer a delivery channel from the user id when nothing was recorded.
+
+    Only a fully numeric id or ``D<digits>`` is classified by shape.  Every
+    other id is looked up: Discord if linked, else SMS if a phone is linked,
+    else TeamWork if that is the identity — so a TeamWork-only user's reminder
+    no longer defaults to SMS with no phone number to send it to.
+    """
+    if _is_legacy_id(user_id):
+        return "discord" if user_id.startswith("D") else "sms"
     from prax.services.identity_service import get_identities
     providers = {i["provider"] for i in get_identities(user_id)}
     if "discord" in providers:
         return "discord"
+    if "sms" in providers:
+        return "sms"
+    if "teamwork" in providers:
+        return "teamwork"
     return "sms"
 
 
@@ -145,8 +180,7 @@ def _resolve_cross_channel(user_id: str) -> tuple[str | None, str | None]:
     # Twilio as "+90c2b48f-…" (error 20404) while Discord reported "no Discord
     # ID" — with the identity rows sitting right there in the DB
     # (found live 2026-08-31, on the fire the catch-up had just rescued).
-    _is_legacy = user_id.startswith(("D", "+")) or user_id.lstrip("+").isdigit()
-    if not _is_legacy:
+    if not _is_legacy_id(user_id):
         from prax.services.identity_service import get_identities
         for identity in get_identities(user_id):
             if identity["provider"] == "sms":
@@ -177,45 +211,66 @@ def _resolve_cross_channel(user_id: str) -> tuple[str | None, str | None]:
     return phone, discord_id
 
 
-def _deliver_message(user_id: str, message: str, channel: str | None = None) -> None:
-    """Route a message to SMS, Discord, or both.
+def _deliver_message(user_id: str, message: str, channel: str | None = None) -> bool:
+    """Route a message to SMS, Discord, TeamWork, or all of them.
+
+    Returns True if at least one send was handed to a transport without
+    raising, False if nothing was sent — every channel that was selected but
+    had no address is logged at WARNING, whatever the channel setting (a
+    reminder that silently went nowhere is the failure this guards against).
+
+    TeamWork delivery is fire-and-forget (``post_to_channel`` swallows its own
+    errors), so it counts as sent once TeamWork is configured and the hand-off
+    did not raise — that is the strongest claim this function can make.
 
     Args:
-        user_id: The user identifier (phone number or Discord ID).
+        user_id: The user identifier (canonical UUID, phone number or ``D<id>``).
         message: The message to send.
-        channel: Delivery channel — "sms", "discord", or "all".
-            If None, infers from user_id prefix.
+        channel: Delivery channel — "sms", "discord", "teamwork" or "all".
+            If None, inferred from the user's identities (see _infer_channel).
     """
     channel = channel or _infer_channel(user_id)
 
     phone, discord_id = _resolve_cross_channel(user_id)
+    sent = False
 
     if channel in ("discord", "all"):
         if discord_id:
             try:
                 from prax.services.discord_service import send_message
                 send_message(discord_id, message)
+                sent = True
             except Exception:
                 logger.exception("Failed to deliver via Discord to %s", discord_id)
-        elif channel == "all":
+        else:
             logger.warning("Cannot deliver via Discord — no Discord ID for user %s", user_id)
 
     if channel in ("sms", "all"):
         if phone:
             try:
                 send_sms(message, phone)
+                sent = True
             except Exception:
                 logger.exception("Failed to deliver via SMS to %s", phone)
-        elif channel == "all":
+        else:
             logger.warning("Cannot deliver via SMS — no phone number for user %s", user_id)
 
     if channel in ("teamwork", "all"):
-        try:
-            from prax.services.teamwork_hooks import post_to_channel
-            from prax.settings import settings
-            post_to_channel("general", message, agent_name=settings.agent_name)
-        except Exception:
-            logger.exception("Failed to deliver via TeamWork")
+        if getattr(settings, "teamwork_active", False):
+            try:
+                from prax.services.teamwork_hooks import post_to_channel
+                post_to_channel("general", message, agent_name=settings.agent_name)
+                sent = True
+            except Exception:
+                logger.exception("Failed to deliver via TeamWork")
+        else:
+            logger.warning("Cannot deliver via TeamWork — TeamWork is not configured "
+                           "(user %s)", user_id)
+
+    if channel not in ("discord", "sms", "teamwork", "all"):
+        logger.warning("Unknown delivery channel %r for user %s — nothing sent", channel, user_id)
+
+    return sent
 
 
 # ---------------------------------------------------------------------------
@@ -264,7 +319,9 @@ def _on_fire(user_id: str, schedule_id: str, prompt: str, channel: str | None = 
             f"{prompt}",
             source="scheduler",
         )
-        _deliver_message(user_id, response, channel=channel)
+        if not _deliver_message(user_id, response, channel=channel):
+            logger.error("Schedule %s (user %s) generated a response but it was "
+                         "delivered nowhere (channel=%s)", schedule_id, user_id, channel)
 
         # Persist last_run (no git commit — this is housekeeping only).
         with _lock:
@@ -292,13 +349,32 @@ def _on_reminder_fire(
     """
     logger.info("Reminder fired: user=%s id=%s channel=%s", user_id, reminder_id, channel)
     try:
-        _deliver_message(user_id, f"\u23f0 Reminder: {prompt}", channel=channel)
+        delivered = _deliver_message(user_id, f"\u23f0 Reminder: {prompt}", channel=channel)
 
-        # Auto-delete the reminder from YAML.
         with _lock:
             data = _read_schedules(user_id)
-            data["reminders"] = [r for r in data["reminders"] if r["id"] != reminder_id]
-            _write_schedules(user_id, data)
+            if delivered:
+                # Delivered — the reminder has done its job.
+                data["reminders"] = [r for r in data["reminders"] if r["id"] != reminder_id]
+                _write_schedules(user_id, data)
+            else:
+                # Nothing was sent.  The reminder used to be deleted here
+                # regardless, so a TeamWork user with no phone lost the
+                # reminder AND every trace that it had ever existed.  Keep it,
+                # mark it, and say so: it stays visible in reminder_list and
+                # the YAML until the user or the agent deals with it.
+                for r in data["reminders"]:
+                    if r["id"] == reminder_id:
+                        r["delivery_failed_at"] = datetime.now(UTC).isoformat()
+                        r["delivery_error"] = (
+                            f"no send on channel {channel or 'auto'} — see the log")
+                        break
+                _write_schedules(user_id, data, commit=False)
+                logger.error(
+                    "Reminder %s for user %s was NOT delivered (channel=%s); "
+                    "kept in schedules.yaml, not deleted",
+                    reminder_id, user_id, channel,
+                )
     except Exception:
         logger.exception("Reminder fire failed: user=%s id=%s", user_id, reminder_id)
 
@@ -501,27 +577,34 @@ def _load_all_users() -> None:
             )
             continue
         seen_resolved.add(resolved)
+        # The dir name (usr_<id8>) is NOT a user id. Register jobs under the
+        # canonical identity when one exists, so a fire reaches reply() with
+        # the same id normal traffic uses — same conversation, same notes,
+        # same memory. Fall back to the dir name for workspaces with no
+        # identity row.  This applies to BOTH job kinds below: the task
+        # runner used to be registered with the raw dir name four lines
+        # after this lookup was added for schedules, and its synthetic turns
+        # ran as a user that does not exist.
+        _uid = _canonical_user_id(user_dir.name)
         # Recurring schedules + reminders (opt-in via schedules.yaml).
         if (user_dir / "schedules.yaml").exists():
             with _lock:
-                # The dir name (usr_<id8>) is NOT a user id. Register jobs
-                # under the canonical identity when one exists, so a fire
-                # reaches reply() with the same id normal traffic uses —
-                # same conversation, same notes, same memory. Fall back to
-                # the dir name for workspaces with no identity row.
-                _uid = user_dir.name
-                try:
-                    from prax.services.identity_service import get_user_by_workspace
-                    _u = get_user_by_workspace(user_dir.name)
-                    if _u:
-                        _uid = _u.id
-                except Exception:
-                    pass
                 _sync_user_jobs(_uid)
         # Task runner polling — opt-in via settings, per-user.
         if settings.task_runner_enabled:
             from prax.services import task_runner_service
-            task_runner_service.register_user(_scheduler, user_dir.name)
+            task_runner_service.register_user(_scheduler, _uid)
+
+
+def _canonical_user_id(workspace_name: str) -> str:
+    """The identity-service user id for a workspace directory name, or the name
+    itself when no user owns that directory."""
+    try:
+        from prax.services.identity_service import get_user_by_workspace
+        user = get_user_by_workspace(workspace_name)
+    except Exception:
+        user = None
+    return user.id if user else workspace_name
 
 
 def _run_nightly_eval() -> None:
@@ -756,12 +839,18 @@ def create_reminder(
     fire_at: str,
     timezone: str | None = None,
     channel: str | None = None,
+    source: str | None = None,
 ) -> dict[str, Any]:
     """Create a one-time reminder that fires at a specific datetime.
 
     Args:
-        channel: Delivery channel — "sms", "discord", or "all".
-            If None, defaults to the channel inferred from the user_id.
+        channel: Delivery channel — "sms", "discord", "teamwork" or "all".
+            If None, the channel the creating turn arrived on (``source``)
+            is persisted on the reminder; only when that is unknown too is
+            the channel inferred from the user's identities.
+        source: The creating turn's origin channel (``sms`` / ``voice`` /
+            ``discord`` / ``teamwork`` / …) — see
+            ``prax.agent.user_context.current_turn_source``.
     """
     # Validate channel if provided.
     if channel and channel not in ("sms", "discord", "teamwork", "all"):
@@ -794,8 +883,10 @@ def create_reminder(
         slug = description.lower().replace(" ", "-")[:20]
         reminder_id = f"rem-{slug}-{uuid.uuid4().hex[:6]}"
 
-        # Default channel: infer from user_id (sms for phone, discord for D-prefix).
-        effective_channel = channel or _infer_channel(user_id)
+        # Default channel: where the user asked from, else what their
+        # identities say.  Persisted on the entry so a restart re-registers the
+        # reminder with the same destination.
+        effective_channel = channel or _channel_for_source(source) or _infer_channel(user_id)
 
         entry: dict[str, Any] = {
             "id": reminder_id,

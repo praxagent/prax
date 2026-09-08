@@ -23,11 +23,29 @@ class ConsolidationResult:
     """Outcome of a consolidation run for one user."""
 
     memories_created: int = 0
+    # Vector writes that RAISED (upsert_memory no longer returns an id for a
+    # failed write), so memories_created is a count of what actually landed.
+    memories_failed: int = 0
     entities_upserted: int = 0
     relations_upserted: int = 0
+    # Pruned from the vector store / graph by the time-based decay pass
+    # (which runs at most once per 24 h, so these are 0 on most runs).
     memories_decayed: int = 0
     memories_forgotten: int = 0
     daily_summary: str = ""
+    # UTF-8 bytes of trace text handed to the extractor this run, and bytes of
+    # content the pointer advanced past WITHOUT the extractor seeing them (only
+    # the tail of a single line longer than EXTRACTION_CHAR_BUDGET).
+    bytes_seen: int = 0
+    bytes_skipped: int = 0
+    # Extractor batches drained this run (≤ consolidation.MAX_BATCHES_PER_RUN)
+    # and the backlog left behind: non-blank trace lines past the pointer, with
+    # their UTF-8 size.  A non-zero backlog means the run hit the cap; later
+    # runs pick it up unless trace.log rotates first, in which case it is
+    # dropped and logged at WARNING (consolidation._record_rotation).
+    batches: int = 0
+    pending_lines: int = 0
+    pending_bytes: int = 0
     # Symbolic consistency pass (MEMORY_CONSISTENCY_ENABLED): conflicts a
     # single-valued relation write had with existing current edges, and how
     # many of those stale edges were closed (0 unless auto-supersede is on).

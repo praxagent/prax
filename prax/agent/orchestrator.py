@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from collections.abc import Iterable
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
@@ -991,13 +992,66 @@ class ConversationAgent:
         )
         logger.info("Turn model override -> %s", resolved or "(tier default)")
 
+    def _clear_turn_model_override(self) -> None:
+        """Undo a space-model pin at the END of a turn (TURN_LOCK_PER_USER).
+
+        Under the per-user lock a pin is turn-local: applied by
+        ``_apply_turn_model_override`` at the start, reverted here, so it can
+        neither outlive its turn (into ``resume_last_turn``, which applies no
+        override) nor be the binding another user's turn finds on this shared
+        instance.  Without the flag the pin persists as before, and the next
+        turn's compare-and-rebind replaces it.
+        """
+        if not getattr(self, "_applied_model_override", None):
+            return
+        self._applied_model_override = None
+        self.llm = build_llm(provider=self._active_provider, tier=self._orchestrator_tier)
+        self.graph = build_agent_loop(
+            self.llm, self.tools, checkpointer=self.checkpoint_mgr.saver,
+        )
+        logger.info("Turn model override cleared (tier default)")
+
+    # Guards creation of the per-user turn locks; the locks themselves live on
+    # the instance (``_user_turn_locks``) because the hazards they serialise —
+    # the checkpoint slot, the per-turn llm/graph rebind — are per instance.
+    _turn_locks_guard = threading.Lock()
+
+    def _turn_lock_for(self, user_id: str) -> threading.Lock:
+        """The lock that serialises this instance's turns for *user_id*
+        (created on first use; one per distinct user id, never dropped)."""
+        with ConversationAgent._turn_locks_guard:
+            locks = self.__dict__.setdefault("_user_turn_locks", {})
+            return locks.setdefault(user_id, threading.Lock())
+
     def run(self, conversation: Iterable[BaseMessage], user_input: str, workspace_context: str = "", trigger: str = "", source: str = "") -> str:
         """Execute the agent graph and return the final string response.
 
         *source* is the origin channel (discord | sms | voice | teamwork |
         scheduler | task_runner) — recorded on the execution graph so a trace
         shows where the request came from.
+
+        With ``TURN_LOCK_PER_USER`` on, turns for the same user on this
+        instance run one at a time: a second message from the same user waits
+        for the in-flight turn instead of clobbering its checkpoint slot
+        (``CheckpointManager._turns[user_id]``) and its ``self.llm`` /
+        ``self.graph`` rebind mid-run, and the space-model pin is turn-local.
+        Off (the default) is the prior behaviour: no lock, turns may overlap.
+        Turns for DIFFERENT users are not serialised by this flag.
         """
+        if not getattr(settings, "turn_lock_per_user", False):
+            return self._run_turn(conversation, user_input, workspace_context, trigger, source)
+        uid = current_user_id.get() or "anonymous"
+        with self._turn_lock_for(uid):
+            try:
+                return self._run_turn(conversation, user_input, workspace_context, trigger, source)
+            finally:
+                try:
+                    self._clear_turn_model_override()
+                except Exception:  # noqa: BLE001 - never lose the turn's answer over the revert
+                    logger.warning("Could not revert the per-turn model override", exc_info=True)
+
+    def _run_turn(self, conversation: Iterable[BaseMessage], user_input: str, workspace_context: str = "", trigger: str = "", source: str = "") -> str:
+        """The body of :meth:`run` — one turn, no locking."""
         import time as _time
 
         from prax.agent.trace import GraphCallbackHandler, get_trace_heartbeat, start_span
@@ -1060,11 +1114,14 @@ class ConversationAgent:
         current_user_message.set(user_input)
         current_component.set("orchestrator")
 
-        # Initialize tool-call budget for this turn.
+        # Start this turn's governance state (audit buffer, HIGH/trifecta
+        # latches, tool-call budget).  A FRESH per-turn object bound in this
+        # context — the graph worker thread re-binds the same object in
+        # _invoke_graph_once, and _write_trace drains it at the end.
         from prax.agent.autonomy import get_recursion_limit
-        from prax.agent.governed_tool import init_turn_budget
+        from prax.agent.governed_tool import begin_turn
         effective_limit = get_recursion_limit(settings.agent_max_tool_calls)
-        init_turn_budget(effective_limit)
+        begin_turn(effective_limit)
 
         # Reset Active Inference prediction tracker for the new turn.
         try:
@@ -1663,12 +1720,27 @@ class ConversationAgent:
         of restarting the turn.  Returns the agent's response, or None when
         there is nothing to resume.  Requires ``CHECKPOINT_RESUME_ENABLED``
         (otherwise failed turns aren't retained).
+
+        Takes the same per-user lock as :meth:`run` under
+        ``TURN_LOCK_PER_USER`` — a resume races a new turn for the same user
+        over the same checkpoint slot and graph binding.
         """
+        if getattr(settings, "turn_lock_per_user", False):
+            with self._turn_lock_for(user_id):
+                return self._resume_last_turn(user_id, nudge)
+        return self._resume_last_turn(user_id, nudge)
+
+    def _resume_last_turn(self, user_id: str, nudge: str) -> str | None:
+        """The body of :meth:`resume_last_turn` — no locking."""
         self._rebuild_if_needed()
         self._reset_to_primary_provider()
         turn = self.checkpoint_mgr.resume_turn(user_id)
         if turn is None:
             return None
+        # A resumed turn is a turn: start it on fresh governance state (no
+        # budget, as before) rather than whatever latches this context last held.
+        from prax.agent.governed_tool import begin_turn
+        begin_turn()
 
         _cbs: list = []
         try:
@@ -1983,6 +2055,10 @@ class ConversationAgent:
         result_q: queue.Queue[tuple[str, object]] = queue.Queue(maxsize=1)
         heartbeat = heartbeat or TraceHeartbeat(trace_id=f"invoke-{str(user_id)[:12]}")
         heartbeat.touch("orchestrator", "graph invoke started")
+        # This turn's governance state, captured on the calling thread (where
+        # run() began the turn and where _write_trace will drain it).
+        from prax.agent.governed_tool import current_turn_state, use_turn_state
+        turn_state = current_turn_state()
 
         def _worker() -> None:
             try:
@@ -1995,7 +2071,10 @@ class ConversationAgent:
                 # IdempotentToolCache middleware (inert unless TOOL_MEMOIZE_ENABLED
                 # installed it). Per-invoke scoping is what makes memoization
                 # correct — a read cached this turn is never reused in a later one.
-                with use_heartbeat(heartbeat), use_tool_cache():
+                # use_turn_state binds the SAME governance state object the
+                # calling thread holds, so every governed tool call made by the
+                # graph (and by the spokes it delegates to) lands in this turn.
+                with use_heartbeat(heartbeat), use_tool_cache(), use_turn_state(turn_state):
                     result_q.put(("ok", self.graph.invoke({"messages": messages}, config=config)))
             except Exception as exc:
                 result_q.put(("error", exc))

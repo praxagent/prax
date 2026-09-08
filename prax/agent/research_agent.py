@@ -178,12 +178,16 @@ def _run_research(question: str, depth: int = 0) -> str:
         depth: Recursion depth for this invocation.  0 is top-level.
     """
     token = _research_depth.set(depth)
-    from prax.agent.user_context import bind_tools_user_context, current_component
+    from prax.agent.governed_tool import govern_spoke_tools
+    from prax.agent.tool_registry import apply_eval_denylist
+    from prax.agent.user_context import current_component
     component_token = current_component.set("research")
     try:
         logger.info("Research agent (depth=%d): %s", depth, question[:80])
 
-        tools = bind_tools_user_context(_build_research_tools(depth=depth))
+        # Bind request context, then spoke-layer governance (audit + trifecta
+        # legs always; confirmation gates only under SPOKE_GOVERNANCE_ENABLED).
+        tools = govern_spoke_tools(apply_eval_denylist(_build_research_tools(depth=depth)))
         if not tools:
             return "No research tools available."
 

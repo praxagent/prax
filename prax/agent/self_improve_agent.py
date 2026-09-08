@@ -122,7 +122,12 @@ def delegate_self_improve(task: str) -> str:
     """
     logger.info("Self-improve agent delegated: %s", task[:100])
 
-    tools = _build_self_improve_tools()
+    from prax.agent.governed_tool import govern_spoke_tools
+    from prax.agent.tool_registry import apply_eval_denylist
+
+    # Bind request context, then spoke-layer governance (audit + trifecta legs
+    # always; confirmation gates only under SPOKE_GOVERNANCE_ENABLED).
+    tools = govern_spoke_tools(apply_eval_denylist(_build_self_improve_tools()))
     if not tools:
         return "No tools available for self-improvement."
 
