@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.44.2](https://github.com/praxagent/prax/compare/v0.44.1...v0.44.2) (2026-09-08)
+
+
+### Bug Fixes
+
+* keyless clients, per-turn governance state, governed spokes (opt-in), memory pipeline, fail-closed eval aggregators ([#231](https://github.com/praxagent/prax/issues/231)) ([ecf5a37](https://github.com/praxagent/prax/commit/ecf5a37477b7e7c6f2ea3bc81bd1c58d06008ba2))
+
 ## [0.44.1](https://github.com/praxagent/prax/compare/v0.44.0...v0.44.1) (2026-09-07)
 
 
