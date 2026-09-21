@@ -15,6 +15,16 @@
 # when the sandbox is up.
 SANDBOX_EXCLUDES := not test_imported_run_command_forces_cwd and not test_builtin_run_command_respects_cwd
 
+# Machine-local overrides, loaded BEFORE every `?=` default below so they win.
+# Optional and gitignored: a checkout without one behaves exactly as before.
+# It exists because one host can run two Prax trees — a production deploy and a
+# dev sandbox — and the "is it already running?" probes key on a PORT, while the
+# sandbox compose project has a fixed name. Left at the defaults, the second
+# tree silently binds the FIRST tree's Qdrant and Neo4j and runs
+# `docker compose down --remove-orphans` against its sandbox. See the
+# PRAX_STACK / SANDBOX_PROJECT blocks further down for the knobs.
+-include local.mk
+
 lint:
 	uv run ruff check .
 
@@ -179,7 +189,7 @@ sandbox-gpu-check:
 	@nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
 
 sandbox-gpu: sandbox-gpu-check
-	docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d sandbox --force-recreate
+	$(SANDBOX_PORT_ENV) docker compose -p $(SANDBOX_PROJECT) -f docker-compose.yml -f docker-compose.gpu.yml up -d sandbox --force-recreate
 	@echo
 	@echo "Waiting for sandbox to come up..."
 	@for i in 1 2 3 4 5 6 7 8 9 10; do \
@@ -260,6 +270,34 @@ PRAX_USER     ?= $(or $(shell sed -n 's/^PRAX_USER_ID=//p' .env 2>/dev/null | ta
 APP_WORKSPACE_DIR := $(abspath $(or $(shell sed -n 's/^WORKSPACE_DIR=//p' .env 2>/dev/null | tail -1 | tr -d '"'),../workspaces))
 QDRANT_DATA   := $(CURDIR)/workspaces/$(PRAX_USER)/.services/qdrant
 NEO4J_DATA    := $(CURDIR)/workspaces/$(PRAX_USER)/.services/neo4j
+# Backing-service identity.  Two Prax trees on ONE host (a production deploy
+# plus a dev sandbox) must not share Qdrant/Neo4j: the "already running" probes
+# in _local-qdrant/_local-neo4j key on a port, so a second tree would silently
+# bind to the FIRST tree's memory stores and cross-write into them.  Defaults
+# reproduce today's behaviour exactly; a dev tree overrides them, e.g.
+#   PRAX_STACK=praxdev QDRANT_PORT=6343 NEO4J_HTTP_PORT=7484 NEO4J_BOLT_PORT=7697
+# The native (non-Docker) fallbacks below listen on their own fixed ports and
+# cannot be remapped; they warn when an override is set.
+PRAX_STACK      ?= prax
+QDRANT_NAME     ?= $(PRAX_STACK)-qdrant
+NEO4J_NAME      ?= $(PRAX_STACK)-neo4j
+QDRANT_PORT     ?= 6333
+NEO4J_HTTP_PORT ?= 7474
+NEO4J_BOLT_PORT ?= 7687
+# The split sandbox is its own compose project with a hardcoded `name:` and
+# fixed published ports.  A SECOND Prax tree on the same host would therefore
+# run `docker compose down --remove-orphans` against the FIRST tree's sandbox —
+# destroying it and re-creating it bind-mounted to the wrong workspace.  Every
+# sandbox compose call below is pinned with `-p $(SANDBOX_PROJECT)` so the two
+# trees can never touch each other's container.  Defaults match today exactly.
+SANDBOX_PROJECT        ?= prax-sandbox
+SANDBOX_CDP_PORT       ?= 9223
+SANDBOX_VNC_PORT       ?= 6080
+SANDBOX_CLIPBOARD_PORT ?= 6090
+SANDBOX_CONTAINER_NAME  = $(SANDBOX_PROJECT)-sandbox-1
+# Exported into every sandbox compose invocation; prax-sandbox's compose reads
+# them with these same defaults, so an un-overridden call is byte-identical.
+SANDBOX_PORT_ENV = SANDBOX_CDP_PORT=$(SANDBOX_CDP_PORT) SANDBOX_VNC_PORT=$(SANDBOX_VNC_PORT) SANDBOX_CLIPBOARD_PORT=$(SANDBOX_CLIPBOARD_PORT)
 # Passed through to Prax's app.run(debug=...). `run-local-all-dev` flips
 # this to true so Werkzeug's reloader restarts Prax on code change.
 DEBUG         ?= false
@@ -282,7 +320,7 @@ RESTART       ?=
 # + the container name — NOT TeamWork's in-Docker defaults (chrome_cdp_host=
 # `sandbox`, desktop_vnc_url=http://sandbox:6080, empty sandbox_container). Without
 # these, terminal (docker exec), browser (CDP), and desktop (noVNC) all break.
-TW_SANDBOX_ENV = SANDBOX_CONTAINER=prax-sandbox-sandbox-1 CHROME_CDP_HOST=localhost CHROME_CDP_PORT=9223 DESKTOP_VNC_URL=http://localhost:6080
+TW_SANDBOX_ENV = SANDBOX_CONTAINER=$(SANDBOX_CONTAINER_NAME) CHROME_CDP_HOST=localhost CHROME_CDP_PORT=$(SANDBOX_CDP_PORT) DESKTOP_VNC_URL=http://localhost:$(SANDBOX_VNC_PORT)
 
 run-local-min:
 	@echo "Starting Prax core (no memory / sandbox / TeamWork). Ctrl-C to stop."
@@ -379,21 +417,23 @@ _tailscale-local:
 # if Docker isn't available, and prints install hints if neither is.
 _local-qdrant:
 	@mkdir -p $(LOCAL_RUN)
-	@if curl -s -o /dev/null --max-time 2 http://localhost:6333/; then \
-	  echo "Qdrant already running -> :6333"; \
+	@if curl -s -o /dev/null --max-time 2 http://localhost:$(QDRANT_PORT)/; then \
+	  echo "Qdrant already running -> :$(QDRANT_PORT)"; \
 	elif command -v docker >/dev/null 2>&1; then \
 	  mkdir -p "$(QDRANT_DATA)"; \
-	  docker rm -f prax-qdrant >/dev/null 2>&1 || true; \
-	  docker run -d --name prax-qdrant -p 6333:6333 --log-opt max-size=10m --log-opt max-file=3 -v "$(QDRANT_DATA)":/qdrant/storage qdrant/qdrant \
+	  docker rm -f $(QDRANT_NAME) >/dev/null 2>&1 || true; \
+	  docker run -d --name $(QDRANT_NAME) -p $(QDRANT_PORT):6333 --log-opt max-size=10m --log-opt max-file=3 -v "$(QDRANT_DATA)":/qdrant/storage qdrant/qdrant \
 	    >$(LOCAL_RUN)/qdrant.log 2>&1 \
-	    && echo "Qdrant started (docker) -> :6333   data: $(QDRANT_DATA)" \
+	    && echo "Qdrant started (docker) -> :$(QDRANT_PORT)   data: $(QDRANT_DATA)" \
 	    || { echo "WARN: qdrant docker run failed - see $(LOCAL_RUN)/qdrant.log. LTM will degrade."; }; \
 	elif command -v qdrant >/dev/null 2>&1; then \
 	  nohup qdrant >$(LOCAL_RUN)/qdrant.log 2>&1 & echo $$! >$(LOCAL_RUN)/qdrant.pid; \
 	  echo "Qdrant started (native, pid $$(cat $(LOCAL_RUN)/qdrant.pid)) -> :6333"; \
+	  [ "$(QDRANT_PORT)" = "6333" ] || echo "  WARN: native qdrant ignores QDRANT_PORT=$(QDRANT_PORT); it is on :6333"; \
 	elif [ -x ./qdrant ]; then \
 	  nohup ./qdrant >$(LOCAL_RUN)/qdrant.log 2>&1 & echo $$! >$(LOCAL_RUN)/qdrant.pid; \
 	  echo "Qdrant started (native, pid $$(cat $(LOCAL_RUN)/qdrant.pid)) -> :6333"; \
+	  [ "$(QDRANT_PORT)" = "6333" ] || echo "  WARN: native qdrant ignores QDRANT_PORT=$(QDRANT_PORT); it is on :6333"; \
 	else \
 	  echo "WARN: neither Docker nor a qdrant binary found - skipping. LTM will degrade."; \
 	  echo "      Easiest fix: install Docker (https://docs.docker.com/engine/install/) and re-run;"; \
@@ -406,18 +446,18 @@ _local-qdrant:
 # install if Docker isn't available, and prints install hints if neither is.
 _local-neo4j:
 	@mkdir -p $(LOCAL_RUN)
-	@if curl -s -o /dev/null --max-time 2 http://localhost:7474/; then \
-	  echo "Neo4j already running -> :7687"; \
+	@if curl -s -o /dev/null --max-time 2 http://localhost:$(NEO4J_HTTP_PORT)/; then \
+	  echo "Neo4j already running -> :$(NEO4J_BOLT_PORT)"; \
 	elif command -v docker >/dev/null 2>&1; then \
 	  mkdir -p "$(NEO4J_DATA)/data" "$(NEO4J_DATA)/logs"; \
-	  docker rm -f prax-neo4j >/dev/null 2>&1 || true; \
-	  docker run -d --name prax-neo4j -p 7474:7474 -p 7687:7687 --log-opt max-size=10m --log-opt max-file=3 -e NEO4J_AUTH=neo4j/prax-memory \
+	  docker rm -f $(NEO4J_NAME) >/dev/null 2>&1 || true; \
+	  docker run -d --name $(NEO4J_NAME) -p $(NEO4J_HTTP_PORT):7474 -p $(NEO4J_BOLT_PORT):7687 --log-opt max-size=10m --log-opt max-file=3 -e NEO4J_AUTH=neo4j/prax-memory \
 	    -v "$(NEO4J_DATA)/data":/data -v "$(NEO4J_DATA)/logs":/logs neo4j:5 \
 	    >$(LOCAL_RUN)/neo4j.log 2>&1 \
-	    && { echo "Neo4j started (docker) -> :7687    data: $(NEO4J_DATA)"; \
+	    && { echo "Neo4j started (docker) -> :$(NEO4J_BOLT_PORT)    data: $(NEO4J_DATA)"; \
 	         printf "  waiting for Neo4j to accept Bolt connections"; ok=; \
 	         for i in $$(seq 1 60); do \
-	           docker exec prax-neo4j cypher-shell -u neo4j -p prax-memory "RETURN 1;" >/dev/null 2>&1 \
+	           docker exec $(NEO4J_NAME) cypher-shell -u neo4j -p prax-memory "RETURN 1;" >/dev/null 2>&1 \
 	             && { ok=1; echo " ready"; break; }; \
 	           printf "."; sleep 1; \
 	         done; \
@@ -426,6 +466,7 @@ _local-neo4j:
 	elif command -v neo4j >/dev/null 2>&1; then \
 	  neo4j start >$(LOCAL_RUN)/neo4j.log 2>&1 || echo "WARN: 'neo4j start' failed - see $(LOCAL_RUN)/neo4j.log"; \
 	  echo "Neo4j start requested (native) -> :7687 ('make shutdown' stops it)"; \
+	  [ "$(NEO4J_BOLT_PORT)" = "7687" ] || echo "  WARN: native neo4j ignores NEO4J_BOLT_PORT=$(NEO4J_BOLT_PORT); it is on :7687"; \
 	else \
 	  echo "WARN: neither Docker nor a neo4j binary found - skipping. Graph memory will degrade."; \
 	  echo "      Easiest fix: install Docker (https://docs.docker.com/engine/install/) and re-run;"; \
@@ -585,7 +626,7 @@ _local-sandbox:
 	    { docker image inspect prax-sandbox:latest >/dev/null 2>&1 || \
 	      { echo "Building prax-sandbox image (first run only, this can take several minutes)..."; \
 	        docker build -t prax-sandbox:latest sandbox/ ; } ; } && \
-	    { docker compose -f docker-compose.yml down --remove-orphans >/dev/null 2>&1 || true; } && \
+	    { docker compose -p $(SANDBOX_PROJECT) -f docker-compose.yml down --remove-orphans >/dev/null 2>&1 || true; } && \
 	    mkdir -p "$(APP_WORKSPACE_DIR)/$(PRAX_USER)/active" && \
 	    { ak=""; ok=""; \
 	      if [ -f "$(CURDIR)/.env" ]; then \
@@ -594,10 +635,10 @@ _local-sandbox:
 	      fi; \
 	      ANTHROPIC_API_KEY="$$ak" OPENAI_API_KEY="$$ok" \
 	        WORKSPACE_DIR="$(APP_WORKSPACE_DIR)/$(PRAX_USER)" \
-	        docker compose -f docker-compose.yml up -d; } ) \
+	        $(SANDBOX_PORT_ENV) docker compose -p $(SANDBOX_PROJECT) -f docker-compose.yml up -d; } ) \
 	      >$(LOCAL_RUN)/sandbox.log 2>&1 \
 	    && { touch $(LOCAL_RUN)/.sandbox-on; \
-	         echo "Sandbox started -> :9223 (CDP) :6080 (desktop) :6090 (clipboard)"; } \
+	         echo "Sandbox started -> :$(SANDBOX_CDP_PORT) (CDP) :$(SANDBOX_VNC_PORT) (desktop) :$(SANDBOX_CLIPBOARD_PORT) (clipboard)"; } \
 	    || { echo "ERROR: sandbox failed to start - see $(LOCAL_RUN)/sandbox.log"; \
 	         echo "       run-local-all aborts here: the sandbox was expected to come up (Docker + checkout present)."; \
 	         echo "       Fix the error above, or run without it via 'make run-local-all SANDBOX_PATH='."; \
@@ -708,13 +749,13 @@ shutdown:
 	@pkill -f "[v]ite.*--port 5173" 2>/dev/null && echo "  swept stray Vite dev server" || true
 	@pkill -f "[n]pm run dev" 2>/dev/null || true
 	@if command -v docker >/dev/null 2>&1; then \
-	  for c in prax-qdrant prax-neo4j; do \
+	  for c in $(QDRANT_NAME) $(NEO4J_NAME); do \
 	    docker rm -f $$c >/dev/null 2>&1 && echo "  stopped $$c (docker)" || true; \
 	  done; \
 	fi
 	@command -v neo4j >/dev/null 2>&1 && neo4j stop >/dev/null 2>&1 && echo "  stopped neo4j (native)" || true
 	@if [ -f $(LOCAL_RUN)/.sandbox-on ] && [ -d "$(SANDBOX_PATH)" ] && command -v docker >/dev/null 2>&1; then \
-	  ( cd "$(SANDBOX_PATH)" && docker compose -f docker-compose.yml down ) >/dev/null 2>&1 && echo "  stopped sandbox (docker compose down)"; \
+	  ( cd "$(SANDBOX_PATH)" && docker compose -p $(SANDBOX_PROJECT) -f docker-compose.yml down ) >/dev/null 2>&1 && echo "  stopped sandbox (docker compose down)"; \
 	  rm -f $(LOCAL_RUN)/.sandbox-on; \
 	fi
 	@if [ -f $(LOCAL_RUN)/.observability-on ] && command -v docker >/dev/null 2>&1; then \
@@ -734,22 +775,22 @@ shutdown:
 
 local-status:
 	@echo "-- Native local stack --"
-	@printf "  %-9s" "Qdrant";   curl -s -o /dev/null --max-time 3 http://localhost:6333/             && echo " up   -> :6333" || echo " down -> :6333"
+	@printf "  %-9s" "Qdrant";   curl -s -o /dev/null --max-time 3 http://localhost:$(QDRANT_PORT)/    && echo " up   -> :$(QDRANT_PORT)" || echo " down -> :$(QDRANT_PORT)"
 	@# Neo4j: check Bolt (:7687, what Prax actually uses) via cypher-shell when
 	@# the container is up; the HTTP :7474 endpoint is a flaky proxy for readiness.
 	@printf "  %-9s" "Neo4j"; \
-	  if docker exec prax-neo4j cypher-shell -u neo4j -p prax-memory "RETURN 1;" >/dev/null 2>&1 \
-	     || curl -s -o /dev/null --max-time 3 http://localhost:7474/; then \
-	    echo " up   -> :7687"; else echo " down -> :7687"; fi
+	  if docker exec $(NEO4J_NAME) cypher-shell -u neo4j -p prax-memory "RETURN 1;" >/dev/null 2>&1 \
+	     || curl -s -o /dev/null --max-time 3 http://localhost:$(NEO4J_HTTP_PORT)/; then \
+	    echo " up   -> :$(NEO4J_BOLT_PORT)"; else echo " down -> :$(NEO4J_BOLT_PORT)"; fi
 	@printf "  %-9s" "TeamWork"; curl -s -o /dev/null --max-time 3 http://localhost:8000/health        && echo " up   -> :8000 (API)" || echo " down -> :8000 (API)"
 	@printf "  %-9s" "TW UI";    curl -s -o /dev/null --max-time 3 http://localhost:5173/             && echo " up   -> :5173 (Vite dev)" || echo " n/a  -> :5173 (Vite dev; prod serves UI from :8000)"
 	@# Sandbox: Docker's view of the image HEALTHCHECK (`pgrep -x supervisord`) —
 	@# the same signal compose's service_healthy waits on. (The old probe curled
 	@# OpenCode's :4096, which no longer exists, so it always said "down".)
 	@printf "  %-9s" "Sandbox"; \
-	  st=$$(docker inspect --format '{{.State.Health.Status}}' prax-sandbox-sandbox-1 2>/dev/null); \
-	  if [ "$$st" = "healthy" ]; then echo " up   -> prax-sandbox-sandbox-1 healthy (:9223 CDP, :6080 desktop)"; \
-	  else echo " down -> prax-sandbox-sandbox-1 ($${st:-not running})"; fi
+	  st=$$(docker inspect --format '{{.State.Health.Status}}' $(SANDBOX_CONTAINER_NAME) 2>/dev/null); \
+	  if [ "$$st" = "healthy" ]; then echo " up   -> $(SANDBOX_CONTAINER_NAME) healthy (:$(SANDBOX_CDP_PORT) CDP, :$(SANDBOX_VNC_PORT) desktop)"; \
+	  else echo " down -> $(SANDBOX_CONTAINER_NAME) ($${st:-not running})"; fi
 	@printf "  %-9s" "Prax";     curl -s -o /dev/null --max-time 3 http://localhost:5001/health        && echo " up   -> :5001" || echo " down -> :5001"
 	@printf "  %-9s" "Grafana";  curl -s -o /dev/null --max-time 3 http://localhost:3002/api/health    && echo " up   -> :3002 (Loki/Tempo/Prometheus; tailnet :3001)" || echo " n/a  -> :3002 (observability stack not running)"
 	@echo "Logs: make local-logs   Stop: make shutdown   Connectivity: make smoke"
@@ -796,7 +837,7 @@ integration:
 	@if [ -n "$(REBUILD_SANDBOX)" ]; then \
 	  if [ -d "$(SANDBOX_PATH)" ] && command -v docker >/dev/null 2>&1; then \
 	    echo "Rebuilding sandbox image (REBUILD_SANDBOX set; --no-cache)..."; \
-	    ( cd "$(SANDBOX_PATH)" && docker compose -f docker-compose.yml build --no-cache ) || exit 1; \
+	    ( cd "$(SANDBOX_PATH)" && docker compose -p $(SANDBOX_PROJECT) -f docker-compose.yml build --no-cache ) || exit 1; \
 	  else \
 	    echo "WARN: REBUILD_SANDBOX set but no sandbox checkout / docker - skipping image rebuild."; \
 	  fi; \
