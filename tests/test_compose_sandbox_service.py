@@ -24,7 +24,18 @@ import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-COMPOSE_FILES = sorted(REPO_ROOT.glob("docker-compose*.yml"))
+
+# ``docker-compose.override.yml`` is Compose's conventional MACHINE-LOCAL file:
+# gitignored, present only on a particular host, and carrying that host's port
+# bindings and restart policies.  It is not part of the shape these tests pin,
+# and it legitimately uses Compose's own merge tags (``!override``, ``!reset``)
+# which ``yaml.safe_load`` cannot construct — so globbing it in fails the whole
+# suite on exactly the machines that deploy Prax, with an error that points at
+# YAML rather than at the real cause.
+_LOCAL_ONLY = {"docker-compose.override.yml"}
+COMPOSE_FILES = sorted(
+    p for p in REPO_ROOT.glob("docker-compose*.yml") if p.name not in _LOCAL_ONLY
+)
 
 # Env-key suffixes that mean "credential".  ``_API_KEY`` is covered by ``_KEY``;
 # ``_TOKEN`` / ``_SECRET`` / ``_PASSWORD`` mirror the repo's pre-commit sweep.

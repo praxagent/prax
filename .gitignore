@@ -20,7 +20,19 @@ share/python-wheels/
 
 # ---- Environments ----
 .env
+# Every .env variant, not just .bak: migration and pre-change backups like
+# .env.pre-zeta.bak hold REAL credentials, and `.env.bak*` did not match them.
+# This repo is public, and a blanket `git add -A` once swept a DB backup in.
+# `.env-example` uses a hyphen, so it stays tracked.
+.env.*
 .env.bak*
+
+# Machine-local config. Both are per-checkout by design: local.mk carries the
+# dev tree's port and project overrides that keep it off production's Qdrant,
+# Neo4j and sandbox; docker-compose.override.yml carries loopback bindings and
+# restart policies for one host. Neither is secret, but neither may be shared.
+local.mk
+docker-compose.override.yml
 .venv
 env/
 venv/
