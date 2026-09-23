@@ -98,7 +98,7 @@ include = [
 ]
 
 [tool.pytest.ini_options]
-addopts = "-m 'not e2e_live and not integration'"
+addopts = "-m 'not e2e_live and not integration and not allow_network'"
 markers = [
     "integration: real LLM integration tests (slow, requires API key)",
     "e2e_live: end-to-end tests against running docker-compose stack",

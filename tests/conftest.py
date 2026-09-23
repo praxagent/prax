@@ -128,10 +128,24 @@ def pytest_configure(config):
     )
 
 
+# Markers whose tests are DELIBERATELY networked (and, for `integration`, paid):
+# they only ever run when selected by hand (`pytest -m integration`), because
+# pyproject's addopts deselects all three from every default run and from
+# `make ci`. Without this, the ban would break the real-LLM integration suite
+# the moment someone runs it on purpose.
+#
+# The lift is process-wide while such a test runs — a background thread leaked
+# by an earlier test would get the network too. That window only exists in a
+# hand-selected run, never in `make ci`, which is why the deselection matters.
+_OPT_IN_NETWORK_MARKERS = ("allow_network", "integration", "e2e_live")
+
+
 @pytest.fixture(autouse=True)
 def _network_ban(request):
     global _network_allowed
-    _network_allowed = request.node.get_closest_marker("allow_network") is not None
+    _network_allowed = any(
+        request.node.get_closest_marker(m) is not None for m in _OPT_IN_NETWORK_MARKERS
+    )
     yield
     _network_allowed = False
 

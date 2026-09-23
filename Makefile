@@ -48,14 +48,20 @@ TEST_MEM_HIGH ?=
 TEST_MEM_MAX  ?=
 PYTEST_ARGS    = tests/ -x -q -k "$(SANDBOX_EXCLUDES)"
 
+# Either knob alone turns the cap on: HIGH throttles (reclaims) past its value,
+# MAX OOM-kills the tests only. The venv's python runs directly because the
+# snap-packaged uv moves itself into its own scope and would escape the cap.
+TEST_VENV_PY   = $(or $(UV_PROJECT_ENVIRONMENT),.venv)/bin/python
+TEST_MEM_PROPS = $(if $(strip $(TEST_MEM_HIGH)),-p MemoryHigh=$(TEST_MEM_HIGH)) \
+                 $(if $(strip $(TEST_MEM_MAX)),-p MemoryMax=$(TEST_MEM_MAX) -p MemorySwapMax=0)
+
 test:
-ifeq ($(strip $(TEST_MEM_MAX)),)
+ifeq ($(strip $(TEST_MEM_MAX)$(TEST_MEM_HIGH)),)
 	FLASK_SECRET_KEY=ci-test-key uv run pytest $(PYTEST_ARGS)
 else
-	uv sync --frozen --quiet
+	uv sync --inexact --quiet
 	FLASK_SECRET_KEY=ci-test-key systemd-run --user --scope --quiet --collect \
-	  -p MemoryHigh=$(or $(TEST_MEM_HIGH),$(TEST_MEM_MAX)) -p MemoryMax=$(TEST_MEM_MAX) -p MemorySwapMax=0 \
-	  -- .venv/bin/python -m pytest $(PYTEST_ARGS)
+	  $(TEST_MEM_PROPS) -- $(TEST_VENV_PY) -m pytest $(PYTEST_ARGS)
 endif
 
 actions:

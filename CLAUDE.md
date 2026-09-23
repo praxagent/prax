@@ -31,7 +31,10 @@ Multi-channel AI assistant (TeamWork web UI, Discord, SMS/voice) powered by a La
   `.env`, so a module-scope import can still differ from CI in those.
 - **Test memory cap (opt-in):** set `TEST_MEM_HIGH`/`TEST_MEM_MAX` in
   `local.mk` and `make test` runs under a systemd scope that OOM-kills only
-  the tests. The suite peaks under 1 GB; 2 GB is a sane cap.
+  the tests. Measured 2026-09-23: ~1.2 GB sampled, with brief spikes past
+  1.5 GB (tests that start a child interpreter share the scope). Keep
+  `TEST_MEM_HIGH` at 2G or more: at 1536M the soft limit throttled the whole
+  scope and a subprocess test timed out at 300 s. `TEST_MEM_MAX` 2560M.
 - **Targeted test run:** `FLASK_SECRET_KEY=ci-test-key uv run pytest tests/<file>.py -x -q`
 - **Lint only:** `make lint` (or `uv run ruff check .`)
 - **Lint auto-fix:** `uv run ruff check --fix`

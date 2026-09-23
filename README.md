@@ -627,8 +627,8 @@ With 8 GB you can run the full stack, including Neo4j and observability, but
 ```make
 NEO4J_HEAP_MAX  := 512m
 NEO4J_PAGECACHE := 256m
-TEST_MEM_HIGH   := 1536M   # tests peak under 1 GB; this keeps a bad test
-TEST_MEM_MAX    := 2G      # from starving the rest of the VM
+TEST_MEM_HIGH   := 2G      # tests reach ~1.2 GB with spikes past 1.5 GB;
+TEST_MEM_MAX    := 2560M   # below 2G the soft limit throttles them to a stall
 ```
 
 ### 7. Reaching the UI
