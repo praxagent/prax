@@ -38,6 +38,24 @@ for _proxy_var in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
 # unrelated test was running, and one of them took the blame for a 5.5 GB peak.
 os.environ["AUTO_GENERATE_COVER"] = "false"
 
+# --- Tokenizer files: fetched once, BEFORE the network ban. ---------------------
+#
+# tiktoken downloads its encoding tables on first use and caches them.  With a
+# warm cache that is invisible, which is how a test came to depend on the network
+# without anyone noticing — until it ran on a fresh machine (and on GitHub CI's
+# fresh runners, every time).  So warm the two encodings Prax uses here, as
+# session setup, the way `uv sync` fetches packages before tests run: static,
+# public files, no key involved, and the proxy vars are already blanked above so
+# this cannot route through the credential proxy.  Offline, this quietly does
+# nothing and any test that needs a tokenizer fails with the ban's clear error.
+try:
+    import tiktoken as _tiktoken  # noqa: E402
+
+    for _enc in ("o200k_base", "cl100k_base"):  # DEFAULT_ENCODING, and the gpt-4/3.5 family
+        _tiktoken.get_encoding(_enc)
+except Exception:  # noqa: BLE001 — best effort; never break collection
+    pass
+
 # --- Network ban: no test may reach anything off this machine. ------------------
 #
 # The two fixes above close the path that actually burned money; this closes the
