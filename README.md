@@ -32,6 +32,10 @@ Designed to work with the optional [**prax-sandbox**](https://github.com/praxage
 
 ## Quick Start
 
+Three ways in: **Docker Compose** (below), **without Docker** (further below),
+or **in a local Ubuntu VM** — the whole suite isolated from the machine you
+also use for other work; see [Running the suite in a local Ubuntu VM](#running-the-suite-in-a-local-ubuntu-vm-kvm--cloud-init).
+
 ### Docker Compose
 
 ```bash
@@ -512,6 +516,148 @@ The [Tailscale / HTTPS](#remote-access-tailscale--https) options below also appl
 - **Tailscale** — the `make tailscale-*` targets and the sidecar's [`serve-config.json`](tailscale/serve-config.json) map to the Docker ports; point them at `:8000`/`:5001` instead before using them without Docker.
 
 ---
+
+## Running the suite in a local Ubuntu VM (KVM + cloud-init)
+
+Use this when you want Prax on a machine you also use for other work, but
+**isolated from it**: a VM is a kernel boundary, so the agent, its sandbox and
+its tests cannot reach the rest of your disk, and it can be snapshotted and
+rolled back. The VM is built declaratively from Ubuntu's cloud image plus a
+cloud-init file — no installer to click through, about 90 seconds to a shell.
+Once it is up, you follow [Deploying the suite to a fresh server](#deploying-the-suite-to-a-fresh-server-keyless-single-tenant)
+*inside* it.
+
+Verified 2026-09-22: Ubuntu 26.04 host, Ubuntu 26.04 guest, 8 GB / 6 vCPU,
+running the full stack (Prax, TeamWork, sandbox, Qdrant, Neo4j, secrets proxy,
+LGTM observability).
+
+**Memory is not locked away.** KVM commits guest RAM only as the guest touches
+it, and with **free page reporting** on the balloon device the guest hands freed
+pages back to the host continuously. That setting is **off by default** — step 5
+turns it on. Without it, an 8 GB VM tends to keep whatever it has ever used.
+
+### 1. Host prep
+
+```bash
+sudo apt-get install -y qemu-kvm libvirt-daemon-system virtinst cloud-image-utils
+sudo usermod -aG libvirt "$USER"          # log out/in afterwards
+ls -l /dev/kvm                            # must exist: hardware virtualisation on
+```
+
+### 2. Image and disk
+
+```bash
+VM=praxvm; DIR=/var/lib/libvirt/images/$VM      # put it on a disk with room
+REL=resolute                                     # an Ubuntu release codename
+sudo mkdir -p $DIR && sudo chown "$USER" $DIR && cd $DIR
+curl -fLO https://cloud-images.ubuntu.com/$REL/current/$REL-server-cloudimg-amd64.img
+cp $REL-server-cloudimg-amd64.img $VM.qcow2
+qemu-img resize $VM.qcow2 250G                   # thin: occupies only what is written
+```
+
+### 3. cloud-init
+
+Save as `user-data` (no secrets in it — it is readable inside the guest):
+
+```yaml
+#cloud-config
+hostname: praxvm
+users:
+  - name: YOUR_USER
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+    lock_passwd: true
+    ssh_authorized_keys: ["ssh-ed25519 AAAA... you@host"]
+package_update: true
+packages: [git, make, curl, build-essential, rsync, zstd, jq, sqlite3,
+           nodejs, npm, docker.io, docker-compose-v2,
+           uidmap, slirp4netns, fuse-overlayfs, rootlesskit, dbus-user-session]
+swap: {filename: /swap.img, size: 4G}   # cloud images ship with none
+runcmd:
+  # uv from Astral's installer, NOT the snap: snap confinement moves every
+  # process it starts into its own cgroup, silently escaping systemd memory
+  # limits — `make test` with TEST_MEM_MAX set would then cap nothing.
+  - [su, -l, YOUR_USER, -c, "curl -LsSf https://astral.sh/uv/install.sh | sh"]
+  - [loginctl, enable-linger, YOUR_USER]
+```
+
+```bash
+printf 'instance-id: praxvm-001\nlocal-hostname: praxvm\n' > meta-data
+cloud-localds $VM-seed.iso user-data meta-data
+```
+
+### 4. Create and boot
+
+A fixed MAC plus a DHCP reservation gives the VM a stable address, which
+matters if the host forwards traffic to it (step 7):
+
+```bash
+sudo virsh net-update default add ip-dhcp-host \
+  "<host mac='52:54:00:70:72:78' name='praxvm' ip='192.168.122.50'/>" --live --config
+
+sudo virt-install --name $VM --memory 8192 --vcpus 6 --cpu host-passthrough --import \
+  --disk path=$DIR/$VM.qcow2,format=qcow2,bus=virtio,discard=unmap \
+  --disk path=$DIR/$VM-seed.iso,device=cdrom \
+  --network network=default,model=virtio,mac=52:54:00:70:72:78 \
+  --memballoon model=virtio --osinfo ubuntu24.04 --graphics none --noautoconsole
+
+ssh YOUR_USER@192.168.122.50 'cloud-init status --wait'
+```
+
+If `virt-install` fails with `No module named 'gi'`, a conda or virtualenv
+`python3` is shadowing the system one: run `sudo /usr/bin/python3 /usr/bin/virt-install …`.
+
+### 5. Give memory back, and start with the host
+
+```bash
+sudo virsh dumpxml $VM | sed "s/<memballoon model='virtio'/<memballoon model='virtio' freePageReporting='on'/" > /tmp/$VM.xml
+sudo virsh define /tmp/$VM.xml
+sudo virsh autostart $VM
+sudo virsh shutdown $VM && sleep 20 && sudo virsh start $VM     # the balloon change needs a cold boot
+sudo virsh dumpxml $VM | grep -o "<memballoon[^>]*>"           # expect freePageReporting='on'
+```
+
+### 6. Install the suite inside it
+
+`ssh` in and follow [Deploying the suite to a fresh server](#deploying-the-suite-to-a-fresh-server-keyless-single-tenant).
+With 8 GB you can run the full stack, including Neo4j and observability, but
+**cap Neo4j**: left unset, its JVM sizes its heap from total RAM. In `prax/local.mk`:
+
+```make
+NEO4J_HEAP_MAX  := 512m
+NEO4J_PAGECACHE := 256m
+TEST_MEM_HIGH   := 1536M   # tests peak under 1 GB; this keeps a bad test
+TEST_MEM_MAX    := 2G      # from starving the rest of the VM
+```
+
+### 7. Reaching the UI
+
+The VM sits on libvirt's NAT network, reachable from the host only. Either join
+it to your tailnet (`tailscale up` inside the VM), or keep the host's tailnet
+name and forward to the VM:
+
+```bash
+# inside the VM: TeamWork must listen beyond loopback (NAT network = host-only)
+#   TEAMWORK_HOST=0.0.0.0
+# on the host:
+sudo tailscale serve --bg --https=443 http://192.168.122.50:8000
+```
+
+### 8. Day-to-day
+
+```bash
+virsh list --all                                         # state
+virsh start praxvm
+virsh shutdown praxvm                                    # clean ACPI shutdown
+virsh snapshot-create-as praxvm pre-upgrade --atomic    # rollback point (fastest when shut down)
+virsh snapshot-revert praxvm pre-upgrade
+```
+
+**Do not back up the running disk image.** A nightly file-level backup of a live
+`qcow2` captures it mid-write. Back up the *data* instead, from inside the
+guest, with SQLite's online backup API and a brief stop of Neo4j and Qdrant —
+then copy the result out to storage your host backup already covers.
 
 ## Deploying the suite to a fresh server (keyless, single-tenant)
 
