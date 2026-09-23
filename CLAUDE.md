@@ -10,13 +10,28 @@ Multi-channel AI assistant (TeamWork web UI, Discord, SMS/voice) powered by a La
   actionlint + `uv run ruff check .` + the full pytest suite with
   `-x` and the sandbox-dependent tests excluded.  If `make ci` is
   green, CI will be green.
-  **Known gap (2026-09):** local `make ci` is not fully keyless.
-  `prax/settings.py` loads `.env` itself (`env_file=".env"`), and
-  `tests/conftest.py` pins only 54 env keys (53 real aliases plus a
-  `NGROCK_URL` typo for `NGROK_URL`), so every other setting comes from
-  your `.env`. A module-scope import can therefore pass locally and fail
-  on keyless GitHub CI — the fixture docstring in
-  `tests/test_context_stats_endpoint.py` records one such case.
+  **Tests are keyless AND offline, locally too (since 2026-09-22).** This
+  was a real incident: local runs read the developer's `.env`, a Library
+  test's background thread called OpenAI image generation, and the dev
+  `.env`'s `HTTPS_PROXY` routed it through the credential-injecting
+  secrets proxy, which swapped the fake `sk-test` for the real key — about
+  a thousand paid images a day, and TJ's whole OpenAI balance. GitHub CI
+  (no `.env`) never saw it. `tests/conftest.py` now enforces, at import:
+  1. **Network ban** — every non-loopback socket connect is refused, and
+     the secrets-proxy ports 8785/8786 are refused even on loopback. A test
+     that truly needs the network takes `@pytest.mark.allow_network` and
+     must not run in `make ci`. **Never weaken this.**
+  2. **Key scrub** — every credential in `credential_registry` is replaced
+     with its `TEST_ENV` fake or `""` before settings load, so no real key
+     enters the process (only `FLASK_SECRET_KEY`/`NEO4J_PASSWORD`, both
+     local, are left alone). This makes local runs match CI.
+  3. **No proxy, no cover thread** — proxy vars are blanked so importing
+     `app` cannot export them, and `AUTO_GENERATE_COVER=false`.
+  Non-credential settings (ports, paths, model names) still come from your
+  `.env`, so a module-scope import can still differ from CI in those.
+- **Test memory cap (opt-in):** set `TEST_MEM_HIGH`/`TEST_MEM_MAX` in
+  `local.mk` and `make test` runs under a systemd scope that OOM-kills only
+  the tests. The suite peaks under 1 GB; 2 GB is a sane cap.
 - **Targeted test run:** `FLASK_SECRET_KEY=ci-test-key uv run pytest tests/<file>.py -x -q`
 - **Lint only:** `make lint` (or `uv run ruff check .`)
 - **Lint auto-fix:** `uv run ruff check --fix`

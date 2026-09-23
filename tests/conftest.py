@@ -1,8 +1,121 @@
 import importlib
+import os
 import sys
 from pathlib import Path
 
 import pytest
+
+# --- No test may reach a credential-injecting proxy, or spawn paid work. -------
+#
+# Runs once, at conftest import, before any test module is collected.
+#
+# app.py calls _export_proxy_env_from_dotenv() at MODULE IMPORT, copying
+# HTTPS_PROXY from the developer's .env into os.environ.  settings.py says in
+# as many words that doing this in tests is wrong, but any test that merely
+# imports `app` triggered it, and from then on every request in the session went
+# out through the secrets proxy — which strips whatever key a request carries
+# and injects the REAL one.  The fake "sk-test" below therefore bought real
+# images: creating a Library space starts a background thread that calls
+# gpt-image-1, and on 2026-09-22 production's forward-proxy log showed 993
+# successful image generations from local test runs in a single day.  GitHub CI
+# has no .env, so it never saw any of this.
+#
+# The export skips any variable that is already set, so pre-setting these to ""
+# makes it a no-op however and whenever `app` is imported.  Empty proxy values
+# mean "no proxy" to httpx, requests and urllib alike.  Tests that exercise the
+# export itself (test_proxy_env_export.py) monkeypatch these and are restored.
+#
+# Uppercase is set to "" (present, so the export skips it); lowercase is REMOVED
+# rather than blanked, because the export also skips a var whose lowercase twin
+# exists — blanking both would stop test_proxy_env_export.py, which clears only
+# the uppercase names, from ever exercising the real export.
+for _proxy_var in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+    os.environ[_proxy_var] = ""
+    os.environ.pop(_proxy_var.lower(), None)
+# Never start the cover-image thread.  With the proxy gone a fake key fails
+# fast anyway, but threads that outlive the test that started them made the
+# suite's memory numbers wrong: their ~3 MB responses landed during whatever
+# unrelated test was running, and one of them took the blame for a 5.5 GB peak.
+os.environ["AUTO_GENERATE_COVER"] = "false"
+
+# --- Network ban: no test may reach anything off this machine. ------------------
+#
+# The two fixes above close the path that actually burned money; this closes the
+# CLASS.  Every socket connect in the test process is checked: loopback and unix
+# sockets are allowed (Qdrant, Neo4j, Ollama and the Docker socket are local),
+# everything else is refused — so a new code path that calls a paid API cannot
+# spend a cent, whatever key or proxy it finds.
+#
+# The secrets proxy's ports are refused EVEN THOUGH they are on loopback: that
+# proxy exists to turn a request carrying a fake key into one carrying the real
+# key, which is precisely how "sk-test" bought real images.
+#
+# A test that genuinely needs the network must say so with
+# @pytest.mark.allow_network — and should then not run in `make ci`.
+import ipaddress  # noqa: E402
+import socket  # noqa: E402
+
+_SECRETS_PROXY_PORTS = frozenset({8785, 8786})  # reverse + forward: both inject real keys
+_network_allowed = False
+
+
+class NetworkBlockedError(ConnectionRefusedError):
+    """Raised instead of connecting. A ConnectionRefusedError, so code under test
+    handles it exactly as it would an unreachable host."""
+
+
+def _is_local(host: str, port: int) -> bool:
+    if host in ("localhost", ""):
+        return port not in _SECRETS_PROXY_PORTS
+    try:
+        ip = ipaddress.ip_address(host.split("%", 1)[0])
+    except ValueError:
+        return False  # an unresolved hostname: not provably local
+    return ip.is_loopback and port not in _SECRETS_PROXY_PORTS
+
+
+def _guard(sock, address):
+    if _network_allowed or sock.family == getattr(socket, "AF_UNIX", -1):
+        return
+    host, port = address[0], address[1]
+    if not _is_local(str(host), int(port)):
+        raise NetworkBlockedError(
+            f"tests may not open network connections (attempted {host}:{port}). "
+            "No test may reach a paid API or the credential-injecting proxy. "
+            "Mock it, or mark the test @pytest.mark.allow_network."
+        )
+
+
+_real_connect = socket.socket.connect
+_real_connect_ex = socket.socket.connect_ex
+
+
+def _guarded_connect(self, address):
+    _guard(self, address)
+    return _real_connect(self, address)
+
+
+def _guarded_connect_ex(self, address):
+    _guard(self, address)
+    return _real_connect_ex(self, address)
+
+
+socket.socket.connect = _guarded_connect
+socket.socket.connect_ex = _guarded_connect_ex
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "allow_network: this test may open non-loopback network connections"
+    )
+
+
+@pytest.fixture(autouse=True)
+def _network_ban(request):
+    global _network_allowed
+    _network_allowed = request.node.get_closest_marker("allow_network") is not None
+    yield
+    _network_allowed = False
 
 TEST_ENV = {
     "FLASK_SECRET_KEY": "test-secret",
@@ -76,6 +189,27 @@ TEST_ENV = {
     "DISCORD_ALLOWED_CHANNELS": "",
     "DISCORD_TO_PHONE_MAP": "",
 }
+
+# --- No real credential ever enters the test process. ---------------------------
+#
+# pydantic-settings reads the developer's .env itself, so without this every key
+# in it is present in the test process — and the network ban above is the only
+# thing stopping its use.  Belt AND braces: replace every registered credential
+# with its TEST_ENV fake, or "" where there is none, before prax.settings is
+# first imported.  An env var outranks .env, so the real values are never read.
+#
+# This mirrors GitHub CI exactly, which has no .env: all 30 registered
+# credentials default to empty except two local ones, left alone here —
+# FLASK_SECRET_KEY (TEST_ENV supplies it) and NEO4J_PASSWORD (its "prax-memory"
+# default is what the local test Neo4j uses).  Taken from the credential
+# registry, whose drift guard already fails CI if a credential is added to
+# settings.py without a row — so a new key is scrubbed here automatically.
+from prax.services.credential_registry import REGISTRY as _CREDENTIALS  # noqa: E402
+
+_KEEP_LOCAL = {"FLASK_SECRET_KEY", "NEO4J_PASSWORD"}
+for _cred in _CREDENTIALS:
+    if _cred.env not in _KEEP_LOCAL:
+        os.environ[_cred.env] = TEST_ENV.get(_cred.env, "")
 
 
 @pytest.fixture(autouse=True)
