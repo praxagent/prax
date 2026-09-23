@@ -633,16 +633,39 @@ TEST_MEM_MAX    := 2G      # from starving the rest of the VM
 
 ### 7. Reaching the UI
 
-The VM sits on libvirt's NAT network, reachable from the host only. Either join
-it to your tailnet (`tailscale up` inside the VM), or keep the host's tailnet
-name and forward to the VM:
+The VM sits on libvirt's NAT network, reachable from the host only.
+**Recommended: make the VM its own tailnet node.** TeamWork then stays on
+loopback, and the URL does not depend on the host:
 
 ```bash
-# inside the VM: TeamWork must listen beyond loopback (NAT network = host-only)
-#   TEAMWORK_HOST=0.0.0.0
-# on the host:
-sudo tailscale serve --bg --https=443 http://192.168.122.50:8000
+# inside the VM
+curl -fsSL https://tailscale.com/install.sh | sh
+# --accept-dns=false: leave the guest's name resolution exactly as it was, so
+# the stack's outbound lookups do not change underneath it
+sudo tailscale up --hostname=prax --accept-dns=false     # approve the printed link
+sudo tailscale serve --bg --https=443 http://127.0.0.1:8000
 ```
+
+Prax discovers its own address from the `tailscale` CLI, so the links it sends
+use `https://prax.<tailnet>.ts.net` with no further configuration. In the
+Tailscale admin console, disable key expiry for the node, or it drops off the
+tailnet after about six months and needs an interactive re-login.
+
+**Once the VM is on the tailnet, anything listening on all interfaces is
+reachable from every tailnet device** — including development Qdrant/Neo4j,
+which have no authentication. Make loopback Docker's default for ports
+published without an address:
+
+```bash
+echo '{"ip": "127.0.0.1"}' | sudo tee /etc/docker/daemon.json   # merge if the file exists
+sudo systemctl restart docker
+sudo ss -ltn | grep -v 127.0.0.1        # expect only sshd
+```
+
+*Alternative:* keep the host's tailnet name and forward to the VM
+(`sudo tailscale serve --bg --https=443 http://192.168.122.50:8000` on the
+host). That needs TeamWork listening beyond loopback inside the VM
+(`TEAMWORK_HOST=0.0.0.0`) and ties the URL to the host.
 
 ### 8. Day-to-day
 
