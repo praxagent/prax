@@ -55,7 +55,7 @@ When a plugin calls `caps.http_get(url)`, the proxy in the subprocess serializes
 | `gc.get_objects()` to find `prax.settings` | Returns nothing — the parent's settings object is in a different process. **Not isolated:** `from prax.settings import settings` builds a fresh one from the inherited cwd's `.env` (Known gap above) |
 | `().__class__.__base__.__subclasses__()` → `BuiltinImporter` | Can import modules — including `prax.settings`, which loads the keys from `.env` (Known gap above) |
 | `open("/proc/self/environ")` | Contains only `PATH`, `HOME`, `LANG`, `PYTHONPATH` |
-| Infinite loop / memory bomb | `SIGALRM` → `SIGTERM` → `SIGKILL` (uncatchable) |
+| Infinite loop | Parent's read deadline expires → subprocess `SIGKILL`ed (uncatchable). A memory bomb is bounded only by the host — the child has no memory limit |
 | `ctypes` memory writes to bypass audit hooks | No audit hook is installed to bypass (see Defence-in-depth below); keys are obtainable via `prax.settings` regardless |
 | Docker socket access | **Not isolated** — the child is an ordinary host process running as the same OS user; if the host has `/var/run/docker.sock`, the child can open it |
 | Read other plugins' files | Blocked **through `caps.*`** — `save_file`/`read_file`/`workspace_path` scoped to `plugin_data/{plugin}/`; path traversal blocked by `safe_join`. Plain `open()` in the child is unrestricted |
@@ -71,8 +71,8 @@ Plugins access Prax services through a `PluginCapabilities` proxy. Every method 
 | `caps.http_get(url)` / `caps.http_post(url)` | Makes the HTTP request with credentials, rate-limited (50/invocation), returns serialized response |
 | `caps.save_file(name, content)` | Writes to the plugin's scoped directory (`plugin_data/{plugin}/`) for IMPORTED; `active/` for BUILTIN/WORKSPACE |
 | `caps.read_file(name)` | Reads from the plugin's scoped directory only — IMPORTED plugins cannot read other plugins' files or user workspace |
-| `caps.run_command(cmd)` | Executes in the parent with auditing and timeout; IMPORTED plugins have `cwd` forced to their scoped directory |
-| `caps.tts_synthesize(text, path)` | Calls OpenAI/ElevenLabs TTS API with the real key |
+| `caps.run_command(cmd)` | Executes via `prax.utils.shell.run_command` with auditing and timeout. IMPORTED plugins have `cwd` forced to their scoped directory and, since 2026-09-23, are **refused** when the command would run on the Prax host rather than in the sandbox |
+| `caps.tts_synthesize(text, path)` / `caps.transcribe_audio(path)` | Calls the TTS / Whisper API with the real key, in the parent. For IMPORTED plugins `path` is confined to `plugin_data/{plugin}/` (since 2026-09-23; before, it was any path the service account could write or read) |
 | `caps.get_config(key)` | Returns non-secret config values; blocks keys matching `key`, `secret`, `token`, `password`, `credential` |
 | `caps.workspace_path()` / `caps.get_user_id()` / `caps.shared_tempdir()` | IMPORTED plugins get their scoped path (`plugin_data/{plugin}/`), not the full workspace root |
 
@@ -84,7 +84,7 @@ These limits are enforced in the **parent process** (in `MonitoredTool`), outsid
 |-------|-------|-------------|
 | Tool calls per message | 10 | `_increment_call_count()` in parent, checked before each bridge invocation |
 | HTTP requests | 50 **per `PluginCapabilities` instance, for its lifetime** | Counted in `PluginCapabilities._check_http()` in parent. **Known gap (2026-09):** the policy field is named `max_http_requests_per_invocation`, but `_http_request_count` is set to 0 only in `__init__` and never reset, and caps instances live as long as the loader — so a plugin that has made 50 requests in total gets `PermissionError` until the next `load_all()`/restart |
-| Invocation timeout | 30 seconds | `SIGALRM` in parent → `SIGTERM` → 5s grace → `SIGKILL` |
+| Invocation timeout | 30 seconds | A deadline on the parent's read of the child's replies (a pump thread feeds a queue) → `SIGKILL`. It was `SIGALRM` until 2026-09-23, which can only be armed on the main thread: under Flask, Discord and task-runner threads it raised `ValueError`, so IMPORTED plugins never finished registering where Prax actually serves |
 | Risk classification | HIGH | IMPORTED tools are classified HIGH (`get_risk_level`), so they require user confirmation before first execution **where the governance wrapper is in front** — i.e. tools promoted into the hub registry or exposed via MCP (which refuses HIGH). Spoke-routed plugin tools are not wrapped; see [tool-risk.md](tool-risk.md) |
 
 ### Subprocess lifecycle

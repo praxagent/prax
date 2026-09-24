@@ -505,3 +505,107 @@ class TestLoaderBridgeIntegration:
             assert name == "imported_tool"
         finally:
             shutdown_bridge("imported_test")
+
+
+# ---------------------------------------------------------------------------
+# The bridge must work off the main thread (#19 in the July review)
+# ---------------------------------------------------------------------------
+
+def _run_in_thread(fn):
+    """Run *fn* on a worker thread, as Flask/Discord/the task runner do."""
+    import threading
+
+    box: dict = {}
+
+    def target():
+        try:
+            box["value"] = fn()
+        except BaseException as exc:  # noqa: BLE001 — surface anything to the test
+            box["error"] = exc
+
+    t = threading.Thread(target=target)
+    t.start()
+    t.join(60)
+    assert not t.is_alive(), "bridge call hung"
+    if "error" in box:
+        raise box["error"]
+    return box["value"]
+
+
+class TestBridgeOffMainThread:
+    def test_register_and_invoke_from_a_worker_thread(self, tmp_path):
+        from prax.plugins.bridge import PluginBridge
+
+        plugin_path = _make_plugin(tmp_path, textwrap.dedent("""\
+            from langchain_core.tools import tool
+
+            @tool
+            def echo(value: str) -> str:
+                \"\"\"Echo.\"\"\"
+                return value
+
+            def register():
+                return [echo]
+        """), subdir="threaded")
+        bridge = PluginBridge("threaded")
+        try:
+            tools = _run_in_thread(lambda: bridge.register(plugin_path, "imported"))
+            assert [t["name"] for t in tools] == ["echo"]
+            assert _run_in_thread(lambda: bridge.invoke("echo", {"value": "hi"}, timeout=10)) == "hi"
+        finally:
+            bridge.shutdown()
+
+    def test_timeout_fires_off_the_main_thread_and_kills_the_subprocess(self, tmp_path):
+        import time
+
+        from prax.plugins.bridge import PluginBridge
+
+        plugin_path = _make_plugin(tmp_path, textwrap.dedent("""\
+            import time
+            from langchain_core.tools import tool
+
+            @tool
+            def slow(value: str) -> str:
+                \"\"\"Sleep.\"\"\"
+                time.sleep(60)
+                return value
+
+            def register():
+                return [slow]
+        """), subdir="slow")
+        bridge = PluginBridge("slow")
+        try:
+            _run_in_thread(lambda: bridge.register(plugin_path, "imported"))
+            started = time.monotonic()
+            with pytest.raises(TimeoutError):
+                _run_in_thread(lambda: bridge.invoke("slow", {"value": "x"}, timeout=2))
+            assert time.monotonic() - started < 15
+            assert not bridge.is_alive
+        finally:
+            bridge.shutdown()
+
+    def test_stderr_flood_does_not_block_the_plugin(self, tmp_path):
+        from prax.plugins.bridge import PluginBridge
+
+        # ~1 MB of stderr: far past a pipe buffer, which nobody used to drain.
+        plugin_path = _make_plugin(tmp_path, textwrap.dedent("""\
+            import sys
+            from langchain_core.tools import tool
+
+            @tool
+            def noisy(value: str) -> str:
+                \"\"\"Log a lot.\"\"\"
+                for _ in range(16384):
+                    sys.stderr.write("x" * 63 + "\\n")
+                sys.stderr.flush()
+                return value
+
+            def register():
+                return [noisy]
+        """), subdir="noisy")
+        bridge = PluginBridge("noisy")
+        try:
+            bridge.register(plugin_path, "imported")
+            assert bridge.invoke("noisy", {"value": "done"}, timeout=20) == "done"
+        finally:
+            bridge.shutdown()

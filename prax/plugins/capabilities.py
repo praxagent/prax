@@ -102,6 +102,27 @@ class PluginCapabilities:
             return os.path.join(root, "plugin_data", self.plugin_rel_path)
         return os.path.join(root, "active")
 
+    def _scoped_path(self, path: str) -> str:
+        """Confine a caller-supplied path to an IMPORTED plugin's data dir.
+
+        tts/transcription run in the Prax process, so an unconfined path is
+        a write (or an upload) of any file the service account can reach —
+        including Prax's own code. BUILTIN/WORKSPACE plugins keep their
+        prior, unconfined behaviour.
+        """
+        if self.trust_tier != PluginTrust.IMPORTED:
+            return path
+        from prax.services.workspace_service import safe_join
+        data_root = self._plugin_data_root()
+        os.makedirs(data_root, exist_ok=True)
+        try:
+            return safe_join(data_root, path)
+        except ValueError:
+            raise PermissionError(
+                f"Plugin '{self.plugin_rel_path}' may only use paths inside its "
+                f"data directory; {path!r} is outside it."
+            ) from None
+
     # ------------------------------------------------------------------
     # LLM — plugin never sees API key
     # ------------------------------------------------------------------
@@ -256,6 +277,16 @@ class PluginCapabilities:
                     f"Plugin '{self.plugin_rel_path}' is not allowed to run '{cmd_name}'. "
                     f"Allowed commands: {sorted(self._permissions.allowed_commands)}"
                 )
+        if self.trust_tier == PluginTrust.IMPORTED:
+            # Third-party code: never on the Prax host. Its permissions.md is
+            # written by the plugin's own author, so "commands" there is a
+            # request, not a grant the host should honour outside the sandbox.
+            from prax.utils.shell import routes_to_sandbox
+            if not routes_to_sandbox():
+                raise PermissionError(
+                    f"Plugin '{self.plugin_rel_path}' is IMPORTED; its commands run only "
+                    "inside the sandbox, and this deployment would run them on the Prax host."
+                )
         if self.trust_tier == PluginTrust.IMPORTED and self.user_id:
             from prax.services.workspace_service import safe_join
             forced_cwd = self._plugin_data_root()
@@ -292,6 +323,7 @@ class PluginCapabilities:
         Returns the output path on success.
         """
         self._check_permission("tts")
+        output_path = self._scoped_path(output_path)
         logger.info(
             "Plugin %s TTS request (%s/%s, %d chars)",
             self.plugin_rel_path, provider, voice, len(text),
@@ -333,6 +365,7 @@ class PluginCapabilities:
         (OpenAI Whisper API limit).
         """
         self._check_permission("transcription")
+        audio_path = self._scoped_path(audio_path)
         logger.info(
             "Plugin %s transcription request (%s)",
             self.plugin_rel_path, audio_path,

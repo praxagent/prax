@@ -84,6 +84,11 @@ def _translate_cmd_paths(cmd: list[str]) -> list[str]:
 # Public API
 # ---------------------------------------------------------------------------
 
+def routes_to_sandbox() -> bool:
+    """True when :func:`run_command` executes inside the sandbox container."""
+    return bool(_get_settings().sandbox_persistent)
+
+
 def run_command(
     cmd: list[str],
     *,
@@ -101,8 +106,7 @@ def run_command(
     container (via the prax-sandbox client); workspace paths in *cmd* and *cwd*
     are translated to the sandbox mount first.  Otherwise it runs on the host.
     """
-    settings = _get_settings()
-    if settings.sandbox_persistent:
+    if routes_to_sandbox():
         from prax.services.sandbox_bridge import configured_client
         sandbox_cmd = _translate_cmd_paths(cmd)
         sandbox_cwd = to_sandbox_path(cwd)
