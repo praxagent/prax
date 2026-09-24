@@ -22,6 +22,13 @@ EGRESS_GATE_TOKEN=<the gate's EGRESS_ADMIN_TOKEN>
 They need TeamWork with approval support (`/api/external/approvals`,
 `/api/approvals`) and prax-sandbox with `docker-compose.egress.yml`.
 
+**TeamWork must authenticate its UI**, because approvals are decided only by
+an authenticated person. Set `INTERNAL_API_KEY` in TeamWork's `.env` and log in
+once in the browser (the session lasts 30 days), or run behind the
+authenticating proxy. Without either, TeamWork **refuses every decision**,
+and Prax therefore refuses every action that needs one. That is fail-closed on
+purpose: an unauthenticated route cannot tell your browser from a program.
+
 ## 1. Out-of-band approvals — `OUT_OF_BAND_APPROVALS_ENABLED`
 
 **Before.** The HIGH-risk gate and the lethal-trifecta gate in
@@ -49,19 +56,19 @@ drives the gates; `prax/services/approval_service.py` holds the shared core.
 **Why the model cannot approve itself.**
 - **The model never carries the decision.** Prax reads it from TeamWork, not
   from anything the model says.
-- **TeamWork's decision route refuses agent credentials.** Any request with
-  `X-API-Key`, `Authorization` or `X-Agent-Signature` gets a 403.
+- **TeamWork's decision route requires a person.** It needs a logged-in UI
+  session cookie. The UI key header alone is refused, since that is the
+  scripts path. Any request with `X-API-Key`, `Authorization` or
+  `X-Agent-Signature` also gets a 403.
 - **The external API cannot decide either.** An agent can only ask, check and
   spend its **own** requests.
 - **No model tool can reach the decision route.** Prax's fetch tools block
   loopback, and the sandbox cannot reach the host.
 
-**How strong it is.** An approval is exactly as strong as access to the
-TeamWork UI:
-- On a loopback/tailnet deployment, that means whoever can reach the UI.
-- With `INTERNAL_API_KEY` or proxy auth, it means whoever holds that.
-
-Set one of those if the UI is reachable by anyone you would not let approve.
+**How strong it is.** An approval is exactly as strong as your UI login: the
+`INTERNAL_API_KEY` session cookie, or the proxy's identity. The operator can
+choose `APPROVALS_ALLOW_UNAUTHENTICATED=true` in TeamWork to skip that. It is
+off by default, because it lets any program that can reach the port approve.
 
 Verified end to end (2026-09-24) against a live TeamWork:
 - An approved call ran about 2 s after the click.
@@ -77,6 +84,13 @@ into the model's context, and so into the trace. With the flag it is replaced
 by `browser_fill_login(domain, username_selector, password_selector)`. That
 tool types the stored values into the page and reports only which fields it
 filled. `browser_credentials` never showed the password.
+
+**Stored credentials go only to their own site.** The open page must be HTTPS
+on the credential's domain, an alias of it, or a subdomain of either. This is
+checked before the username and **again before the password**, because the
+page may move. Without the check, an injected page could get the model to
+"log in to github.com" while the browser shows `attacker.example`, and the
+page would read the password.
 
 The other login route, `browser_request_login`, already has this shape: the
 person logs in over VNC, and the agent never sees anything.
@@ -113,10 +127,24 @@ to a person through the same TeamWork dialog ("The sandbox wants to connect to
 example.net:443") and posts the answer back to the gate. **Allow for 1 hour**
 works here too.
 
-**Taint.** Once a turn has read private data (the trifecta's private leg) or
-run code in the sandbox (whose `/workspace` *is* the user's data), Prax marks
-the gate tainted until the last such turn ends. While tainted, the policy's
-`clean_only` destinations are asked about rather than allowed.
+**Taint.** Prax marks the gate tainted until the last such turn ends when a
+turn:
+- has read private data (the trifecta's private leg), or
+- is **about to** run code in the sandbox, whose `/workspace` *is* the user's
+  data. Taint is set before the command runs, since a
+  `cat … | curl …` is one call.
+
+While tainted, the policy's `clean_only` destinations are asked about rather
+than allowed.
+
+Taint does not fail open:
+- Updates are sent synchronously, one at a time, so a "clean" can never
+  overtake a later "tainted".
+- Each turn's taint is a lease that expires if the turn never cleans up.
+- Prax re-asserts taint every minute, well inside the gate's 5-minute TTL.
+
+A person's answer to a gate question is spent only after the gate accepts it,
+and Prax stops asking once the gate's own deadline has passed.
 
 Verified end to end (2026-09-24) against the real sandbox image, gate and
 TeamWork:

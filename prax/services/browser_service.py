@@ -583,6 +583,11 @@ def click(user_id: str, selector: str) -> dict[str, Any]:
         return {"error": f"Click failed on '{selector}': {e}"}
 
 
+def current_url(user_id: str) -> str:
+    """URL of the page currently open in this user's browser session."""
+    return _get_session(user_id).page.url or ""
+
+
 def fill(user_id: str, selector: str, value: str) -> dict[str, Any]:
     """Fill a form field with human-like typing."""
     try:

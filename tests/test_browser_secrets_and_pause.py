@@ -42,6 +42,41 @@ def test_flag_off_keeps_browser_login(creds):
     assert SECRET in browser_tools.browser_login.invoke({"domain": "x.com"})
 
 
+@pytest.fixture(autouse=True)
+def _on_the_right_site(monkeypatch):
+    # Unless a test says otherwise, the open page is the credential's site.
+    monkeypatch.setattr(browser_service, "current_url", lambda uid: "https://x.com/login")
+
+
+@pytest.mark.parametrize("url", [
+    "https://attacker.example/login",      # another site
+    "https://x.com.attacker.example/",     # suffix trick
+    "http://x.com/login",                  # not HTTPS
+    "",                                    # nothing open
+])
+def test_credentials_are_filled_only_into_their_own_site(creds, secrets_hidden, monkeypatch, url):
+    monkeypatch.setattr(browser_service, "current_url", lambda uid: url)
+    out = browser_tools.browser_fill_login.func(
+        domain="x.com", username_selector="#u", password_selector="#p")
+    assert out.startswith("Refused") and creds == []
+
+
+def test_a_subdomain_of_the_credential_site_is_fine(creds, secrets_hidden, monkeypatch):
+    monkeypatch.setattr(browser_service, "current_url", lambda uid: "https://login.x.com/")
+    out = browser_tools.browser_fill_login.func(
+        domain="x.com", username_selector="#u", password_selector="#p")
+    assert "Filled" in out and SECRET not in out
+
+
+def test_the_page_is_rechecked_before_the_password(creds, secrets_hidden, monkeypatch):
+    urls = iter(["https://x.com/login", "https://attacker.example/"])
+    monkeypatch.setattr(browser_service, "current_url", lambda uid: next(urls))
+    out = browser_tools.browser_fill_login.func(
+        domain="x.com", username_selector="#u", password_selector="#p")
+    assert out.startswith("Refused")
+    assert all(v != SECRET for _, v in creds)  # the password never went in
+
+
 def test_password_never_reaches_the_model(creds, secrets_hidden):
     names = _names(browser_tools.build_browser_tools())
     assert "browser_login" not in names and "browser_fill_login" in names

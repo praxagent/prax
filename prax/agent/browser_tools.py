@@ -285,6 +285,23 @@ def browser_login(domain: str) -> str:
     return f"username={username}\npassword={password}"
 
 
+def _refuse_foreign_page(url: str, creds: dict) -> str:
+    """Why the open page must not receive these credentials, or ``""``."""
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url or "")
+    host = (parts.hostname or "").lower().rstrip(".")
+    allowed = [str(d).lower().rstrip(".") for d in [creds.get("domain"), *creds.get("aliases", [])] if d]
+    if parts.scheme != "https":
+        return (f"Refused: the open page ({url or 'none'}) is not HTTPS, so stored "
+                "credentials are not filled into it.")
+    if not any(host == d or host.endswith("." + d) for d in allowed):
+        return (f"Refused: the open page is on {host or 'no site'}, not "
+                f"{creds.get('domain')}. Stored credentials are filled only into their own "
+                "site — navigate there first.")
+    return ""
+
+
 @risk_tool(risk=RiskLevel.HIGH)
 def browser_fill_login(domain: str, username_selector: str, password_selector: str) -> str:
     """Log in with the stored credentials for *domain* without seeing them.
@@ -306,6 +323,16 @@ def browser_fill_login(domain: str, username_selector: str, password_selector: s
     if "error" in creds:
         return f"No credentials: {creds['error']}"
     uid = _get_user_id()
+
+    def wrong_site() -> str:
+        # Credentials go only into their own site, over HTTPS. Without this an
+        # injected page could have the model "log in to github.com" while the
+        # browser shows attacker.example — and the page would read the password.
+        return _refuse_foreign_page(browser_service.current_url(uid), creds)
+
+    refusal = wrong_site()
+    if refusal:
+        return refusal
     filled = []
     username = creds.get("username") or creds.get("email") or ""
     if username_selector and username:
@@ -316,6 +343,9 @@ def browser_fill_login(domain: str, username_selector: str, password_selector: s
     password = creds.get("password") or ""
     if not password:
         return f"No stored password for {creds.get('domain', domain)}."
+    refusal = wrong_site()  # re-checked: the page may have moved meanwhile
+    if refusal:
+        return refusal
     r = browser_service.fill(uid, password_selector, password)
     if "error" in r:
         # The error text comes from the page layer, not the secret; say only which step failed.
