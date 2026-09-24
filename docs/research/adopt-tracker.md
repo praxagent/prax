@@ -87,6 +87,14 @@ Everything here feeds [IDEAS_BACKLOG #29](../IDEAS_BACKLOG.md) (close the recurs
 | **Email as a channel** (OSS transport: Postal/Cloudflare) | [agentmail](agentmail-email-as-a-channel.md) | ⏸ | **ship only after** the lethal-trifecta guard — inbound email is a prime injection vector |
 | **Mixture-of-Agents hard-task escalation** (`MOA_ENABLED`, default off) | [mixture-of-agents](mixture-of-agents.md) | ⏸ | gate rollout on the HAL `pass_per_1k_tokens` cost axis |
 
+## Containment (who decides what leaves the box)
+
+| Item | From | Status | Notes |
+|---|---|---|---|
+| **Password surrogation for browser logins** (the model never sees a stored site password; a tool fills it into the selector server-side) | [muse](meta-muse-secure-vm.md) | 📋 | small, do first. Today `browser_login` returns the real password into the model's context and the trace (`prax/agent/browser_tools.py`). Keyless Prax, extended from provider keys to the user's own credentials |
+| **Out-of-process egress authority ("Sentinel-lite")**: the forward proxy as the sandbox's only exit, deny-by-default, allow / deny / ask at host + HTTP level, DNS-time SSRF checks | [muse](meta-muse-secure-vm.md) + [google-ax](google-ax-agent-orchestrator.md) `Gateway` | 📋 | the largest gap Muse exposes: Prax's governance runs in the agent's own process, the forward proxy passes unknown hosts through, and sandbox egress is unrestricted. Flag-gated and eval-gated: tool-level deny-by-default was rejected on measured cost regressions, and an egress policy that constantly asks fails differently |
+| **Process-level taint for sandbox egress** (egress after workspace-reading calls counts as the private-data trifecta leg) | [muse](meta-muse-secure-vm.md) | ⏸ waits on Sentinel-lite | the trifecta guard sees tool calls, not what a script does inside one `sandbox_shell` call. First version per-container / per-turn; Muse uses kernel tracking |
+
 ## Memory / learning (needs infra or eval coverage first)
 
 | Item | From | Status | Notes |
