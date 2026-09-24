@@ -196,6 +196,32 @@ Verified live (2026-09-24):
   Treat Prax's own traffic as permanently holding private data when you
   write its policy.
 
+## 6. Prax without the Docker socket — `SANDBOX_DAEMON_URL` + `deploy/systemd/prax-sandbox-daemon.service`
+
+The Docker socket is root-equivalent over its containers. Whoever holds it can
+start a container with no egress gate, no limits and any mount. A compromised
+Prax holding it could therefore walk around every boundary above.
+
+prax-sandbox's control daemon holds Docker instead, and exposes only sandbox
+operations over a token-guarded loopback API. Image rebuilds stay off. Prax
+drives the sandbox through it (`SANDBOX_DAEMON_URL` / `SANDBOX_DAEMON_TOKEN`),
+and `prax.service.d/50-no-docker.conf` makes the Docker sockets inaccessible
+to the Prax process.
+
+Over the daemon, Prax cannot ask Docker what the sandbox mounts, so set
+`SANDBOX_WORKSPACE_MOUNT_SOURCE`.
+
+Verified (2026-09-24) with the Prax process's Docker access deliberately
+dead:
+- health, `run_shell` and `run_command` (host paths translated) all worked
+  through the daemon;
+- the exec deadline was enforced there.
+
+This is the part of "the harness in its own cell" that matters for
+containment. Prax already runs under systemd file confinement, and with
+sections 5 and 6 it has no route to the network except the proxy, and no route
+to Docker except the daemon.
+
 ## Compared with Meta's Muse (see [research note](../research/meta-muse-secure-vm.md))
 
 | Muse | Prax + TeamWork + prax-sandbox, with the flags on |
@@ -207,7 +233,7 @@ Verified live (2026-09-24):
 | Kernel-level per-process taint | Per-container, per-turn taint. Coarser |
 | Surrogates for all credentials, including site passwords | Provider keys via the secrets proxy; site passwords filled without entering context. User OAuth tokens: Prax has no OAuth connector store to surrogate |
 | Agent paused while the user drives the browser | Yes (flag) |
-| Harness itself inside the isolated cell | **Not as a container.** Prax runs on the host under systemd confinement (files) plus the loopback-only egress restriction (network). See the Docker-socket note below |
+| Harness itself inside the isolated cell | **Not as a container, but boxed on every axis that matters:** systemd file confinement; network only through the policy proxy (kernel-enforced); no Docker socket, with the sandbox reached through the daemon |
 | Injection classifiers outside the cell | **No.** Not built; would need the eval gate |
 
 **The honest claim:**
