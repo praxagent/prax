@@ -263,6 +263,19 @@ class AppSettings(BaseSettings):
     sandbox_mem_limit: str = Field(default="1g", alias="SANDBOX_MEM_LIMIT")
     sandbox_cpu_limit: int = Field(default=2_000_000_000, alias="SANDBOX_CPU_LIMIT")
     sandbox_max_rounds: int = Field(default=10, alias="SANDBOX_MAX_ROUNDS")
+    egress_gate_url: str = Field(
+        default="", alias="EGRESS_GATE_URL",
+        description=(
+            "Admin API of prax-sandbox's egress gate (docker-compose.egress.yml), "
+            "e.g. http://127.0.0.1:8790. When set with EGRESS_GATE_TOKEN, Prax "
+            "answers the gate's 'ask' decisions through TeamWork approvals and "
+            "keeps its taint flag. Empty = no egress gate."
+        ),
+    )
+    egress_gate_token: str = Field(
+        default="", alias="EGRESS_GATE_TOKEN", repr=False,
+        description="Bearer token for the egress gate's admin API (its EGRESS_ADMIN_TOKEN).",
+    )
     browser_secrets_out_of_context: bool = Field(
         default=False, alias="BROWSER_SECRETS_OUT_OF_CONTEXT",
         description=(

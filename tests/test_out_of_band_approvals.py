@@ -57,7 +57,7 @@ def tool(ran):
 def teamwork(monkeypatch):
     fake = FakeTeamWork()
     monkeypatch.setattr("prax.services.teamwork_service.get_teamwork_client", lambda: fake)
-    monkeypatch.setattr("prax.agent.human_approval._POLL_SECONDS", 0.0)
+    monkeypatch.setattr("prax.services.approval_service.POLL_SECONDS", 0.0)
     monkeypatch.setattr(prax_settings.settings, "out_of_band_approvals_enabled", True)
     return fake
 
@@ -95,7 +95,7 @@ def test_unanswered_request_times_out_refused(tool, ran, teamwork, monkeypatch):
     teamwork.answers = []  # stays pending
     monkeypatch.setattr(prax_settings.settings, "approval_wait_seconds", 5)
     t = [0.0]
-    monkeypatch.setattr("prax.agent.human_approval.time.monotonic", lambda: t.__setitem__(0, t[0] + 3) or t[0])
+    monkeypatch.setattr("prax.services.approval_service.time.monotonic", lambda: t.__setitem__(0, t[0] + 3) or t[0])
     out = tool.invoke({"x": "a"})
     assert "no answer" in out and ran == []
 
@@ -123,3 +123,15 @@ def test_a_high_risk_trifecta_sink_asks_once(ran, teamwork, monkeypatch):
     assert len(teamwork.asked) == 1
     assert teamwork.asked[0]["payload"]["kind"] == "lethal_trifecta"
     gov.drain_audit_log()
+
+
+def test_a_vanished_request_fails_fast_instead_of_polling_to_the_deadline(tool, ran, teamwork):
+    import requests
+
+    def gone(approval_id):
+        resp = requests.Response()
+        resp.status_code = 404
+        raise requests.HTTPError("404", response=resp)
+    teamwork.approval_status = gone
+    out = tool.invoke({"x": "a"})
+    assert out.startswith("⛔") and "404" in out and ran == []

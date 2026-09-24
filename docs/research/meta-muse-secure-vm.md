@@ -178,6 +178,27 @@ Willison's lethal trifecta:
 - per-tool risk tiers with an audit trail;
 - a pre-registered eval gate for behaviour changes.
 
+## Status — built 2026-09-24 (all opt-in; see [out-of-band-approvals.md](../security/out-of-band-approvals.md))
+
+All four adopts below are built, each verified end to end against live
+services:
+1. **Out-of-band approvals.** Flag `OUT_OF_BAND_APPROVALS_ENABLED`. Built from
+   TeamWork's approval dialog and scoped grants plus Prax's gates.
+2. **Passwords out of context.** Flags `BROWSER_SECRETS_OUT_OF_CONTEXT` and
+   `BROWSER_PAUSE_FOR_USER`, plus TeamWork's Take control toggle.
+3. **An egress authority.** prax-sandbox's egress gate, with Prax answering
+   its questions through the same dialog.
+4. **Coarse taint.** Per turn and per container.
+
+The comparison table in the security doc says what now matches Muse and what
+still does not: the harness itself is not in a cell, the Prax process's own
+egress is not gated, and there is no classifier layer.
+
+Building it exposed a TeamWork data-loss bug. TeamWork shared **one** SQLite
+connection across concurrent sessions, so a session closing rolled back
+another's in-flight insert, which still answered 200. It is fixed with a
+connection per session, and a regression test covers it.
+
 ## Adopt (ranked)
 
 1. **Real, out-of-band approvals.** This fixes July #8.

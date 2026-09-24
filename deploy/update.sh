@@ -116,6 +116,18 @@ if ! $CHECK_ONLY; then
           echo "    WARN: SANDBOX_LIMITS is set but this prax-sandbox has no docker-compose.limits.yml"
         fi ;;
     esac
+    # SANDBOX_EGRESS=1 adds the egress gate: the sandbox's only way out becomes
+    # a policy proxy. Needs EGRESS_ADMIN_TOKEN here, and the same token as
+    # EGRESS_GATE_TOKEN (with EGRESS_GATE_URL) in Prax's .env so Prax can answer
+    # the gate's questions through TeamWork approvals.
+    case "${SANDBOX_EGRESS:-}" in
+      1|true|yes)
+        if [[ -f "$PRAX_ROOT/prax-sandbox/docker-compose.egress.yml" && -n "${EGRESS_ADMIN_TOKEN:-}" ]]; then
+          sandbox_files+=(-f docker-compose.egress.yml)
+        else
+          echo "    WARN: SANDBOX_EGRESS is set but EGRESS_ADMIN_TOKEN is empty or this prax-sandbox has no docker-compose.egress.yml — egress gate NOT enabled"
+        fi ;;
+    esac
     (cd "$PRAX_ROOT/prax-sandbox" \
       && WORKSPACE_DIR="${WORKSPACE_DIR:-$PRAX_ROOT/workspaces}" \
          docker compose "${sandbox_files[@]}" up -d 2>&1 | tail -2)
