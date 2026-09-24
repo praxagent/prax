@@ -15,7 +15,8 @@ def gate(monkeypatch):
     calls = []
     monkeypatch.setattr(prax_settings.settings, "egress_gate_url", "http://127.0.0.1:8790")
     monkeypatch.setattr(prax_settings.settings, "egress_gate_token", "t")
-    monkeypatch.setattr(egs, "_call", lambda method, path, body=None: calls.append((method, path, body)) or {"pending": []})
+    monkeypatch.setattr(prax_settings.settings, "prax_egress_gate_url", "")
+    monkeypatch.setattr(egs, "_call", lambda method, path, body=None, gate="sandbox": calls.append((method, path, body)) or {"pending": []})
     egs._tainted_turns.clear()
     monkeypatch.setattr(egs, "_last_sent", None)
     yield calls
@@ -93,7 +94,7 @@ def test_an_approval_is_not_spent_if_the_gate_no_longer_wants_it(gate, monkeypat
     monkeypatch.setattr("prax.services.teamwork_service.get_teamwork_client", lambda: tw)
     monkeypatch.setattr(approval_service, "ask_and_wait", lambda *a, **k: approval_service.Outcome("approved", "a1"))
 
-    def gate_gone(method, path, body=None):
+    def gate_gone(method, path, body=None, gate="sandbox"):
         raise ConnectionError("404: the question expired")
     monkeypatch.setattr(egs, "_call", gate_gone)
     assert egs.answer({"id": "9", "host": "x.example", "port": 443, "expires_in_seconds": 100}) is False
@@ -131,3 +132,24 @@ def test_sandbox_exec_taints_the_gate_before_it_runs_and_turn_end_releases_it(ga
     assert _taints(gate) == [True]
     gov.drain_audit_log()  # end of turn
     assert _taints(gate)[-1] is False
+
+
+def test_taint_reaches_every_gate_and_prax_questions_name_the_request(monkeypatch):
+    sent = []
+    monkeypatch.setattr(prax_settings.settings, "egress_gate_url", "http://127.0.0.1:8790")
+    monkeypatch.setattr(prax_settings.settings, "egress_gate_token", "a")
+    monkeypatch.setattr(prax_settings.settings, "prax_egress_gate_url", "http://127.0.0.1:8791")
+    monkeypatch.setattr(prax_settings.settings, "prax_egress_gate_token", "b")
+    monkeypatch.setattr(egs, "_call", lambda m, p, body=None, gate="sandbox": sent.append((gate, p, body)) or {})
+    monkeypatch.setattr(egs, "_last_sent", None)
+    egs._tainted_turns.clear()
+    egs.mark_tainted(1, "x")
+    assert {g for g, p, _ in sent if p == "/taint"} == {"sandbox", "prax"}
+    egs._tainted_turns.clear()
+
+    asked = []
+    monkeypatch.setattr(approval_service, "ask_and_wait",
+                        lambda cap, payload, **kw: asked.append((cap, kw["reason"])) or approval_service.Outcome("rejected"))
+    egs.answer({"id": "3", "host": "paste.example", "port": 443, "method": "POST", "path": "/new"}, gate="prax")
+    assert asked == [("prax.net.paste.example", "Prax wants to POST paste.example/new.")]
+    assert ("prax", "/pending/3", {"allow": False, "by": "no approval (rejected)"}) in sent
