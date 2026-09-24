@@ -122,29 +122,35 @@ README). The gate:
   addresses (SSRF);
 - logs every decision.
 
-When the policy says **ask**, Prax's `egress_gate_service` puts the question
-to a person through the same TeamWork dialog ("The sandbox wants to connect to
-example.net:443") and posts the answer back to the gate. **Allow for 1 hour**
-works here too.
+When the policy says **ask**, **TeamWork** relays the question to a person in
+the same dialog ("The sandbox wants to connect to example.net:443") and posts
+the answer back to the gate (`teamwork/src/teamwork/services/gate_relay.py`,
+`EGRESS_GATES`). **Allow for 1 hour** works here too.
 
-**Taint.** Prax marks the gate tainted until the last such turn ends when a
-turn:
+**Why TeamWork and not Prax relays.** Whoever holds a gate's admin token can
+approve anything and clear taint. Prax is the party being judged, so it holds
+only each gate's **raise-only taint token**: it can make the gates stricter,
+never looser. A code review of the first version (where Prax relayed) caught
+exactly that.
+
+**Taint.** Prax marks the gate tainted when a turn:
 - has read private data (the trifecta's private leg), or
 - is **about to** run code in the sandbox, whose `/workspace` *is* the user's
   data. Taint is set before the command runs, since a
   `cat … | curl …` is one call.
 
 While tainted, the policy's `clean_only` destinations are asked about rather
-than allowed.
+than allowed. Taint is **raise-only** from Prax's side. It is re-asserted while
+a tainted turn is live, and lapses at the gate about 5 minutes after the last
+one ends. Prax cannot clear it early, so a compromised Prax cannot either.
 
 Taint does not fail open:
-- Updates are sent synchronously, one at a time, so a "clean" can never
-  overtake a later "tainted".
-- Each turn's taint is a lease that expires if the turn never cleans up.
+- Updates are sent synchronously, one at a time.
+- Each turn's taint is a lease, so a turn that never cleans up cannot pin it.
 - Prax re-asserts taint every minute, well inside the gate's 5-minute TTL.
 
-A person's answer to a gate question is spent only after the gate accepts it,
-and Prax stops asking once the gate's own deadline has passed.
+TeamWork withdraws a question from the dialog once the gate has stopped
+waiting for it.
 
 Verified end to end (2026-09-24) against the real sandbox image, gate and
 TeamWork:
@@ -164,8 +170,8 @@ already terminates TLS for all of Prax's egress, to inject keys. With a
 policy it also decides each request:
 - It judges host, **method and path, for HTTPS too.** Reading a page can be
   allowed while posting to that same site is asked about.
-- It asks through the same TeamWork dialog: "Prax wants to POST
-  example.org/upload".
+- It asks through the same TeamWork dialog, relayed by TeamWork: "The agent
+  wants to POST example.org/upload".
 - It never resolves a name before deciding.
 
 The example policy:

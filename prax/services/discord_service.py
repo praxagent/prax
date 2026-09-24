@@ -347,9 +347,16 @@ def _proxy_kwargs() -> dict:
     parts = urlsplit(url)
     kwargs: dict = {}
     if parts.username or parts.password:
+        from urllib.parse import unquote
+
         import aiohttp
-        kwargs["proxy_auth"] = aiohttp.BasicAuth(parts.username or "", parts.password or "")
-        netloc = parts.hostname + (f":{parts.port}" if parts.port else "")
+        # URL userinfo is percent-encoded (requests decodes it; aiohttp's
+        # BasicAuth does not) — decode, or a password like p%40ss fails auth.
+        kwargs["proxy_auth"] = aiohttp.BasicAuth(unquote(parts.username or ""), unquote(parts.password or ""))
+        host = parts.hostname or ""
+        if ":" in host:  # IPv6 literal: keep the brackets
+            host = f"[{host}]"
+        netloc = host + (f":{parts.port}" if parts.port else "")
         url = urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
     kwargs["proxy"] = url
     return kwargs

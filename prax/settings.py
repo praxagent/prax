@@ -267,27 +267,33 @@ class AppSettings(BaseSettings):
         default="", alias="EGRESS_GATE_URL",
         description=(
             "Admin API of prax-sandbox's egress gate (docker-compose.egress.yml), "
-            "e.g. http://127.0.0.1:8790. When set with EGRESS_GATE_TOKEN, Prax "
-            "answers the gate's 'ask' decisions through TeamWork approvals and "
-            "keeps its taint flag. Empty = no egress gate."
+            "e.g. http://127.0.0.1:8790. With EGRESS_GATE_TAINT_TOKEN, Prax marks "
+            "the sandbox tainted there; TeamWork (EGRESS_GATES) relays the gate's "
+            "questions to a person. Empty = not used."
         ),
     )
-    egress_gate_token: str = Field(
-        default="", alias="EGRESS_GATE_TOKEN", repr=False,
-        description="Bearer token for the egress gate's admin API (its EGRESS_ADMIN_TOKEN).",
+    egress_gate_taint_token: str = Field(
+        default="", alias="EGRESS_GATE_TAINT_TOKEN", repr=False,
+        description=(
+            "The sandbox egress gate's RAISE-ONLY taint token (its EGRESS_TAINT_TOKEN). "
+            "Never its admin token: that answers questions, and belongs to TeamWork."
+        ),
     )
     prax_egress_gate_url: str = Field(
         default="", alias="PRAX_EGRESS_GATE_URL",
         description=(
             "Admin API of the forward proxy's egress policy (prax-secrets-proxy, "
-            "PROXY_EGRESS_POLICY), e.g. http://127.0.0.1:8791. Prax answers its 'ask' "
-            "decisions about Prax's OWN requests through TeamWork approvals and keeps "
-            "its taint flag. Empty = not used."
+            "PROXY_EGRESS_POLICY), e.g. http://127.0.0.1:8791. With "
+            "PRAX_EGRESS_GATE_TAINT_TOKEN, Prax marks its own traffic tainted there; "
+            "TeamWork relays the questions. Empty = not used."
         ),
     )
-    prax_egress_gate_token: str = Field(
-        default="", alias="PRAX_EGRESS_GATE_TOKEN", repr=False,
-        description="Bearer token for that admin API (the proxy's PROXY_EGRESS_ADMIN_TOKEN).",
+    prax_egress_gate_taint_token: str = Field(
+        default="", alias="PRAX_EGRESS_GATE_TAINT_TOKEN", repr=False,
+        description=(
+            "The forward proxy's RAISE-ONLY taint token (its PROXY_EGRESS_TAINT_TOKEN). "
+            "Never its admin token: that answers questions, and belongs to TeamWork."
+        ),
     )
     injection_screen_url: str = Field(
         default="", alias="INJECTION_SCREEN_URL",
