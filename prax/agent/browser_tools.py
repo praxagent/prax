@@ -15,6 +15,45 @@ def _get_user_id() -> str:
     return uid
 
 
+def _settings():
+    from prax.settings import settings
+    return settings
+
+
+def user_has_the_browser() -> str:
+    """Why the agent must not act in the browser right now, or ``""``.
+
+    With ``BROWSER_PAUSE_FOR_USER`` the agent's browser actions stand down
+    while a person is driving: an interactive VNC login is open for this user,
+    or TeamWork reports the person holding (or just using) the shared browser.
+    Two drivers on one page is how a form gets submitted half-filled.
+
+    TeamWork unreachable = no signal = proceed: this is a courtesy lock on
+    shared input, not a security boundary, and it must not take the browser
+    down with TeamWork.
+    """
+    if not getattr(_settings(), "browser_pause_for_user", False):
+        return ""
+    uid = _get_user_id()
+    if uid in getattr(browser_service, "_vnc_sessions", {}):
+        return ("Paused: the user is logging in through the VNC session. Wait for them "
+                "to finish (browser_finish_login) before acting in the browser.")
+    try:
+        from prax.services.teamwork_service import get_teamwork_client
+        tw = get_teamwork_client()
+        if tw.enabled and tw.browser_control().get("user_in_control"):
+            return ("Paused: the user is controlling the browser in TeamWork right now. "
+                    "Do not act in it until they hand it back; tell them what you were "
+                    "about to do, or wait and try again later.")
+    except Exception:
+        pass
+    return ""
+
+
+def _secrets_out_of_context() -> bool:
+    return bool(getattr(_settings(), "browser_secrets_out_of_context", False))
+
+
 @tool
 def browser_navigate(url: str) -> str:
     """Navigate the shared Chrome to a URL and return the page content.
@@ -28,6 +67,9 @@ def browser_navigate(url: str) -> str:
     and browser_click to log in — or use browser_request_login for
     manual VNC-based login.
     """
+    paused = user_has_the_browser()
+    if paused:
+        return paused
     result = browser_service.navigate(_get_user_id(), url)
     if "error" in result:
         return f"Browser error: {result['error']}"
@@ -106,6 +148,9 @@ def browser_page_screenshot(
     - "grab a screenshot of https://example.com/dashboard"
     - "what does the hacker news homepage look like right now"
     """
+    paused = user_has_the_browser()
+    if paused:
+        return paused
     uid = _get_user_id()
 
     # Step 1: navigate.
@@ -150,6 +195,9 @@ def browser_click(selector: str) -> str:
     Use CSS selectors: 'button.submit', '#login', 'a[href="/about"]',
     'text=Log in', '[data-testid="tweet"]', etc.
     """
+    paused = user_has_the_browser()
+    if paused:
+        return paused
     result = browser_service.click(_get_user_id(), selector)
     if "error" in result:
         return f"Browser error: {result['error']}"
@@ -163,6 +211,9 @@ def browser_fill(selector: str, text: str) -> str:
     Use CSS selectors: 'input[name="username"]', '#password',
     'textarea.comment', '[placeholder="Search"]', etc.
     """
+    paused = user_has_the_browser()
+    if paused:
+        return paused
     result = browser_service.fill(_get_user_id(), selector, text)
     if "error" in result:
         return f"Browser error: {result['error']}"
@@ -172,6 +223,9 @@ def browser_fill(selector: str, text: str) -> str:
 @tool
 def browser_press(key: str) -> str:
     """Press a keyboard key: 'Enter', 'Tab', 'Escape', 'ArrowDown', etc."""
+    paused = user_has_the_browser()
+    if paused:
+        return paused
     result = browser_service.press_key(_get_user_id(), key)
     if "error" in result:
         return f"Browser error: {result['error']}"
@@ -218,12 +272,57 @@ def browser_login(domain: str) -> str:
     Returns the actual password value so you can fill it into the login form.
     Keep this value private — only use it with browser_fill.
     """
+    if _secrets_out_of_context():
+        return ("Stored passwords are not shown to the model. Use "
+                "browser_fill_login(domain, username_selector, password_selector) — it "
+                "types them into the page for you — or browser_request_login to let the "
+                "user log in themselves.")
     result = browser_service.get_credentials(domain)
     if "error" in result:
         return f"No credentials: {result['error']}"
     password = result.get("password", "")
     username = result.get("username", result.get("email", ""))
     return f"username={username}\npassword={password}"
+
+
+@risk_tool(risk=RiskLevel.HIGH)
+def browser_fill_login(domain: str, username_selector: str, password_selector: str) -> str:
+    """Log in with the stored credentials for *domain* without seeing them.
+
+    Types the stored username and password straight into the given fields of
+    the current page. The values never appear in your context, the trace or
+    the reply — only which fields were filled. Submit the form yourself
+    afterwards (e.g. browser_press('Enter') or browser_click on the button).
+
+    Args:
+        domain: Site whose stored credentials to use (e.g. "github.com").
+        username_selector: CSS selector of the username/email field ("" to skip).
+        password_selector: CSS selector of the password field.
+    """
+    paused = user_has_the_browser()
+    if paused:
+        return paused
+    creds = browser_service.get_credentials(domain)
+    if "error" in creds:
+        return f"No credentials: {creds['error']}"
+    uid = _get_user_id()
+    filled = []
+    username = creds.get("username") or creds.get("email") or ""
+    if username_selector and username:
+        r = browser_service.fill(uid, username_selector, username)
+        if "error" in r:
+            return f"Browser error filling the username field: {r['error']}"
+        filled.append("username")
+    password = creds.get("password") or ""
+    if not password:
+        return f"No stored password for {creds.get('domain', domain)}."
+    r = browser_service.fill(uid, password_selector, password)
+    if "error" in r:
+        # The error text comes from the page layer, not the secret; say only which step failed.
+        return "Browser error filling the password field — check the selector."
+    filled.append("password")
+    return (f"Filled {' and '.join(filled)} for {creds.get('domain', domain)} "
+            "(values not shown). Submit the form to log in.")
 
 
 @tool
@@ -301,11 +400,14 @@ def browser_profiles() -> str:
 
 
 def build_browser_tools() -> list:
+    # With BROWSER_SECRETS_OUT_OF_CONTEXT the password-returning tool is
+    # replaced by one that fills credentials without the model seeing them.
+    login_tool = browser_fill_login if _secrets_out_of_context() else browser_login
     return [
         browser_navigate, browser_read_page, browser_screenshot,
         browser_page_screenshot,
         browser_click, browser_fill, browser_press, browser_find,
-        browser_credentials, browser_login, browser_close,
+        browser_credentials, login_tool, browser_close,
         browser_request_login, browser_finish_login,
         browser_check_login, browser_profiles,
     ]

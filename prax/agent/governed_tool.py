@@ -102,6 +102,10 @@ class TurnGovernanceState:
     trifecta_private: bool = False
     trifecta_seen: set[str] = field(default_factory=set)
     trifecta_confirmed: set[str] = field(default_factory=set)
+    # (tool, exact-arguments) keys a PERSON approved out of band this turn
+    # (OUT_OF_BAND_APPROVALS_ENABLED). One approval covers both gates for that
+    # exact call, so a call that is HIGH and closes the trifecta asks once.
+    human_approved: set[str] = field(default_factory=set)
     tool_call_count: int = 0
     tool_call_budget: int = 0
 
@@ -116,6 +120,7 @@ class TurnGovernanceState:
         self.high_risk_seen.clear()
         self.high_risk_confirmed = False
         self.high_risk_confirmed_tools.clear()
+        self.human_approved.clear()
         self.trifecta_untrusted = False
         self.trifecta_private = False
         self.trifecta_seen.clear()
@@ -402,10 +407,20 @@ def wrap_with_governance(
                 _tf_key = _trifecta_key(tool_name, kwargs)  # latch is bound to the ARGS too
                 if (trifecta_guard_enabled()
                         and _tf_key not in state.trifecta_confirmed
+                        and _tf_key not in state.human_approved
                         and should_escalate_sink(
                             tool_name, untrusted_seen=state.trifecta_untrusted,
                             private_seen=state.trifecta_private, legs=static_legs)):
-                    if _tf_key not in state.trifecta_seen:
+                    from prax.agent import human_approval
+                    if human_approval.enabled():
+                        refusal = _ask_a_person(
+                            state, tool_name, kwargs, _tf_key, kind="lethal_trifecta",
+                            reason=("This turn read UNTRUSTED content and PRIVATE data, and "
+                                    "this action sends or acts externally — the classic "
+                                    "prompt-injection exfiltration point."))
+                        if refusal:
+                            return refusal
+                    elif _tf_key not in state.trifecta_seen:
                         state.trifecta_seen.add(_tf_key)
                         state.audit.append(log_action(
                             tool_name, RiskLevel.HIGH, kwargs,
@@ -472,7 +487,9 @@ def wrap_with_governance(
                 tool_name in state.high_risk_confirmed_tools
                 or (not scoped and state.high_risk_confirmed)
             )
-            if risk is RiskLevel.HIGH and not already_confirmed:
+            _call_key = _trifecta_key(tool_name, kwargs)
+            if risk is RiskLevel.HIGH and not already_confirmed and _call_key not in state.human_approved:
+                from prax.agent import human_approval
                 # Smart confirmation: if the user explicitly requested THIS
                 # browser interaction (e.g. "click the login button"),
                 # auto-approve this tool only — never the turn-wide latch.
@@ -482,6 +499,13 @@ def wrap_with_governance(
                         "Smart auto-approve: %s (user explicitly requested action)",
                         tool_name,
                     )
+                elif human_approval.enabled():
+                    # Out of band: a person answers in TeamWork, the model cannot.
+                    refusal = _ask_a_person(
+                        state, tool_name, kwargs, _call_key, kind="high_risk",
+                        reason=f"{tool_name} is classified HIGH risk.")
+                    if refusal:
+                        return refusal
                 elif tool_name not in state.high_risk_seen:
                     state.high_risk_seen.add(tool_name)
                     state.audit.append(log_action(
@@ -717,6 +741,30 @@ def _tag_result(
     if tag:
         return f"{tag}\n\n{result}"
     return result
+
+
+def _ask_a_person(state: TurnGovernanceState, tool_name: str, kwargs: dict,
+                  call_key: str, *, kind: str, reason: str) -> str | None:
+    """Block on an out-of-band approval. ``None`` = approved, go ahead;
+    otherwise the refusal to return to the model instead of running the tool."""
+    from prax.agent import human_approval
+
+    state.audit.append(log_action(
+        tool_name, RiskLevel.HIGH, kwargs,
+        result=f"PAUSED — awaiting out-of-band approval ({kind})"))
+    decision = human_approval.request(
+        tool_name, kwargs, kind=kind, reason=reason,
+        summary=_summarize_args(kwargs, max_len=600))
+    if decision.approved:
+        state.human_approved.add(call_key)
+        state.audit.append(log_action(
+            tool_name, RiskLevel.HIGH, kwargs,
+            result=f"APPROVED by a person (approval {decision.approval_id})"))
+        return None
+    state.audit.append(log_action(
+        tool_name, RiskLevel.HIGH, kwargs,
+        result=f"REFUSED — {decision.message[:120]}"))
+    return f"⛔ {decision.message}"
 
 
 def _summarize_args(args: dict, max_len: int = 120) -> str:

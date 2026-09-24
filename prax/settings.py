@@ -263,6 +263,41 @@ class AppSettings(BaseSettings):
     sandbox_mem_limit: str = Field(default="1g", alias="SANDBOX_MEM_LIMIT")
     sandbox_cpu_limit: int = Field(default=2_000_000_000, alias="SANDBOX_CPU_LIMIT")
     sandbox_max_rounds: int = Field(default=10, alias="SANDBOX_MAX_ROUNDS")
+    browser_secrets_out_of_context: bool = Field(
+        default=False, alias="BROWSER_SECRETS_OUT_OF_CONTEXT",
+        description=(
+            "Stored site passwords (SITES_CREDENTIALS_PATH) never enter the model's "
+            "context: browser_login is replaced by browser_fill_login, which types "
+            "them into the page and returns only which fields it filled. Off (prior "
+            "behaviour), browser_login returns the password to the model."
+        ),
+    )
+    browser_pause_for_user: bool = Field(
+        default=False, alias="BROWSER_PAUSE_FOR_USER",
+        description=(
+            "The agent's browser actions stand down while a person is driving the "
+            "browser: an interactive VNC login is open, or TeamWork reports the user "
+            "holding (Take control) or just using the shared browser."
+        ),
+    )
+    out_of_band_approvals_enabled: bool = Field(
+        default=False, alias="OUT_OF_BAND_APPROVALS_ENABLED",
+        description=(
+            "HIGH-risk and lethal-trifecta confirmations are answered by a person "
+            "in the TeamWork UI's approval dialog, never in the chat: the tool call "
+            "waits for the decision and runs only if a person approved that exact "
+            "action. Off (prior behaviour), the model is told to 'call again' and "
+            "the second call runs — self-confirmable. Needs TeamWork; refuses when "
+            "TeamWork is unreachable."
+        ),
+    )
+    approval_wait_seconds: int = Field(
+        default=300, alias="APPROVAL_WAIT_SECONDS",
+        description=(
+            "How long a tool call waits for a person to answer an out-of-band "
+            "approval before it is refused as unanswered."
+        ),
+    )
     sandbox_route_commands: bool = Field(
         default=False, alias="SANDBOX_ROUTE_COMMANDS",
         description=(
