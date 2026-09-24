@@ -29,13 +29,9 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import time
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
-
-_POLL_SECONDS = 2.0
-_TERMINAL = ("rejected", "consumed")
 
 
 @dataclass(frozen=True)
@@ -78,59 +74,33 @@ def _heartbeat(message: str) -> None:
 def request(tool_name: str, kwargs: dict, *, kind: str, reason: str, summary: str,
             capability_prefix: str = "prax.tool.") -> Decision:
     """Ask a person, wait for the answer, and spend it. Never raises."""
-    from prax.services.teamwork_service import get_teamwork_client
+    from prax.services.approval_service import ask_and_wait
     from prax.settings import settings
 
-    client = get_teamwork_client()
-    if not client.enabled:
-        return Decision(False, (
-            "Refused: this action needs a person's approval in TeamWork, and TeamWork "
-            "is not configured. Tell the user it was not done."))
-
-    capability = f"{capability_prefix}{tool_name}"[:64]
-    payload = action_payload(tool_name, kwargs, kind, summary)
-    project_id = client.project_id
-    try:
-        asked = client.ask_approval(capability, payload, reason=reason, project_id=project_id)
-    except Exception as exc:
-        logger.warning("Could not create approval request for %s: %s", tool_name, exc)
-        return Decision(False, (
-            "Refused: the approval service could not be reached, so this action was "
-            "not done. Tell the user."))
-
-    approval_id = asked.get("approval_id")
-    status = asked.get("status")
     wait = max(5, int(getattr(settings, "approval_wait_seconds", 300)))
-    deadline = time.monotonic() + wait
-    logger.info("Waiting up to %ss for approval %s of %s", wait, approval_id, tool_name)
-    while status == "pending" and not asked.get("expired") and time.monotonic() < deadline:
-        _heartbeat(f"waiting for approval of {tool_name}")
-        time.sleep(_POLL_SECONDS)
-        try:
-            asked = client.approval_status(approval_id)
-            status = asked.get("status")
-        except Exception as exc:
-            logger.warning("Approval status check failed for %s: %s", approval_id, exc)
+    outcome = ask_and_wait(
+        f"{capability_prefix}{tool_name}",
+        action_payload(tool_name, kwargs, kind, summary),
+        reason=reason, wait_seconds=wait,
+        on_wait=lambda: _heartbeat(f"waiting for approval of {tool_name}"))
 
-    if status == "pending":
-        why = "expired" if asked.get("expired") else f"no answer within {wait}s"
+    if outcome.approved:
+        logger.info("Approval %s granted and spent for %s", outcome.approval_id, tool_name)
+        return Decision(True, "", outcome.approval_id)
+    if outcome.status == "unavailable":
+        return Decision(False, (
+            "Refused: this action needs a person's approval in TeamWork, and the approval "
+            "service is not available, so it was not done. Tell the user."))
+    if outcome.status == "pending":
+        why = "expired" if outcome.detail == "expired" else f"no answer within {wait}s"
         return Decision(False, (
             f"Not approved ({why}): the user did not approve {tool_name} in TeamWork. "
             "Do not retry it on your own; tell the user it is waiting on their approval."),
-            approval_id)
-    if status in _TERMINAL:
+            outcome.approval_id)
+    if outcome.status == "rejected":
         return Decision(False, (
             f"The user DENIED {tool_name} in TeamWork. Do not retry it or look for "
             "another way to do the same thing; tell the user it was not done."),
-            approval_id)
-    if status != "approved":
-        return Decision(False, f"Refused: unexpected approval state {status!r}.", approval_id)
-
-    try:
-        client.consume_approval(approval_id, capability, payload, project_id=project_id)
-    except Exception as exc:
-        logger.warning("Approval %s could not be spent: %s", approval_id, exc)
-        return Decision(False, "Refused: the approval could not be used for this exact action.",
-                        approval_id)
-    logger.info("Approval %s granted and spent for %s", approval_id, tool_name)
-    return Decision(True, "", approval_id)
+            outcome.approval_id)
+    return Decision(False, f"Refused: {outcome.detail or 'the approval could not be used'}.",
+                    outcome.approval_id)

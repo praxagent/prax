@@ -208,6 +208,13 @@ def create_app():
         except Exception:
             logger.warning("TeamWork integration failed to initialize", exc_info=True)
 
+    # Sandbox egress gate: answer its "ask" decisions through TeamWork approvals.
+    try:
+        from prax.services import egress_gate_service
+        egress_gate_service.start()
+    except Exception:
+        logger.warning("Egress gate integration failed to start", exc_info=True)
+
     # --- Health probes (Kubernetes/Docker-compatible) ---
 
     @app.route("/healthz/live")

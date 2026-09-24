@@ -342,8 +342,17 @@ SANDBOX_PORT_ENV = SANDBOX_CDP_PORT=$(SANDBOX_CDP_PORT) SANDBOX_VNC_PORT=$(SANDB
 # Its sizes come from SANDBOX_MEM_LIMIT / SANDBOX_PIDS_LIMIT / SANDBOX_TMP_SIZE,
 # passed through when set. Empty (the default) = the unlimited container of old.
 SANDBOX_LIMITS        ?=
-SANDBOX_COMPOSE_FILES  = -f docker-compose.yml $(if $(filter 1 true yes,$(SANDBOX_LIMITS)),-f docker-compose.limits.yml)
-export SANDBOX_MEM_LIMIT SANDBOX_PIDS_LIMIT SANDBOX_TMP_SIZE
+# SANDBOX_EGRESS=1 layers docker-compose.egress.yml: the sandbox's only way out
+# becomes prax-sandbox's egress gate, and Prax is told where its admin API is so
+# it can answer the gate's "ask" decisions through TeamWork approvals. Needs
+# EGRESS_ADMIN_TOKEN (e.g. in local.mk). EGRESS_ADMIN_PORT must differ between
+# two trees on one host.
+SANDBOX_EGRESS        ?=
+EGRESS_ADMIN_PORT     ?= 8790
+_EGRESS_ON             = $(filter 1 true yes,$(SANDBOX_EGRESS))
+SANDBOX_COMPOSE_FILES  = -f docker-compose.yml $(if $(filter 1 true yes,$(SANDBOX_LIMITS)),-f docker-compose.limits.yml) $(if $(_EGRESS_ON),-f docker-compose.egress.yml)
+EGRESS_PRAX_ENV        = $(if $(_EGRESS_ON),EGRESS_GATE_URL=http://127.0.0.1:$(EGRESS_ADMIN_PORT) EGRESS_GATE_TOKEN="$(EGRESS_ADMIN_TOKEN)")
+export SANDBOX_MEM_LIMIT SANDBOX_PIDS_LIMIT SANDBOX_TMP_SIZE EGRESS_ADMIN_TOKEN EGRESS_ADMIN_PORT EGRESS_POLICY_FILE
 # Passed through to Prax's app.run(debug=...). `run-local-all-dev` flips
 # this to true so Werkzeug's reloader restarts Prax on code change.
 DEBUG         ?= false
@@ -722,7 +731,7 @@ _local-prax:
 	    obs_env="OBSERVABILITY_ENABLED=false"; \
 	  fi; \
 	  env MEMORY_ENABLED=true SANDBOX_ENABLED=$$sb SANDBOX_HOST=localhost TEAMWORK_ENABLED=true TEAMWORK_URL=http://localhost:8000 PRAX_USER_ID=$(PRAX_USER) DEBUG=$(DEBUG) \
-	    SANDBOX_WORKSPACE_MOUNT_SOURCE="$(APP_WORKSPACE_DIR)/$(PRAX_USER)" \
+	    SANDBOX_WORKSPACE_MOUNT_SOURCE="$(APP_WORKSPACE_DIR)/$(PRAX_USER)" $(EGRESS_PRAX_ENV) \
 	    TASK_RUNNER_ENABLED=true $$obs_env \
 	    nohup $(LOCAL_PY) app.py >$(LOCAL_RUN)/prax.log 2>&1 & echo $$! >$(LOCAL_RUN)/prax.pid; \
 	  echo "Prax started (pid $$(cat $(LOCAL_RUN)/prax.pid)) -> :5001 (DEBUG=$(DEBUG), SANDBOX_ENABLED=$$sb, OBSERVABILITY_ENABLED=$$obs, PRAX_USER_ID=$(PRAX_USER))"; \

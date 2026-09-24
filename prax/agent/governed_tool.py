@@ -106,6 +106,8 @@ class TurnGovernanceState:
     # (OUT_OF_BAND_APPROVALS_ENABLED). One approval covers both gates for that
     # exact call, so a call that is HIGH and closes the trifecta asks once.
     human_approved: set[str] = field(default_factory=set)
+    # Whether this turn has told the sandbox egress gate it read private data.
+    egress_tainted: bool = False
     tool_call_count: int = 0
     tool_call_budget: int = 0
 
@@ -121,6 +123,13 @@ class TurnGovernanceState:
         self.high_risk_confirmed = False
         self.high_risk_confirmed_tools.clear()
         self.human_approved.clear()
+        if self.egress_tainted:
+            self.egress_tainted = False
+            try:
+                from prax.services import egress_gate_service
+                egress_gate_service.release(id(self))
+            except Exception:
+                pass
         self.trifecta_untrusted = False
         self.trifecta_private = False
         self.trifecta_seen.clear()
@@ -344,6 +353,11 @@ def wrap_with_governance(
             state.trifecta_untrusted = True
         if LEG_PRIVATE in static_legs:
             state.trifecta_private = True
+            _taint_egress(state, f"{tool_name} read private data")
+        elif tool_name in _SANDBOX_EXEC_TOOLS:
+            # Code in the sandbox can read /workspace — the user's data — so
+            # for the egress gate the sandbox is no longer "clean".
+            _taint_egress(state, f"{tool_name} ran code over the workspace")
 
     def _governed_run_bound(**kwargs: Any) -> Any:
         state = current_turn_state()
@@ -741,6 +755,22 @@ def _tag_result(
     if tag:
         return f"{tag}\n\n{result}"
     return result
+
+
+# Tools that run code inside the sandbox, where /workspace is the user's data.
+_SANDBOX_EXEC_TOOLS = frozenset({"sandbox_shell", "run_python", "data_query", "lean_check"})
+
+
+def _taint_egress(state: TurnGovernanceState, reason: str) -> None:
+    """Tell the sandbox egress gate this turn has touched private data."""
+    if state.egress_tainted:
+        return
+    state.egress_tainted = True
+    try:
+        from prax.services import egress_gate_service
+        egress_gate_service.mark_tainted(id(state), reason)
+    except Exception:
+        pass  # the gate is a second line; never break the tool path
 
 
 def _ask_a_person(state: TurnGovernanceState, tool_name: str, kwargs: dict,
