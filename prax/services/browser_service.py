@@ -470,7 +470,10 @@ def navigate(user_id: str, url: str) -> dict[str, Any]:
         if _detect_login_wall(title, text, session.page.url):
             result["login_required"] = True
             hints = ["This page appears to require login. Options:"]
-            hints.append("- browser_login: auto-fill credentials from sites.yaml")
+            if getattr(settings, "browser_secrets_out_of_context", False):
+                hints.append("- browser_fill_login: fill stored credentials into the form (values stay hidden)")
+            else:
+                hints.append("- browser_login: auto-fill credentials from sites.yaml")
             if settings.browser_vnc_enabled and settings.browser_profile_dir:
                 hints.append("- browser_request_login: open VNC for the user to log in manually")
             elif settings.browser_profile_dir:

@@ -66,12 +66,14 @@ interactions where reliability matters more than speed.
 
 ### Login & credential tools (Playwright)
 - **browser_credentials** — look up stored credentials for a domain
-- **browser_login** — get the actual password for form filling
+- **browser_login** / **browser_fill_login** — use stored credentials for a site (whichever you have; browser_fill_login types them into the page without showing them to you)
 - **browser_check_login** — check if logged into a domain
 - **browser_request_login** — start VNC session for manual login (MFA, CAPTCHAs)
 - **browser_finish_login** — end VNC session and save profile
 - **browser_profiles** — list saved browser profiles
 - **browser_close** — close the browser session
+
+If a browser tool answers "Paused: the user is controlling the browser", stop acting in the browser — the person is driving it. Report what you were about to do instead of retrying.
 
 ## Workflow
 
