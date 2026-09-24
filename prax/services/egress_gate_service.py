@@ -1,30 +1,23 @@
-"""Prax's side of the sandbox egress gate (prax-sandbox ``docker-compose.egress.yml``).
+"""Prax's side of the egress gates: taint, and nothing else.
 
-The gate is the sandbox's only way out. When its policy says "ask" about a
-destination, the request waits in the gate; this service puts the question to a
-person through TeamWork's approval dialog and posts the answer back. It also
-keeps the gate's taint flag, so the policy's ``clean_only`` destinations stop
-being automatic while work that has read private data is in flight.
+Two gates judge outbound traffic — prax-sandbox's egress gate (the sandbox's
+only exit) and the secrets proxy's egress policy (Prax's own traffic). When
+their policy says "ask", **TeamWork** relays the question to a person and the
+answer back (teamwork ``EGRESS_GATES``). Prax deliberately holds no gate admin
+token: whoever holds it can approve anything, and Prax is the party being
+judged.
 
-Taint is coarse on purpose: a turn taints the sandbox once it has read private
-data (the lethal-trifecta private leg) or is about to run code in the sandbox
-— whose ``/workspace`` *is* the user's data — and the flag stays set until the
-last such turn ends. It is per container, not per process: the gate cannot
-tell which process inside the sandbox made a request.
+What Prax does hold is each gate's **raise-only taint token**. A turn taints
+the gates once it has read private data (the lethal-trifecta private leg) or is
+about to run code in the sandbox — whose ``/workspace`` *is* the user's data.
+While any such turn is live, Prax re-asserts taint well inside the gates' TTL;
+when none is, it stops, and taint lapses at the gates on its own (a raise-only
+token cannot clear it — so a compromised Prax cannot un-taint either). Each
+tainted turn holds a lease, so a turn that never reaches its cleanup cannot
+pin the state; updates are sent synchronously and one at a time.
 
-Taint must not fail open, so:
-
-* every tainted turn holds a **lease** (the longest a run can last, plus
-  margin): a turn that never reaches its cleanup cannot pin the set forever,
-  and cannot leave the gate believing it is clean while it still is not;
-* updates are sent **synchronously, one at a time** — taint reaches the gate
-  before the sandbox code runs, and a "clean" can never overtake a later
-  "tainted" in flight;
-* while tainted, the poller **re-asserts** taint well inside the gate's TTL,
-  so a long turn (or a failed send) does not lapse into "clean".
-
-Configured by ``EGRESS_GATE_URL`` + ``EGRESS_GATE_TOKEN``; without them every
-function here is a no-op.
+Taint is per container / per process group, not per process, and for Prax's
+own traffic it does not count the conversation Prax always holds.
 """
 from __future__ import annotations
 
@@ -40,13 +33,11 @@ logger = logging.getLogger(__name__)
 _POLL_SECONDS = 2.0
 _TAINT_TTL = 300        # the gate forgets taint if Prax stops re-asserting it
 _TAINT_REFRESH = 60     # re-assert this often while tainted (well inside the TTL)
-_ANSWER_MARGIN = 5      # stop asking a person this long before the gate gives up
 
 _lock = threading.Lock()
 _send_lock = threading.Lock()                     # one taint update at a time
 _tainted_turns: dict[int, tuple[str, float]] = {}  # turn -> (reason, lease expiry)
 _last_sent: tuple[bool, float] | None = None       # (state, when)
-_handling: set[str] = set()
 _poller: threading.Thread | None = None
 
 
@@ -71,8 +62,8 @@ def _gates() -> list[tuple[str, str, str]]:
     """
     s = _settings()
     gates = []
-    for name, url_f, tok_f in (("sandbox", "egress_gate_url", "egress_gate_token"),
-                               ("prax", "prax_egress_gate_url", "prax_egress_gate_token")):
+    for name, url_f, tok_f in (("sandbox", "egress_gate_url", "egress_gate_taint_token"),
+                               ("prax", "prax_egress_gate_url", "prax_egress_gate_taint_token")):
         url, tok = getattr(s, url_f, "") or "", getattr(s, tok_f, "") or ""
         if url and tok:
             gates.append((name, url.rstrip("/"), tok))
@@ -112,13 +103,12 @@ def mark_tainted(turn_key: int, reason: str) -> None:
 
 
 def release(turn_key: int) -> None:
-    """The turn is over; clear taint once no tainted turn remains."""
+    """The turn is over. Taint is not cleared — the raise-only token cannot —
+    it simply stops being re-asserted and lapses at the gates within their TTL."""
     if not configured():
         return
     with _lock:
-        if _tainted_turns.pop(turn_key, None) is None:
-            return
-    _sync(force=True)
+        _tainted_turns.pop(turn_key, None)
 
 
 def _desired() -> tuple[bool, str]:
@@ -142,9 +132,11 @@ def _sync(force: bool = False) -> None:
     global _last_sent
     with _send_lock:
         tainted, reason = _desired()
+        if not tainted:
+            _last_sent = None  # nothing to assert; the gates' TTL clears it
+            return
         now = time.monotonic()
-        due = _last_sent is None or _last_sent[0] != tainted or (
-            tainted and now - _last_sent[1] >= _TAINT_REFRESH)
+        due = _last_sent is None or now - _last_sent[1] >= _TAINT_REFRESH
         if not (force or due):
             return
         ok = True
@@ -158,96 +150,23 @@ def _sync(force: bool = False) -> None:
         _last_sent = (tainted, now) if ok else None  # unknown: try again next tick
 
 
-# --- answering the gate's questions -----------------------------------------------
-
-def answer(item: dict, gate: str = "sandbox") -> bool:
-    """Ask a person about one pending destination; tell the gate. Returns allow."""
-    from prax.services.approval_service import ask_and_wait
-    from prax.services.teamwork_service import get_teamwork_client
-
-    host, port = item.get("host", "?"), item.get("port", 0)
-    tainted = bool(item.get("tainted"))
-    after = " while the current work has read private data." if tainted else "."
-    if gate == "prax":
-        # Prax's own request, seen whole through the TLS-terminating proxy.
-        reason = f"Prax wants to {item.get('method', '?')} {host}{item.get('path') or '/'}{after}"
-        capability = f"prax.net.{host}"
-    else:
-        reason = f"The sandbox wants to connect to {host}:{port}{after}"
-        capability = f"prax.egress.{host}"
-    payload = {"host": host, "port": port, "method": item.get("method"),
-               "path": item.get("path"), "tainted": tainted}
-    # Ask no longer than the gate will wait: an answer after it gives up would
-    # be spent on a connection that was already refused.
-    wait = float(getattr(_settings(), "approval_wait_seconds", 300))
-    if item.get("expires_in_seconds") is not None:
-        wait = min(wait, float(item["expires_in_seconds"]) - _ANSWER_MARGIN)
-    if wait <= 0:
-        return False
-    outcome = ask_and_wait(capability, payload, reason=reason, wait_seconds=wait, spend=False)
-    allow = outcome.approved
-    try:
-        _call("POST", f"/pending/{item['id']}",
-              {"allow": allow, "by": "a person in TeamWork" if allow else f"no approval ({outcome.status})"},
-              gate=gate)
-    except Exception as exc:
-        logger.warning("Could not answer egress question %s: %s", item.get("id"), exc)
-        return False  # the approval is left unspent; it expires on its own
-    if allow:
-        # Spend it only once the gate has taken the answer.
-        try:
-            client = get_teamwork_client()
-            client.consume_approval(outcome.approval_id, capability, payload,
-                                    project_id=client.project_id)
-        except Exception as exc:
-            logger.warning("Egress approval %s could not be spent: %s", outcome.approval_id, exc)
-    return allow
-
-
-def _poll_once() -> None:
-    for gate, _, _ in _gates():
-        try:
-            items = _call("GET", "/pending", gate=gate).get("pending", [])
-        except Exception as exc:
-            logger.debug("egress gate %s poll failed: %s", gate, exc)
-            continue
-        for item in items:
-            key = f"{gate}:{item.get('id')}"
-            with _lock:
-                if key in _handling:
-                    continue
-                _handling.add(key)
-
-            def run(item=item, key=key, gate=gate):
-                try:
-                    answer(item, gate=gate)
-                finally:
-                    with _lock:
-                        _handling.discard(key)
-            threading.Thread(target=run, name=f"egress-ask-{key}", daemon=True).start()
-
-
 def _loop() -> None:
     while True:
         try:
-            _poll_once()
-        except Exception as exc:
-            logger.debug("egress gate poll failed: %s", exc)
-        try:
-            _sync()  # re-assert taint, expire abandoned leases
+            _sync()  # re-assert taint while tainted; expire abandoned leases
         except Exception as exc:
             logger.debug("egress taint sync failed: %s", exc)
         time.sleep(_POLL_SECONDS)
 
 
 def start() -> bool:
-    """Start answering the gate's questions (idempotent). ``True`` if running."""
+    """Start the taint refresher (idempotent). ``True`` if running."""
     global _poller
     if not configured():
         return False
     with _lock:
         if _poller is None or not _poller.is_alive():
-            _poller = threading.Thread(target=_loop, name="egress-gate-poller", daemon=True)
+            _poller = threading.Thread(target=_loop, name="egress-taint", daemon=True)
             _poller.start()
-            logger.info("Egress gate: answering questions at %s", _settings().egress_gate_url)
+            logger.info("Egress gates: keeping taint on %s", ", ".join(g[0] for g in _gates()))
     return True

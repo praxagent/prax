@@ -25,6 +25,7 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import numpy as np
@@ -51,8 +52,15 @@ class Screen:
                                             providers=["CPUExecutionProvider"])
         self.inputs = {i.name for i in self.session.get_inputs()}
         self.threshold = threshold
+        # One scoring at a time: memory is bounded per request (~1.8 GB peak),
+        # so two concurrent requests could exceed a 2 GB container limit.
+        self._lock = threading.Lock()
 
     def score(self, text: str) -> tuple[float, int]:
+        with self._lock:
+            return self._score(text)
+
+    def _score(self, text: str) -> tuple[float, int]:
         ids = self.tokenizer.encode(text[:MAX_CHARS], add_special_tokens=False).ids
         cls = self.tokenizer.token_to_id("[CLS]")
         sep = self.tokenizer.token_to_id("[SEP]")

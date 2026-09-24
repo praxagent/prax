@@ -122,8 +122,8 @@ own `.env`; this page cannot assert its absence.
 | `FLASK_SECRET_KEY` | Prax session signing. |
 | `MCP_BEARER_TOKEN` | Authenticates inbound MCP callers. |
 | `SANDBOX_DAEMON_TOKEN`, `SANDBOX_CLIENT_KEY` | Remote sandbox access. |
-| `EGRESS_GATE_TOKEN` | Admin API of the sandbox egress gate (loopback): answers its "ask" decisions and sets taint. |
-| `PRAX_EGRESS_GATE_TOKEN` | Admin API of the forward proxy's egress policy (loopback): answers its "ask" decisions about Prax's own requests and sets taint. |
+| `EGRESS_GATE_TAINT_TOKEN` | Raise-only taint token for the sandbox egress gate (loopback). Its admin token belongs to TeamWork, never Prax. |
+| `PRAX_EGRESS_GATE_TAINT_TOKEN` | Raise-only taint token for the forward proxy's egress policy (loopback). Its admin token belongs to TeamWork, never Prax. |
 | `INJECTION_SCREEN_TOKEN` | Optional bearer for the local prompt-injection classifier sidecar (loopback). |
 | `TEAMWORK_API_KEY` | Prax/TeamWork integration. |
 | `PRAX_API_KEY` | Inbound to Prax itself — checked on `/teamwork/*`, `/plugins/*`, `/api/users/*` when set (`prax/blueprints/inbound_auth.py`, opt-in, default empty); never sent anywhere. |

@@ -31,3 +31,11 @@ def test_the_client_accepts_the_arguments():
     import discord
     src = inspect.getsource(discord.Client.__init__)
     assert "proxy" in src and "proxy_auth" in src
+
+
+def test_encoded_credentials_are_decoded_and_ipv6_keeps_brackets(monkeypatch):
+    monkeypatch.setattr(prax_settings.settings, "discord_use_proxy", True)
+    monkeypatch.setenv("HTTPS_PROXY", "http://prax:p%40ss@[::1]:8786")
+    kw = discord_service._proxy_kwargs()
+    assert kw["proxy"] == "http://[::1]:8786"
+    assert kw["proxy_auth"].password == "p@ss"
