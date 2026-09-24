@@ -6,7 +6,8 @@ from langchain_core.tools import StructuredTool
 
 import prax.agent.governed_tool as gov
 import prax.settings as prax_settings
-from prax.services import approval_service, egress_gate_service as egs
+from prax.services import approval_service
+from prax.services import egress_gate_service as egs
 
 
 @pytest.fixture
