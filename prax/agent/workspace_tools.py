@@ -356,6 +356,11 @@ def workspace_send_file(filename: str, message: str = "") -> str:
     elif name.startswith("workspace/"):
         name = name[len("workspace/"):]
     name = name.lstrip("/")
+    # A whole-tree-shaped path (<own dir>/active/x) when the mount is
+    # misdetected: also try it without this user's own directory name.
+    own_dir = os.path.basename(os.path.realpath(root))
+    if own_dir and name.startswith(own_dir + "/"):
+        mapped.append(name[len(own_dir) + 1:])
 
     file_path = None
     for rel in (*mapped, os.path.join("active", name), name):

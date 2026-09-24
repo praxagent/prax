@@ -9,9 +9,9 @@ user's directory, the sandbox agent's paths assumed the whole tree — so on any
 given box one of them pointed the model at directories that did not exist.
 
 Every sandbox path is now derived from :func:`mount_source`: the host
-directory actually bound at ``/workspace``, asked of Docker when Prax can reach
-the container, else the deploy path's documented shape, else an explicit
-``SANDBOX_WORKSPACE_MOUNT_SOURCE``. From it:
+directory bound at ``/workspace`` — ``SANDBOX_WORKSPACE_MOUNT_SOURCE`` when set
+(``make run-local-all`` sets it), else asked of Docker when Prax can reach the
+container, else the deploy path's documented shape (logged). From it:
 
 * :func:`to_sandbox` — host path -> container path (``None`` if not mounted)
 * :func:`from_sandbox` — container path -> host path
@@ -86,10 +86,34 @@ def mount_source() -> str | None:
     with _lock:
         if _cached and now - _cached[0] < _CACHE_SECONDS:
             return _cached[1]
-    value = _detect_from_docker() or _documented_default()
+    value = _detect_from_docker()
+    if value is None:
+        value = _documented_default()
+        _warn_fallback_once(value)
     with _lock:
         _cached = (now, value)
     return value
+
+
+_warned = False
+
+
+def _warn_fallback_once(value: str) -> None:
+    """Say so when a host install could not read the mount from Docker.
+
+    The fallback (the whole workspaces/ tree) is wrong for a per-user mount,
+    and a wrong mount shows up only as files "not found" — so log it once.
+    """
+    global _warned
+    s = _settings()
+    if _warned or s.running_in_docker or not s.sandbox_enabled:
+        return
+    _warned = True
+    logger.warning(
+        "Could not read the sandbox's /workspace mount from Docker; assuming %s. "
+        "If the sandbox mounts a different directory, set SANDBOX_WORKSPACE_MOUNT_SOURCE.",
+        value,
+    )
 
 
 def reset_cache() -> None:

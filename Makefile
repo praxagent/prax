@@ -722,6 +722,7 @@ _local-prax:
 	    obs_env="OBSERVABILITY_ENABLED=false"; \
 	  fi; \
 	  env MEMORY_ENABLED=true SANDBOX_ENABLED=$$sb SANDBOX_HOST=localhost TEAMWORK_ENABLED=true TEAMWORK_URL=http://localhost:8000 PRAX_USER_ID=$(PRAX_USER) DEBUG=$(DEBUG) \
+	    SANDBOX_WORKSPACE_MOUNT_SOURCE="$(APP_WORKSPACE_DIR)/$(PRAX_USER)" \
 	    TASK_RUNNER_ENABLED=true $$obs_env \
 	    nohup $(LOCAL_PY) app.py >$(LOCAL_RUN)/prax.log 2>&1 & echo $$! >$(LOCAL_RUN)/prax.pid; \
 	  echo "Prax started (pid $$(cat $(LOCAL_RUN)/prax.pid)) -> :5001 (DEBUG=$(DEBUG), SANDBOX_ENABLED=$$sb, OBSERVABILITY_ENABLED=$$obs, PRAX_USER_ID=$(PRAX_USER))"; \

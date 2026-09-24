@@ -609,3 +609,47 @@ class TestBridgeOffMainThread:
             assert bridge.invoke("noisy", {"value": "done"}, timeout=20) == "done"
         finally:
             bridge.shutdown()
+
+    def test_a_malformed_reply_does_not_leak_into_the_next_call(self, tmp_path):
+        from prax.plugins.bridge import PluginBridge
+
+        # print() writes a non-JSON line on the protocol channel, then the
+        # real result follows it.
+        plugin_path = _make_plugin(tmp_path, textwrap.dedent("""\
+            from langchain_core.tools import tool
+
+            @tool
+            def chatty(value: str) -> str:
+                \"\"\"Print then answer.\"\"\"
+                print("not json", flush=True)
+                return value
+
+            def register():
+                return [chatty]
+        """), subdir="chatty")
+        bridge = PluginBridge("chatty")
+        try:
+            bridge.register(plugin_path, "imported")
+            with pytest.raises(RuntimeError, match="unreadable message"):
+                bridge.invoke("chatty", {"value": "first"}, timeout=10)
+            assert not bridge.is_alive
+            # Before the fix the next call read the stale "first" reply and
+            # returned it; now it runs in a fresh subprocess and hits its own
+            # protocol error instead.
+            bridge.register(plugin_path, "imported")
+            with pytest.raises(RuntimeError):
+                bridge.invoke("chatty", {"value": "second"}, timeout=10)
+        finally:
+            bridge.shutdown()
+
+    def test_startup_crash_reports_its_traceback(self, tmp_path):
+        from prax.plugins.bridge import PluginBridge
+
+        plugin_path = _make_plugin(tmp_path, "raise SystemExit(__import__('sys').stderr.write('BOOM-TRACE\\\\n'))\n", subdir="crashy")
+        bridge = PluginBridge("crashy")
+        try:
+            with pytest.raises(RuntimeError) as exc:
+                bridge.register(plugin_path, "imported")
+            assert "BOOM-TRACE" in str(exc.value)
+        finally:
+            bridge.shutdown()

@@ -64,6 +64,7 @@ class PluginBridge:
         # pipe and block).
         self._messages: queue.Queue = queue.Queue()
         self._stderr_tail: collections.deque[str] = collections.deque(maxlen=200)
+        self._stderr_thread: threading.Thread | None = None
 
     def _ensure_started(self) -> subprocess.Popen:
         """Start the subprocess if not already running."""
@@ -86,10 +87,11 @@ class PluginBridge:
             target=_pump_messages, args=(self._proc.stdout, self._messages),
             name=f"plugin-stdout-{self.rel_key}", daemon=True,
         ).start()
-        threading.Thread(
+        self._stderr_thread = threading.Thread(
             target=_drain_lines, args=(self._proc.stderr, self._stderr_tail),
             name=f"plugin-stderr-{self.rel_key}", daemon=True,
-        ).start()
+        )
+        self._stderr_thread.start()
         logger.info("Started plugin host subprocess for %s (pid=%d)", self.rel_key, self._proc.pid)
         return self._proc
 
@@ -153,12 +155,20 @@ class PluginBridge:
                         f"Plugin subprocess {self.rel_key} timed out after {timeout}s"
                     ) from None
                 if resp is None:
+                    # stdout closed; give the stderr drain a moment to finish
+                    # so a startup crash reports its traceback.
+                    if self._stderr_thread is not None:
+                        self._stderr_thread.join(timeout=2)
                     stderr = "".join(self._stderr_tail)
                     raise RuntimeError(
                         f"Plugin subprocess {self.rel_key} closed unexpectedly. "
                         f"stderr: {stderr[-500:] if stderr else '(empty)'}"
                     )
                 if isinstance(resp, Exception):
+                    # The protocol is out of step: this call's real reply may
+                    # still arrive and would be read as the NEXT call's. Kill
+                    # the subprocess so the next call starts clean.
+                    self._kill_proc()
                     raise RuntimeError(
                         f"Plugin subprocess {self.rel_key} sent an unreadable message: {resp}"
                     )

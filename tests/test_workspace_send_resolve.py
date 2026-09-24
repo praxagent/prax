@@ -59,3 +59,11 @@ def test_path_traversal_blocked(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     out = wt.workspace_send_file.func("../secret_xyz/s.txt")
     assert "not found" in out and _captured.get("p") is None
+
+
+def test_whole_tree_path_with_own_dir_resolves_even_if_mount_is_misread(monkeypatch, tmp_path):
+    (tmp_path / "active").mkdir(exist_ok=True)
+    (tmp_path / "active" / "d.mp3").write_bytes(b"x")
+    own = tmp_path.name
+    assert _resolve(monkeypatch, tmp_path, f"/workspace/{own}/active/d.mp3") == str(tmp_path / "active" / "d.mp3")
+    assert _resolve(monkeypatch, tmp_path, f"{own}/active/d.mp3") == str(tmp_path / "active" / "d.mp3")

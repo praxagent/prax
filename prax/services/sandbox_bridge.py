@@ -12,7 +12,11 @@ control plane's bare built-in defaults).
 """
 from __future__ import annotations
 
+import logging
+
 from prax_sandbox_client import SandboxClient, SandboxConfig
+
+logger = logging.getLogger(__name__)
 
 
 def _on_output(label: str, text: str) -> None:
@@ -46,6 +50,25 @@ def _tls_verify(value: str):
     return v  # a path to a CA bundle
 
 
+def _optional_fields(**values) -> dict:
+    """Keep only the fields this installed prax-sandbox's SandboxConfig has.
+
+    Prax and prax-sandbox deploy from separate repos; passing a field an older
+    prax-sandbox lacks would make every build_config() raise TypeError and take
+    every sandbox tool down. A missing field falls back to prior behaviour —
+    logged, because a flag that was turned on is then not in effect.
+    """
+    import dataclasses
+
+    known = {f.name for f in dataclasses.fields(SandboxConfig)}
+    for name, value in values.items():
+        if name not in known and value:
+            logger.warning(
+                "prax-sandbox is too old for %s; update it — the setting has no effect", name,
+            )
+    return {k: v for k, v in values.items() if k in known}
+
+
 def build_config() -> SandboxConfig:
     """Build a SandboxConfig from the current prax settings + callbacks.
 
@@ -62,7 +85,7 @@ def build_config() -> SandboxConfig:
         max_concurrent=settings.sandbox_max_concurrent,
         max_rounds=settings.sandbox_max_rounds,
         timeout=settings.sandbox_timeout,
-        enforce_exec_timeout=settings.sandbox_exec_timeout_enforced,
+        **_optional_fields(enforce_exec_timeout=settings.sandbox_exec_timeout_enforced),
         anthropic_key=settings.anthropic_key,
         openai_key=settings.openai_key,
         # Remote transport (empty daemon_url -> in-process, the default):

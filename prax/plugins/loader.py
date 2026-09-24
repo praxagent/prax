@@ -641,14 +641,24 @@ class PluginLoader:
         abs_path = self._abs_path_for(rel_key)
         if abs_path and self.registry.restore_file(str(abs_path)):
             self.registry.mark_rolled_back(rel_key)
+            untrusted = False
             if self.needs_trust_record(abs_path):
                 # The .prev backup lives beside the plugin, where the sandbox
                 # can write: only a restore to a version trusted before counts.
-                integrity.get_ledger().record_if_previously_trusted(
+                # (Only plugin.py is restored, so a manifest/permissions change
+                # since then also lands here — reported, not hidden.)
+                untrusted = not integrity.get_ledger().record_if_previously_trusted(
                     integrity.plugin_unit(abs_path), "rollback",
                 )
             self.load_all()
-            return {"status": "rolled_back", "rel_key": rel_key}
+            result = {"status": "rolled_back", "rel_key": rel_key}
+            if untrusted and integrity.enforced():
+                result["warning"] = (
+                    "the restored files match no version Prax trusted before, so the "
+                    "plugin stays blocked; review it and approve with "
+                    f"scripts/plugin_trust.py approve {integrity.plugin_unit(abs_path)}"
+                )
+            return result
         return {"error": f"No backup found for {rel_key}"}
 
     def remove_plugin(self, rel_key: str) -> dict:

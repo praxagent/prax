@@ -55,12 +55,31 @@ def plugin_unit(plugin_file: Path) -> Path:
     return plugin_file.parent if plugin_file.name == "plugin.py" else plugin_file
 
 
+def symlinks_in(unit: Path) -> list[str]:
+    """Symbolic links inside *unit* (or *unit* itself, if it is one).
+
+    A trusted plugin may contain none: the loader and Python follow links, so
+    a link's target — possibly a file the sandbox can edit — is what runs,
+    while a digest could only ever cover the link.
+    """
+    unit = Path(unit)
+    if unit.is_symlink():
+        return [unit.name]
+    found: list[str] = []
+    if unit.is_dir():
+        for root, dirs, files in os.walk(unit, followlinks=False):
+            for name in (*dirs, *files):
+                p = Path(root) / name
+                if p.is_symlink():
+                    found.append(p.relative_to(unit).as_posix())
+    return found
+
+
 def digest(unit: Path) -> str:
     """SHA-256 over every file in *unit* that can change what the plugin does.
 
-    Symlinks are hashed as their target *string*, never followed: a link's
-    meaning is where it points, and following one could read outside the
-    plugin.
+    Symlinks are hashed as their target *string*, never followed; a unit
+    that contains one is never trusted anyway (see :func:`symlinks_in`).
     """
     h = hashlib.sha256()
     unit = Path(unit)
@@ -146,6 +165,9 @@ class TrustLedger:
 
     def check(self, unit: Path) -> tuple[bool, str]:
         """``(trusted, reason)`` for the unit's current contents."""
+        links = symlinks_in(unit)
+        if links:
+            return False, f"contains symbolic links ({', '.join(links[:3])})"
         key = str(Path(unit).resolve())
         entry = self._read().get(key)
         if not entry:
