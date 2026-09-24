@@ -149,6 +149,8 @@ REGISTRY: tuple[Credential, ...] = (
                PROXY_LOCAL, caveat="Prax's own co-located infra (loopback), not a third-party provider."),
     Credential("PRAX_EGRESS_GATE_TOKEN", "Forward-proxy egress policy", "Bearer for the proxy's egress admin API (answer asks, set taint)",
                PROXY_LOCAL, caveat="Prax's own co-located infra (loopback), not a third-party provider."),
+    Credential("INJECTION_SCREEN_TOKEN", "Injection-screen sidecar", "Optional bearer for the local prompt-injection classifier",
+               PROXY_LOCAL, caveat="Prax's own co-located sidecar (loopback), not a third-party provider."),
     Credential("SANDBOX_CLIENT_KEY", "Prax remote sandbox daemon", "Client mTLS key for the sandbox",
                PROXY_LOCAL, caveat="A TLS client key, not an API token; Prax's own infra."),
     Credential("TEAMWORK_API_KEY", "TeamWork UI", "Prax↔TeamWork API (own UI)",

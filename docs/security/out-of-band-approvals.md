@@ -222,6 +222,24 @@ containment. Prax already runs under systemd file confinement, and with
 sections 5 and 6 it has no route to the network except the proxy, and no route
 to Docker except the daemon.
 
+## 7. An independent injection classifier — built, measured, not recommended (yet)
+
+`sidecars/injection-screen` is a classifier that runs outside Prax.
+`INJECTION_SCREEN_URL` wires it into the point where untrusted tool results
+are labelled; flagged content is either labelled or blocked. It is **off**,
+and with the default open model it should stay off.
+
+Measured with `scripts/eval_injection_screen.py`, at threshold 0.95:
+- **5%** of injections planted inside real pages were caught — the case that
+  matters for Prax;
+- 32% of direct injections were caught;
+- **25%** of popular READMEs were falsely flagged;
+- 0% of Wikipedia articles were falsely flagged.
+
+Muse's ensemble is trained on Meta's own red-teaming; an off-the-shelf model
+is not that. The slot and the eval are here, so that a better model can be
+dropped in and measured, not trusted. See `sidecars/injection-screen/README.md`.
+
 ## Compared with Meta's Muse (see [research note](../research/meta-muse-secure-vm.md))
 
 | Muse | Prax + TeamWork + prax-sandbox, with the flags on |
@@ -234,7 +252,7 @@ to Docker except the daemon.
 | Surrogates for all credentials, including site passwords | Provider keys via the secrets proxy; site passwords filled without entering context. User OAuth tokens: Prax has no OAuth connector store to surrogate |
 | Agent paused while the user drives the browser | Yes (flag) |
 | Harness itself inside the isolated cell | **Not as a container, but boxed on every axis that matters:** systemd file confinement; network only through the policy proxy (kernel-enforced); no Docker socket, with the sandbox reached through the daemon |
-| Injection classifiers outside the cell | **No.** Not built; would need the eval gate |
+| Injection classifiers outside the cell | **Built as a sidecar slot, not enabled:** the default open model catches 5% of injections planted in pages and flags 25% of READMEs (measured) |
 
 **The honest claim:**
 - Prax matches Muse's consent model: out-of-band, scoped, cannot be approved
