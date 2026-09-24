@@ -1,110 +1,223 @@
 # Meta Muse Secure VM — runtime cell + Sentinel — assessment
 
-**Sources:** David Singleton's post ([x.com/dps/status/2103161493722419334](https://x.com/dps/status/2103161493722419334),
-2026-09-24) and the security write-up it links,
-[security.muse.ai](https://security.muse.ai) → Meta's
-["Security and safety for AI agents: our approach with Muse"](https://research.meta.ai/blog/security-and-safety-for-ai-agents-our-approach-with-muse).
-Muse gives every user a cloud VM ("Muse Secure VM") that they share with their
-agent. Assessed 2026-09-24.
+**Sources:**
+- Meta's ["How We Built Safety Into Muse"](https://research.meta.ai/blog/security-and-safety-for-ai-agents-our-approach-with-muse)
+  (Tarek Sheasha, Meta Superintelligence Labs, 2026-09-08). [security.muse.ai](https://security.muse.ai)
+  redirects to it; the full text was read.
+- David Singleton's follow-up post, [x.com/dps/status/2103161493722419334](https://x.com/dps/status/2103161493722419334)
+  (2026-09-24).
 
-**⚠️ Source limits.** The blog post was read through a summarising fetch, so the
-quotes below are the summary's. Nothing was run. Every mechanism is Meta's own
-description of its own system: external audits and source availability are
-promised "later in 2026", not delivered. Treat each claim as a design statement,
-not a verified property. The Prax side of the comparison *was* checked against
-the code, with file references.
+Muse is Meta's personal agent: every user gets a cloud VM that they share with
+it. Assessed 2026-09-24.
 
-**Verdict: document + adopt three things.** Prax already has the same shape in
-two places: keyless model credentials (the secrets proxy is credential
-surrogation) and a separate execution cell (the sandbox container, rootless in
-production). Muse is ahead in one structural way: **every sensitive action and
-every byte of egress is decided by a rules-based authority that runs outside
-the cell the agent lives in.** Prax's governance runs *inside the same process*
-as the model loop, and nothing governs the sandbox's network egress at all.
+**⚠️ Source limits.**
+- Every Muse mechanism below is Meta's own description of its own system.
+  Nothing was run, and the promised external audits cover only the
+  forthcoming Confidential VM. Read the Muse side as design statements, not
+  verified properties.
+- The Prax side *was* checked against the code; file references are given.
+- An earlier draft of this note, written from a summarising fetch, described
+  Sentinel as "rules-based, not an LLM". **The post never says that.** It calls
+  Sentinel "a separate host-side agent", driven by policy the user sets, that
+  also "generates a user-visible purpose for the request". Whether a model sits
+  inside it is not stated.
+
+**Verdict: document + adopt four things.**
+- Prax already matches Muse in three places:
+  - keyless model credentials (the secrets proxy *is* credential surrogation);
+  - a separate execution cell (the sandbox container, rootless in production);
+  - untrusted-input labelling (provenance tainting in the agent loop).
+- Muse's lead is one principle applied everywhere: **authority lives outside
+  the cell the agent runs in, and the agent's consent path never goes through
+  the agent.** Prax breaks that principle in three places:
+  - its HIGH-risk confirmation is **self-confirmable by the model**
+    (July review #8, still open);
+  - its governance runs **in the agent's own process**;
+  - **nothing** governs the sandbox's network egress.
 
 ---
 
 ## What Muse describes
 
-- **Runtime cell.** The agent itself runs in a `systemd-nspawn` container with a
-  full Debian image. Root inside maps to an unprivileged host user; `io_uring`
-  is blocked; `CAP_SYS_PTRACE` and `CAP_NET_ADMIN` are dropped. Activity inside
-  is "unfettered", and the user can browse and download every file in it.
-- **Sentinel.** A host-side, **rules-based (not an LLM)** process that is "the
-  sole permission authority" for connector actions and **all network egress**.
-  It decides allow / deny / ask-the-user at L4 (host, IP, port) and at L7
-  (method, path, decoded request), and validates DNS against SSRF.
-- **Tainted egress.** "Kernel-level data flow tracking": a request from a
-  process that has *not* read user data can be auto-allowed under a narrow
-  policy; a request from one that *has* needs approval.
-- **Credential surrogation for everything.** OAuth tokens and user passwords
-  live in `hatch-authd`, in a separate container. The agent holds surrogate
-  tokens, and Sentinel swaps in the real secret at the network boundary. Browser
-  logins are captured by a custom UI straight into `authd`, so the main agent
-  never sees them.
-- **Least-privilege IPC.** Unix sockets with `SO_PEERCRED` and peer ACLs.
-  Connector workers run outside the cell, each identified by its cgroup with an
-  explicit credential allowlist ("a calendar worker cannot ask authd for an
-  email credential").
-- **Injection defence in depth.** Model training and evals; external data
-  labelled untrusted in the harness; an **ensemble of injection classifiers**
-  independent of the model; human approval for exfiltration; deterministic
-  boundaries "even if Muse is persuaded to behave badly".
-- **Browser.** The browser sub-agent sees an accessibility-tree snapshot, not
-  raw DOM, and cannot run page JavaScript. Purchases need human approval of the
-  exact details every time and use single-use card numbers.
-- **Admitted limits.** Prompt injection "remains an open problem"; Meta can
-  still access VM data when operationally necessary. A "Confidential VM" meant
-  to prevent that is planned, not shipped.
+**Two security domains on one box.** "The right mental model is two isolated
+security domains on one box, not an LLM powered agent with root."
+
+- **Runtime cell.** It holds the harness itself (the `hatch` daemon), the user's
+  workspace, and every binary the agent runs. It runs as a `systemd-nspawn`
+  container with its own full Debian root filesystem.
+  - Root inside maps to an unprivileged host user.
+  - It has a virtual network interface and filtered syscalls (no `io_uring`).
+  - `CAP_SYS_PTRACE` and `CAP_NET_ADMIN` are dropped.
+  - It is "expected to process untrusted data".
+- **Outside the cell**, as separate systemd units:
+  - **`hatch-safety`** — independent models and classifiers on every inference
+    request and response, outside the cell "so attackers cannot disable these
+    protections".
+  - **`privsep`** workers — run built-in connector logic with tightly scoped
+    credentials. The connector CLIs inside the cell "simply parse their
+    arguments, open any files the caller is already allowed to access, and pass
+    typed arguments and file descriptors over a Unix socket".
+  - **`hatch-authd`** — the credential store (OAuth tokens, passwords, kept in
+    the user's VM, not centrally), and it mints the surrogate tokens.
+  - **Sentinel** — "the sole permission authority for connector actions and
+    network egress".
+  - Postgres for durable state, "separate from the runtime cell and from the
+    credential store".
+  - Constrained proxies for inference and telemetry.
+- **IPC** is Unix sockets with `SO_PEERCRED` and peer ACLs: "kernel
+  authenticated, least-privilege interprocess communication with no secrets to
+  steal".
+- **Three separate authorities**:
+  - privsep decides *where* credential-capable code runs;
+  - authd decides *which* credentials a caller may receive (each worker is
+    identified by its cgroup and has a credential allowlist);
+  - Sentinel decides *whether* an action may happen.
+
+**Sentinel.**
+- **Connectors.** A connector call inside the cell submits the connector,
+  method, class of action, scope, and the user's request. Sentinel evaluates
+  the **user-set** connector policy and returns allow, deny, or ask.
+- **Egress.** Traffic reaches Sentinel through a forward proxy, enforced with
+  userns, veth boundaries and eBPF. Sentinel sees L4 and L7: hostname, resolved
+  *and* final IP, port, protocol, method, path, and the decoded request. SSRF
+  checks run after DNS resolution.
+- **Credential insertion.** Code in the cell only ever holds surrogate tokens.
+  After a request is authorised, Sentinel swaps in the real credential from
+  authd at the boundary.
+- **Tainted egress.** Every tool process starts clean and becomes tainted when
+  it reads user data. A clean request that fits a narrow auto-allow policy goes
+  through; tainted or unverifiable processes fall back to approval.
+  Implemented with eBPF cgroup programs plus eBPF on **new LSM hooks Meta
+  added** for taint propagation.
+
+**Human in the loop.**
+- An "ask" creates a pending approval and **execution stops**.
+- The dialog appears in the client UI, "not via their conversation with Muse",
+  and the answer goes **directly to Sentinel**.
+- Approvals are "strict capabilities, not conversational suggestions", bound
+  to the connector or destination and the use case.
+- Scopes available: one-time, session, task, time-bounded, or perpetual.
+  Sentinel chooses which to offer and enforces that later calls match exactly.
+- Read-only, previously allowed, or low-risk actions don't ask: "put friction
+  where consent matters".
+
+**Least privilege.**
+- Read and write access are separated wherever the service supports it.
+- Controls go finer than OAuth scopes: for example, Gmail read access without
+  Gmail settings.
+- The email connector **filters one-time codes, password-reset links and magic
+  links** (deterministic filters plus a classifier), so an agent holding your
+  inbox cannot impersonate you elsewhere.
+
+**Defense in depth against prompt injection.** Framed explicitly around Simon
+Willison's lethal trifecta:
+1. a model trained to resist it (Muse Spark 1.3, "close to SOTA", with their
+   own evals);
+2. untrusted-input labelling in the harness;
+3. an ensemble of injection classifiers, trained independently of the model,
+   run on all external data entering context;
+4. human approval for anything that moves data out of the VM;
+5. beneath all of it, the deterministic boundaries above.
+
+**Browser.**
+- Chromium runs behind a virtualisation layer. The user can watch and take
+  over at any time.
+- Logins go through a client UI (integrated with password managers) straight
+  into authd, and are "injected into the browser window at the point of need".
+- A broker outside the cell owns the CDP connection.
+- The browser sub-agent sees an **accessibility-tree snapshot, not the DOM**,
+  so it cannot read filled credentials back.
+  - It has no JavaScript, no script verbs, and no exec in the browser process,
+    and devtools are disabled.
+- **The agent is paused while the user has control or while a credential is
+  being filled.**
+- Classifiers block the action or ask the user when they see:
+  - off-task personal-data egress;
+  - injection in the DOM, in images or media, or in downloaded files;
+  - a high-risk form submission.
+- Navigation is checked against Meta's malicious-site lists.
+
+**Purchases.**
+- Checkout pages are detected and need approval with the exact details, every
+  time.
+- The wallet (Stripe Link) issues single-use card numbers bound to one
+  merchant, one amount, and a time window.
+
+**Also.**
+- Bug bounty up to $300k, and up to $130k for a single-user prompt injection.
+- Continuous VM backups; users can download every file, including Muse's
+  memory about them.
+- PII-sanitised trajectories train the model by default, with an opt-out.
+- A Confidential VM "later this year" is meant to stop Meta itself reading the
+  VM; today "it does not prevent Meta from accessing data when necessary".
 
 ## Prax, mechanism by mechanism (checked 2026-09-24)
 
 | Muse | Prax today | Gap |
 |---|---|---|
-| Agent runs **inside** the cell; authority lives outside | The **agent runs on the host** (`app.py` under systemd confinement); only tool *execution* happens in the sandbox container | Different trust placement. An injected Prax is a host process holding the governance code that is supposed to restrain it. |
-| Sentinel: out-of-process, rules-based, sole egress + connector authority, L4/L7, SSRF DNS | `governed_tool.py` risk tiers and `trifecta.py` run **in-process**, per tool call. SSRF helpers (`validate_url`, `safe_request`) are per-tool. The forward proxy **passes unknown hosts through untouched** (`prax-secrets-proxy/secrets_proxy/mitm_addon.py:109`). Sandbox egress is unrestricted, and the 2026-09 review found the HIGH-risk confirmation gate never fires in the shipped topology (finding 17) | **The largest gap.** Nothing outside the agent process decides what may leave the box. |
-| Tainted egress (process-level, kernel-tracked) | Trifecta legs recorded per turn at *tool* granularity; provenance tainting of untrusted tool results (`loop_middleware.py`) | Same idea at the agent layer, but it cannot see inside a single `sandbox_shell` call: a script that reads the workspace and then `curl`s out is one tool call. |
-| Surrogates for **all** credentials, user passwords included | Provider keys: yes, the secrets proxy (keyless Prax). User site passwords: **`browser_login` returns the real password into the model's context** (`prax/agent/browser_tools.py:215`, from `sites.yaml`) | Concrete and small to fix: the model should never see a password. |
-| Per-worker cgroup credential allowlists, `SO_PEERCRED` IPC | Per-plugin approved secrets enforced in-process (`capabilities.py`); TeamWork↔Prax is HTTP with an opt-in shared key | Partial; same in-process caveat as above. |
-| Injection classifier ensemble | Provenance labels only; no classifier | Real gap, but a classifier has false positives and must go through the eval gate. |
-| Accessibility tree, no page JS | Prax's browser tools have no JavaScript-evaluation tool (navigate / read_page / click / fill / press / find / screenshot) | Holds on the JS point. The `read_page` format was not compared. |
-| File explorer over the cell + "download your agent data" | TeamWork's file browser over a git-backed workspace (with history) | Memory lives in Qdrant/Neo4j and is not browsable as files, and there is no one-click export that includes it. |
-| Confidential VM (stop the operator reading your data) | Self-hosted: the user *is* the operator | Not a gap; a structural advantage Muse is still building towards. |
+| Approvals: out-of-band client dialog, answer goes straight to Sentinel, scoped capabilities (one-time / session / task / time-bounded / perpetual), execution stops meanwhile | `governed_tool.py:494` blocks the first HIGH call with *"Please confirm with the user … call {tool} again with the same arguments"*; the second call runs. Nothing verifies a user said yes. July review **#8**, still open. TeamWork **already has** the right primitive: `require_approval` in `routers/external.py:209` gives single-use approvals bound to the exact action, where the decider must differ from the requester. It only gates external agents acting on TeamWork, not Prax's own tools | **The most important gap, and mostly wiring.** Prax's "human in the loop" is a speed bump the model clears itself. |
+| Authority outside the agent's cell (Sentinel, authd, privsep, hatch-safety) | The agent runs on the host (`app.py` under systemd confinement). Governance and the trifecta guard run in the same process; only tool *execution* is in the sandbox | An injected Prax holds the code meant to restrain it. |
+| Sentinel owns **all** egress: L4 + L7, post-DNS SSRF | The forward proxy injects keys but **passes unknown hosts through** (`prax-secrets-proxy/secrets_proxy/mitm_addon.py:109`). Sandbox egress is unrestricted. SSRF helpers are per-tool (`validate_url`, `safe_request`) | Nothing outside the agent decides what leaves the box. |
+| Tainted egress (per process, kernel-tracked) | Trifecta legs per turn, at tool granularity; provenance tainting of tool results | Cannot see inside one `sandbox_shell` call: read the workspace, then `curl` it out. |
+| Surrogates for every credential, including site passwords filled at point of need | Provider keys: yes (the secrets proxy). Site logins: **two paths**. `browser_request_login` has the user log in through VNC, so the agent never sees the password — the right shape. `browser_login` (`browser_tools.py:215`) **returns the real password from `sites.yaml` into the model's context** and the trace | Keep the first path, remove the second. |
+| Agent paused while the user drives the browser or a credential is filled | No pause: the agent can act while the user has VNC control | Small, real. |
+| Browser sees an accessibility tree, no page JS, devtools off | No JavaScript-evaluation tool among Prax's browser tools (navigate / read_page / click / fill / press / find / screenshot). `read_page` format not compared | Holds on JS. |
+| Privsep: connector logic runs outside the agent, per-worker credential allowlists | IMPORTED plugins run in a subprocess and call capabilities back in the parent, with per-plugin approved secrets. Built-in tools run in-process | Same direction, weaker boundary. |
+| `hatch-safety` injection classifiers, outside the cell, can't be disabled | No injection classifier | Real, but must pass the eval gate (false positives cost too). |
+| Email connector strips one-time codes and reset links | No email connector; SMS and X/social readers exist | For when an email channel arrives (it is gated on injection evals in the adopt tracker). |
+| Malicious-site blocklist on navigation | SSRF / private-IP checks only | Minor. |
+| Download everything, memory included; continuous backup | TeamWork file browser over a git-backed workspace with history; nightly backup. Memory (Qdrant/Neo4j) is not browsable as files and not in a one-click export | Minor. |
+| Confidential VM (stop the operator reading) | Self-hosted: the user is the operator | Structural advantage, not a gap. |
+| Trajectories train the model by default | Prax trains nothing on user data | Not a gap. |
 
-Where Prax is already ahead: open source today (Muse promises source later),
-self-hostable, keyless model credentials in production, a git-backed workspace
-with history, risk-tiered tool governance with an audit trail, and an eval gate
-for behaviour changes.
+**Where Prax is already ahead:**
+- open source today;
+- self-hostable, so no operator-access problem to solve;
+- keyless model credentials in production;
+- a git-backed workspace with history;
+- per-tool risk tiers with an audit trail;
+- a pre-registered eval gate for behaviour changes.
 
-## Adopt
+## Adopt (ranked)
 
-1. **An out-of-process egress authority ("Sentinel-lite") — the big one.** Make
-   the forward proxy the *only* network path out of the sandbox container (an
-   internal Docker network whose sole route is the proxy), and give it
-   deny-by-default policy with allow / deny / ask at host and HTTP level, plus
-   DNS-time SSRF checks. The pieces exist: the mitmproxy forward proxy, rootless
-   Docker networking, and TeamWork's approval flow (Buzz adoption) for "ask".
-   Must be flag-gated. Must be evaluated rather than assumed: deny-by-default for
-   *tool classification* (`UNKNOWN_TOOL_HIGH_RISK`) was rejected on measured
-   cost regressions in the 2026-07-08 flag campaign and deleted on 2026-08-07,
-   and an egress policy that constantly asks is its own failure mode.
-2. **Password surrogation for browser logins — small, do first.** Replace
-   `browser_login` returning the password with a tool that fills a stored secret
-   into a selector *server-side*, so the value never enters the model's context
-   or the trace. Same principle as keyless Prax, extended from provider keys to
-   the user's own credentials.
-3. **Process-level taint for sandbox egress — research, depends on (1).** Once
-   the proxy is the only exit, it can tell apart requests from the sandbox
-   container and requests from Prax, and treat sandbox egress after
-   workspace-reading calls as the private-data leg. Muse does this with kernel
-   tracking; an honest first version is coarser (per-container, per-turn).
+1. **Real, out-of-band approvals.** This fixes July #8.
+   - A HIGH-risk or trifecta-closing call creates a TeamWork approval and the
+     turn *stops*. The user answers in the TeamWork UI, never in chat, and the
+     decision reaches the governance layer directly.
+   - Grants are capabilities bound to the tool and its arguments: one-time by
+     default, with Muse's session / task / time-bounded scopes as later options.
+   - TeamWork's `require_approval` already implements the single-use,
+     action-bound, requester≠decider core. Prax needs a client for it and a
+     resume path for a stopped turn (the durable-checkpoint work is the seam).
+   - Flag-gated, because it changes every HIGH call.
+2. **Passwords never reach the model.**
+   - Retire `browser_login` in favour of the existing `browser_request_login`
+     VNC flow.
+   - If stored credentials stay, fill them server-side at the selector, so the
+     value never enters context or trace.
+   - Pause the agent while the user holds the browser.
+3. **An out-of-process egress authority ("Sentinel-lite").**
+   - Make the forward proxy the sandbox's only exit (an internal Docker network
+     whose only route is the proxy), deny-by-default, with allow / deny / ask at
+     host and HTTP level and post-DNS SSRF checks. "Ask" reuses adopt 1.
+   - Flag- and eval-gated. Tool-level deny-by-default (`UNKNOWN_TOOL_HIGH_RISK`)
+     was rejected on measured cost regressions in the 2026-07-08 flag campaign
+     and deleted on 2026-08-07. Muse's own answer, "put friction where consent
+     matters", is what the policy has to achieve.
+4. **Process-level taint for sandbox egress** — parked until 3 exists. Once the
+   proxy is the only exit, treat egress from the sandbox after workspace-reading
+   calls as the private-data leg. Start per container and per turn; Muse needed
+   new LSM hooks to do it per process.
 
-**Document, don't adopt yet:** the injection-classifier ensemble (park behind
-the eval gate; false positives are a product cost); "download your agent data"
-including the memory stores (worth doing, small, not security); and single-use
-cards / purchase flows (not a Prax product direction).
+**Document, don't adopt yet:**
+- an injection-classifier layer outside the agent (behind the eval gate);
+- email-style filtering of one-time codes and reset links (bank for the email
+  channel);
+- a known-malicious-site list;
+- memory in the "download your data" export;
+- purchases and single-use cards (not a product direction).
 
-**Not adopted:** moving the agent itself into the cell. It is the cleaner trust
-placement, but it is a re-architecture of the harness. Adopting (1) gets most of
-the benefit, because what an injected agent can *do* is bounded by the exit it
-must pass through.
+**Not adopted:** moving the agent into the cell. It is the cleaner placement,
+but it re-architects the harness, and adopts 1 and 3 bound what an injected
+agent can do: it cannot approve its own actions, and it cannot reach anything
+the exit does not allow.
