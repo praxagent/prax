@@ -123,6 +123,7 @@ own `.env`; this page cannot assert its absence.
 | `MCP_BEARER_TOKEN` | Authenticates inbound MCP callers. |
 | `SANDBOX_DAEMON_TOKEN`, `SANDBOX_CLIENT_KEY` | Remote sandbox access. |
 | `EGRESS_GATE_TOKEN` | Admin API of the sandbox egress gate (loopback): answers its "ask" decisions and sets taint. |
+| `PRAX_EGRESS_GATE_TOKEN` | Admin API of the forward proxy's egress policy (loopback): answers its "ask" decisions about Prax's own requests and sets taint. |
 | `TEAMWORK_API_KEY` | Prax/TeamWork integration. |
 | `PRAX_API_KEY` | Inbound to Prax itself — checked on `/teamwork/*`, `/plugins/*`, `/api/users/*` when set (`prax/blueprints/inbound_auth.py`, opt-in, default empty); never sent anywhere. |
 | `NEO4J_PASSWORD` | Graph database access over Bolt. |

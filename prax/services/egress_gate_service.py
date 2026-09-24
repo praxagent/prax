@@ -62,17 +62,35 @@ def _settings():
     return settings
 
 
+def _gates() -> list[tuple[str, str, str]]:
+    """``(name, url, token)`` for each configured gate.
+
+    ``sandbox`` — prax-sandbox's egress gate (the sandbox's only exit);
+    ``prax`` — the forward proxy's egress policy (Prax's own traffic). Both
+    speak the same admin API.
+    """
+    s = _settings()
+    gates = []
+    for name, url_f, tok_f in (("sandbox", "egress_gate_url", "egress_gate_token"),
+                               ("prax", "prax_egress_gate_url", "prax_egress_gate_token")):
+        url, tok = getattr(s, url_f, "") or "", getattr(s, tok_f, "") or ""
+        if url and tok:
+            gates.append((name, url.rstrip("/"), tok))
+    return gates
+
+
 def configured() -> bool:
-    s = _settings()
-    return bool(getattr(s, "egress_gate_url", "") and getattr(s, "egress_gate_token", ""))
+    return bool(_gates())
 
 
-def _call(method: str, path: str, body: dict | None = None) -> dict:
-    s = _settings()
+def _call(method: str, path: str, body: dict | None = None, gate: str = "sandbox") -> dict:
+    match = [g for g in _gates() if g[0] == gate]
+    if not match:
+        raise LookupError(f"egress gate {gate!r} is not configured")
+    _, url, token = match[0]
     resp = requests.request(
-        method, s.egress_gate_url.rstrip("/") + path,
-        headers={"Authorization": f"Bearer {s.egress_gate_token}",
-                 "Content-Type": "application/json"},
+        method, url + path,
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
         data=json.dumps(body) if body is not None else None, timeout=5)
     resp.raise_for_status()
     return resp.json()
@@ -129,26 +147,34 @@ def _sync(force: bool = False) -> None:
             tainted and now - _last_sent[1] >= _TAINT_REFRESH)
         if not (force or due):
             return
-        try:
-            _call("POST", "/taint", {"tainted": tainted, "reason": reason[:200], "ttl": _TAINT_TTL})
-            _last_sent = (tainted, now)
-        except Exception as exc:
-            _last_sent = None  # unknown: try again on the next tick
-            logger.warning("Could not update egress-gate taint (%s): %s", tainted, exc)
+        ok = True
+        for name, _, _ in _gates():
+            try:
+                _call("POST", "/taint", {"tainted": tainted, "reason": reason[:200], "ttl": _TAINT_TTL},
+                      gate=name)
+            except Exception as exc:
+                ok = False
+                logger.warning("Could not update %s egress-gate taint (%s): %s", name, tainted, exc)
+        _last_sent = (tainted, now) if ok else None  # unknown: try again next tick
 
 
 # --- answering the gate's questions -----------------------------------------------
 
-def answer(item: dict) -> bool:
+def answer(item: dict, gate: str = "sandbox") -> bool:
     """Ask a person about one pending destination; tell the gate. Returns allow."""
     from prax.services.approval_service import ask_and_wait
     from prax.services.teamwork_service import get_teamwork_client
 
     host, port = item.get("host", "?"), item.get("port", 0)
     tainted = bool(item.get("tainted"))
-    reason = (f"The sandbox wants to connect to {host}:{port}"
-              + (" while the current work has read private data." if tainted else "."))
-    capability = f"prax.egress.{host}"
+    after = " while the current work has read private data." if tainted else "."
+    if gate == "prax":
+        # Prax's own request, seen whole through the TLS-terminating proxy.
+        reason = f"Prax wants to {item.get('method', '?')} {host}{item.get('path') or '/'}{after}"
+        capability = f"prax.net.{host}"
+    else:
+        reason = f"The sandbox wants to connect to {host}:{port}{after}"
+        capability = f"prax.egress.{host}"
     payload = {"host": host, "port": port, "method": item.get("method"),
                "path": item.get("path"), "tainted": tainted}
     # Ask no longer than the gate will wait: an answer after it gives up would
@@ -162,7 +188,8 @@ def answer(item: dict) -> bool:
     allow = outcome.approved
     try:
         _call("POST", f"/pending/{item['id']}",
-              {"allow": allow, "by": "a person in TeamWork" if allow else f"no approval ({outcome.status})"})
+              {"allow": allow, "by": "a person in TeamWork" if allow else f"no approval ({outcome.status})"},
+              gate=gate)
     except Exception as exc:
         logger.warning("Could not answer egress question %s: %s", item.get("id"), exc)
         return False  # the approval is left unspent; it expires on its own
@@ -178,20 +205,26 @@ def answer(item: dict) -> bool:
 
 
 def _poll_once() -> None:
-    for item in _call("GET", "/pending").get("pending", []):
-        key = str(item.get("id"))
-        with _lock:
-            if key in _handling:
-                continue
-            _handling.add(key)
+    for gate, _, _ in _gates():
+        try:
+            items = _call("GET", "/pending", gate=gate).get("pending", [])
+        except Exception as exc:
+            logger.debug("egress gate %s poll failed: %s", gate, exc)
+            continue
+        for item in items:
+            key = f"{gate}:{item.get('id')}"
+            with _lock:
+                if key in _handling:
+                    continue
+                _handling.add(key)
 
-        def run(item=item, key=key):
-            try:
-                answer(item)
-            finally:
-                with _lock:
-                    _handling.discard(key)
-        threading.Thread(target=run, name=f"egress-ask-{key}", daemon=True).start()
+            def run(item=item, key=key, gate=gate):
+                try:
+                    answer(item, gate=gate)
+                finally:
+                    with _lock:
+                        _handling.discard(key)
+            threading.Thread(target=run, name=f"egress-ask-{key}", daemon=True).start()
 
 
 def _loop() -> None:

@@ -276,6 +276,27 @@ class AppSettings(BaseSettings):
         default="", alias="EGRESS_GATE_TOKEN", repr=False,
         description="Bearer token for the egress gate's admin API (its EGRESS_ADMIN_TOKEN).",
     )
+    prax_egress_gate_url: str = Field(
+        default="", alias="PRAX_EGRESS_GATE_URL",
+        description=(
+            "Admin API of the forward proxy's egress policy (prax-secrets-proxy, "
+            "PROXY_EGRESS_POLICY), e.g. http://127.0.0.1:8791. Prax answers its 'ask' "
+            "decisions about Prax's OWN requests through TeamWork approvals and keeps "
+            "its taint flag. Empty = not used."
+        ),
+    )
+    prax_egress_gate_token: str = Field(
+        default="", alias="PRAX_EGRESS_GATE_TOKEN", repr=False,
+        description="Bearer token for that admin API (the proxy's PROXY_EGRESS_ADMIN_TOKEN).",
+    )
+    discord_use_proxy: bool = Field(
+        default=False, alias="DISCORD_USE_PROXY",
+        description=(
+            "Connect the Discord bot (REST and gateway) through HTTPS_PROXY. Needed when "
+            "Prax may reach only loopback (deploy/systemd egress drop-in): discord.py "
+            "ignores proxy environment variables."
+        ),
+    )
     browser_secrets_out_of_context: bool = Field(
         default=False, alias="BROWSER_SECRETS_OUT_OF_CONTEXT",
         description=(

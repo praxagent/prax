@@ -153,6 +153,49 @@ TeamWork:
 - A governed `sandbox_shell` call tainted the gate, and the end of the turn
   cleared it.
 
+## 5. Prax's own traffic — `PRAX_EGRESS_GATE_URL` + the forward proxy's egress policy
+
+The sandbox gate covers code the agent runs. Prax's **own** process holds your
+memory, workspace and conversations, and its fetch tools can put data in a
+URL. So its traffic needs the same treatment. It comes in two parts.
+
+**The policy.** prax-secrets-proxy's forward proxy (`PROXY_EGRESS_POLICY`)
+already terminates TLS for all of Prax's egress, to inject keys. With a
+policy it also decides each request:
+- It judges host, **method and path, for HTTPS too.** Reading a page can be
+  allowed while posting to that same site is asked about.
+- It asks through the same TeamWork dialog: "Prax wants to POST
+  example.org/upload".
+- It never resolves a name before deciding.
+
+The example policy:
+- allows the providers Prax needs;
+- allows reading the web while clean;
+- asks before any write to a site that is not listed.
+
+**The enforcement.** `deploy/systemd/prax.service.d/40-egress-only-through-the-proxy.conf`
+restricts the Prax process to loopback (`IPAddressDeny=any`,
+`IPAddressAllow=localhost`), and the kernel enforces it on the unit's cgroup.
+Prax cannot open a connection anywhere except through the proxy, whatever the
+model tells it. Discord needs `DISCORD_USE_PROXY=true`, because discord.py
+ignores proxy variables.
+
+Verified live (2026-09-24):
+- A process under that restriction could not reach example.net directly, but
+  could through the proxy.
+- With Prax's real poller and a logged-in person in TeamWork:
+  - `POST example.org/upload` was held, shown as "Prax wants to POST
+    example.org/upload", denied, and blocked (403);
+  - a `GET` to an unknown site was held, allowed, and returned 200.
+
+**Residuals:**
+- **DNS.** Prax's resolver (127.0.0.53) is loopback, so names Prax itself
+  resolves (its own SSRF checks do) can still leave as queries.
+- **Taint for Prax's own process is incomplete.** It counts memory and
+  workspace tool reads, but not the conversation Prax is always holding.
+  Treat Prax's own traffic as permanently holding private data when you
+  write its policy.
+
 ## Compared with Meta's Muse (see [research note](../research/meta-muse-secure-vm.md))
 
 | Muse | Prax + TeamWork + prax-sandbox, with the flags on |
@@ -160,17 +203,19 @@ TeamWork:
 | Approvals in the client UI, straight to Sentinel, never via chat | **Same shape.** TeamWork dialog → decision read by governance; agent credentials refused on the decision route |
 | Scopes: one-time, session, task, time-bounded, perpetual | One-time, 1 hour, 1 day; revocable. No task-scoped or perpetual grants (perpetual deliberately omitted) |
 | Execution stops while asked | Yes: the call blocks until decided or `APPROVAL_WAIT_SECONDS` |
-| Sentinel: sole authority for **all** egress, L4 + L7, SSRF after DNS | For the **sandbox**: sole exit, L4 for HTTPS / L7 for plain HTTP, SSRF after DNS with the checked IP pinned. Not L7 for HTTPS (no TLS interception). **Prax's own host process is not behind the gate** |
+| Sentinel: sole authority for **all** egress, L4 + L7, SSRF after DNS | **Sandbox:** sole exit; L4 for HTTPS, L7 for plain HTTP; SSRF after DNS, with the checked IP pinned. **Prax's own process:** sole exit, with the kernel enforcing loopback-only; **L7 including HTTPS** through the TLS-terminating proxy; SSRF after DNS. DNS itself is not gated for the Prax process |
 | Kernel-level per-process taint | Per-container, per-turn taint. Coarser |
 | Surrogates for all credentials, including site passwords | Provider keys via the secrets proxy; site passwords filled without entering context. User OAuth tokens: Prax has no OAuth connector store to surrogate |
 | Agent paused while the user drives the browser | Yes (flag) |
-| Harness itself inside the isolated cell | **No.** Prax runs on the host under systemd confinement; only tool execution is in the sandbox |
+| Harness itself inside the isolated cell | **Not as a container.** Prax runs on the host under systemd confinement (files) plus the loopback-only egress restriction (network). See the Docker-socket note below |
 | Injection classifiers outside the cell | **No.** Not built; would need the eval gate |
 
 **The honest claim:**
 - Prax matches Muse's consent model: out-of-band, scoped, cannot be approved
   by the agent.
 - It matches Muse's credential principle for provider keys and site passwords.
-- It matches Muse's egress model for the sandbox, where the agent's code runs.
-- It does **not** match three things: the harness living in the cell, egress
-  control of the harness process itself, and the classifier layer.
+- It matches Muse's egress model for **both** the sandbox and Prax's own
+  process. Prax's process is judged on full HTTPS requests; the sandbox is
+  judged per host.
+- It does **not** match per-process taint (Meta built custom kernel hooks for
+  that).
