@@ -289,6 +289,21 @@ class AppSettings(BaseSettings):
         default="", alias="PRAX_EGRESS_GATE_TOKEN", repr=False,
         description="Bearer token for that admin API (the proxy's PROXY_EGRESS_ADMIN_TOKEN).",
     )
+    injection_screen_url: str = Field(
+        default="", alias="INJECTION_SCREEN_URL",
+        description=(
+            "An independent prompt-injection classifier (sidecars/injection-screen) "
+            "run on untrusted tool results before they enter the model's context. "
+            "Empty = off. NOT recommended with the default open model — measured: "
+            "5% of planted injections caught, 25% of READMEs flagged "
+            "(scripts/eval_injection_screen.py). Measure any model before enabling."
+        ),
+    )
+    injection_screen_token: str = Field(default="", alias="INJECTION_SCREEN_TOKEN", repr=False)
+    injection_screen_mode: str = Field(
+        default="label", alias="INJECTION_SCREEN_MODE",
+        description="label = warn the model inline; block = withhold flagged content.",
+    )
     discord_use_proxy: bool = Field(
         default=False, alias="DISCORD_USE_PROXY",
         description=(
