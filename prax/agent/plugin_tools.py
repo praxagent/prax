@@ -17,6 +17,7 @@ The workspace can be pushed to a private remote using PRAX_SSH_KEY_B64.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 from langchain_core.tools import tool
@@ -25,6 +26,8 @@ from prax.agent.action_policy import RiskLevel, risk_tool
 from prax.agent.user_context import current_user_id
 from prax.plugins.loader import get_plugin_loader
 from prax.trace_events import TraceEvent
+
+logger = logging.getLogger(__name__)
 
 _PLUGINS_TOOLS_ROOT = Path(__file__).resolve().parent.parent / "plugins" / "tools"
 _CUSTOM_DIR = _PLUGINS_TOOLS_ROOT / "custom"
@@ -229,6 +232,10 @@ def plugin_write(
         allowed_commands=allowed_commands,
         secrets=secrets,
     )
+    # This call is the trusted write path: vouch for exactly what it produced.
+    if loader.needs_trust_record(abs_path):
+        from prax.plugins.integrity import get_ledger, plugin_unit
+        get_ledger().record(plugin_unit(abs_path), "plugin_write")
 
     _audit_plugin_event(
         TraceEvent.PLUGIN_ACTIVATE, name,
@@ -325,6 +332,10 @@ def plugin_test(name: str) -> str:
 
     if not abs_path.exists():
         return f"Plugin not found: {name}"
+
+    refusal = get_plugin_loader().untrusted_reason(abs_path)
+    if refusal:
+        return f"NOT RUN — {refusal}"
 
     from prax.plugins.sandbox import sandbox_test_plugin
     result = sandbox_test_plugin(str(abs_path))
@@ -947,6 +958,7 @@ def plugin_import(repo_url: str, name: str | None = None, plugin_subfolder: str 
     result = import_plugin_repo(uid, repo_url, name, plugin_subfolder)
     if "error" in result:
         return f"Error: {result['error']}"
+    _record_imported(uid, result)
 
     # --- Security warnings ---
     # If the scan found anything, report to the user and do NOT load the
@@ -1120,10 +1132,20 @@ def plugin_import_update(name: str) -> str:
 
     if result["status"] == "up_to_date":
         return f"Plugin '{result['name']}' is already up to date ({result['commit']})."
+    _record_imported(uid, result)
 
     # Check for security warnings in the updated code.
     warnings = result.get("security_warnings", [])
     if warnings:
+        # "NOT reloaded" must hold for the next load_all() too, not only for
+        # this call: flag it exactly as plugin_import does, so it stays out
+        # until plugin_import_activate acknowledges the new warnings.
+        try:
+            loader = get_plugin_loader()
+            for key in loader.discover_shared_keys(result.get("name", "")):
+                loader.registry.flag_requires_acknowledgement(key)
+        except Exception:
+            logger.warning("Could not hold back updated plugin %s", name, exc_info=True)
         lines = [
             f"Updated '{result['name']}' ({result['old_commit']} → {result['new_commit']}).\n",
             f"**Security review found {len(warnings)} concern(s):**\n",
@@ -1153,6 +1175,25 @@ def plugin_import_update(name: str) -> str:
         f"Updated '{result['name']}' ({result['old_commit']} → {result['new_commit']}). "
         f"{_format_load_status(load_errors)}"
     )
+
+
+def _record_imported(uid: str, result: dict) -> None:
+    """Vouch for the repo that plugin_import / plugin_import_update just wrote.
+
+    ``result["name"]`` is the sanitized directory name under ``plugins/shared/``.
+    """
+    name = result.get("name")
+    if not name:
+        return
+    try:
+        from prax.services.workspace_service import get_workspace_plugins_dir
+        plugins_dir = get_workspace_plugins_dir(uid)
+        if plugins_dir:
+            get_plugin_loader().record_trusted_under(
+                Path(plugins_dir) / "shared" / name, "plugin_import",
+            )
+    except Exception:
+        logger.warning("Could not record trust for imported plugin %s", name, exc_info=True)
 
 
 def _format_load_status(load_errors: dict[str, str]) -> str:

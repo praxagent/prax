@@ -20,6 +20,7 @@ from pathlib import Path
 
 from langchain_core.tools import BaseTool, StructuredTool
 
+from prax.plugins import integrity
 from prax.plugins.capabilities import PluginCapabilities
 from prax.plugins.manifest import PluginManifest, PluginManifestError, PluginToolManifest, load_plugin_manifest
 from prax.plugins.monitored_tool import wrap_with_monitoring
@@ -232,8 +233,19 @@ class PluginLoader:
         seen_tool_names: set[str] = set()
         builtin_names = _get_builtin_tool_names()
 
+        enforce_integrity = integrity.enforced()
         for plugin_file, rel_key, trust_tier in ordered_plugins:
             try:
+                if enforce_integrity and self.needs_trust_record(plugin_file):
+                    unit = integrity.plugin_unit(plugin_file)
+                    trusted, reason = integrity.get_ledger().check(unit)
+                    if not trusted:
+                        load_errors[rel_key] = integrity.BLOCK_MESSAGE.format(
+                            reason=reason, path=unit,
+                        )
+                        logger.warning("Blocking plugin %s (%s): %s", rel_key, unit, reason)
+                        self._emit_audit_event("plugin_block", rel_key, f"reason=untrusted_write {reason}")
+                        continue
                 manifest = self._load_manifest(
                     plugin_file, rel_key, trust_tier, load_errors,
                 )
@@ -602,6 +614,10 @@ class PluginLoader:
         Returns:
             Dict with status/error and the new version number.
         """
+        refusal = self.untrusted_reason(Path(plugin_path))
+        if refusal:
+            return {"error": "Untrusted plugin files", "details": refusal}
+
         result = sandbox_test_plugin(plugin_path)
         if not result["passed"]:
             return {"error": "Sandbox test failed", "details": result}
@@ -625,6 +641,12 @@ class PluginLoader:
         abs_path = self._abs_path_for(rel_key)
         if abs_path and self.registry.restore_file(str(abs_path)):
             self.registry.mark_rolled_back(rel_key)
+            if self.needs_trust_record(abs_path):
+                # The .prev backup lives beside the plugin, where the sandbox
+                # can write: only a restore to a version trusted before counts.
+                integrity.get_ledger().record_if_previously_trusted(
+                    integrity.plugin_unit(abs_path), "rollback",
+                )
             self.load_all()
             return {"status": "rolled_back", "rel_key": rel_key}
         return {"error": f"No backup found for {rel_key}"}
@@ -724,6 +746,45 @@ class PluginLoader:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def needs_trust_record(plugin_file: Path) -> bool:
+        """True for plugin code that lives outside the install's built-in root.
+
+        Built-in plugins ship with Prax and sit where neither the sandbox nor
+        TeamWork can write. Everything else — workspace plugins, imported
+        repos, the legacy plugin repo — must be vouched for by the ledger.
+        """
+        try:
+            return not Path(plugin_file).resolve().is_relative_to(_PLUGINS_ROOT.resolve())
+        except OSError:
+            return True
+
+    def untrusted_reason(self, plugin_file: Path) -> str:
+        """Empty when *plugin_file* may run; else why it may not."""
+        if not (integrity.enforced() and self.needs_trust_record(plugin_file)):
+            return ""
+        unit = integrity.plugin_unit(Path(plugin_file))
+        trusted, reason = integrity.get_ledger().check(unit)
+        if trusted:
+            return ""
+        return integrity.BLOCK_MESSAGE.format(reason=reason, path=unit)
+
+    def record_trusted_under(self, root: Path, source: str) -> list[str]:
+        """Record every plugin discovered under *root* as trusted.
+
+        For paths that just received content through a trusted Prax tool
+        (a repo import or update). Returns the recorded unit paths.
+        """
+        recorded: list[str] = []
+        root = Path(root)
+        if not root.is_dir():
+            return recorded
+        for plugin_file, _rel in self._discover_plugins(root):
+            unit = integrity.plugin_unit(plugin_file)
+            integrity.get_ledger().record(unit, source)
+            recorded.append(str(unit))
+        return recorded
 
     def _rel_key_for(self, abs_path: Path) -> str:
         """Compute a relative key for a plugin given its absolute path."""

@@ -263,6 +263,16 @@ class AppSettings(BaseSettings):
     sandbox_mem_limit: str = Field(default="1g", alias="SANDBOX_MEM_LIMIT")
     sandbox_cpu_limit: int = Field(default=2_000_000_000, alias="SANDBOX_CPU_LIMIT")
     sandbox_max_rounds: int = Field(default=10, alias="SANDBOX_MAX_ROUNDS")
+    workspace_plugin_integrity_enabled: bool = Field(
+        default=False, alias="WORKSPACE_PLUGIN_INTEGRITY_ENABLED",
+        description=(
+            "Only run workspace/imported plugin code whose digest a Prax plugin "
+            "tool (plugin_write, rollback, plugin_import[_update]) or the "
+            "operator's scripts/plugin_trust.py recorded. The workspace is "
+            "writable by the sandbox and TeamWork's file API; without this, a "
+            "file planted under plugins/ runs on the host at the next load."
+        ),
+    )
     sandbox_exec_timeout_enforced: bool = Field(
         default=False, alias="SANDBOX_EXEC_TIMEOUT_ENFORCED",
         description=(
