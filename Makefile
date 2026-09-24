@@ -31,8 +31,38 @@ lint:
 layers:
 	uv run python scripts/check_layers.py
 
+# Optional memory ceiling for the test run, so a developer's machine is never
+# starved by the suite. Empty (the default) changes nothing — CI and every
+# checkout without a local.mk run exactly as before. Set both in local.mk:
+#
+#   TEST_MEM_HIGH := 2G   # soft: above this the kernel reclaims and throttles
+#   TEST_MEM_MAX  := 3G   # hard: above this the TESTS are OOM-killed, never
+#                         #       another project's process
+#
+# The capped path runs the venv's python directly rather than `uv run`. That
+# matters: when uv is installed as a snap, snap confinement moves every process
+# it launches into its own fresh cgroup scope, escaping the cap entirely — the
+# limit would appear set and bind to nothing. `uv sync` still runs first,
+# outside the cap, so the environment is exactly what `uv run` would have used.
+TEST_MEM_HIGH ?=
+TEST_MEM_MAX  ?=
+PYTEST_ARGS    = tests/ -x -q -k "$(SANDBOX_EXCLUDES)"
+
+# Either knob alone turns the cap on: HIGH throttles (reclaims) past its value,
+# MAX OOM-kills the tests only. The venv's python runs directly because the
+# snap-packaged uv moves itself into its own scope and would escape the cap.
+TEST_VENV_PY   = $(or $(UV_PROJECT_ENVIRONMENT),.venv)/bin/python
+TEST_MEM_PROPS = $(if $(strip $(TEST_MEM_HIGH)),-p MemoryHigh=$(TEST_MEM_HIGH)) \
+                 $(if $(strip $(TEST_MEM_MAX)),-p MemoryMax=$(TEST_MEM_MAX) -p MemorySwapMax=0)
+
 test:
-	FLASK_SECRET_KEY=ci-test-key uv run pytest tests/ -x -q -k "$(SANDBOX_EXCLUDES)"
+ifeq ($(strip $(TEST_MEM_MAX)$(TEST_MEM_HIGH)),)
+	FLASK_SECRET_KEY=ci-test-key uv run pytest $(PYTEST_ARGS)
+else
+	uv sync --inexact --quiet
+	FLASK_SECRET_KEY=ci-test-key systemd-run --user --scope --quiet --collect \
+	  $(TEST_MEM_PROPS) -- $(TEST_VENV_PY) -m pytest $(PYTEST_ARGS)
+endif
 
 actions:
 	actionlint
@@ -284,6 +314,15 @@ NEO4J_NAME      ?= $(PRAX_STACK)-neo4j
 QDRANT_PORT     ?= 6333
 NEO4J_HTTP_PORT ?= 7474
 NEO4J_BOLT_PORT ?= 7687
+# Neo4j memory. Left unset, the JVM sizes itself from the HOST's RAM: on a
+# 91 GB workstation each instance granted itself a 22.9 GB max heap, while
+# Prax's graph (~3k nodes) needs a fraction of one. Empty keeps today's
+# behaviour; set in local.mk to bound it, e.g.
+#   NEO4J_HEAP_MAX  := 512m
+#   NEO4J_PAGECACHE := 256m
+NEO4J_HEAP_MAX  ?=
+NEO4J_PAGECACHE ?=
+NEO4J_MEM_ENV    = $(if $(NEO4J_HEAP_MAX),-e NEO4J_server_memory_heap_initial__size=$(NEO4J_HEAP_MAX) -e NEO4J_server_memory_heap_max__size=$(NEO4J_HEAP_MAX)) $(if $(NEO4J_PAGECACHE),-e NEO4J_server_memory_pagecache_size=$(NEO4J_PAGECACHE))
 # The split sandbox is its own compose project with a hardcoded `name:` and
 # fixed published ports.  A SECOND Prax tree on the same host would therefore
 # run `docker compose down --remove-orphans` against the FIRST tree's sandbox —
@@ -451,7 +490,7 @@ _local-neo4j:
 	elif command -v docker >/dev/null 2>&1; then \
 	  mkdir -p "$(NEO4J_DATA)/data" "$(NEO4J_DATA)/logs"; \
 	  docker rm -f $(NEO4J_NAME) >/dev/null 2>&1 || true; \
-	  docker run -d --name $(NEO4J_NAME) -p $(NEO4J_HTTP_PORT):7474 -p $(NEO4J_BOLT_PORT):7687 --log-opt max-size=10m --log-opt max-file=3 -e NEO4J_AUTH=neo4j/prax-memory \
+	  docker run -d --name $(NEO4J_NAME) -p $(NEO4J_HTTP_PORT):7474 -p $(NEO4J_BOLT_PORT):7687 --log-opt max-size=10m --log-opt max-file=3 -e NEO4J_AUTH=neo4j/prax-memory $(NEO4J_MEM_ENV) \
 	    -v "$(NEO4J_DATA)/data":/data -v "$(NEO4J_DATA)/logs":/logs neo4j:5 \
 	    >$(LOCAL_RUN)/neo4j.log 2>&1 \
 	    && { echo "Neo4j started (docker) -> :$(NEO4J_BOLT_PORT)    data: $(NEO4J_DATA)"; \
