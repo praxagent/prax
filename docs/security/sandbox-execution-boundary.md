@@ -41,9 +41,13 @@ the Prax OS user: all six `desktop_*` tools in `prax/agent/sandbox_tools.py`
 (`desktop_open` passes the model-supplied string to `bash -c`), plugin
 `caps.run_command` (`prax/plugins/capabilities.py`), and
 `prax/services/mermaid_validator.py`. No `desktop_*` tool is in
-`prax/agent/action_policy.py`'s `_HIGH` set, so nothing gates the call. The fix
-direction is to route that helper on `settings.sandbox_available` and raise when
-the container is unreachable, matching the contract above.
+`prax/agent/action_policy.py`'s `_HIGH` set, so nothing gates the call.
+**Opt-in fix (2026-09-23):** `SANDBOX_ROUTE_COMMANDS=true` routes that helper into
+the sandbox whenever the sandbox is enabled, and raises — no host fallback — when
+the container is unreachable. Paths are translated through the directory Docker
+reports at `/workspace` (`prax/services/sandbox_mount.py`), so it is correct for
+both the per-user and the whole-tree mount. Independently of the flag, an
+IMPORTED plugin's `caps.run_command` is refused whenever it would run on the host.
 
 ## Why the container, not command filtering
 
@@ -161,6 +165,15 @@ shape with `docker inspect prax-sandbox-sandbox-1 --format '{{range .Mounts}}…
    `/workspace/plugins/custom/<x>/plugin.py` — i.e. model-authored code in the
    container — becomes model-authored code **in the harness** at the next load.
    That is exactly the escalation this page says the container prevents.
+   **Mitigation, opt-in since 2026-09-23:** `WORKSPACE_PLUGIN_INTEGRITY_ENABLED=true`
+   makes `load_all()`, `hot_swap()` and `plugin_test` refuse any plugin outside
+   the install's built-in root — WORKSPACE *and* `shared/` — whose files do not
+   match a digest recorded by `plugin_write`, `plugin_import[_update]`, a
+   rollback to a previously trusted version, or the operator's
+   `scripts/plugin_trust.py approve`. The ledger (`prax/plugins/trusted_plugins.json`)
+   lives outside every workspace. Residual: the digest check and the import read
+   the files at different moments, so a writer who races a load it also
+   triggers can still swap bytes in between; and the flag is off by default.
 4. **Known gap (2026-09): the trifecta guard does not see `delegate_sandbox`.**
    `prax/agent/trifecta.py` classifies `delegate_<spoke>` tools only by
    membership in its `_DELEGATE_UNTRUSTED/_PRIVATE/_SINK` sets and does not fall

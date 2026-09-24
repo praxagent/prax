@@ -7,18 +7,22 @@ Each bridge:
   - Spawns the host subprocess lazily on first tool invocation
   - Serializes tool kwargs → sends to subprocess → deserializes result
   - Handles capability callbacks (plugin calling caps.http_get, etc.)
-  - Enforces timeouts with SIGTERM → SIGKILL escalation
+  - Enforces timeouts by killing the subprocess (thread-safe: no signals)
   - Is killed on reload or conversation end
 """
 from __future__ import annotations
 
 import atexit
 import base64
+import collections
+import json
 import logging
 import os
+import queue
 import subprocess
 import sys
 import threading
+import time
 from typing import Any
 
 from prax.plugins.rpc import (
@@ -55,6 +59,12 @@ class PluginBridge:
         self._lock = threading.Lock()
         self._tool_metadata: list[dict] = []
         self._caps: Any = None  # PluginCapabilities for servicing callbacks
+        # Per-subprocess: messages read off its stdout by a pump thread, and
+        # the tail of its stderr (drained so a chatty plugin cannot fill the
+        # pipe and block).
+        self._messages: queue.Queue = queue.Queue()
+        self._stderr_tail: collections.deque[str] = collections.deque(maxlen=200)
+        self._stderr_thread: threading.Thread | None = None
 
     def _ensure_started(self) -> subprocess.Popen:
         """Start the subprocess if not already running."""
@@ -69,6 +79,19 @@ class PluginBridge:
             text=True,
             env=_SAFE_ENV,
         )
+        # Fresh channels per subprocess, so nothing from a killed one leaks
+        # into the next.
+        self._messages = queue.Queue()
+        self._stderr_tail = collections.deque(maxlen=200)
+        threading.Thread(
+            target=_pump_messages, args=(self._proc.stdout, self._messages),
+            name=f"plugin-stdout-{self.rel_key}", daemon=True,
+        ).start()
+        self._stderr_thread = threading.Thread(
+            target=_drain_lines, args=(self._proc.stderr, self._stderr_tail),
+            name=f"plugin-stderr-{self.rel_key}", daemon=True,
+        )
+        self._stderr_thread.start()
         logger.info("Started plugin host subprocess for %s (pid=%d)", self.rel_key, self._proc.pid)
         return self._proc
 
@@ -109,33 +132,45 @@ class PluginBridge:
     def _read_response(self, proc: subprocess.Popen, *, timeout: int = 30) -> Any:
         """Read messages from the subprocess, handling caps callbacks along the way.
 
-        Blocks until a terminal response (ready/result/error) is received.
-        If a caps_call is received, it is serviced and the response sent back.
+        Blocks until a terminal response (ready/result/error) is received or
+        *timeout* seconds pass, whichever is first; on timeout the subprocess
+        is killed. If a caps_call is received, it is serviced and the
+        response sent back.
+
+        The deadline is a queue read, not ``signal.alarm``: SIGALRM handlers
+        can only be installed on the main thread, and Prax serves requests
+        from Flask, Discord and task-runner threads — where the alarm raised
+        ValueError and no IMPORTED plugin could ever register.
         """
-        import signal
-
-        def _alarm_handler(signum, frame):
-            raise TimeoutError(f"Plugin subprocess {self.rel_key} timed out after {timeout}s")
-
-        # Set alarm for timeout (Unix only).
-        old_handler = None
-        if hasattr(signal, "SIGALRM"):
-            old_handler = signal.signal(signal.SIGALRM, _alarm_handler)
-            signal.alarm(timeout)
-
+        deadline = time.monotonic() + timeout
         try:
             while True:
-                resp = recv(proc.stdout)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(f"Plugin subprocess {self.rel_key} timed out after {timeout}s")
+                try:
+                    resp = self._messages.get(timeout=remaining)
+                except queue.Empty:
+                    raise TimeoutError(
+                        f"Plugin subprocess {self.rel_key} timed out after {timeout}s"
+                    ) from None
                 if resp is None:
-                    stderr = ""
-                    if proc.stderr:
-                        try:
-                            stderr = proc.stderr.read()
-                        except Exception:
-                            pass
+                    # stdout closed; give the stderr drain a moment to finish
+                    # so a startup crash reports its traceback.
+                    if self._stderr_thread is not None:
+                        self._stderr_thread.join(timeout=2)
+                    stderr = "".join(self._stderr_tail)
                     raise RuntimeError(
                         f"Plugin subprocess {self.rel_key} closed unexpectedly. "
                         f"stderr: {stderr[-500:] if stderr else '(empty)'}"
+                    )
+                if isinstance(resp, Exception):
+                    # The protocol is out of step: this call's real reply may
+                    # still arrive and would be read as the NEXT call's. Kill
+                    # the subprocess so the next call starts clean.
+                    self._kill_proc()
+                    raise RuntimeError(
+                        f"Plugin subprocess {self.rel_key} sent an unreadable message: {resp}"
                     )
 
                 msg_type = resp.get("type")
@@ -167,11 +202,6 @@ class PluginBridge:
         except TimeoutError:
             self._kill_proc()
             raise
-        finally:
-            if hasattr(signal, "SIGALRM"):
-                signal.alarm(0)
-                if old_handler is not None:
-                    signal.signal(signal.SIGALRM, old_handler)
 
     def _handle_caps_call(self, proc: subprocess.Popen, msg: dict) -> None:
         """Service a capability callback from the subprocess."""
@@ -248,6 +278,33 @@ class PluginBridge:
     @property
     def is_alive(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
+
+
+def _pump_messages(stream: Any, out: queue.Queue) -> None:
+    """Move JSON-lines messages from *stream* onto *out*; ``None`` marks EOF."""
+    try:
+        while True:
+            try:
+                msg = recv(stream)
+            except json.JSONDecodeError as exc:
+                out.put(exc)
+                continue
+            if msg is None:
+                break
+            out.put(msg)
+    except (OSError, ValueError):
+        pass  # pipe closed underneath us (process killed)
+    finally:
+        out.put(None)
+
+
+def _drain_lines(stream: Any, tail: collections.deque) -> None:
+    """Keep the last lines of *stream* so the pipe never fills up."""
+    try:
+        for line in stream:
+            tail.append(line)
+    except (OSError, ValueError):
+        pass
 
 
 # ---------------------------------------------------------------------------

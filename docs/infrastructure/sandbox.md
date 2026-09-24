@@ -27,18 +27,37 @@ start:
 cd ../prax-sandbox && make build && docker compose up -d
 ```
 
-> **Known gap (2026-09):** prax's own `docker-compose.yml` also defines a
-> `sandbox` service, but its compose-level healthcheck still curls the removed
-> OpenCode `:4096`, so under `docker compose up` the sandbox never turns healthy
-> and `prax` never starts; that service also injects `ANTHROPIC_API_KEY` /
-> `OPENAI_API_KEY` and mounts the repo at `/source`. Details and the fix
-> direction: [docker.md](docker.md), [sandbox-execution-boundary.md](../security/sandbox-execution-boundary.md).
+prax's own `docker-compose.yml` / `docker-compose.lite.yml` define the same
+`sandbox` service for the all-in-Docker path. Since 2026-09-07 they match the
+reference: no compose-level healthcheck (the image's `pgrep -x supervisord` is
+what `prax` waits on), no model keys, no `/source` mount.
+
+**Resource limits and exec deadlines are opt-in.** By default the container has
+no memory, process or `/tmp` bound, and `docker exec` has no deadline — the
+2026-07-08 disk-full outage was an unbounded `ffmpeg` writing 21 GB into the
+container's `/tmp`. Two switches, both recommended:
+
+- `SANDBOX_LIMITS=1` (in `local.mk` for `make run-local-*`, or in
+  `deploy/update.sh`'s environment) layers prax-sandbox's
+  `docker-compose.limits.yml`: memory without extra swap
+  (`SANDBOX_MEM_LIMIT`, 3g), `SANDBOX_PIDS_LIMIT` (1024), a sized tmpfs `/tmp`
+  (`SANDBOX_TMP_SIZE`, 1g) and a small `cap_drop`. Writes to `/workspace` stay
+  unbounded — Docker cannot size a bind mount.
+- `SANDBOX_EXEC_TIMEOUT_ENFORCED=true` (a Prax setting) makes every timeout
+  Prax passes real: the command runs under coreutils `timeout`, its process
+  group is stopped at the deadline, and the tool sees exit code 124. A process
+  that `setsid`s itself escapes the group; the pids limit is the backstop.
 
 **What `/workspace` is depends on how you started it.** `make run-local-all`
 passes `WORKSPACE_DIR=<workspaces>/<PRAX_USER_ID>` (the user's own workspace);
 `deploy/update.sh` passes `WORKSPACE_DIR` through and defaults it to the whole
 `workspaces/` tree, so set it to the per-user directory on a multi-user box or
-every user's files are visible from the container.
+every user's files are visible from the container. Prax does not assume either
+shape: it reads the directory bound at `/workspace` from Docker
+(`prax/services/sandbox_mount.py`) and derives every container path from it —
+the sandbox agent's "your directory", the shell translation, delivery of files
+the agent reports. A user whose workspace is not in the mount is told so rather
+than handed another user's path.
 
 Prax reaches it in-process — the control plane holds the docker socket, `exec`s
 into the container for shell/file ops, and talks to `sandbox:9223` (CDP) for the

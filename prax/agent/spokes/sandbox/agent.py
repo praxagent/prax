@@ -20,21 +20,22 @@ from prax.settings import settings
 def _container_user_workspace(uid: str) -> str:
     """The CURRENT USER's directory as seen inside the sandbox container.
 
-    The sandbox bind-mounts the whole ``workspaces/`` directory at
-    ``/workspace``, so the user's root is ``/workspace/<their-dir>`` — NOT
-    ``/workspace`` itself, and NOT ``/workspace/active`` (which resolves to a
-    directory belonging to no user; artifacts written there are invisible to
-    ``workspace_send_file`` and were observed stranded, root-owned, on the
-    live box).
+    Derived from the directory actually mounted at ``/workspace``
+    (:mod:`prax.services.sandbox_mount`): ``/workspace/<their-dir>`` when the
+    whole tree is mounted, ``/workspace`` itself when only their workspace
+    is. Hard-coding either shape pointed the model at a path that did not
+    exist on the other kind of deploy — artifacts written to a wrong
+    ``/workspace/active`` were observed stranded, root-owned, on the live
+    box.
     """
-    import os
+    from prax.services.sandbox_mount import user_root_in_sandbox
 
-    try:
-        from prax.services import workspace_service
-
-        return "/workspace/" + os.path.basename(workspace_service.workspace_root(uid))
-    except Exception:
-        return f"/workspace/{uid}"
+    root = user_root_in_sandbox(uid)
+    if root is None:
+        # This user's workspace is not in the mount at all; say so rather
+        # than invent a path that resolves to another user's files or none.
+        return "(this user's workspace is not mounted in the sandbox)"
+    return root
 
 
 def _append_delivery_hint(result: str, uid: str) -> str:
@@ -58,20 +59,17 @@ def _append_delivery_hint(result: str, uid: str) -> str:
 
     try:
         from prax.services import workspace_service
+        from prax.services.sandbox_mount import from_sandbox
 
-        root = workspace_service.workspace_root(uid)
+        root = os.path.realpath(workspace_service.workspace_root(uid))
     except Exception:
         return result
-    user_dir = os.path.basename(root)
     deliverable: list[str] = []
     for path in re.findall(r"/workspace/[^\s`'\"]+", result or ""):
-        rel = path.removeprefix(f"/workspace/{user_dir}/")
-        if rel == path:  # not under this user's directory
-            continue
-        try:
-            host = workspace_service.safe_join(root, rel)
-        except Exception:
-            continue
+        host = from_sandbox(path)
+        if not host or not host.startswith(root + os.sep):
+            continue  # outside the mount, or not this user's directory
+        rel = host[len(root) + 1:]
         if os.path.isfile(host) and rel not in deliverable:
             deliverable.append(rel)
     if not deliverable:
@@ -125,9 +123,9 @@ the one writing the commands and code.
 2. **Run** it with sandbox_shell and read the output.
 3. **Iterate** — fix errors and re-run until it works.
 4. **Deliver** any artifact the user should receive under
-   {user_workspace}/active/ — this user's OWN directory in the shared mount.
-   Do NOT write user artifacts to /workspace/active/ (that path belongs to no
-   user and the app cannot deliver files from it). Report the full path.
+   {user_workspace}/active/ — this user's OWN directory in the mount.
+   Do NOT write user artifacts anywhere else under /workspace (the app can
+   only deliver from this user's directory). Report the full path.
 5. **Report** honestly what you did, what was produced, and whether it succeeded.
 
 ## Rules

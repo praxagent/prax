@@ -263,6 +263,46 @@ class AppSettings(BaseSettings):
     sandbox_mem_limit: str = Field(default="1g", alias="SANDBOX_MEM_LIMIT")
     sandbox_cpu_limit: int = Field(default=2_000_000_000, alias="SANDBOX_CPU_LIMIT")
     sandbox_max_rounds: int = Field(default=10, alias="SANDBOX_MAX_ROUNDS")
+    sandbox_route_commands: bool = Field(
+        default=False, alias="SANDBOX_ROUTE_COMMANDS",
+        description=(
+            "On a host install (Prax beside the sandbox, not in compose), run "
+            "prax.utils.shell.run_command — desktop_* tools, plugin "
+            "caps.run_command, mermaid validation — inside the sandbox instead "
+            "of on the Prax host. Compose deployments always route there."
+        ),
+    )
+    sandbox_workspace_mount_source: str = Field(
+        default="", alias="SANDBOX_WORKSPACE_MOUNT_SOURCE",
+        description=(
+            "The directory, as Prax sees it, that the sandbox mounts at "
+            "/workspace. Empty = ask Docker, else the deploy path's shape "
+            "(compose: the PRAX_USER_ID workspace; host installs: the whole "
+            "workspaces/ tree). Set it only for a remote sandbox or an unusual "
+            "mount."
+        ),
+    )
+    workspace_plugin_integrity_enabled: bool = Field(
+        default=False, alias="WORKSPACE_PLUGIN_INTEGRITY_ENABLED",
+        description=(
+            "Only run workspace/imported plugin code whose digest a Prax plugin "
+            "tool (plugin_write, rollback, plugin_import[_update]) or the "
+            "operator's scripts/plugin_trust.py recorded. The workspace is "
+            "writable by the sandbox and TeamWork's file API; without this, a "
+            "file planted under plugins/ runs on the host at the next load."
+        ),
+    )
+    sandbox_exec_timeout_enforced: bool = Field(
+        default=False, alias="SANDBOX_EXEC_TIMEOUT_ENFORCED",
+        description=(
+            "Enforce each sandbox command's timeout inside the container "
+            "(coreutils timeout: TERM to the process group, KILL 5 s later, "
+            "exit 124). Off, docker exec has no deadline and every timeout "
+            "Prax passes (run_python 120 s, shell 60 s, ...) is ignored. "
+            "Local transport only — a remote daemon enforces its own via "
+            "PRAX_SANDBOX_ENFORCE_EXEC_TIMEOUT."
+        ),
+    )
     # Remote sandbox daemon — empty = in-process (local), the default. Set to a
     # daemon URL (https://host:8843) to drive a sandbox on a remote box.
     sandbox_daemon_url: str = Field(default="", alias="SANDBOX_DAEMON_URL")

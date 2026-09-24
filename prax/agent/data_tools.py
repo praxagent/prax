@@ -100,7 +100,7 @@ def data_query(sql: str, timeout: int = 60) -> str:
     directly, so you can query a CSV/Parquet/JSON without loading it first:
 
         SELECT category, count(*) n, round(avg(amount), 2) avg_amount
-        FROM '/workspace/active/sales.csv'
+        FROM '<your workspace>/active/sales.csv'
         GROUP BY category ORDER BY n DESC
 
     It also does pure computation and stats (``SELECT 2^10``, ``median(x)``,
@@ -111,15 +111,17 @@ def data_query(sql: str, timeout: int = 60) -> str:
     isolated sandbox Docker container (via ``run_shell`` → ``exec_in_sandbox`` →
     ``container.exec_run``), NEVER on the Prax host: DuckDB can read files (e.g.
     ``FROM '/path.csv'``) can therefore only see the CONTAINER's filesystem —
-    ``/workspace`` (the user's own mounted data) and the container's own paths —
+    ``/workspace`` (the mounted workspace data) and the container's own paths —
     exactly the boundary as run_python/sandbox_shell. The Prax host never loads
     DuckDB (the import lives in the in-container runner). If the sandbox is off or
     its container is absent, the tool refuses/errors — it does not fall back to
     host execution. Do NOT change this to run DuckDB in-process on the host: that
     would let ``FROM '/etc/…'`` read the host's arbitrary files.
 
-    Note: files the user should receive go under /workspace/active/ (deliver
-    with workspace_send_file); the container's /tmp is internal.
+    Note: files the user should receive go under the user's own directory's
+    active/ in the mount — /workspace/active/ when only their workspace is
+    mounted, /workspace/<their dir>/active/ when all are (deliver with
+    workspace_send_file); the container's /tmp is internal.
 
     Args:
         sql: A DuckDB SQL query. Reference data files by absolute path in

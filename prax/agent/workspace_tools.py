@@ -335,25 +335,35 @@ def workspace_send_file(filename: str, message: str = "") -> str:
     uid = _get_user_id()
     root = workspace_service._workspace_root(uid)
 
-    # The sandbox mounts the whole workspaces/ directory at /workspace, so THIS
-    # user's root is /workspace/<their-dir> in the container — NOT /workspace
-    # itself. The agent may pass a container-absolute path
-    # (/workspace/usr_abc/active/foo.mp3), or a root-relative one. Normalize by
-    # stripping the mount prefix AND the caller's own directory (never another
-    # user's — the per-user boundary stays intact), then resolve from active/
-    # or the workspace root.
+    # The agent may pass a container-absolute path (/workspace/...) or a
+    # root-relative one. A container path is mapped back through the
+    # directory actually mounted at /workspace (prax.services.sandbox_mount),
+    # so it is right for a per-user mount and for the whole tree; it must land
+    # in THIS user's workspace (never another user's — the per-user boundary
+    # stays intact). Then resolve from active/ or the workspace root.
     name = filename
-    for prefix in ("/workspace/", "workspace/"):
-        if name.startswith(prefix):
-            name = name[len(prefix):]
-            break
+    mapped: list[str] = []
+    if name.startswith("/workspace/"):
+        from prax.services.sandbox_mount import from_sandbox
+        host = from_sandbox(name)
+        real_root = os.path.realpath(root)
+        if host and host.startswith(real_root + os.sep):
+            mapped.append(host[len(real_root) + 1:])
+        # Old leniency, tried after the mapped path: read the rest as relative
+        # to this user's root (safe_join below keeps it there), for a model
+        # that got the mount shape wrong.
+        name = name[len("/workspace/"):]
+    elif name.startswith("workspace/"):
+        name = name[len("workspace/"):]
     name = name.lstrip("/")
-    own_dir = os.path.basename(root)
+    # A whole-tree-shaped path (<own dir>/active/x) when the mount is
+    # misdetected: also try it without this user's own directory name.
+    own_dir = os.path.basename(os.path.realpath(root))
     if own_dir and name.startswith(own_dir + "/"):
-        name = name[len(own_dir) + 1:]
+        mapped.append(name[len(own_dir) + 1:])
 
     file_path = None
-    for rel in (os.path.join("active", name), name):
+    for rel in (*mapped, os.path.join("active", name), name):
         try:
             candidate = workspace_service.safe_join(root, rel)
         except Exception:
