@@ -47,16 +47,17 @@ def _apply_pinned_inputs(task: str) -> str:
     if not captures:
         return task
     try:
-        import os
+        from prax.services.sandbox_mount import user_root_in_sandbox
 
-        from prax.services import workspace_service
-
-        uid = current_user_id.get() or ""
-        user_dir = os.path.basename(workspace_service.workspace_root(uid))
+        sandbox_root = user_root_in_sandbox(current_user_id.get() or "")
     except Exception:
-        user_dir = "<user_id>"
+        sandbox_root = None
+
+    def where(slug: str) -> str:
+        return f"  (in the sandbox: {sandbox_root}/library/raw/{slug}.md)" if sandbox_root else ""
+
     lines = "\n".join(
-        f"- library/raw/{slug}.md  (in the sandbox: /workspace/{user_dir}/library/raw/{slug}.md)"
+        f"- library/raw/{slug}.md{where(slug)}"
         for slug in captures)
     return (
         f"{task}\n\n"

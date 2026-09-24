@@ -22,10 +22,6 @@ import tempfile
 
 logger = logging.getLogger(__name__)
 
-_APP_WORKSPACE_PREFIX = "/app/workspaces/"
-# User-scoped sandbox mount: /workspace (singular) is the user's own folder.
-_SANDBOX_WORKSPACE_PREFIX = "/workspace/"
-
 
 def _get_settings():
     from prax.settings import settings
@@ -33,46 +29,22 @@ def _get_settings():
 
 
 # ---------------------------------------------------------------------------
-# Path translation between app and sandbox containers
+# Path translation between the Prax host and the sandbox container
 # ---------------------------------------------------------------------------
 
 def to_sandbox_path(path: str | None) -> str | None:
-    """Translate an app-container path to the sandbox-container equivalent.
+    """Translate a Prax-side path to where the sandbox sees it.
 
-    The sandbox mounts a single user's workspace at ``/workspace/``.
-    App-container paths like ``/app/workspaces/{user_id}/foo`` become
-    ``/workspace/foo`` (the user_id prefix is stripped because the mount
-    is already user-scoped).
+    Derived from the directory actually mounted at ``/workspace``
+    (:mod:`prax.services.sandbox_mount`), so it is right whether the sandbox
+    mounts one user's workspace or the whole tree. A path outside the mount
+    (``/tmp/x``, a command-line flag, a non-path argument) is returned
+    unchanged, as before.
     """
     if not path:
         return path
-
-    settings = _get_settings()
-    user_id = settings.prax_user_id
-
-    # /app/workspaces/{user_id}/foo → /workspace/foo
-    if path.startswith(_APP_WORKSPACE_PREFIX):
-        rest = path[len(_APP_WORKSPACE_PREFIX):]
-        if user_id and rest.startswith(user_id + "/"):
-            rest = rest[len(user_id) + 1:]
-        elif user_id and rest == user_id:
-            rest = ""
-        return _SANDBOX_WORKSPACE_PREFIX + rest if rest else _SANDBOX_WORKSPACE_PREFIX.rstrip("/")
-
-    # Resolve relative/absolute host paths
-    ws_dir = os.path.abspath(settings.workspace_dir)
-    abs_path = os.path.abspath(path)
-    if abs_path.startswith(ws_dir + os.sep):
-        rest = abs_path[len(ws_dir) + 1:]
-        # Strip user_id prefix — sandbox mount is user-scoped
-        if user_id and rest.startswith(user_id + os.sep):
-            rest = rest[len(user_id) + 1:]
-        elif user_id and rest == user_id:
-            rest = ""
-        return _SANDBOX_WORKSPACE_PREFIX + rest if rest else _SANDBOX_WORKSPACE_PREFIX.rstrip("/")
-    if abs_path == ws_dir:
-        return _SANDBOX_WORKSPACE_PREFIX.rstrip("/")
-    return path
+    from prax.services.sandbox_mount import to_sandbox
+    return to_sandbox(path) or path
 
 
 def _translate_cmd_paths(cmd: list[str]) -> list[str]:
@@ -85,8 +57,17 @@ def _translate_cmd_paths(cmd: list[str]) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def routes_to_sandbox() -> bool:
-    """True when :func:`run_command` executes inside the sandbox container."""
-    return bool(_get_settings().sandbox_persistent)
+    """True when :func:`run_command` executes inside the sandbox container.
+
+    Always in a docker-compose deployment. On a host install (Prax as a
+    process beside the sandbox — `make run-local-all`, `deploy/update.sh`)
+    only with ``SANDBOX_ROUTE_COMMANDS``; otherwise commands run on the Prax
+    host itself, which is the prior behaviour.
+    """
+    s = _get_settings()
+    if s.sandbox_persistent:
+        return True
+    return bool(getattr(s, "sandbox_route_commands", False) and s.sandbox_available)
 
 
 def run_command(
@@ -137,11 +118,11 @@ def shared_tempdir(prefix: str = "prax_") -> str:
     The caller is responsible for cleanup (or not — workspace .gitignore
     blocks ``.tmp/``).
     """
-    settings = _get_settings()
-    if settings.sandbox_persistent:
-        base = os.path.join(
-            os.path.abspath(settings.workspace_dir), ".tmp",
-        )
+    if routes_to_sandbox():
+        # Under whatever is mounted at /workspace — the workspaces/ root was
+        # invisible to a sandbox that mounts only one user's directory.
+        from prax.services.sandbox_mount import mount_source
+        base = os.path.join(mount_source() or os.path.abspath(_get_settings().workspace_dir), ".tmp")
         os.makedirs(base, exist_ok=True)
         return tempfile.mkdtemp(prefix=prefix, dir=base)
     return tempfile.mkdtemp(prefix=prefix)
@@ -149,8 +130,7 @@ def shared_tempdir(prefix: str = "prax_") -> str:
 
 def is_sandbox_running() -> bool:
     """Return True if the always-on sandbox container is reachable."""
-    settings = _get_settings()
-    if not settings.sandbox_persistent:
+    if not routes_to_sandbox():
         return False
     try:
         from prax.services.sandbox_bridge import configured_client

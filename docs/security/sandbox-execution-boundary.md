@@ -41,9 +41,13 @@ the Prax OS user: all six `desktop_*` tools in `prax/agent/sandbox_tools.py`
 (`desktop_open` passes the model-supplied string to `bash -c`), plugin
 `caps.run_command` (`prax/plugins/capabilities.py`), and
 `prax/services/mermaid_validator.py`. No `desktop_*` tool is in
-`prax/agent/action_policy.py`'s `_HIGH` set, so nothing gates the call. The fix
-direction is to route that helper on `settings.sandbox_available` and raise when
-the container is unreachable, matching the contract above.
+`prax/agent/action_policy.py`'s `_HIGH` set, so nothing gates the call.
+**Opt-in fix (2026-09-23):** `SANDBOX_ROUTE_COMMANDS=true` routes that helper into
+the sandbox whenever the sandbox is enabled, and raises — no host fallback — when
+the container is unreachable. Paths are translated through the directory Docker
+reports at `/workspace` (`prax/services/sandbox_mount.py`), so it is correct for
+both the per-user and the whole-tree mount. Independently of the flag, an
+IMPORTED plugin's `caps.run_command` is refused whenever it would run on the host.
 
 ## Why the container, not command filtering
 

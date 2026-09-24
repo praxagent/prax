@@ -52,7 +52,12 @@ container's `/tmp`. Two switches, both recommended:
 passes `WORKSPACE_DIR=<workspaces>/<PRAX_USER_ID>` (the user's own workspace);
 `deploy/update.sh` passes `WORKSPACE_DIR` through and defaults it to the whole
 `workspaces/` tree, so set it to the per-user directory on a multi-user box or
-every user's files are visible from the container.
+every user's files are visible from the container. Prax does not assume either
+shape: it reads the directory bound at `/workspace` from Docker
+(`prax/services/sandbox_mount.py`) and derives every container path from it —
+the sandbox agent's "your directory", the shell translation, delivery of files
+the agent reports. A user whose workspace is not in the mount is told so rather
+than handed another user's path.
 
 Prax reaches it in-process — the control plane holds the docker socket, `exec`s
 into the container for shell/file ops, and talks to `sandbox:9223` (CDP) for the

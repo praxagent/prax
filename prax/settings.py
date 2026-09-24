@@ -263,6 +263,25 @@ class AppSettings(BaseSettings):
     sandbox_mem_limit: str = Field(default="1g", alias="SANDBOX_MEM_LIMIT")
     sandbox_cpu_limit: int = Field(default=2_000_000_000, alias="SANDBOX_CPU_LIMIT")
     sandbox_max_rounds: int = Field(default=10, alias="SANDBOX_MAX_ROUNDS")
+    sandbox_route_commands: bool = Field(
+        default=False, alias="SANDBOX_ROUTE_COMMANDS",
+        description=(
+            "On a host install (Prax beside the sandbox, not in compose), run "
+            "prax.utils.shell.run_command — desktop_* tools, plugin "
+            "caps.run_command, mermaid validation — inside the sandbox instead "
+            "of on the Prax host. Compose deployments always route there."
+        ),
+    )
+    sandbox_workspace_mount_source: str = Field(
+        default="", alias="SANDBOX_WORKSPACE_MOUNT_SOURCE",
+        description=(
+            "The directory, as Prax sees it, that the sandbox mounts at "
+            "/workspace. Empty = ask Docker, else the deploy path's shape "
+            "(compose: the PRAX_USER_ID workspace; host installs: the whole "
+            "workspaces/ tree). Set it only for a remote sandbox or an unusual "
+            "mount."
+        ),
+    )
     workspace_plugin_integrity_enabled: bool = Field(
         default=False, alias="WORKSPACE_PLUGIN_INTEGRITY_ENABLED",
         description=(
