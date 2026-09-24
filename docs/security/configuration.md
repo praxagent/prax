@@ -32,8 +32,10 @@ Key fields:
 | `SANDBOX_MAX_CONCURRENT` | Max simultaneous sandbox sessions | `5` |
 | `SANDBOX_DEFAULT_MODEL` | Legacy — the coding-session feature it configured was removed in 2026-07 (#142); still defined and forwarded to the sandbox client, governs nothing in Prax | `openai/gpt-5.4` |
 | `SANDBOX_MAX_ROUNDS` | Legacy — same as above | `10` |
-| `SANDBOX_MEM_LIMIT` | Container memory limit | `1g` |
-| `SANDBOX_CPU_LIMIT` | Container CPU limit (nanocpus) | `2000000000` |
+| `SANDBOX_EXEC_TIMEOUT_ENFORCED` | Enforce each sandbox command's timeout inside the container (TERM to its process group, KILL 5 s later, exit 124). Off, `docker exec` has no deadline and every timeout Prax passes is ignored. Recommended `true` | `false` |
+| `SANDBOX_LIMITS` | Not a Prax setting — a `make` / `deploy/update.sh` variable. `1` layers prax-sandbox's opt-in `docker-compose.limits.yml` (memory, pids, sized tmpfs `/tmp`, dropped capabilities), sized by `SANDBOX_MEM_LIMIT` / `SANDBOX_PIDS_LIMIT` / `SANDBOX_TMP_SIZE` from the same environment. Recommended `1` | unset |
+| `SANDBOX_MEM_LIMIT` | As a Prax setting: declared, **read by no code** — a value in `.env` limits nothing. As an environment variable for the limits overlay above: the container's memory limit | `1g` (setting) / `3g` (overlay) |
+| `SANDBOX_CPU_LIMIT` | Declared, **read by no code** | `2000000000` |
 | **Fine-Tuning (optional)** | | |
 | `FINETUNE_ENABLED` | Enable self-improving fine-tuning | `false` |
 | `VLLM_BASE_URL` | vLLM server URL | `http://localhost:8000/v1` |

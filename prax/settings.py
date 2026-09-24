@@ -263,6 +263,17 @@ class AppSettings(BaseSettings):
     sandbox_mem_limit: str = Field(default="1g", alias="SANDBOX_MEM_LIMIT")
     sandbox_cpu_limit: int = Field(default=2_000_000_000, alias="SANDBOX_CPU_LIMIT")
     sandbox_max_rounds: int = Field(default=10, alias="SANDBOX_MAX_ROUNDS")
+    sandbox_exec_timeout_enforced: bool = Field(
+        default=False, alias="SANDBOX_EXEC_TIMEOUT_ENFORCED",
+        description=(
+            "Enforce each sandbox command's timeout inside the container "
+            "(coreutils timeout: TERM to the process group, KILL 5 s later, "
+            "exit 124). Off, docker exec has no deadline and every timeout "
+            "Prax passes (run_python 120 s, shell 60 s, ...) is ignored. "
+            "Local transport only — a remote daemon enforces its own via "
+            "PRAX_SANDBOX_ENFORCE_EXEC_TIMEOUT."
+        ),
+    )
     # Remote sandbox daemon — empty = in-process (local), the default. Set to a
     # daemon URL (https://host:8843) to drive a sandbox on a remote box.
     sandbox_daemon_url: str = Field(default="", alias="SANDBOX_DAEMON_URL")

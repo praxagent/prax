@@ -62,6 +62,7 @@ def build_config() -> SandboxConfig:
         max_concurrent=settings.sandbox_max_concurrent,
         max_rounds=settings.sandbox_max_rounds,
         timeout=settings.sandbox_timeout,
+        enforce_exec_timeout=settings.sandbox_exec_timeout_enforced,
         anthropic_key=settings.anthropic_key,
         openai_key=settings.openai_key,
         # Remote transport (empty daemon_url -> in-process, the default):
