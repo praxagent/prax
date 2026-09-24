@@ -354,10 +354,6 @@ def wrap_with_governance(
         if LEG_PRIVATE in static_legs:
             state.trifecta_private = True
             _taint_egress(state, f"{tool_name} read private data")
-        elif tool_name in _SANDBOX_EXEC_TOOLS:
-            # Code in the sandbox can read /workspace — the user's data — so
-            # for the egress gate the sandbox is no longer "clean".
-            _taint_egress(state, f"{tool_name} ran code over the workspace")
 
     def _governed_run_bound(**kwargs: Any) -> Any:
         state = current_turn_state()
@@ -565,6 +561,12 @@ def wrap_with_governance(
         # runs, so the spoke's inner (governed) tools see them. ---
         if is_delegate:
             _record_legs(state)
+
+        # Code about to run in the sandbox can read /workspace — the user's
+        # data — within this very call, so the egress gate is tainted BEFORE
+        # it runs, not after (a `cat … | curl …` is one call).
+        if tool_name in _SANDBOX_EXEC_TOOLS:
+            _taint_egress(state, f"{tool_name} ran code over the workspace")
 
         # Execute the tool.
         logger.info("Tool %s starting [%s] (args=%s)", tool_name, risk.value, _summarize_args(kwargs))
