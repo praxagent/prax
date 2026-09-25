@@ -204,7 +204,7 @@ def _build_bot():
 
     intents = discord.Intents.default()
     intents.message_content = True
-    client = discord.Client(intents=intents)
+    client = discord.Client(intents=intents, **_proxy_kwargs())
 
     @client.event
     async def on_ready():
@@ -325,6 +325,41 @@ def _build_bot():
 
 
     return client
+
+
+def _proxy_kwargs() -> dict:
+    """discord.py ignores HTTPS_PROXY; pass it explicitly when asked to.
+
+    With DISCORD_USE_PROXY the bot's REST calls and gateway websocket go through
+    the forward proxy — required when Prax may reach only loopback, and it puts
+    Discord traffic under the same egress policy as everything else. Credentials
+    in the proxy URL are passed as proxy_auth (aiohttp does not read userinfo).
+    """
+    import os
+    from urllib.parse import urlsplit, urlunsplit
+
+    if not getattr(settings, "discord_use_proxy", False):
+        return {}
+    url = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or ""
+    if not url:
+        logger.warning("DISCORD_USE_PROXY is set but HTTPS_PROXY is empty — Discord connects directly")
+        return {}
+    parts = urlsplit(url)
+    kwargs: dict = {}
+    if parts.username or parts.password:
+        from urllib.parse import unquote
+
+        import aiohttp
+        # URL userinfo is percent-encoded (requests decodes it; aiohttp's
+        # BasicAuth does not) — decode, or a password like p%40ss fails auth.
+        kwargs["proxy_auth"] = aiohttp.BasicAuth(unquote(parts.username or ""), unquote(parts.password or ""))
+        host = parts.hostname or ""
+        if ":" in host:  # IPv6 literal: keep the brackets
+            host = f"[{host}]"
+        netloc = host + (f":{parts.port}" if parts.port else "")
+        url = urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+    kwargs["proxy"] = url
+    return kwargs
 
 
 def start_bot() -> None:

@@ -32,6 +32,13 @@ Key fields:
 | `SANDBOX_MAX_CONCURRENT` | Max simultaneous sandbox sessions | `5` |
 | `SANDBOX_DEFAULT_MODEL` | Legacy — the coding-session feature it configured was removed in 2026-07 (#142); still defined and forwarded to the sandbox client, governs nothing in Prax | `openai/gpt-5.4` |
 | `SANDBOX_MAX_ROUNDS` | Legacy — same as above | `10` |
+| `OUT_OF_BAND_APPROVALS_ENABLED` | HIGH-risk / lethal-trifecta confirmations are answered by a person in TeamWork's approval dialog, never in chat; the call waits and runs only on an approval bound to that exact action. Off = the model can "call again" and confirm itself. See [out-of-band-approvals.md](out-of-band-approvals.md). Recommended `true` | `false` |
+| `APPROVAL_WAIT_SECONDS` | How long a call waits for a person before it is refused as unanswered | `300` |
+| `BROWSER_SECRETS_OUT_OF_CONTEXT` | Stored site passwords never enter the model's context (`browser_fill_login` replaces `browser_login`). Recommended `true` | `false` |
+| `BROWSER_PAUSE_FOR_USER` | Browser actions stand down while a person drives the browser (VNC login, TeamWork Take control / recent input). Recommended `true` | `false` |
+| `EGRESS_GATE_URL` / `EGRESS_GATE_TAINT_TOKEN` | prax-sandbox's egress gate and its **raise-only** taint token. TeamWork (`EGRESS_GATES`, admin tokens) relays the gate's questions; Prax never holds an admin token | empty |
+| `PRAX_EGRESS_GATE_URL` / `PRAX_EGRESS_GATE_TAINT_TOKEN` | The forward proxy's egress policy (Prax's own traffic) and its raise-only taint token; TeamWork relays its questions | empty |
+| `DISCORD_USE_PROXY` | Discord bot (REST + gateway) through `HTTPS_PROXY` — required under the loopback-only egress drop-in | `false` |
 | `SANDBOX_ROUTE_COMMANDS` | On a host install, run `prax.utils.shell.run_command` (desktop tools, plugin `caps.run_command`, mermaid) in the sandbox instead of on the Prax host; fails closed if the sandbox is down. Compose deployments always route. Recommended `true` | `false` |
 | `SANDBOX_WORKSPACE_MOUNT_SOURCE` | The directory (as Prax sees it) mounted at the sandbox's `/workspace`. Empty = read it from Docker, else compose → the `PRAX_USER_ID` workspace, host install → the whole `workspaces/` tree | empty |
 | `WORKSPACE_PLUGIN_INTEGRITY_ENABLED` | Run workspace/imported plugin code only when its digest was recorded by a Prax plugin tool or `scripts/plugin_trust.py approve`; closes the sandbox→host plugin path (see sandbox-execution-boundary.md). Recommended `true` | `false` |

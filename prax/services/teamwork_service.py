@@ -611,6 +611,30 @@ class TeamWorkClient:
 
     # ----- Terminal (shared PTY) -----
 
+    # ----- Human approval of Prax's own actions (out of band) -----
+
+    def ask_approval(self, capability: str, payload: dict, reason: str = "",
+                     project_id: str | None = None) -> dict:
+        """Put one of Prax's own actions in front of a person in the TeamWork UI."""
+        return self._post("/approvals", {
+            "capability": capability, "payload": payload, "reason": reason,
+            "project_id": project_id,
+        })
+
+    def approval_status(self, approval_id: str) -> dict:
+        return self._get(f"/approvals/{approval_id}")
+
+    def consume_approval(self, approval_id: str, capability: str, payload: dict,
+                         project_id: str | None = None) -> dict:
+        """Spend an approval on exactly the action it was granted for — once."""
+        return self._post(f"/approvals/{approval_id}/consume", {
+            "capability": capability, "payload": payload, "project_id": project_id,
+        })
+
+    def browser_control(self) -> dict:
+        """Is a person driving the shared sandbox browser right now?"""
+        return self._get("/browser/control")
+
     def terminal_exec(self, command: str, timeout: float = 5.0) -> dict | None:
         """Execute a command in the user's shared terminal.
 
