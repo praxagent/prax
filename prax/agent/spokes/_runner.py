@@ -163,6 +163,9 @@ def run_spoke(
         span.end(status="aborted", summary=refusal[:200])
         _finish(role_name, label=label, status="aborted", start_time=_spoke_start)
         return refusal
+    from prax.agent.governed_tool import current_turn_state
+    _calls = current_turn_state().spoke_calls
+    _calls[label] = _calls.get(label, 0) + 1
 
     # TeamWork status + live output
     if role_name:
@@ -344,14 +347,31 @@ def run_spoke(
 
 
 def _failure_limit_refusal(label: str) -> str:
-    """The refusal to return when *label* already failed too often this turn."""
+    """The refusal to return when *label* was used too often this turn.
+
+    Two limits. SPOKE_CALL_LIMIT counts every delegation, successful or not:
+    in the incident that motivated it, 13 of 19 delegations "succeeded" with
+    false claims ("Ctrl+A worked this time!") while nothing changed, which no
+    failure count sees. SPOKE_FAILURE_LIMIT counts failures only.
+    """
     from prax.agent.governed_tool import current_turn_state
     from prax.settings import settings
 
+    state = current_turn_state()
+    call_limit = int(getattr(settings, "spoke_call_limit", 0) or 0)
+    calls = state.spoke_calls.get(label, 0)
+    if call_limit > 0 and calls >= call_limit:
+        return (
+            f"Not delegated: the {label} agent has already been asked {calls} times "
+            "this turn. Repeating the same approach is not converging. Do not "
+            "delegate to it again this turn — tell the user what you tried, what "
+            "you actually observed (not what the agent claimed), what is still "
+            "unresolved, and what they could do or approve next."
+        )
     limit = int(getattr(settings, "spoke_failure_limit", 0) or 0)
     if limit <= 0:
         return ""
-    failures = current_turn_state().spoke_failures.get(label, [])
+    failures = state.spoke_failures.get(label, [])
     if len(failures) < limit:
         return ""
     return (

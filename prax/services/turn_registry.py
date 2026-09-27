@@ -29,6 +29,14 @@ class TurnCancelled(BaseException):  # noqa: N818 - reads as an event, like Keyb
     """Raised inside a turn that a person asked to stop."""
 
 
+class TurnBudgetExceeded(TurnCancelled):
+    """A turn that ran past its cost or time budget (TURN_BUDGET_*).
+
+    A kind of cancellation, so every handler that stops a cancelled turn stops
+    this one too; the orchestrator words the reply differently.
+    """
+
+
 @dataclass
 class Turn:
     id: str

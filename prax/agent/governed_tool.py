@@ -116,6 +116,12 @@ class TurnGovernanceState:
     turn: Any = None
     # spoke label -> failure summaries this turn (SPOKE_FAILURE_LIMIT).
     spoke_failures: dict[str, list[str]] = field(default_factory=dict)
+    # spoke label -> delegations this turn, success or not (SPOKE_CALL_LIMIT).
+    spoke_calls: dict[str, int] = field(default_factory=dict)
+    # The turn's execution graph, for its running cost (TURN_BUDGET_USD).
+    graph: Any = None
+    # Tool calls refused because the turn is over budget.
+    budget_refusals: int = 0
 
     def reset(self) -> None:
         """Clear everything IN PLACE.
@@ -143,6 +149,8 @@ class TurnGovernanceState:
         self.tool_call_count = 0
         self.tool_call_budget = 0
         self.spoke_failures.clear()
+        self.spoke_calls.clear()
+        self.budget_refusals = 0
 
 
 _turn_state: ContextVar[TurnGovernanceState | None] = ContextVar(
@@ -371,6 +379,9 @@ def wrap_with_governance(
         if turn is not None and turn.cancel.is_set():
             from prax.services.turn_registry import TurnCancelled
             raise TurnCancelled(turn.reason or "stopped")
+        over = _over_budget(state)
+        if over:
+            return over
 
         # --- Active Inference: extract expected observation (Phase 1) ---
         expected_observation = kwargs.pop("expected_observation", None)
@@ -775,6 +786,58 @@ def _tag_result(
 
 # Tools that run code inside the sandbox, where /workspace is the user's data.
 _SANDBOX_EXEC_TOOLS = frozenset({"sandbox_shell", "run_python", "data_query", "lean_check"})
+
+
+# How many tool calls an over-budget turn may still attempt (each refused) to
+# write its report before it is ended outright.
+_BUDGET_GRACE_CALLS = 3
+
+
+def _budget_state(state: TurnGovernanceState) -> str:
+    """Why this turn is over its budget, or "" (TURN_BUDGET_USD / _SECONDS)."""
+    try:
+        from prax.settings import settings
+        max_usd = float(getattr(settings, "turn_budget_usd", 0) or 0)
+        max_s = int(getattr(settings, "turn_budget_seconds", 0) or 0)
+    except Exception:
+        return ""
+    if max_s > 0 and state.turn is not None:
+        age = state.turn.age_seconds()
+        if age >= max_s:
+            return f"{int(age // 60)} min {int(age % 60)} s of a {max_s // 60} min {max_s % 60} s time budget"
+    if max_usd > 0 and state.graph is not None:
+        try:
+            spent, complete = state.graph.cost_so_far()
+        except Exception:
+            return ""
+        if spent >= max_usd:
+            approx = "" if complete else " (at least — some model rates are unknown)"
+            return f"${spent:.2f}{approx} of a ${max_usd:.2f} cost budget"
+    return ""
+
+
+def _over_budget(state: TurnGovernanceState) -> str:
+    """Refuse the call when the turn is over budget; end it if it keeps going.
+
+    Past the budget the agent is not cut off mid-thought: its next few tool
+    calls are refused with an instruction to stop and report, so the person
+    gets what was done and what is left. A turn that keeps calling tools
+    anyway is ended (TurnBudgetExceeded). Either way the person decides
+    whether to continue — a new message starts a fresh budget.
+    """
+    reason = _budget_state(state)
+    if not reason:
+        return ""
+    state.budget_refusals += 1
+    if state.budget_refusals > _BUDGET_GRACE_CALLS:
+        from prax.services.turn_registry import TurnBudgetExceeded
+        raise TurnBudgetExceeded(reason)
+    return (
+        f"BUDGET REACHED — not run. This request has used {reason}. Make no more "
+        "tool calls. Reply to the user now: what you did, what is still left, "
+        "what you spent, and ask whether they want you to continue (a new "
+        "message gets a fresh budget)."
+    )
 
 
 def _taint_egress(state: TurnGovernanceState, reason: str) -> None:
