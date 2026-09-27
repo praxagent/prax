@@ -5,6 +5,7 @@ import logging
 import re
 import threading
 from collections.abc import Iterable
+from contextvars import ContextVar
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
@@ -15,6 +16,7 @@ from prax.agent.message_text import message_text
 from prax.agent.tool_registry import get_registered_tools
 from prax.agent.user_context import current_user_id
 from prax.plugins.prompt_manager import get_prompt_manager
+from prax.services.turn_registry import TurnCancelled
 from prax.services.workspace_service import append_trace, read_plan, save_instructions
 from prax.settings import settings
 from prax.trace_events import TraceEvent
@@ -46,6 +48,10 @@ _COMPLEXITY_SIGNALS = [
 ]
 
 logger = logging.getLogger(__name__)
+
+# The running turn's registry entry, set by run() for _run_turn to attach to
+# the turn's governance state (see prax.services.turn_registry).
+_registered_turn: ContextVar = ContextVar("prax_registered_turn", default=None)
 
 # ---------------------------------------------------------------------------
 # Runtime model override — set via the /teamwork/model API
@@ -1038,6 +1044,17 @@ class ConversationAgent:
         Off (the default) is the prior behaviour: no lock, turns may overlap.
         Turns for DIFFERENT users are not serialised by this flag.
         """
+        from prax.services import turn_registry
+        registered = turn_registry.begin(
+            current_user_id.get() or "anonymous", trigger or user_input, source)
+        token = _registered_turn.set(registered)
+        try:
+            return self._run_locked(conversation, user_input, workspace_context, trigger, source)
+        finally:
+            _registered_turn.reset(token)
+            turn_registry.end(registered)
+
+    def _run_locked(self, conversation: Iterable[BaseMessage], user_input: str, workspace_context: str = "", trigger: str = "", source: str = "") -> str:
         if not getattr(settings, "turn_lock_per_user", False):
             return self._run_turn(conversation, user_input, workspace_context, trigger, source)
         uid = current_user_id.get() or "anonymous"
@@ -1121,7 +1138,7 @@ class ConversationAgent:
         from prax.agent.autonomy import get_recursion_limit
         from prax.agent.governed_tool import begin_turn
         effective_limit = get_recursion_limit(settings.agent_max_tool_calls)
-        begin_turn(effective_limit)
+        begin_turn(effective_limit).turn = _registered_turn.get()
 
         # Reset Active Inference prediction tracker for the new turn.
         try:
@@ -1494,6 +1511,15 @@ class ConversationAgent:
                     pass
 
             self._rebuild_if_needed()
+        except TurnCancelled as exc:
+            run_status = "cancelled"
+            run_error_summary = f"Stopped: {exc}"
+            logger.info("Turn stopped for user %s: %s", uid, exc)
+            result = {
+                "messages": messages + [
+                    AIMessage(content="Stopped, as you asked. Nothing more will run for that request."),
+                ],
+            }
         except TimeoutError as exc:
             run_status = "timed_out"
             run_error_summary = str(exc)
@@ -2076,7 +2102,7 @@ class ConversationAgent:
                 # graph (and by the spokes it delegates to) lands in this turn.
                 with use_heartbeat(heartbeat), use_tool_cache(), use_turn_state(turn_state):
                     result_q.put(("ok", self.graph.invoke({"messages": messages}, config=config)))
-            except Exception as exc:
+            except (Exception, TurnCancelled) as exc:
                 result_q.put(("error", exc))
 
         worker = threading.Thread(
@@ -2091,10 +2117,15 @@ class ConversationAgent:
         notice_interval = max(60.0, idle_timeout / 2.0)
         last_notice_at = 0.0
 
+        registered = turn_state.turn
         while worker.is_alive():
             worker.join(poll_interval)
             if not worker.is_alive():
                 break
+            # Stopped: stop waiting now. The worker is a daemon and ends at its
+            # next governed tool call; a model call in flight just finishes.
+            if registered is not None and registered.cancel.is_set():
+                raise TurnCancelled(registered.reason or "stopped")
 
             snapshot = heartbeat.snapshot()
             elapsed = float(snapshot["elapsed_s"])

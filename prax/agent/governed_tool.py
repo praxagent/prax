@@ -110,6 +110,12 @@ class TurnGovernanceState:
     egress_tainted: bool = False
     tool_call_count: int = 0
     tool_call_budget: int = 0
+    # The registry entry a person can cancel (prax.services.turn_registry).
+    # None outside an orchestrator turn. Not cleared by reset(): it names the
+    # turn, it is not state accumulated during it.
+    turn: Any = None
+    # spoke label -> failure summaries this turn (SPOKE_FAILURE_LIMIT).
+    spoke_failures: dict[str, list[str]] = field(default_factory=dict)
 
     def reset(self) -> None:
         """Clear everything IN PLACE.
@@ -136,6 +142,7 @@ class TurnGovernanceState:
         self.trifecta_confirmed.clear()
         self.tool_call_count = 0
         self.tool_call_budget = 0
+        self.spoke_failures.clear()
 
 
 _turn_state: ContextVar[TurnGovernanceState | None] = ContextVar(
@@ -357,6 +364,13 @@ def wrap_with_governance(
 
     def _governed_run_bound(**kwargs: Any) -> Any:
         state = current_turn_state()
+        # A stopped turn ends at its next tool call — hub or spoke. Raised,
+        # not returned as text: text is a result the model can decide to
+        # retry around, which is how a stop used to get ignored.
+        turn = state.turn
+        if turn is not None and turn.cancel.is_set():
+            from prax.services.turn_registry import TurnCancelled
+            raise TurnCancelled(turn.reason or "stopped")
 
         # --- Active Inference: extract expected observation (Phase 1) ---
         expected_observation = kwargs.pop("expected_observation", None)

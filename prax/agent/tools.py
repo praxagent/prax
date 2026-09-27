@@ -164,6 +164,7 @@ def fetch_url_content(url: str) -> str:
 
 
 def build_default_tools():
+    from prax.agent.turn_tools import build_turn_tools
     from prax.settings import settings
 
     kernel = [background_search_tool, get_current_datetime, fetch_url_content]
@@ -176,6 +177,8 @@ def build_default_tools():
         kernel
         # Orchestrator-level workspace tools (planning, todos, notes, meta)
         + build_workspace_tools()
+        # Stop the user's other running tasks (TURN_STOP_ENABLED)
+        + build_turn_tools()
         # Image understanding — handles inbound image attachments from
         # Discord/SMS/TeamWork via the configured vision provider.  Empty
         # list when no provider is configured (graceful degradation).

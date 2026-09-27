@@ -23,6 +23,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from prax.agent.agent_loop import build_agent_loop, invoke_isolated
 from prax.agent.llm_factory import build_llm
 from prax.agent.message_text import message_text
+from prax.services.turn_registry import TurnCancelled
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +152,18 @@ def run_spoke(
             _finish(role_name, label=label, status="aborted", start_time=_spoke_start)
             return f"Pre-check failed for spoke '{label}': {guard_result}"
 
+    # --- Repeated-failure stop (SPOKE_FAILURE_LIMIT) ---
+    # Each failed delegation looks like a fresh start to the orchestrator, so
+    # it re-delegates the same doomed task: one turn sent the browser spoke to
+    # its recursion limit six times, ~$0.40 a go, for 26 minutes. Past the
+    # limit the delegation is refused with an instruction to report instead.
+    refusal = _failure_limit_refusal(label)
+    if refusal:
+        logger.warning("Spoke [%s] refused: %s", label, refusal)
+        span.end(status="aborted", summary=refusal[:200])
+        _finish(role_name, label=label, status="aborted", start_time=_spoke_start)
+        return refusal
+
     # TeamWork status + live output
     if role_name:
         from prax.services.teamwork_hooks import push_live_output, set_role_status
@@ -277,8 +290,14 @@ def run_spoke(
                         pass
                 raise  # re-raise if not context overflow or retries exhausted
 
+    except TurnCancelled:
+        # A person stopped the turn: close this spoke's span and keep unwinding.
+        span.end(status="cancelled", summary="stopped by the user")
+        _finish(role_name, label=label, status="cancelled", start_time=_spoke_start)
+        raise
     except Exception as exc:
         logger.warning("Spoke [%s] failed: %s", label, exc, exc_info=True)
+        _record_failure(label, exc)
         span.end(status="failed", summary=str(exc)[:200])
         _finish(role_name, label=label, status="failed", start_time=_spoke_start)
         try:
@@ -322,6 +341,32 @@ def run_spoke(
     span.end(status="completed", summary="No output produced", tool_calls=tool_count)
     _finish(role_name, label=label, status="success", start_time=_spoke_start)
     return f"Spoke [{label}] completed but produced no output."
+
+
+def _failure_limit_refusal(label: str) -> str:
+    """The refusal to return when *label* already failed too often this turn."""
+    from prax.agent.governed_tool import current_turn_state
+    from prax.settings import settings
+
+    limit = int(getattr(settings, "spoke_failure_limit", 0) or 0)
+    if limit <= 0:
+        return ""
+    failures = current_turn_state().spoke_failures.get(label, [])
+    if len(failures) < limit:
+        return ""
+    return (
+        f"Not delegated: the {label} agent already failed {len(failures)} times "
+        f"this turn (last: {failures[-1]}). Retrying the same way will fail the "
+        "same way. Do not delegate to it again this turn — tell the user what "
+        "you were trying to do, what went wrong, and what they could do instead."
+    )
+
+
+def _record_failure(label: str, exc: BaseException) -> None:
+    from prax.agent.governed_tool import current_turn_state
+
+    current_turn_state().spoke_failures.setdefault(label, []).append(
+        f"{type(exc).__name__}: {str(exc)[:120]}")
 
 
 def _tool_message_text(msg: ToolMessage) -> str:

@@ -177,6 +177,10 @@ class ConversationService:
                 (see :meth:`resolve_conversation`); ignored when
                 ``conversation_key`` is given.
         """
+        stopped = self._stop_running(user_id, text, conversation_key=conversation_key,
+                                     space_slug=space_slug)
+        if stopped is not None:
+            return stopped
         source_token = current_turn_source.set(source or "")
         try:
             return self._reply(
@@ -185,6 +189,51 @@ class ConversationService:
             )
         finally:
             current_turn_source.reset(source_token)
+
+    def _stop_running(self, user_id: str, text: str, *, conversation_key: int | None,
+                      space_slug: str | None) -> str | None:
+        """A bare "stop" while a task runs: stop it, answer, skip the model.
+
+        Returns None when this message is not that (the flag is off, it says
+        more than stop, or nothing is running) and the turn proceeds normally.
+        """
+        from prax.services import turn_registry
+        from prax.settings import settings
+
+        if not settings.turn_stop_enabled or not turn_registry.is_stop_request(text):
+            return None
+        stopped = turn_registry.cancel(user_id)
+        if not stopped:
+            return None
+        names = "; ".join(turn_registry.describe(t) for t in stopped)
+        answer = f"Stopped {names}. Anything it already did stays done."
+        try:
+            database_name, db_key = self.resolve_conversation(
+                user_id, conversation_key, space_slug=space_slug)
+            self._save(database_name, db_key, {"role": "user", "content": text})
+            self._save(database_name, db_key, {"role": "assistant", "content": answer})
+        except Exception:
+            logger.debug("could not record the stop in history", exc_info=True)
+        logger.info("Stopped %d running turn(s) for %s on request", len(stopped), user_id)
+        return answer
+
+    @staticmethod
+    def _running_note(user_id: str) -> str:
+        """Tell a new turn what else is still running for this user."""
+        from prax.services import turn_registry
+        from prax.settings import settings
+
+        if not settings.turn_stop_enabled:
+            return ""
+        running = turn_registry.running(user_id)
+        if not running:
+            return ""
+        listed = "; ".join(turn_registry.describe(t) for t in running)
+        return (
+            f"[Still running from an earlier message: {listed}. If the user is "
+            "asking to stop, cancel or abandon that work, call stop_running_task. "
+            "Do not reinterpret a stop as being about something else.]"
+        )
 
     def _reply(
         self,
@@ -226,6 +275,9 @@ class ConversationService:
 
         lc_history = _history_to_messages(history)
         workspace_ctx = get_workspace_context(user_id, text)
+        running_note = self._running_note(user_id)
+        if running_note:
+            workspace_ctx = f"{running_note}\n\n{workspace_ctx}" if workspace_ctx else running_note
         logger.info("Agent invoked for %s (key=%s): %s", user_id, db_key, text[:80])
         response = self.agent.run(
             conversation=lc_history,
