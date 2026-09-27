@@ -399,7 +399,8 @@ def workspace_send_file(filename: str, message: str = "") -> str:
 
     # Try TeamWork — if the user is on a TeamWork channel, post a message
     # with the filename.  TeamWork's file browser has access to the workspace.
-    teamwork_delivered = _deliver_via_teamwork(uid, filename, size_mb, message)
+    rel_path = os.path.relpath(os.path.realpath(file_path), os.path.realpath(root))
+    teamwork_delivered = _deliver_via_teamwork(uid, rel_path, size_mb, message)
     if teamwork_delivered:
         return teamwork_delivered
 
@@ -425,18 +426,23 @@ def workspace_send_file(filename: str, message: str = "") -> str:
 
 
 def _deliver_via_teamwork(
-    user_id: str, filename: str, size_mb: float, message: str,
+    user_id: str, rel_path: str, size_mb: float, message: str,
 ) -> str | None:
     """Try to deliver a file notification via TeamWork.
 
     TeamWork's file browser has direct access to the workspace, so we post
     a message with attachment metadata.  For media files (audio/video) the
     chat UI renders an inline player; other files get a download button.
+    *rel_path* is where the file actually is, relative to the workspace root
+    — not the name the model passed in, which may be ``/workspace/...`` or a
+    bare name found under ``active/`` or ``plugin_data/``.
     Returns the success string, or None if TeamWork is not the active channel.
     """
     try:
         import mimetypes
+        import os
         import uuid
+        from urllib.parse import quote
 
         from prax.agent.user_context import current_channel_id
         from prax.services.teamwork_service import get_teamwork_client
@@ -450,9 +456,11 @@ def _deliver_via_teamwork(
             return None
 
         project_id = tw.project_id
+        filename = os.path.basename(rel_path)
         content_type, _ = mimetypes.guess_type(filename)
         content_type = content_type or "application/octet-stream"
-        download_url = f"/api/workspace/{project_id}/download?path=active/{filename}"
+        download_url = (f"/api/workspace/{quote(str(project_id), safe='')}/download"
+                        f"?path={quote(rel_path, safe='/')}")
 
         note = message or "Your file is ready"
         tw.send_message(
