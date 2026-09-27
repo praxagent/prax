@@ -83,8 +83,15 @@ def sandbox_browser_act(action: str, value: str = "") -> str:
       "click"     — click an element by visible text OR CSS selector
                      Preferred: use the visible text, e.g. "Sign in", "Next", "Submit"
                      Also works: CSS selectors like "button.submit", "#login-btn"
-      "type"      — type text into the currently focused element (value = text to type)
-      "key"       — press a key (value = Enter, Tab, Escape, Backspace, ArrowDown, etc.)
+      "type"      — type text into the currently focused element (value = text to type).
+                     Text with line breaks (code, multi-line notes) goes in as ONE
+                     paste-like edit, so code editors don't re-indent or auto-close it.
+                     To REPLACE an editor's contents: click into it, key "Control+a",
+                     then type — the selection is overwritten.
+      "key"       — press a key or shortcut (value = Enter, Tab, Escape, Backspace,
+                     Delete, Home, End, ArrowDown, F1-F12, or a combination such as
+                     "Control+a", "Control+Shift+End"). An unknown key is an error,
+                     never a silent no-op.
 
     Example workflow:
       1. sandbox_browser_act("navigate", "https://example.com")
