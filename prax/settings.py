@@ -1089,6 +1089,16 @@ class AppSettings(BaseSettings):
     # delegations to it are refused with an instruction to report to the user.
     # 0 (default) keeps the prior behaviour: no limit.
     spoke_failure_limit: int = Field(default=0, alias="SPOKE_FAILURE_LIMIT")
+    # After this many delegations to the same spoke in one turn — successful
+    # or not — further ones are refused with an instruction to report. Catches
+    # loops of false successes that SPOKE_FAILURE_LIMIT cannot. 0 = no limit.
+    spoke_call_limit: int = Field(default=0, alias="SPOKE_CALL_LIMIT")
+    # Per-request budgets (0 = off). Past either, the agent's next tool calls
+    # are refused with an instruction to report what it did and ask whether
+    # to continue; a turn that keeps going anyway is ended. A new message
+    # starts a fresh budget, so "continue" is the way to raise it for a task.
+    turn_budget_usd: float = Field(default=0.0, alias="TURN_BUDGET_USD")
+    turn_budget_seconds: int = Field(default=0, alias="TURN_BUDGET_SECONDS")
     # Days of persisted execution graphs to keep; 0 keeps them forever. Was a
     # hard-coded 7, which silently deleted a week-idle instance's whole trace
     # history at startup. Raised to 90: losing diagnostic history is a bug,

@@ -133,6 +133,32 @@ class ExecutionGraph:
             if cached_in:
                 per["cached_in"] = per.get("cached_in", 0) + int(cached_in)
 
+    def cost_so_far(self) -> tuple[float, bool]:
+        """(USD priced so far, whether every model had a known rate).
+
+        For budgets: the priced part is a LOWER bound when a model's rate is
+        unknown, so a budget checked against it can stop late, never early.
+        """
+        try:
+            from prax.eval.pricing import estimate_cost
+        except Exception:  # noqa: BLE001
+            return 0.0, False
+        with self._lock:
+            merged: dict[str, list[int]] = {}
+            for n in self._nodes.values():
+                for m, u in n.usage_by_model.items():
+                    agg = merged.setdefault(m, [0, 0])
+                    agg[0] += u["in"]
+                    agg[1] += u["out"]
+        total, complete = 0.0, True
+        for model, (tin, tout) in merged.items():
+            c = estimate_cost(model, tin, tout)
+            if c is None:
+                complete = False
+            else:
+                total += c
+        return total, complete
+
     def add_node(self, node: SpanNode) -> None:
         with self._lock:
             self._nodes[node.span_id] = node

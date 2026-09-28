@@ -16,7 +16,7 @@ from prax.agent.message_text import message_text
 from prax.agent.tool_registry import get_registered_tools
 from prax.agent.user_context import current_user_id
 from prax.plugins.prompt_manager import get_prompt_manager
-from prax.services.turn_registry import TurnCancelled
+from prax.services.turn_registry import TurnBudgetExceeded, TurnCancelled
 from prax.services.workspace_service import append_trace, read_plan, save_instructions
 from prax.settings import settings
 from prax.trace_events import TraceEvent
@@ -1138,7 +1138,9 @@ class ConversationAgent:
         from prax.agent.autonomy import get_recursion_limit
         from prax.agent.governed_tool import begin_turn
         effective_limit = get_recursion_limit(settings.agent_max_tool_calls)
-        begin_turn(effective_limit).turn = _registered_turn.get()
+        turn_state = begin_turn(effective_limit)
+        turn_state.turn = _registered_turn.get()
+        turn_state.graph = getattr(getattr(root_span, "ctx", None), "graph", None)
 
         # Reset Active Inference prediction tracker for the new turn.
         try:
@@ -1512,14 +1514,17 @@ class ConversationAgent:
 
             self._rebuild_if_needed()
         except TurnCancelled as exc:
-            run_status = "cancelled"
-            run_error_summary = f"Stopped: {exc}"
-            logger.info("Turn stopped for user %s: %s", uid, exc)
-            result = {
-                "messages": messages + [
-                    AIMessage(content="Stopped, as you asked. Nothing more will run for that request."),
-                ],
-            }
+            over_budget = isinstance(exc, TurnBudgetExceeded)
+            run_status = "budget_exceeded" if over_budget else "cancelled"
+            run_error_summary = f"{'Over budget' if over_budget else 'Stopped'}: {exc}"
+            logger.info("Turn %s for user %s: %s", run_status, uid, exc)
+            reply = (
+                f"I stopped: this request reached its budget — {exc}. Nothing more "
+                "will run for it. Say \"continue\" if you want me to keep going."
+                if over_budget else
+                "Stopped, as you asked. Nothing more will run for that request."
+            )
+            result = {"messages": messages + [AIMessage(content=reply)]}
         except TimeoutError as exc:
             run_status = "timed_out"
             run_error_summary = str(exc)
