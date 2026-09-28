@@ -32,11 +32,12 @@ def sandbox_shell(command: str, timeout: int = 60) -> str:
 
     FILES FOR THE USER: the container's /tmp is internal — the user can NEVER
     receive a file from there, and "sandbox:/tmp/..." links do not work.
-    /workspace holds ALL user workspaces; the current user's directory is
-    /workspace/<their user dir>. Write any artifact the user should get under
-    <their dir>/active/ — NOT /workspace/active/, which belongs to no user and
-    cannot be delivered from — then deliver it with
-    workspace_send_file('active/<filename>').
+    /workspace is the sandbox's view of the workspace mount. The current
+    user's directory there is named in your instructions — /workspace/<their
+    dir> when every workspace is mounted, /workspace itself when only theirs
+    is. Write any artifact the user should get under that directory's
+    active/ — anywhere else under /workspace cannot be delivered from — then
+    deliver it with workspace_send_file('active/<filename>').
 
     BOUND YOUR OUTPUT: the container's disk IS the host disk. Never run
     generators without a size/duration limit (e.g. ffmpeg with a lavfi

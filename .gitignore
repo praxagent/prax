@@ -99,6 +99,8 @@ adapters/
 
 # ---- Prax plugin runtime ----
 prax/plugins/registry.json
+# Plugin trust ledger — runtime state, machine-specific absolute paths.
+prax/plugins/trusted_plugins.json
 prax/plugins/tools/CATALOG.md
 plugin_repo/
 *.prev

@@ -337,6 +337,13 @@ SANDBOX_CONTAINER_NAME  = $(SANDBOX_PROJECT)-sandbox-1
 # Exported into every sandbox compose invocation; prax-sandbox's compose reads
 # them with these same defaults, so an un-overridden call is byte-identical.
 SANDBOX_PORT_ENV = SANDBOX_CDP_PORT=$(SANDBOX_CDP_PORT) SANDBOX_VNC_PORT=$(SANDBOX_VNC_PORT) SANDBOX_CLIPBOARD_PORT=$(SANDBOX_CLIPBOARD_PORT)
+# SANDBOX_LIMITS=1 layers prax-sandbox's opt-in docker-compose.limits.yml
+# (memory, pids, sized tmpfs /tmp, dropped capabilities) onto the sandbox.
+# Its sizes come from SANDBOX_MEM_LIMIT / SANDBOX_PIDS_LIMIT / SANDBOX_TMP_SIZE,
+# passed through when set. Empty (the default) = the unlimited container of old.
+SANDBOX_LIMITS        ?=
+SANDBOX_COMPOSE_FILES  = -f docker-compose.yml $(if $(filter 1 true yes,$(SANDBOX_LIMITS)),-f docker-compose.limits.yml)
+export SANDBOX_MEM_LIMIT SANDBOX_PIDS_LIMIT SANDBOX_TMP_SIZE
 # Passed through to Prax's app.run(debug=...). `run-local-all-dev` flips
 # this to true so Werkzeug's reloader restarts Prax on code change.
 DEBUG         ?= false
@@ -665,7 +672,7 @@ _local-sandbox:
 	    { docker image inspect prax-sandbox:latest >/dev/null 2>&1 || \
 	      { echo "Building prax-sandbox image (first run only, this can take several minutes)..."; \
 	        docker build -t prax-sandbox:latest sandbox/ ; } ; } && \
-	    { docker compose -p $(SANDBOX_PROJECT) -f docker-compose.yml down --remove-orphans >/dev/null 2>&1 || true; } && \
+	    { docker compose -p $(SANDBOX_PROJECT) $(SANDBOX_COMPOSE_FILES) down --remove-orphans >/dev/null 2>&1 || true; } && \
 	    mkdir -p "$(APP_WORKSPACE_DIR)/$(PRAX_USER)/active" && \
 	    { ak=""; ok=""; \
 	      if [ -f "$(CURDIR)/.env" ]; then \
@@ -674,7 +681,7 @@ _local-sandbox:
 	      fi; \
 	      ANTHROPIC_API_KEY="$$ak" OPENAI_API_KEY="$$ok" \
 	        WORKSPACE_DIR="$(APP_WORKSPACE_DIR)/$(PRAX_USER)" \
-	        $(SANDBOX_PORT_ENV) docker compose -p $(SANDBOX_PROJECT) -f docker-compose.yml up -d; } ) \
+	        $(SANDBOX_PORT_ENV) docker compose -p $(SANDBOX_PROJECT) $(SANDBOX_COMPOSE_FILES) up -d; } ) \
 	      >$(LOCAL_RUN)/sandbox.log 2>&1 \
 	    && { touch $(LOCAL_RUN)/.sandbox-on; \
 	         echo "Sandbox started -> :$(SANDBOX_CDP_PORT) (CDP) :$(SANDBOX_VNC_PORT) (desktop) :$(SANDBOX_CLIPBOARD_PORT) (clipboard)"; } \
@@ -715,6 +722,7 @@ _local-prax:
 	    obs_env="OBSERVABILITY_ENABLED=false"; \
 	  fi; \
 	  env MEMORY_ENABLED=true SANDBOX_ENABLED=$$sb SANDBOX_HOST=localhost TEAMWORK_ENABLED=true TEAMWORK_URL=http://localhost:8000 PRAX_USER_ID=$(PRAX_USER) DEBUG=$(DEBUG) \
+	    SANDBOX_WORKSPACE_MOUNT_SOURCE="$(APP_WORKSPACE_DIR)/$(PRAX_USER)" \
 	    TASK_RUNNER_ENABLED=true $$obs_env \
 	    nohup $(LOCAL_PY) app.py >$(LOCAL_RUN)/prax.log 2>&1 & echo $$! >$(LOCAL_RUN)/prax.pid; \
 	  echo "Prax started (pid $$(cat $(LOCAL_RUN)/prax.pid)) -> :5001 (DEBUG=$(DEBUG), SANDBOX_ENABLED=$$sb, OBSERVABILITY_ENABLED=$$obs, PRAX_USER_ID=$(PRAX_USER))"; \
@@ -794,7 +802,7 @@ shutdown:
 	fi
 	@command -v neo4j >/dev/null 2>&1 && neo4j stop >/dev/null 2>&1 && echo "  stopped neo4j (native)" || true
 	@if [ -f $(LOCAL_RUN)/.sandbox-on ] && [ -d "$(SANDBOX_PATH)" ] && command -v docker >/dev/null 2>&1; then \
-	  ( cd "$(SANDBOX_PATH)" && docker compose -p $(SANDBOX_PROJECT) -f docker-compose.yml down ) >/dev/null 2>&1 && echo "  stopped sandbox (docker compose down)"; \
+	  ( cd "$(SANDBOX_PATH)" && docker compose -p $(SANDBOX_PROJECT) $(SANDBOX_COMPOSE_FILES) down ) >/dev/null 2>&1 && echo "  stopped sandbox (docker compose down)"; \
 	  rm -f $(LOCAL_RUN)/.sandbox-on; \
 	fi
 	@if [ -f $(LOCAL_RUN)/.observability-on ] && command -v docker >/dev/null 2>&1; then \
@@ -876,7 +884,7 @@ integration:
 	@if [ -n "$(REBUILD_SANDBOX)" ]; then \
 	  if [ -d "$(SANDBOX_PATH)" ] && command -v docker >/dev/null 2>&1; then \
 	    echo "Rebuilding sandbox image (REBUILD_SANDBOX set; --no-cache)..."; \
-	    ( cd "$(SANDBOX_PATH)" && docker compose -p $(SANDBOX_PROJECT) -f docker-compose.yml build --no-cache ) || exit 1; \
+	    ( cd "$(SANDBOX_PATH)" && docker compose -p $(SANDBOX_PROJECT) $(SANDBOX_COMPOSE_FILES) build --no-cache ) || exit 1; \
 	  else \
 	    echo "WARN: REBUILD_SANDBOX set but no sandbox checkout / docker - skipping image rebuild."; \
 	  fi; \

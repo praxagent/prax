@@ -17,6 +17,7 @@ The workspace can be pushed to a private remote using PRAX_SSH_KEY_B64.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 from langchain_core.tools import tool
@@ -25,6 +26,8 @@ from prax.agent.action_policy import RiskLevel, risk_tool
 from prax.agent.user_context import current_user_id
 from prax.plugins.loader import get_plugin_loader
 from prax.trace_events import TraceEvent
+
+logger = logging.getLogger(__name__)
 
 _PLUGINS_TOOLS_ROOT = Path(__file__).resolve().parent.parent / "plugins" / "tools"
 _CUSTOM_DIR = _PLUGINS_TOOLS_ROOT / "custom"
@@ -200,6 +203,15 @@ def plugin_write(
             f"# {name}\n\n{description or 'Custom plugin.'}\n"
         )
 
+    # With the trust ledger on, run nothing we did not just write: the test
+    # subprocess imports the folder, so a module planted beside plugin.py
+    # would execute here and then be vouched for below.
+    guarded = _integrity_guarded(loader, abs_path)
+    if guarded:
+        problem = _foreign_contents(abs_path, code)
+        if problem:
+            return f"Error: refusing to test or trust {name}: {problem}"
+
     # Run sandbox test.
     from prax.plugins.sandbox import sandbox_test_plugin
     result = sandbox_test_plugin(str(abs_path))
@@ -229,6 +241,22 @@ def plugin_write(
         allowed_commands=allowed_commands,
         secrets=secrets,
     )
+    # This call is the trusted write path: vouch for exactly what it produced
+    # — re-checked, since the folder stayed writable while the test ran.
+    if loader.needs_trust_record(abs_path):
+        problem = _foreign_contents(abs_path, code)
+        if problem and guarded:
+            return (
+                f"Plugin written and tested, but NOT trusted: {problem}. "
+                "It will not load while WORKSPACE_PLUGIN_INTEGRITY_ENABLED is on."
+            )
+        if problem:
+            # Ledger not enforced: keep prior output, but do not vouch for it,
+            # so turning the flag on later cannot bless what was planted.
+            logger.warning("Not recording trust for plugin %s: %s", name, problem)
+        else:
+            from prax.plugins.integrity import get_ledger, plugin_unit
+            get_ledger().record(plugin_unit(abs_path), "plugin_write")
 
     _audit_plugin_event(
         TraceEvent.PLUGIN_ACTIVATE, name,
@@ -241,6 +269,36 @@ def plugin_write(
         f"Use plugin_activate('{name}') to make it live.\n"
         f"Use workspace_push() to sync to the remote."
     )
+
+
+# Everything plugin_write itself puts in a plugin folder.
+_PLUGIN_WRITE_FILES = frozenset({
+    "plugin.py", "plugin.py.prev", "README.md", "plugin.json", "permissions.md",
+})
+
+
+def _integrity_guarded(loader, abs_path: Path) -> bool:
+    from prax.plugins.integrity import enforced
+    return enforced() and loader.needs_trust_record(abs_path)
+
+
+def _foreign_contents(abs_path: Path, code: str) -> str:
+    """Why the folder is not exactly what plugin_write produced, or ``""``."""
+    from prax.plugins.integrity import symlinks_in
+
+    folder = abs_path.parent
+    links = symlinks_in(folder)
+    if links:
+        return f"the folder contains symbolic links ({', '.join(links[:3])})"
+    extra = sorted(
+        p.name for p in folder.iterdir()
+        if p.name not in _PLUGIN_WRITE_FILES and p.name != "__pycache__"
+    )
+    if extra:
+        return f"the folder contains files plugin_write did not write ({', '.join(extra[:5])})"
+    if abs_path.read_text() != code:
+        return "plugin.py changed after it was written"
+    return ""
 
 
 def _write_manifest(
@@ -326,6 +384,10 @@ def plugin_test(name: str) -> str:
     if not abs_path.exists():
         return f"Plugin not found: {name}"
 
+    refusal = get_plugin_loader().untrusted_reason(abs_path)
+    if refusal:
+        return f"NOT RUN — {refusal}"
+
     from prax.plugins.sandbox import sandbox_test_plugin
     result = sandbox_test_plugin(str(abs_path))
 
@@ -391,6 +453,8 @@ def plugin_rollback(name: str) -> str:
         return f"Rollback failed: {result['error']}"
 
     _audit_plugin_event(TraceEvent.PLUGIN_ROLLBACK, name)
+    if result.get("warning"):
+        return f"Rolled back `{name}`, but it is NOT loaded: {result['warning']}."
     return f"Rolled back `{name}` to previous version. Tools reloaded."
 
 
@@ -947,6 +1011,7 @@ def plugin_import(repo_url: str, name: str | None = None, plugin_subfolder: str 
     result = import_plugin_repo(uid, repo_url, name, plugin_subfolder)
     if "error" in result:
         return f"Error: {result['error']}"
+    _record_imported(uid, result)
 
     # --- Security warnings ---
     # If the scan found anything, report to the user and do NOT load the
@@ -1120,10 +1185,20 @@ def plugin_import_update(name: str) -> str:
 
     if result["status"] == "up_to_date":
         return f"Plugin '{result['name']}' is already up to date ({result['commit']})."
+    _record_imported(uid, result)
 
     # Check for security warnings in the updated code.
     warnings = result.get("security_warnings", [])
     if warnings:
+        # "NOT reloaded" must hold for the next load_all() too, not only for
+        # this call: flag it exactly as plugin_import does, so it stays out
+        # until plugin_import_activate acknowledges the new warnings.
+        try:
+            loader = get_plugin_loader()
+            for key in loader.discover_shared_keys(result.get("name", "")):
+                loader.registry.flag_requires_acknowledgement(key)
+        except Exception:
+            logger.warning("Could not hold back updated plugin %s", name, exc_info=True)
         lines = [
             f"Updated '{result['name']}' ({result['old_commit']} → {result['new_commit']}).\n",
             f"**Security review found {len(warnings)} concern(s):**\n",
@@ -1153,6 +1228,54 @@ def plugin_import_update(name: str) -> str:
         f"Updated '{result['name']}' ({result['old_commit']} → {result['new_commit']}). "
         f"{_format_load_status(load_errors)}"
     )
+
+
+def _record_imported(uid: str, result: dict) -> None:
+    """Vouch for the repo that plugin_import / plugin_import_update just wrote.
+
+    ``result["name"]`` is the sanitized directory name under ``plugins/shared/``.
+    """
+    name = result.get("name")
+    if not name:
+        return
+    try:
+        from prax.services.workspace_service import get_workspace_plugins_dir
+        plugins_dir = get_workspace_plugins_dir(uid)
+        if plugins_dir:
+            repo = Path(plugins_dir) / "shared" / name
+            # Vouch only for what git delivered. `submodule update --merge`
+            # keeps untracked files and local edits, so anything the sandbox
+            # planted in the checkout would otherwise be blessed here.
+            problem = _checkout_problem(repo)
+            if problem:
+                logger.warning("Not trusting imported plugin %s: %s", name, problem)
+                return
+            get_plugin_loader().record_trusted_under(repo, "plugin_import")
+    except Exception:
+        logger.warning("Could not record trust for imported plugin %s", name, exc_info=True)
+
+
+def _checkout_problem(repo: Path) -> str:
+    """Why *repo*'s working tree is not exactly its commit, or ``""``."""
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(repo), "status", "--porcelain",
+             "--untracked-files=all", "--ignored"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"could not read git status ({exc})"
+    if out.returncode != 0:
+        return f"git status failed: {out.stderr.strip()[:200]}"
+    dirty = [
+        line[3:] for line in out.stdout.splitlines()
+        if line[3:] and "__pycache__/" not in line and not line.endswith(".pyc")
+    ]
+    if dirty:
+        return f"working tree differs from its commit ({', '.join(dirty[:5])})"
+    return ""
 
 
 def _format_load_status(load_errors: dict[str, str]) -> str:

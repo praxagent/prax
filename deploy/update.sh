@@ -104,9 +104,21 @@ if ! $CHECK_ONLY; then
     # WORKSPACE_DIR must match what Prax hands out, or the agent writes files
     # into a directory the container cannot see and the failure looks like a
     # tool bug rather than a mount.
+    # SANDBOX_LIMITS=1 adds the opt-in resource-limits overlay (memory, pids,
+    # a sized tmpfs /tmp, dropped capabilities). A limit applied with
+    # `docker update` instead is lost whenever compose recreates the container.
+    sandbox_files=(-f docker-compose.yml)
+    case "${SANDBOX_LIMITS:-}" in
+      1|true|yes)
+        if [[ -f "$PRAX_ROOT/prax-sandbox/docker-compose.limits.yml" ]]; then
+          sandbox_files+=(-f docker-compose.limits.yml)
+        else
+          echo "    WARN: SANDBOX_LIMITS is set but this prax-sandbox has no docker-compose.limits.yml"
+        fi ;;
+    esac
     (cd "$PRAX_ROOT/prax-sandbox" \
       && WORKSPACE_DIR="${WORKSPACE_DIR:-$PRAX_ROOT/workspaces}" \
-         docker compose up -d 2>&1 | tail -2)
+         docker compose "${sandbox_files[@]}" up -d 2>&1 | tail -2)
   fi
 
   # A .env change to the proxy needs --force-recreate: compose reads it at

@@ -34,6 +34,14 @@ def user_root(tmp_path, monkeypatch):
 
     monkeypatch.setattr(workspace_service, "workspace_root", lambda _uid: str(root))
     monkeypatch.setattr(workspace_service, "_workspace_root", lambda _uid: str(root))
+    # These tests describe the whole-tree mount (deploy/update.sh, production):
+    # the sandbox sees workspaces/ at /workspace. The per-user mount is covered
+    # in test_sandbox_mount.py.
+    import prax.settings as prax_settings
+    from prax.services import sandbox_mount
+    monkeypatch.setattr(prax_settings.settings, "sandbox_workspace_mount_source",
+                        str(tmp_path / "workspaces"))
+    sandbox_mount.reset_cache()
     return root
 
 
@@ -143,5 +151,7 @@ class TestSpokePromptUsesPerUserPath:
         prompt = sandbox_agent.SYSTEM_PROMPT.format(
             agent_name="Prax", user_workspace=ws)
         assert "/workspace/usr_test1/active/" in prompt
-        # The old no-user path survives only as an explicit warning.
-        assert "Do NOT write user artifacts to /workspace/active/" in prompt
+        # Anything outside the user's own directory is named as undeliverable.
+        # (Not "/workspace/active/" by name: on a per-user mount that IS
+        # the user's directory.)
+        assert "Do NOT write user artifacts anywhere else under /workspace" in prompt
