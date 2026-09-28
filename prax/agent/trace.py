@@ -452,7 +452,22 @@ _last_completed_graph: ExecutionGraph | None = None
 _active_graphs: dict[str, ExecutionGraph] = {}
 _active_graphs_lock = threading.Lock()
 _COMPLETED_MAX = 100  # keep at most this many completed graphs in memory
-_GRAPH_RETENTION_DAYS = 7  # keep graph files for this many days
+_GRAPH_RETENTION_DAYS = 7  # the old fixed window; see _retention_days()
+
+
+def _retention_days() -> int:
+    """Days of persisted graphs to keep (TRACE_RETENTION_DAYS; 0 = forever).
+
+    Seven days was fixed here, and the deletion ran right after loading the
+    files at startup: an instance idle for a week woke up, loaded its history
+    and deleted it in the same breath — invisible until the next restart
+    emptied memory too. A graph line is a few KB; a long window costs little.
+    """
+    try:
+        from prax.settings import settings
+        return max(0, int(settings.trace_retention_days))
+    except Exception:
+        return _GRAPH_RETENTION_DAYS
 _graphs_loaded = False
 
 
@@ -492,18 +507,42 @@ def _persist_graph(graph: ExecutionGraph) -> None:
 
 
 def _rotate_graph_files() -> None:
-    """Delete graph files older than _GRAPH_RETENTION_DAYS."""
+    """Keep the newest graph files inside both retention limits.
+
+    Two limits, so the default is safe either way a deployment is used: an
+    age window (TRACE_RETENTION_DAYS, 0 = no age limit) keeps a quiet
+    instance's history, and a size cap (TRACE_RETENTION_MAX_MB, 0 = no cap)
+    keeps a busy one from filling the disk. Oldest files go first; today's
+    file, still being written, is never deleted.
+    """
+    try:
+        from prax.settings import settings
+        max_mb = max(0, int(getattr(settings, "trace_retention_max_mb", 0) or 0))
+    except Exception:
+        max_mb = 0
+    days = _retention_days()
     try:
         d = _graphs_dir()
         from datetime import timedelta
-        cutoff_date = datetime.now(UTC) - timedelta(days=_GRAPH_RETENTION_DAYS)
-        cutoff_str = cutoff_date.strftime("%Y-%m-%d")
-        for f in d.glob("graphs-*.jsonl"):
-            # Extract date from filename: graphs-YYYY-MM-DD.jsonl
-            date_part = f.stem.replace("graphs-", "")
-            if date_part < cutoff_str:
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        files = sorted(d.glob("graphs-*.jsonl"))  # oldest first (ISO dates)
+        if days > 0:
+            cutoff_str = (datetime.now(UTC) - timedelta(days=days)).strftime("%Y-%m-%d")
+            for f in [f for f in files if f.stem.replace("graphs-", "") < cutoff_str]:
                 f.unlink(missing_ok=True)
-                logger.debug("Rotated old graph file: %s", f.name)
+                logger.info("Rotated graph file %s (older than %d days)", f.name, days)
+            files = [f for f in files if f.exists()]
+        if max_mb > 0:
+            budget = max_mb * 1024 * 1024
+            total = sum(f.stat().st_size for f in files)
+            for f in files:
+                if total <= budget:
+                    break
+                if f.stem.replace("graphs-", "") == today:
+                    continue
+                total -= f.stat().st_size
+                f.unlink(missing_ok=True)
+                logger.info("Rotated graph file %s (traces over %d MB)", f.name, max_mb)
     except Exception:
         logger.debug("Graph file rotation failed", exc_info=True)
 

@@ -1077,6 +1077,27 @@ class AppSettings(BaseSettings):
     # default (prior behaviour: no lock); per-turn governance state is per-turn
     # regardless of this flag.
     turn_lock_per_user: bool = Field(default=False, alias="TURN_LOCK_PER_USER")
+    # Let a person stop a running turn. A message that is only "stop" (or
+    # "cancel", "never mind"...) while a task is running stops that task before
+    # the model sees it; any other message is told what is still running and
+    # the agent gets a stop_running_task tool. Without it a turn could not be
+    # stopped at all short of a restart, and "stop" was read without knowing a
+    # task was running — once as "delete the user's schedule". Off keeps the
+    # prior behaviour; turns are registered either way.
+    turn_stop_enabled: bool = Field(default=False, alias="TURN_STOP_ENABLED")
+    # After this many failures of the same spoke in one turn, further
+    # delegations to it are refused with an instruction to report to the user.
+    # 0 (default) keeps the prior behaviour: no limit.
+    spoke_failure_limit: int = Field(default=0, alias="SPOKE_FAILURE_LIMIT")
+    # Days of persisted execution graphs to keep; 0 keeps them forever. Was a
+    # hard-coded 7, which silently deleted a week-idle instance's whole trace
+    # history at startup. Raised to 90: losing diagnostic history is a bug,
+    # not a behaviour anyone relied on, and a graph is a few KB.
+    trace_retention_days: int = Field(default=90, alias="TRACE_RETENTION_DAYS")
+    # Size cap on persisted execution graphs (MB; 0 = no cap). Oldest days go
+    # first once over. With the 90-day window this keeps a quiet instance's
+    # history and stops a busy one filling the disk.
+    trace_retention_max_mb: int = Field(default=500, alias="TRACE_RETENTION_MAX_MB")
 
     @property
     def sandbox_persistent(self) -> bool:
