@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.46.0](https://github.com/praxagent/prax/compare/v0.45.0...v0.46.0) (2026-09-28)
+
+
+### Features
+
+* a person can stop a running task, and a failing spoke is not retried forever ([#240](https://github.com/praxagent/prax/issues/240)) ([706dfcb](https://github.com/praxagent/prax/commit/706dfcbcef142cf61eeecd4beb775380d06c81fc))
+
+
+### Bug Fixes
+
+* files Prax posts to TeamWork chat link to where they really are ([#239](https://github.com/praxagent/prax/issues/239)) ([fd91955](https://github.com/praxagent/prax/commit/fd91955a18532e1e121b49b7fd4e9169367a8b57))
+
 ## [0.45.0](https://github.com/praxagent/prax/compare/v0.44.3...v0.45.0) (2026-09-28)
 
 
