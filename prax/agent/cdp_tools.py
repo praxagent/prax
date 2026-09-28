@@ -93,6 +93,10 @@ def sandbox_browser_act(action: str, value: str = "") -> str:
       4. sandbox_browser_act("type", "my search query")
       5. sandbox_browser_act("key", "Enter")
     """
+    from prax.agent.browser_tools import user_has_the_browser
+    paused = user_has_the_browser()
+    if paused:
+        return paused
     if action == "navigate":
         if not value:
             return "Error: provide a URL to navigate to"
@@ -326,6 +330,10 @@ def browser_verify(flow: list[dict]) -> str:
 
     Max 40 steps per call. Keep flows focused — one feature, one call.
     """
+    from prax.agent.browser_tools import user_has_the_browser
+    paused = user_has_the_browser()
+    if paused:
+        return paused
     if not cdp_service.is_available():
         return (
             "browser_verify unavailable: sandbox browser (Chrome) is not running. "

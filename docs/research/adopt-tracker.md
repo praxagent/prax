@@ -87,6 +87,15 @@ Everything here feeds [IDEAS_BACKLOG #29](../IDEAS_BACKLOG.md) (close the recurs
 | **Email as a channel** (OSS transport: Postal/Cloudflare) | [agentmail](agentmail-email-as-a-channel.md) | ⏸ | **ship only after** the lethal-trifecta guard — inbound email is a prime injection vector |
 | **Mixture-of-Agents hard-task escalation** (`MOA_ENABLED`, default off) | [mixture-of-agents](mixture-of-agents.md) | ⏸ | gate rollout on the HAL `pass_per_1k_tokens` cost axis |
 
+## Containment (who decides what leaves the box)
+
+| Item | From | Status | Notes |
+|---|---|---|---|
+| **Out-of-band, scoped approvals** (a HIGH-risk / trifecta-closing call stops the turn and creates an approval the user answers in the TeamWork UI — never in chat — and the decision reaches governance directly; grants bound to tool + arguments, one-time by default) | [muse](meta-muse-secure-vm.md) | 🔧 built 2026-09-24, in PR (opt-in) | **fixes July review #8, still open**: today `governed_tool` tells the model to "call again with the same arguments" and the second call runs, so the model confirms itself. TeamWork's `require_approval` already has single-use, action-bound, requester≠decider approvals; Prax needs a client and a resume path for the stopped turn (durable checkpoints are the seam). Flag-gated |
+| **Password surrogation for browser logins** (the model never sees a stored site password; retire `browser_login` for the existing VNC `browser_request_login` flow, or fill server-side at the selector; pause the agent while the user holds the browser) | [muse](meta-muse-secure-vm.md) | 🔧 built 2026-09-24, in PR (opt-in) | small. Today `browser_login` returns the real `sites.yaml` password into the model's context and the trace (`prax/agent/browser_tools.py`). Keyless Prax, extended from provider keys to the user's own credentials |
+| **Out-of-process egress authority ("Sentinel-lite")**: the forward proxy as the sandbox's only exit, deny-by-default, allow / deny / ask at host + HTTP level, DNS-time SSRF checks | [muse](meta-muse-secure-vm.md) + [google-ax](google-ax-agent-orchestrator.md) `Gateway` | 🔧 built 2026-09-24, in PR (opt-in) | the largest gap Muse exposes: Prax's governance runs in the agent's own process, the forward proxy passes unknown hosts through, and sandbox egress is unrestricted. Flag-gated and eval-gated: tool-level deny-by-default was rejected on measured cost regressions, and an egress policy that constantly asks fails differently |
+| **Process-level taint for sandbox egress** (egress after workspace-reading calls counts as the private-data trifecta leg) | [muse](meta-muse-secure-vm.md) | 🔧 coarse version built 2026-09-24 (per turn, per container), in PR | the trifecta guard sees tool calls, not what a script does inside one `sandbox_shell` call. First version per-container / per-turn; Muse uses kernel tracking |
+
 ## Memory / learning (needs infra or eval coverage first)
 
 | Item | From | Status | Notes |

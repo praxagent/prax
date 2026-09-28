@@ -1,0 +1,48 @@
+# prax-sandbox control daemon — the ONLY process that holds Docker for the sandbox.
+#
+# Opt-in. With it, Prax drives the sandbox over a token-guarded loopback API
+# (SANDBOX_DAEMON_URL=http://127.0.0.1:8843, SANDBOX_DAEMON_TOKEN=<token>)
+# instead of holding the Docker socket itself — and the drop-in
+# prax.service.d/50-no-docker.conf then takes Docker away from Prax entirely.
+#
+# Why: the Docker socket is root-equivalent over its containers. Whoever holds
+# it can start a container with no egress gate, no limits and any mount — so
+# a compromised Prax holding it could walk around every other boundary. The
+# daemon exposes only sandbox operations (exec, files, health); image rebuilds
+# stay off (PRAX_SANDBOX_ALLOW_REBUILD unset).
+#
+# Stronger: give it its own account (User=) that owns the Docker socket and a
+# code checkout the Prax account cannot write. With the shared account, the
+# 50-no-docker.conf drop-in keeps Prax from rewriting, seeing or restarting it.
+#
+# Install (adjust User/paths as for prax.service):
+#   echo "$(openssl rand -hex 32)" > ~/PRAX/.sandbox-daemon-token && chmod 600 ~/PRAX/.sandbox-daemon-token
+#   sudo cp deploy/systemd/prax-sandbox-daemon.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now prax-sandbox-daemon
+#
+# Then in prax/.env: SANDBOX_DAEMON_URL, SANDBOX_DAEMON_TOKEN (the token file's
+# content), and SANDBOX_WORKSPACE_MOUNT_SOURCE — over the daemon Prax cannot
+# ask Docker what the sandbox mounts, so tell it (the whole workspaces/ tree
+# for deploy/update.sh's default).
+[Unit]
+Description=prax-sandbox control daemon (holds Docker for the sandbox)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/PRAX/prax-sandbox
+Environment=PRAX_SANDBOX_DAEMON_HOST=127.0.0.1
+Environment=PRAX_SANDBOX_DAEMON_PORT=8843
+Environment=PRAX_SANDBOX_DAEMON_TOKEN_FILE=/home/ubuntu/PRAX/.sandbox-daemon-token
+Environment=PRAX_SANDBOX_CONTAINER_LABEL=com.docker.compose.service=sandbox
+Environment=PRAX_SANDBOX_ENFORCE_EXEC_TIMEOUT=true
+# The venv's python directly — not `uv run`, which would re-sync from a cache
+# the Prax account can write. Prepare once: uv sync --extra daemon (in the tree).
+ExecStart=/home/ubuntu/PRAX/prax-sandbox/.venv/bin/python -m prax_sandbox.daemon
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
