@@ -68,6 +68,18 @@ editing `.env`**.  It falls back to `http://localhost:8000` only when no
 public URL can be detected.  Set `PUBLIC_URL_AUTODETECT=false` for
 strict config-only behaviour.
 
+**Files posted to chat are a third path.**  `workspace_send_file` posts an
+attachment whose link is *relative*
+(`/api/workspace/<project>/download?path=…`), served by TeamWork straight
+from the workspace, so it works at whatever address TeamWork was opened at
+and needs no base URL.  Like the local path above, it has no authentication
+of its own: it reaches exactly whoever can reach TeamWork.  On a tailnet that
+is your devices; behind a public tunnel it is everyone — and the same API
+serves *every* workspace file, not only the posted ones.  Set TeamWork's
+`INTERNAL_API_KEY` before any public exposure
+([network-exposure.md → Public tunnels](../security/network-exposure.md#public-tunnels-ngrok-tailscale-funnel-cloudflare-tunnel)),
+and use a share link, not an open TeamWork, to give one file to someone else.
+
 **Public path (opt-in).**  When the user explicitly says "share this
 publicly", `course_publish(public=True)` or `save_and_publish(public=True)`
 adds an entry to `workspaces/{user}/.shares.json` (the share registry —

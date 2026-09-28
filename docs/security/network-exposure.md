@@ -44,12 +44,45 @@ plus a firewall. If nothing else owns it, loopback is correct.
 
 ## Scenario A — Tailscale (the default here, recommended)
 
-Keep the loopback binds. Expose with `tailscale serve` (tailnet-only) or
-`tailscale funnel` (public internet, but still gated by Tailscale identity for
-funnel + your ACLs). Either way `tailscaled` runs on the host and dials
+Keep the loopback binds. Expose TeamWork with `tailscale serve`: only devices
+on your tailnet can reach it. `tailscaled` runs on the host and dials
 `localhost:5173`/`:8000`, so **no app ever binds a routable port**. This is the
 safest posture and needs no `*_HOST` changes. (`make run-local-all-tail-dev` sets
 this up.)
+
+`tailscale funnel` is different: it publishes the service to **the open
+internet**, with no Tailscale login in front of it. Treat funnel like any public
+tunnel — see "Public tunnels" below.
+
+## Public tunnels (ngrok, `tailscale funnel`, Cloudflare Tunnel)
+
+It works: files Prax posts to TeamWork chat are relative links
+(`/api/workspace/…/download?path=…`), so they resolve against whatever address
+TeamWork was opened at — tailnet name, localhost or tunnel URL.
+
+But a tunnel makes TeamWork reachable by **anyone on the internet**, and out of
+the box TeamWork has no login. That exposes every workspace file (through the
+file API, not only the ones posted to chat), the whole chat history, the shared
+terminal and the live browser, where Prax may be logged in to your accounts. A
+random or unlisted tunnel URL is obscurity, not access control: URLs leak
+through history, screenshots, shared links and logs, and tunnel hostnames are
+scanned.
+
+Before any public tunnel:
+
+1. **Set `INTERNAL_API_KEY` in TeamWork** and log in once. Every `/api` call and
+   websocket then needs the key or your browser session. Chat images and links
+   keep working for you (the session cookie goes with them), and a link copied
+   out of the chat needs a login.
+2. **Tunnel TeamWork only** — never Prax `:5001` or a dev server (see the
+   anti-patterns below).
+3. To share one file with someone outside, use Prax's share links (a revocable
+   token per file, [content-publishing.md](../infrastructure/content-publishing.md)),
+   not an open TeamWork.
+
+**Prefer Scenario A.** `tailscale serve` publishes nothing to the internet; a
+tunnel plus a key is one leaked key away from publishing your workspace.
+TeamWork's own guide: [TeamWork `docs/security/exposure.md`](https://github.com/praxagent/teamwork/blob/main/docs/security/exposure.md).
 
 ## Scenario B — serve `0.0.0.0` behind an authenticating proxy
 
