@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.45.0](https://github.com/praxagent/prax/compare/v0.44.3...v0.45.0) (2026-09-28)
+
+
+### Features
+
+* contain the sandbox and workspace plugins (Tier-2 hardening, opt-in) ([#236](https://github.com/praxagent/prax/issues/236)) ([904d195](https://github.com/praxagent/prax/commit/904d1958a3526a8f0801b51aa53cbcbdb377b21e))
+
 ## [0.44.3](https://github.com/praxagent/prax/compare/v0.44.2...v0.44.3) (2026-09-24)
 
 
