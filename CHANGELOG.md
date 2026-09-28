@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.47.0](https://github.com/praxagent/prax/compare/v0.46.0...v0.47.0) (2026-09-28)
+
+
+### Features
+
+* runaway turns stop and report, whatever made them run away ([#243](https://github.com/praxagent/prax/issues/243)) ([a45e5e9](https://github.com/praxagent/prax/commit/a45e5e9d7f522d81c60786e8733ececb5e57d596))
+
 ## [0.46.0](https://github.com/praxagent/prax/compare/v0.45.0...v0.46.0) (2026-09-28)
 
 
