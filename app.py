@@ -177,9 +177,13 @@ def create_app():
             # "app" hostname in multi-container mode.
             _webhook_host = "localhost" if settings.teamwork_url.startswith("http://localhost") else "app"
             webhook_url = f"http://{_webhook_host}:5001/teamwork/webhook"
-            # Use the real user's workspace if a phone number is configured,
-            # so the file browser and workspace tools see the same files as SMS/Discord.
-            workspace_dir = (settings.teamwork_user_phone or "").lstrip("+") or None
+            # Point TeamWork at the directory Prax actually writes for the
+            # TeamWork user, so its file browser and chat file links see the
+            # agent's files. This used to be the phone number, which stopped
+            # being the directory name when workspaces became opaque usr_* ids:
+            # every link Prax posted then 404ed.
+            from prax.blueprints.teamwork_routes import teamwork_workspace_dir
+            workspace_dir = teamwork_workspace_dir()
             tw.create_project(
                 name=f"{settings.agent_name}'s Workspace",
                 description=f"Controlled by {settings.agent_name}",

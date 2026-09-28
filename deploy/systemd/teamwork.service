@@ -16,6 +16,10 @@ Environment=DATABASE_URL=sqlite+aiosqlite:///./data/vteam.db
 # Without PRAX_URL the /api/prax/* proxy has no target and returns bodies with
 # no fields — which is what blanked the chat view before it was set.
 Environment=PRAX_URL=http://localhost:5001
+# Prax's workspaces. TeamWork serves the file browser and every file Prax
+# posts to chat straight from here; left unset it reads teamwork/workspace/,
+# which is empty, so each of those links 404s. Also checked by update.sh.
+Environment=WORKSPACE_PATH=/home/ubuntu/PRAX/workspaces
 # ── Sandbox wiring (uncomment when running the sandbox) ─────────────────────
 # The terminal, browser and desktop panels all reach into the sandbox
 # container. Without these the panels fail in a browser console rather than in

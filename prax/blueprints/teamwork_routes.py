@@ -215,6 +215,24 @@ def _get_teamwork_user_id() -> str:
     return user.id
 
 
+def teamwork_workspace_dir() -> str | None:
+    """The workspace directory name of the TeamWork user, for TeamWork's project.
+
+    TeamWork reads files straight from ``WORKSPACE_PATH/<this name>``, so it
+    must be the directory Prax writes for that user, looked up the same way
+    Prax looks it up — not derived from the phone number.
+    """
+    import os
+
+    from prax.services.workspace_service import workspace_root
+
+    try:
+        return os.path.basename(workspace_root(_get_teamwork_user_id())) or None
+    except Exception:
+        logger.warning("Could not resolve the TeamWork user's workspace", exc_info=True)
+        return None
+
+
 _VIEW_LABELS = {
     "chat": "the chat tab",
     "browser": "the browser panel (they can see the live browser)",

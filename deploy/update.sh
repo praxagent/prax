@@ -62,6 +62,8 @@ check_env "$PRAX_ROOT/prax/.env" TEAMWORK_URL \
   "Prax skips its TeamWork bootstrap and you get an empty workspace"
 check_env "$PRAX_ROOT/teamwork/.env" DESKTOP_VNC_URL \
   "desktop panel proxies nowhere (http://127.0.0.1:$SANDBOX_NOVNC)"
+check_env "$PRAX_ROOT/teamwork/.env" WORKSPACE_PATH \
+  "file browser is empty and every file Prax posts to chat 404s ($PRAX_ROOT/workspaces)"
 
 if ! $CHECK_ONLY; then
   echo "==> pulling"
