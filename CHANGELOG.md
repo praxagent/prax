@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.44.3](https://github.com/praxagent/prax/compare/v0.44.2...v0.44.3) (2026-09-24)
+
+
+### Bug Fixes
+
+* tests can never reach a paid API or read a real key ([#234](https://github.com/praxagent/prax/issues/234)) ([35c345e](https://github.com/praxagent/prax/commit/35c345e5d7431e7e586bc2929b7a0a9b865a023d))
+
 ## [0.44.2](https://github.com/praxagent/prax/compare/v0.44.1...v0.44.2) (2026-09-08)
 
 
