@@ -130,5 +130,6 @@ it is 0.1.x and doesn't document its kernel mechanisms.
 | Out-of-band wire record in the secrets proxy (tool calls the model returned, hashed, append-only, hash-chained) + a check against Prax's own traces | **queued** |
 | Diff of newly granted access for egress-policy changes and timed grants | **queued** |
 | Policy ceiling: no policy edit or grant may exceed an operator-set boundary | **queued** (with the grant diff) |
+| Per-program network rules (decide by the requesting program as well as destination) | **queued** — not ruled out; build our own or take OpenShell's after the evaluation |
 | OpenShell as prax-sandbox's runtime — per-program network policy + policy prover | **time-boxed evaluation** in the dev VM; adopt only on a clear gain |
 | DPU / in-silicon monitoring | **declined** — hardware wall |
