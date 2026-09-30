@@ -44,6 +44,24 @@ runs on Linux, Apple-silicon macOS or WSL 2 with Docker, Podman or host
 virtualization — no NVIDIA hardware required. The repository doesn't say which
 kernel mechanisms it uses (namespaces, seccomp, Landlock or microVMs).
 
+**From the [OpenShell product page](https://www.nvidia.com/en-us/ai/openshell/)**
+(four components):
+
+- **Agent sandboxes** with "no direct network access"; the kernel "monitors
+  and filters the agent's system calls … blocking unsafe calls".
+- **A supervisor** outside the sandbox that "evaluates every network request
+  against policy at the **binary**, destination, method, and path levels" —
+  per-*program* network policy.
+- **A policy prover** that checks "whether policies stay within an allowed
+  access boundary and whether proposed network rules add risky access".
+- **A gateway** that authenticates users and delivers policies and credentials
+  to each sandbox, plus "a policy-aware inference router which forwards
+  permitted requests to cloud model endpoints".
+- "Security lives in the environment, not the model or the application.
+  Nothing is permitted by default." It supports Claude Code, Codex, Copilot
+  CLI, OpenClaw, OpenCode and LangChain Deep Agents, on Docker, Podman or
+  Kubernetes (Helm). Still no policy-language examples and no numbers.
+
 ## Against Prax
 
 | Principle | Prax |
@@ -54,6 +72,8 @@ kernel mechanisms it uses (namespaces, seccomp, Landlock or microVMs).
 | Verifiable policy before execution | **Partly.** Egress requests and HIGH-risk actions go to a person in TeamWork with the exact destination; a *policy file change* has no review of what it newly grants |
 | Detect drift from designed intent | **Not built.** Traces exist and are searchable; nothing compares behaviour against an expected profile |
 | Hardware enforcement (DPUs, Vera) | **Out of reach.** A single VM; no DPU. The same hardware wall as the GPU-bound research |
+| Per-program network policy (the supervisor decides by *binary* as well as destination) | **Declined earlier as too costly** (per-process taint needs kernel hooks, [meta-muse-secure-vm](meta-muse-secure-vm.md)). Our gates decide per destination, method and path, not per program. OpenShell ships it — the main reason to evaluate it |
+| A policy prover with an outer access boundary | **Not built.** Nothing stops an edited egress policy from granting more than an operator-set ceiling |
 
 ## Adopt
 
@@ -69,12 +89,22 @@ it with Prax's traces: a tool call on the wire that the trace doesn't show is
 the signal. Privacy: names, hashes and sizes only — never prompt or response
 text.
 
-**2. A diff of newly granted access for every policy change.** When the egress
+**2. A diff of newly granted access — and a ceiling — for every policy change.** When the egress
 policy file changes, or a person grants "allow for 1 hour", show the reachable
 set before and after: new hosts, new methods, new paths, and which requests
 would now carry a credential. Review the effect, not the text. OpenShell calls
 its version formal verification; ours can start as a plain set difference over
 the policy's rules.
+Add OpenShell's second check too: an operator-set **ceiling** (the "allowed
+access boundary") that no policy edit or timed grant may exceed — refused
+outright, not merely shown.
+
+**3. A time-boxed evaluation of OpenShell as prax-sandbox's runtime** (dev VM
+only). It ships the two things we declined or lack — per-program network
+policy and a policy prover — and supports LangChain-based agents. Run the
+sandbox's workloads (shell, Python, browser, Lean) inside it and measure what
+breaks. Adopt only if it's a clear gain over the egress gate we already run;
+it is 0.1.x and doesn't document its kernel mechanisms.
 
 ## Don't adopt, and nuance
 
@@ -82,10 +112,11 @@ the policy's rules.
   runs in one VM. Out-of-band on a DPU is stronger than out-of-band in a
   separate process, but a separate process under a separate account, with the
   kernel enforcing the route, is the version available to us and is built.
-- **Replacing prax-sandbox with OpenShell.** Same shape — confined agent,
-  credential injection, network policy — and worth re-reading at 1.0. Today
-  it's 0.1.x, it doesn't document its kernel mechanisms, and prax-sandbox
-  already has the egress gate, exec deadlines and container limits. Watch it.
+- **Replacing prax-sandbox with OpenShell unevaluated.** Same shape —
+  confined agent, credential injection, network policy — plus per-program
+  policy we don't have. But it's 0.1.x, it doesn't document its kernel
+  mechanisms, and prax-sandbox already has the egress gate, exec deadlines and
+  container limits. Evaluate first (adopt item 3), decide on the measurement.
 - **"Formal verification" is a strong phrase.** The post describes flagging new
   access a policy would grant; it doesn't say what is formally proven. Our
   version would be an honest set difference, and we'd call it that.
@@ -98,5 +129,6 @@ the policy's rules.
 |---|---|
 | Out-of-band wire record in the secrets proxy (tool calls the model returned, hashed, append-only, hash-chained) + a check against Prax's own traces | **queued** |
 | Diff of newly granted access for egress-policy changes and timed grants | **queued** |
-| OpenShell as a sandbox runtime | **watch** — re-read at 1.0 |
+| Policy ceiling: no policy edit or grant may exceed an operator-set boundary | **queued** (with the grant diff) |
+| OpenShell as prax-sandbox's runtime — per-program network policy + policy prover | **time-boxed evaluation** in the dev VM; adopt only on a clear gain |
 | DPU / in-silicon monitoring | **declined** — hardware wall |
