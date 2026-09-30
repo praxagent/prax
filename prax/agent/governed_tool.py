@@ -372,6 +372,9 @@ def wrap_with_governance(
 
     def _governed_run_bound(**kwargs: Any) -> Any:
         state = current_turn_state()
+        # Why this call is allowed to run, recorded on its audit entry. Local to
+        # the call: parallel tool calls share the turn state.
+        prov: dict[str, str] = {}
         # A stopped turn ends at its next tool call — hub or spoke. Raised,
         # not returned as text: text is a result the model can decide to
         # retry around, which is how a stop used to get ignored.
@@ -388,7 +391,7 @@ def wrap_with_governance(
         # spoke enforce switch: none of them may lower a floor. See hard_floors.
         from prax.agent import hard_floors
         if hard_floors.is_floor(tool_name):
-            floor_refusal = _floor_gate(state, tool_name, kwargs)
+            floor_refusal = _floor_gate(state, tool_name, kwargs, prov)
             if floor_refusal:
                 return floor_refusal
 
@@ -432,6 +435,7 @@ def wrap_with_governance(
                 trust = get_trust_adjustments(component)
                 if tool_name in trust.risk_downgrade_eligible:
                     risk = RiskLevel.MEDIUM
+                    prov.setdefault("approval", "auto:earned_trust")
                     logger.debug(
                         "Earned trust: downgraded %s from HIGH to MEDIUM for %s",
                         tool_name, component,
@@ -461,7 +465,7 @@ def wrap_with_governance(
                             state, tool_name, kwargs, _tf_key, kind="lethal_trifecta",
                             reason=("This turn read UNTRUSTED content and PRIVATE data, and "
                                     "this action sends or acts externally — the classic "
-                                    "prompt-injection exfiltration point."))
+                                    "prompt-injection exfiltration point."), prov=prov)
                         if refusal:
                             return refusal
                     elif _tf_key not in state.trifecta_seen:
@@ -478,8 +482,10 @@ def wrap_with_governance(
                             f"point. Confirm with the user this is intended, then call "
                             f"{tool_name} again with the same arguments to proceed."
                         )
-                    # 2nd call with the SAME arguments = confirmed (different args re-block)
-                    state.trifecta_confirmed.add(_tf_key)
+                    else:
+                        # 2nd call with the SAME arguments = confirmed (different args re-block)
+                        state.trifecta_confirmed.add(_tf_key)
+                        prov["approval"] = "model_reconfirmed"
             except Exception:
                 pass  # Guard must never break the tool path.
 
@@ -539,6 +545,7 @@ def wrap_with_governance(
                 # auto-approve this tool only — never the turn-wide latch.
                 if _user_explicitly_requested_action(tool_name):
                     state.high_risk_confirmed_tools.add(tool_name)
+                    prov["approval"] = "auto:user_request"
                     logger.info(
                         "Smart auto-approve: %s (user explicitly requested action)",
                         tool_name,
@@ -547,7 +554,7 @@ def wrap_with_governance(
                     # Out of band: a person answers in TeamWork, the model cannot.
                     refusal = _ask_a_person(
                         state, tool_name, kwargs, _call_key, kind="high_risk",
-                        reason=f"{tool_name} is classified HIGH risk.")
+                        reason=f"{tool_name} is classified HIGH risk.", prov=prov)
                     if refusal:
                         return refusal
                 elif tool_name not in state.high_risk_seen:
@@ -567,9 +574,14 @@ def wrap_with_governance(
                 elif scoped:
                     # User confirmed — unlock ONLY this tool for the turn.
                     state.high_risk_confirmed_tools.add(tool_name)
+                    prov["approval"] = "model_reconfirmed"
                 else:
                     # User confirmed — unlock all HIGH-risk tools for this turn.
                     state.high_risk_confirmed = True
+                    prov["approval"] = "model_reconfirmed"
+            elif risk is RiskLevel.HIGH:
+                prov.setdefault("approval", "person" if _call_key in state.human_approved
+                                else "earlier_confirmation")
 
         # --- Semantic entropy gate (Phase 4, hub only) ---
         if hub and risk is RiskLevel.HIGH:
@@ -612,7 +624,11 @@ def wrap_with_governance(
         try:
             result = tool.invoke(kwargs if kwargs else {})
             result_str = str(result) if result is not None else None
-            state.audit.append(log_action(tool_name, risk, kwargs, result=result_str))
+            state.audit.append(log_action(
+                tool_name, risk, kwargs, result=result_str,
+                approval=prov.get("approval") or (
+                    "high_risk_not_enforced" if risk is RiskLevel.HIGH and not enforce
+                    else "none_needed")))
             logger.info("Tool %s finished [%s]", tool_name, risk.value)
 
             # --- Lethal-trifecta: record which legs this turn has now touched ---
@@ -861,7 +877,8 @@ def _taint_egress(state: TurnGovernanceState, reason: str) -> None:
         pass  # the gate is a second line; never break the tool path
 
 
-def _floor_gate(state: TurnGovernanceState, tool_name: str, kwargs: dict) -> str | None:
+def _floor_gate(state: TurnGovernanceState, tool_name: str, kwargs: dict,
+                prov: dict | None = None) -> str | None:
     """Run a hard-floor action only on a person's decision about this exact call.
 
     ``None`` = go ahead. A person's out-of-band approval counts unless a timed
@@ -873,7 +890,9 @@ def _floor_gate(state: TurnGovernanceState, tool_name: str, kwargs: dict) -> str
 
     call_key = _trifecta_key(tool_name, kwargs)
     target = hard_floors._target(kwargs)
+    prov = prov if prov is not None else {}
     if call_key in state.human_approved:
+        prov["approval"] = "person"
         return None
     if human_approval.enabled():
         state.audit.append(log_action(
@@ -887,6 +906,7 @@ def _floor_gate(state: TurnGovernanceState, tool_name: str, kwargs: dict) -> str
             state.audit.append(log_action(
                 tool_name, RiskLevel.HIGH, kwargs,
                 result=f"APPROVED by a person — hard floor (approval {decision.approval_id})"))
+            prov["approval"] = f"person:{decision.approval_id}"
             return None
         why = ("a timed grant can't approve a hard-floor action"
                if decision.approved else decision.message[:120])
@@ -900,6 +920,7 @@ def _floor_gate(state: TurnGovernanceState, tool_name: str, kwargs: dict) -> str
         state.audit.append(log_action(
             tool_name, RiskLevel.HIGH, kwargs,
             result="APPROVED by the user's own message — hard floor"))
+        prov["approval"] = "user_message"
         return None
     state.audit.append(log_action(
         tool_name, RiskLevel.HIGH, kwargs, result="REFUSED — hard floor, no person's decision"))
@@ -907,7 +928,8 @@ def _floor_gate(state: TurnGovernanceState, tool_name: str, kwargs: dict) -> str
 
 
 def _ask_a_person(state: TurnGovernanceState, tool_name: str, kwargs: dict,
-                  call_key: str, *, kind: str, reason: str) -> str | None:
+                  call_key: str, *, kind: str, reason: str,
+                  prov: dict | None = None) -> str | None:
     """Block on an out-of-band approval. ``None`` = approved, go ahead;
     otherwise the refusal to return to the model instead of running the tool."""
     from prax.agent import human_approval
@@ -923,6 +945,8 @@ def _ask_a_person(state: TurnGovernanceState, tool_name: str, kwargs: dict,
         state.audit.append(log_action(
             tool_name, RiskLevel.HIGH, kwargs,
             result=f"APPROVED by a person (approval {decision.approval_id})"))
+        if prov is not None:
+            prov["approval"] = f"person:{decision.approval_id}"
         return None
     state.audit.append(log_action(
         tool_name, RiskLevel.HIGH, kwargs,
