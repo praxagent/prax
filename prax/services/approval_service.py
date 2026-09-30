@@ -32,6 +32,8 @@ class Outcome:
     # Who decided: a person's name, or "grant:<id>" when a timed grant
     # approved the request on arrival (hard floors refuse those).
     decided_by: str = ""
+    # When a still-pending request stops being answerable (ISO, UTC).
+    expires_at: str = ""
 
     @property
     def approved(self) -> bool:
@@ -39,7 +41,8 @@ class Outcome:
 
 
 def ask_and_wait(capability: str, payload: dict, *, reason: str, wait_seconds: float,
-                 on_wait: Callable[[], None] | None = None, spend: bool = True) -> Outcome:
+                 on_wait: Callable[[], None] | None = None, spend: bool = True,
+                 expires_in_seconds: int | None = None) -> Outcome:
     """Create an approval request, block until decided or *wait_seconds*, spend it.
 
     Never raises. Fails closed: anything other than a decided-and-spent
@@ -53,7 +56,9 @@ def ask_and_wait(capability: str, payload: dict, *, reason: str, wait_seconds: f
     capability = capability[:64]
     project_id = client.project_id
     try:
-        asked = client.ask_approval(capability, payload, reason=reason, project_id=project_id)
+        lifetime = {"expires_in_seconds": expires_in_seconds} if expires_in_seconds else {}
+        asked = client.ask_approval(capability, payload, reason=reason, project_id=project_id,
+                                    **lifetime)
     except Exception as exc:
         logger.warning("Could not create approval request for %s: %s", capability, exc)
         return Outcome("unavailable", detail=str(exc)[:200])
@@ -77,7 +82,8 @@ def ask_and_wait(capability: str, payload: dict, *, reason: str, wait_seconds: f
             logger.warning("Approval status check failed for %s: %s", approval_id, exc)
 
     if status == "pending":
-        return Outcome("pending", approval_id, "expired" if asked.get("expired") else "no answer")
+        return Outcome("pending", approval_id, "expired" if asked.get("expired") else "no answer",
+                       expires_at=str(asked.get("expires_at") or ""))
     if status in ("rejected", "consumed"):
         return Outcome("rejected", approval_id)
     if status != "approved":
@@ -89,3 +95,18 @@ def ask_and_wait(capability: str, payload: dict, *, reason: str, wait_seconds: f
             logger.warning("Approval %s could not be spent: %s", approval_id, exc)
             return Outcome("error", approval_id, "could not be spent for this exact action")
     return Outcome("approved", approval_id, decided_by=str(asked.get("decided_by") or ""))
+
+
+def spend(approval_id: str, capability: str, payload: dict) -> bool:
+    """Spend an approval a person already gave, on exactly this action. Never raises."""
+    from prax.services.teamwork_service import get_teamwork_client
+
+    client = get_teamwork_client()
+    if not client.enabled:
+        return False
+    try:
+        client.consume_approval(approval_id, capability, payload, project_id=client.project_id)
+        return True
+    except Exception as exc:
+        logger.warning("Approval %s could not be spent: %s", approval_id, exc)
+        return False

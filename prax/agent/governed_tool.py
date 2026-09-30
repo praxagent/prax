@@ -892,6 +892,8 @@ def _floor_gate(state: TurnGovernanceState, tool_name: str, kwargs: dict) -> str
                if decision.approved else decision.message[:120])
         state.audit.append(log_action(
             tool_name, RiskLevel.HIGH, kwargs, result=f"REFUSED — hard floor: {why}"))
+        if decision.message.startswith("PARKED"):
+            return decision.message  # the model must say the task is waiting, not refused
         return hard_floors.refusal(tool_name, target, approvals=True)
     if hard_floors.user_named_it(tool_name, kwargs, current_user_message.get("")):
         state.human_approved.add(call_key)

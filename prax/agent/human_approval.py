@@ -74,14 +74,32 @@ def _heartbeat(message: str) -> None:
 
 def request(tool_name: str, kwargs: dict, *, kind: str, reason: str, summary: str,
             capability_prefix: str = "prax.tool.") -> Decision:
-    """Ask a person, wait for the answer, and spend it. Never raises."""
-    from prax.services.approval_service import ask_and_wait
+    """Ask a person, wait for the answer, and spend it. Never raises.
+
+    In an unattended run with PARKED_APPROVALS_ENABLED, doesn't wait: parks the
+    request and returns a refusal saying so (prax.services.parked_approvals).
+    A re-run started by a person's approval spends that approval here.
+    """
+    from prax.services import parked_approvals
+    from prax.services.approval_service import ask_and_wait, spend
     from prax.settings import settings
+
+    capability = f"{capability_prefix}{tool_name}"
+    payload = action_payload(tool_name, kwargs, kind, summary)
+
+    given = (parked_approvals.current_preapproved.get() or {}).get(
+        parked_approvals.action_key(capability, payload))
+    if given and spend(given["approval_id"], capability, payload):
+        logger.info("Parked approval %s spent for %s on the re-run", given["approval_id"], tool_name)
+        return Decision(True, "", given["approval_id"], given.get("decided_by", ""))
+
+    parked = _park_if_unattended(tool_name, capability, payload, reason)
+    if parked is not None:
+        return parked
 
     wait = max(5, int(getattr(settings, "approval_wait_seconds", 300)))
     outcome = ask_and_wait(
-        f"{capability_prefix}{tool_name}",
-        action_payload(tool_name, kwargs, kind, summary),
+        capability, payload,
         reason=reason, wait_seconds=wait,
         on_wait=lambda: _heartbeat(f"waiting for approval of {tool_name}"))
 
@@ -105,3 +123,47 @@ def request(tool_name: str, kwargs: dict, *, kind: str, reason: str, summary: st
             outcome.approval_id)
     return Decision(False, f"Refused: {outcome.detail or 'the approval could not be used'}.",
                     outcome.approval_id)
+
+
+def _park_if_unattended(tool_name: str, capability: str, payload: dict,
+                        reason: str) -> Decision | None:
+    """Park the request when nobody is there to answer it; None = ask normally."""
+    import time
+    from datetime import UTC, datetime
+
+    from prax.agent.user_context import current_channel_id, current_turn_source, current_user_id
+    from prax.services import parked_approvals
+    from prax.services.approval_service import ask_and_wait
+    from prax.settings import settings
+
+    recipe = parked_approvals.current_recipe.get()
+    if (not parked_approvals.enabled() or not recipe
+            or current_turn_source.get() not in ("scheduler", "task_runner")):
+        return None
+    if int(recipe.get("resumes", 0)) >= int(getattr(settings, "parked_max_resumes", 3)):
+        return Decision(False, (
+            f"Not done: this unattended task has already been resumed "
+            f"{recipe.get('resumes')} times for approvals, and {tool_name} needs another. "
+            "Stop here and tell the user what still needs their approval."))
+    hours = float(getattr(settings, "parked_approval_hours", 24))
+    outcome = ask_and_wait(capability, payload, reason=reason, wait_seconds=1,
+                           expires_in_seconds=int(hours * 3600))
+    if outcome.approved:  # a standing grant answered on arrival
+        return Decision(True, "", outcome.approval_id, outcome.decided_by)
+    if outcome.status != "pending" or not outcome.approval_id:
+        return Decision(False, (
+            "Refused: this action needs a person's approval in TeamWork, and it could not "
+            "be requested, so it was not done. Tell the user."), outcome.approval_id)
+    try:
+        when = datetime.fromisoformat(outcome.expires_at) if outcome.expires_at else None
+        if when is not None and when.tzinfo is None:  # TeamWork stores naive UTC
+            when = when.replace(tzinfo=UTC)
+        expires = when.timestamp() if when else 0.0
+    except ValueError:
+        expires = 0.0
+    parked_approvals.park(
+        user_id=current_user_id.get() or "", approval_id=outcome.approval_id,
+        tool_name=tool_name, capability=capability, payload=payload, recipe=recipe,
+        channel=(recipe.get("args") or {}).get("channel") or current_channel_id.get(),
+        expires_at=expires or time.time() + hours * 3600)
+    return Decision(False, parked_approvals.parked_message(tool_name, hours), outcome.approval_id)
