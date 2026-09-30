@@ -383,6 +383,15 @@ def wrap_with_governance(
         if over:
             return over
 
+        # --- Hard floors (HARD_FLOORS_ENABLED) ---
+        # Before earned trust, smart auto-approve, the turn-wide latch and the
+        # spoke enforce switch: none of them may lower a floor. See hard_floors.
+        from prax.agent import hard_floors
+        if hard_floors.is_floor(tool_name):
+            floor_refusal = _floor_gate(state, tool_name, kwargs)
+            if floor_refusal:
+                return floor_refusal
+
         # --- Active Inference: extract expected observation (Phase 1) ---
         expected_observation = kwargs.pop("expected_observation", None)
 
@@ -850,6 +859,49 @@ def _taint_egress(state: TurnGovernanceState, reason: str) -> None:
         egress_gate_service.mark_tainted(id(state), reason)
     except Exception:
         pass  # the gate is a second line; never break the tool path
+
+
+def _floor_gate(state: TurnGovernanceState, tool_name: str, kwargs: dict) -> str | None:
+    """Run a hard-floor action only on a person's decision about this exact call.
+
+    ``None`` = go ahead. A person's out-of-band approval counts unless a timed
+    grant gave it; with approvals off, the user's own message must name the
+    action and its target. Each call is decided on its own.
+    """
+    from prax.agent import hard_floors, human_approval
+    from prax.agent.user_context import current_user_message
+
+    call_key = _trifecta_key(tool_name, kwargs)
+    target = hard_floors._target(kwargs)
+    if call_key in state.human_approved:
+        return None
+    if human_approval.enabled():
+        state.audit.append(log_action(
+            tool_name, RiskLevel.HIGH, kwargs, result="PAUSED — hard floor, awaiting a person"))
+        decision = human_approval.request(
+            tool_name, kwargs, kind="hard_floor",
+            reason=f"{tool_name} is a hard-floor action: it always needs a person's decision.",
+            summary=_summarize_args(kwargs, max_len=600))
+        if decision.approved and not decision.decided_by.startswith("grant:"):
+            state.human_approved.add(call_key)
+            state.audit.append(log_action(
+                tool_name, RiskLevel.HIGH, kwargs,
+                result=f"APPROVED by a person — hard floor (approval {decision.approval_id})"))
+            return None
+        why = ("a timed grant can't approve a hard-floor action"
+               if decision.approved else decision.message[:120])
+        state.audit.append(log_action(
+            tool_name, RiskLevel.HIGH, kwargs, result=f"REFUSED — hard floor: {why}"))
+        return hard_floors.refusal(tool_name, target, approvals=True)
+    if hard_floors.user_named_it(tool_name, kwargs, current_user_message.get("")):
+        state.human_approved.add(call_key)
+        state.audit.append(log_action(
+            tool_name, RiskLevel.HIGH, kwargs,
+            result="APPROVED by the user's own message — hard floor"))
+        return None
+    state.audit.append(log_action(
+        tool_name, RiskLevel.HIGH, kwargs, result="REFUSED — hard floor, no person's decision"))
+    return hard_floors.refusal(tool_name, target, approvals=False)
 
 
 def _ask_a_person(state: TurnGovernanceState, tool_name: str, kwargs: dict,

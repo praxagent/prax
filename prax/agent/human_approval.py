@@ -39,6 +39,7 @@ class Decision:
     approved: bool
     message: str
     approval_id: str | None = None
+    decided_by: str = ""
 
 
 def enabled() -> bool:
@@ -86,7 +87,7 @@ def request(tool_name: str, kwargs: dict, *, kind: str, reason: str, summary: st
 
     if outcome.approved:
         logger.info("Approval %s granted and spent for %s", outcome.approval_id, tool_name)
-        return Decision(True, "", outcome.approval_id)
+        return Decision(True, "", outcome.approval_id, outcome.decided_by)
     if outcome.status == "unavailable":
         return Decision(False, (
             "Refused: this action needs a person's approval in TeamWork, and the approval "

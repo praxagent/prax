@@ -29,6 +29,9 @@ class Outcome:
     status: str
     approval_id: str | None = None
     detail: str = ""
+    # Who decided: a person's name, or "grant:<id>" when a timed grant
+    # approved the request on arrival (hard floors refuse those).
+    decided_by: str = ""
 
     @property
     def approved(self) -> bool:
@@ -85,4 +88,4 @@ def ask_and_wait(capability: str, payload: dict, *, reason: str, wait_seconds: f
         except Exception as exc:
             logger.warning("Approval %s could not be spent: %s", approval_id, exc)
             return Outcome("error", approval_id, "could not be spent for this exact action")
-    return Outcome("approved", approval_id)
+    return Outcome("approved", approval_id, decided_by=str(asked.get("decided_by") or ""))

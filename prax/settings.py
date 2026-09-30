@@ -1099,6 +1099,17 @@ class AppSettings(BaseSettings):
     # starts a fresh budget, so "continue" is the way to raise it for a task.
     turn_budget_usd: float = Field(default=0.0, alias="TURN_BUDGET_USD")
     turn_budget_seconds: int = Field(default=0, alias="TURN_BUDGET_SECONDS")
+    # Hard floors (prax/agent/hard_floors.py; pattern credit: OpenWorker):
+    # logging in / revealing credentials, installing or activating code that
+    # runs with Prax's authority, and spending money run only on a person's
+    # decision about that exact call — an out-of-band approval not satisfied
+    # by a timed grant, or with approvals off, the user's own message naming
+    # the action and target. Checked before earned trust, auto-approve and the
+    # spoke enforce switch. Off keeps the prior behaviour.
+    hard_floors_enabled: bool = Field(default=False, alias="HARD_FLOORS_ENABLED")
+    # Extra tool names to treat as hard floors (comma-separated). Add-only:
+    # the built-in floors can't be removed.
+    hard_floor_extra_tools: str = Field(default="", alias="HARD_FLOOR_EXTRA_TOOLS")
     # Days of persisted execution graphs to keep; 0 keeps them forever. Was a
     # hard-coded 7, which silently deleted a week-idle instance's whole trace
     # history at startup. Raised to 90: losing diagnostic history is a bug,
