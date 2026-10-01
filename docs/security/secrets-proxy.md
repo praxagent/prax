@@ -189,6 +189,39 @@ outside Prax's administrative and filesystem access, as its own container/user
 with the keys in *its* secret store only. The [proxy README](https://github.com/praxagent/prax-secrets-proxy)
 owns component setup; this page describes Prax's integration and limits.
 
+## The channel between Prax and the proxy
+
+Audited 2026-10-01 on the production VM by probing the listeners from another
+local account, with requests that could not reach a provider:
+
+| Listener | Caller auth | Encryption | State |
+|---|---|---|---|
+| `:8785` reverse proxy (model calls) | `PROXY_AUTH_TOKEN` required — `401` without it | TLS; self-signed cert with SANs `secrets-proxy`, `localhost`, `127.0.0.1`, trusted through the CA bundle; Prax never disables verification | sound |
+| `:8786` forward proxy (all other HTTPS) | **none** — an unauthenticated request was forwarded | plain-HTTP proxy protocol on loopback; TLS inside each CONNECT tunnel to the proxy's CA | **open to every local process** |
+| `:8791` egress admin | admin / taint tokens | loopback | not running (policy off) |
+
+Loopback is not a user boundary: every account on the machine, the dev tree,
+and every process Prax starts can use `:8786` and have production's keys
+injected. That is the hole to close. In order:
+
+1. **Authenticate every caller of the forward proxy** with its own identity
+   (prax-secrets-proxy: `PROXY_FORWARD_AUTH_TOKEN` works over HTTPS since its #5;
+   per-program identities since #6) — `prax-prod`, `prax-dev`, and for children
+   `prax-tools`. Then `HTTPS_PROXY=http://prax-prod:<token>@127.0.0.1:8786`.
+2. **Keep that credential out of child processes** before step 1:
+   `CHILD_ENV_STRIP_PROXY_CREDENTIALS` (on by default) hands every subprocess the
+   URL without it, or `CHILD_PROXY_URL`'s own identity
+   (`prax/services/child_env.py`). Verified with real `git` through an
+   authenticating mitmproxy: unprotected, the child used Prax's credential;
+   stripped, it got `407`; with its own identity, it worked as `prax-tools`.
+3. **Then give identities different rules**: the egress policy and forward-map
+   rules can name callers (`callers`), so `prax-tools` can be limited to, say,
+   GitHub, and one-instance credentials (the Discord bot token) to `prax-prod`.
+
+What is acceptable as it is: the proxy credential crosses loopback in clear text
+(in `Proxy-Authorization`), readable only by root, who can read the keys anyway;
+request contents are TLS inside the tunnel.
+
 ## Tier 2 — general egress
 
 The optional forward proxy is **shipped** as the companion repository's opt-in
