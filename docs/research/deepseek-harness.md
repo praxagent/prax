@@ -1,6 +1,6 @@
 # DeepSeek Harness (`dsh`)
 
-**Verdict: document + adopt one idea; bank two; don't adopt the harness.**
+**Verdict: document + adopt two ideas; bank one; don't adopt the harness.**
 DeepSeek Harness is a peer, not a model for Prax's trust stance. Its own safety
 notice says it "has not undergone a security audit and must not be treated as
 secure", and network access sits outside its sandbox entirely. Three things are
@@ -13,12 +13,18 @@ worth taking:
    only way out) is installed by hand, and nothing in Prax checks it is
    actually active. **Adopt:** a startup self-check that tests each boundary
    from inside the process and reports it.
-2. **Scrub credentials from every spawned command's environment** (bank, pending
-   a check). dsh drops `*KEY*`/`*SECRET*`/`*TOKEN*`/`*PASSWORD*` from child
-   environments. Prax makes 69 host subprocess calls, none passes `env=`, and
-   there is no scrub helper. Whether that leaks anything depends on what is in
-   Prax's own process environment (pydantic reads `.env` without exporting it),
-   and I could not check the live process (below).
+2. **Keep credentials out of child environments: Prax already does, by
+   design; one gap is coming.** dsh drops `*KEY*`/`*SECRET*`/`*TOKEN*`/`*PASSWORD*`
+   from child environments. Prax never puts keys there in the first place: no
+   `EnvironmentFile`, pydantic reads `.env` without exporting it, and
+   `_export_proxy_env_from_dotenv` (`prax/settings.py`) exports only an
+   allowlist of proxy and CA variables. In keyless mode the provider keys are
+   not in Prax at all. **The gap:** `HTTPS_PROXY` is on that allowlist. Once
+   the forward-proxy token is enabled (prax-secrets-proxy #5), it carries
+   `http://prax:<token>@…`, and all 69 host subprocess calls would inherit
+   Prax's proxy credential and, with per-program rules (#6), Prax's identity.
+   **Adopt:** strip the userinfo from the proxy variables for child processes,
+   and give a child that needs egress its own identity.
 3. **A reminder before the hard stop** (bank). dsh nudges the model at 3, 5 and
    8 identical calls but never blocks. Prax now blocks (turn budgets and spoke
    limits, #243) without nudging first. A reminder would let a turn recover
@@ -68,7 +74,7 @@ retry is a new call with a wider policy, and needs approval.
 | Monotonic guards that can only deny, run after the hooks and permission layer | **The same idea** as hard floors (#247), enforced after earned trust, auto-approve and every other risk-lowering rule |
 | No answer to an approval means deny | **The same** (fail-closed approvals; parked approvals, #248, for unattended runs) |
 | Sandboxes report `full` / `partial` enforcement | **Missing.** The systemd drop-ins and the proxy route are opt-in and installed by hand; Prax does not check them from inside |
-| Child processes get a scrubbed environment | **Unverified.** 69 host subprocess calls, no `env=`, no scrub helper |
+| Child processes get a scrubbed environment | **Keys never enter Prax's environment** (only a proxy/CA allowlist is exported). Gap: `HTTPS_PROXY` will carry the proxy token once #5 is enabled, and children inherit it |
 | Repeated-call reminders at 3/5/8, advisory only | Hard limits (spoke-call limit, failure limit, cost and time budgets, #240/#243), no reminder first |
 | No network policy in the sandbox | Egress decided per host, method and path, out of process (secrets-proxy egress policy, sandbox egress gate) |
 | Keys held by the harness | Keyless Prax: real keys live only in the secrets proxy |
@@ -93,12 +99,14 @@ addresses a root cause from the September suite review: docs asserting
 guarantees the code does not provide. The behaviour change sits behind a flag;
 the report itself is read-only.
 
+**Proxy credential out of child environments.** Before enabling the forward-proxy
+token, make the 69 host subprocess calls go through one helper that removes the
+userinfo from `HTTP(S)_PROXY`/`ALL_PROXY`. A child that needs egress then gets its
+own per-program identity. The `credential_registry` drift-guard pattern can make
+a bare `subprocess` call fail CI.
+
 ## Bank
 
-- **Scrubbed child environments**, once someone has confirmed what Prax's process
-  environment holds. If it holds credentials, one helper used at all 69 call
-  sites is the fix; the drift-guard pattern from `credential_registry` can
-  enforce it.
 - **A reminder before the hard stop**: at half of `SPOKE_CALL_LIMIT`, tell the
   model what it has repeated and ask it to change approach. Advisory only; the
   hard limits stay.
