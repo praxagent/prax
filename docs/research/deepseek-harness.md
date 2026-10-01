@@ -1,107 +1,116 @@
-# deepseek-harness — a model vendor ships a harness, and it has no governance layer
+# DeepSeek Harness (`dsh`)
 
-**Source:** <https://github.com/deepseek-ai/deepseek-harness> (`dsh`) — ~36.8k
-stars, 2.8k forks, ~12,293 commits, MIT, TypeScript/Node. Built on **Cordis**,
-a plugin framework whose design paper is *"A Programming Paradigm for
-Spatiotemporal Composability"*. Self-described: **"Everything is a Plugin."**
-Explicitly a **developer preview** with *"THERE WILL BE COMPATIBILITY-BREAKING
-CHANGES."*
+**Verdict: document + adopt one idea; bank two; don't adopt the harness.**
+DeepSeek Harness is a peer, not a model for Prax's trust stance. Its own safety
+notice says it "has not undergone a security audit and must not be treated as
+secure", and network access sits outside its sandbox entirely. Three things are
+worth taking:
 
-**Verdict: document-don't-adopt — but this is the most useful competitive data
-point in weeks, because of what it *doesn't* have.**
+1. **Report enforcement as `full` or `partial`, and check it from inside.**
+   Every dsh sandbox backend says whether it can actually enforce what it
+   promises (an older kernel's Landlock cannot govern everything). Prax's
+   containment (the loopback-only drop-in, Docker taken away, the proxy as the
+   only way out) is installed by hand, and nothing in Prax checks it is
+   actually active. **Adopt:** a startup self-check that tests each boundary
+   from inside the process and reports it.
+2. **Scrub credentials from every spawned command's environment** (bank, pending
+   a check). dsh drops `*KEY*`/`*SECRET*`/`*TOKEN*`/`*PASSWORD*` from child
+   environments. Prax makes 69 host subprocess calls, none passes `env=`, and
+   there is no scrub helper. Whether that leaks anything depends on what is in
+   Prax's own process environment (pydantic reads `.env` without exporting it),
+   and I could not check the live process (below).
+3. **A reminder before the hard stop** (bank). dsh nudges the model at 3, 5 and
+   8 identical calls but never blocks. Prax now blocks (turn budgets and spoke
+   limits, #243) without nudging first. A reminder would let a turn recover
+   before it is cut off.
 
-## The finding: no governance layer
+Source: [deepseek.com/en/harness](https://www.deepseek.com/en/harness/) (behind
+an AWS WAF challenge, so not readable without a browser) and the repository
+[deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)
+(MIT, TypeScript/Node, about 241k stars, commit `639ed01` of 2026-09-29), which
+is what this note is based on. Launched 2026-08-13 alongside DeepSeek-V4-Pro;
+developer preview with "compatibility-breaking changes". Press: [VentureBeat](https://venturebeat.com/technology/deepseek-harness-launches-as-open-source-rival-to-claude-code-alongside-v4-pro-on-api-with-higher-prices),
+[The New Stack](https://thenewstack.io/deepseek-harness-open-source-plugins/).
+`BENCHMARK.md` gives no scores, only how to run the SDK.
 
-The README describes plugins, composition, a web UI on `127.0.0.1:3080`, and a
-build stack. On permissions, sandboxing, approval workflows, capability
-ceilings, audit, or any safety mechanism: **nothing.**
+## What it is
 
-I want to be precise about the strength of that claim, because absence of
-evidence in a preview README is not proof of absence in the codebase. What I
-can say is that a 36.8k-star general agent platform from a frontier lab does
-not consider governance worth mentioning in its front-page description, which
-is itself the signal. Compare Prax, where `governed_tool.py` wraps *every*
-tool with a risk tier and an audit record, plugins run behind a capability
-gateway with trust tiers, and the lethal-trifecta guard exists as a named
-component.
+An agent harness in which "everything is a plugin": models, tools, skills,
+sessions, sandboxes, filesystems, loops, orchestration and the UI. It is built
+on the Cordis framework ([arXiv 2608.25512](https://arxiv.org/abs/2608.25512)),
+vendored and republished under `@deepseek-ai`. It runs as `npx @deepseek-ai/dsh
+web` (a local web UI on `127.0.0.1:3080`), a desktop app, or through a Python
+SDK. About 60 package families cover subagents (in-process, forked, or
+out-of-process **Claude Code, Codex and ACP** agents), MCP, LSP, browser and
+computer use, scheduling, webhooks, compaction, SSH, credentials and
+programmatic tool calling (PTC: a `run_code` tool whose sub-calls each pass the
+full tool pipeline).
 
-This is the third independent measurement of the same thing. The
-[Agent Harness survey](agent-harness-engineering-survey.md) found **Observability
-and Governance thinnest in open source** (O: 15, G: 14 projects, against L: 47)
-and mostly living inside commercial platforms.
-[Crush](crush-charm-coding-agent.md) ships `--yolo`, a single flag that voids
-its whole permission perimeter. Now the largest new entrant ships without a
-governance story at all.
+**Tool pipeline.**
+1. Every call is logged before it runs.
+2. A pre-execute waterfall runs hooks, permission and sandbox.
+3. **Monotonic guards** follow; they can only deny or abstain.
+4. An approval prompt that is absent or can't be answered is a denial.
+5. An around-dispatch layer handles timeouts and retries.
+6. A post-execute layer can block or replace a result.
+7. The frozen outcome is recorded as the single model-facing result.
 
-**Prax's differentiator is not a claim we make about ourselves — it is a gap
-other people keep leaving.** That is worth knowing precisely because it is
-uncomfortable to rely on: a differentiator nobody else wants may be a
-differentiator nobody else *needs*. The honest reading is that governance costs
-effort and buys nothing on a benchmark, so it loses every time the scoreboard
-is the goal — which is exactly why it has to be a thesis rather than a feature.
+**Sandbox.** It confines processes on the same host: bubblewrap or Landlock on
+Linux, seatbelt on macOS, ACLs on Windows. The modes are Codex's
+(`read-only`, `workspace-write`, `danger-full-access`) and cover file effects
+only: "Network and process visibility are outside this vocabulary." An escalated
+retry is a new call with a wider policy, and needs approval.
 
-## Why the timing matters
+## Against Prax
 
-The live box moved its `low`/`base` tier to `deepseek/deepseek-v4-flash-0731`
-on 2026-08-09. So DeepSeek now supplies both a model Prax runs and a competing
-harness to run it in.
-
-That makes them a **vendor harness** in the sense
-[Niklaus measured](crush-charm-coding-agent.md): every model-vendor harness in
-that comparison **dropped** on the small model (Codex 2nd→9th, Claude Code
-3rd→7th, Qwen Code 4th→6th) while model-agnostic ones climbed. If that pattern
-holds, `dsh` is optimised around DeepSeek's own models and would be the wrong
-thing to benchmark Prax against — and equally, Prax's model-agnostic shape is
-the side of that split that travelled well.
-
-Unverified and worth stating: nobody has run `dsh` against anything, ourselves
-included. There are **no benchmarked claims in the repo**.
-
-## What "everything is a plugin" costs
-
-Prax already has a plugin system, deliberately narrower: plugins declare
-capabilities, run behind a gateway, and `permissions.md` is a
-framework-enforced ceiling. The difference is not architectural taste, it is
-where the trust boundary sits. "Everything is a plugin" makes the *core*
-extensible; Prax's version makes the *periphery* extensible while keeping the
-core — governance, routing, memory — non-pluggable on purpose.
-
-A system where everything is replaceable has nothing that cannot be replaced,
-including the parts that constrain it. For a chatbot framework lineage (Cordis
-comes from that world) that is the right call. For a harness whose thesis is
-that the scaffolding is what makes an agent trustworthy, it is not.
-
-## Not adopted, and why not each
-
-- **Cordis / spatiotemporal composability** — the paper is referenced but the
-  concept is not explained in the preview material, so I am not going to
-  summarise it from its title. If someone reads the paper and it names a real
-  capability, reassess then.
-- **The plugin-everything architecture** — declined above on trust-boundary
-  grounds, not on quality.
-- **TypeScript/Node stack** — irrelevant; Prax is Python and that is settled.
-- **`dsh` as a benchmark target** — declined for now. Comparing harnesses is
-  genuinely valuable ([harness_lift](crush-charm-coding-agent.md) is the
-  instrument nobody else computes), but a developer preview warning of
-  compatibility-breaking changes is a moving target, and the comparison would
-  measure their preview rather than their design.
-
-## The one thing worth watching
-
-If `dsh` later adds a governance layer, that is a signal the market decided
-safety scaffolding matters, and Prax's head start becomes worth something
-commercially rather than only ethically. If it ships 1.0 without one and keeps
-growing, that is evidence the market does not price it — which does not make
-the thesis wrong, but does mean it has to be justified on its merits rather
-than on adoption.
-
-Either outcome is informative. Neither is a reason to change course now.
-
-## Adopt-tracker rows
-
-| Item | Status |
+| dsh | Prax |
 |---|---|
-| Governance-gap observation — 3rd independent measurement (harness survey, Crush `--yolo`, now `dsh`) | ✅ recorded; no work, sharpens positioning |
-| Cordis / spatiotemporal composability | ⏸ parked — concept not explained in available material; do not summarise from a title |
-| `dsh` as a harness-lift comparison target | ⏸ parked — developer preview, moving target |
-| Plugin-everything architecture | ❌ declined — a system where everything is replaceable can replace the parts that constrain it |
+| Monotonic guards that can only deny, run after the hooks and permission layer | **The same idea** as hard floors (#247), enforced after earned trust, auto-approve and every other risk-lowering rule |
+| No answer to an approval means deny | **The same** (fail-closed approvals; parked approvals, #248, for unattended runs) |
+| Sandboxes report `full` / `partial` enforcement | **Missing.** The systemd drop-ins and the proxy route are opt-in and installed by hand; Prax does not check them from inside |
+| Child processes get a scrubbed environment | **Unverified.** 69 host subprocess calls, no `env=`, no scrub helper |
+| Repeated-call reminders at 3/5/8, advisory only | Hard limits (spoke-call limit, failure limit, cost and time budgets, #240/#243), no reminder first |
+| No network policy in the sandbox | Egress decided per host, method and path, out of process (secrets-proxy egress policy, sandbox egress gate) |
+| Keys held by the harness | Keyless Prax: real keys live only in the secrets proxy |
+| Plugins load with whatever access the process has (the safety notice says so) | Plugin trust tiers, `permissions.md` ceilings, the capability gateway |
+| Claude Code / Codex as subagents | Removed from the sandbox image on purpose (2026-07-20) |
+| "Report orthogonal outcomes independently" (a run can time out *and* exit 0) | Worth a check of `run_command`-style results; not audited here |
+
+## Adopt
+
+**Enforcement self-check.** At startup, and in `make status`, Prax tests its
+own boundaries from inside and reports each as enforced, partial or absent:
+
+- a TCP connect to a TEST-NET address (`192.0.2.1`, which never routes) must
+  fail when the loopback-only drop-in is meant to be active;
+- the Docker socket must be unreachable when `50-no-docker.conf` is meant to be
+  active;
+- the outbound proxy must actually be in use when keyless mode is configured.
+
+A deployment whose docs promise containment would then show it, and a missed
+`daemon-reload` would show up as `absent` instead of passing silently. This
+addresses a root cause from the September suite review: docs asserting
+guarantees the code does not provide. The behaviour change sits behind a flag;
+the report itself is read-only.
+
+## Bank
+
+- **Scrubbed child environments**, once someone has confirmed what Prax's process
+  environment holds. If it holds credentials, one helper used at all 69 call
+  sites is the fix; the drift-guard pattern from `credential_registry` can
+  enforce it.
+- **A reminder before the hard stop**: at half of `SPOKE_CALL_LIMIT`, tell the
+  model what it has repeated and ask it to change approach. Advisory only; the
+  hard limits stay.
+- **The defensive-patterns page** (`docs/defensive-patterns.md` in their repo) is
+  a good model for ours: each rule is a defect that shipped, stated as the rule
+  that stops it recurring.
+
+## Don't adopt
+
+- **The harness.** It has no egress control, no audit trail of the kind
+  governance needs, and full-access plugins. A peer to compare against, not a
+  base.
+- **Rebuilding Prax as "everything is a plugin".** Prax's seams (spokes, the
+  plugin gateway, `build_agent_loop`) already sit where the trust boundaries
+  are. Making every layer swappable also makes the governance layer swappable.
