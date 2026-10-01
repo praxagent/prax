@@ -54,6 +54,10 @@ class Credential:
     inject: str | None = None  # how the secret is presented: bearer | x-api-key |
                                #   basic | header:<Name> | query:<param>
     caveat: str = ""         # honest nuance (gateway websocket, fetch-time-only, …)
+    # One instance only: two holders both act on it (a Discord bot token — both
+    # instances answer every message). The forward map names which proxy
+    # callers may use it, or leaves it out.
+    exclusive: bool = False
 
 
 # ── THE REGISTRY ────────────────────────────────────────────────────────────
@@ -122,23 +126,20 @@ REGISTRY: tuple[Credential, ...] = (
                PROXY_FORWARD, host="api.twilio.com", inject="basic:user"),
     Credential("TWILIO_AUTH_TOKEN", "Twilio", "SMS/voice (basic-auth password)",
                PROXY_FORWARD, host="api.twilio.com", inject="basic:pass"),
+    Credential("DISCORD_BOT_TOKEN", "Discord", "Discord bot channel",
+               PROXY_FORWARD, host="discord.com", inject="discord-bot", exclusive=True,
+               caveat="Proxyable through the forward proxy since 2026-10-01: REST gets "
+                      "'Authorization: Bot <token>' (header injection with a prefix) and the "
+                      "gateway's IDENTIFY/RESUME messages get the token at d.token (the proxy "
+                      "rewrites client->server WebSocket messages; discord.py sends them as "
+                      "plain JSON text, compress=0). Prax then holds a placeholder and needs "
+                      "DISCORD_USE_PROXY=true. EXCLUSIVE: the rule must name the one proxy "
+                      "caller allowed to run the bot (prax-prod), or a dev instance holding "
+                      "the placeholder would become the bot too and both would answer every "
+                      "message. Verified with real discord.py against a fake Discord, not yet "
+                      "against Discord itself (VERIFICATION_LEDGER)."),
 
     # ── Not proxyable — in-process signing, INBOUND auth, own infra, or non-HTTP ──
-    Credential("DISCORD_BOT_TOKEN", "Discord", "Discord bot channel",
-               PROXY_LOCAL,
-               caveat="Stays in Prax by necessity (2026-07-22): the bot GATEWAY is a persistent "
-                      "websocket (wss://gateway.discord.gg) that carries the token INSIDE the "
-                      "IDENTIFY payload, not an HTTP header — nothing for a header-injecting "
-                      "proxy to touch; and even Discord's REST wants 'Authorization: Bot <token>' "
-                      "(a prefix generic injection doesn't add → 401). The bot needs the token "
-                      "locally for the gateway regardless. RISK: this is a LOWER blast radius "
-                      "than a cloud or model key — a stolen bot token can't spend money or reach "
-                      "any other provider; it's scoped to the guilds the bot is already in — but "
-                      "it is NOT harmless: it grants full impersonation of the bot (read/send in "
-                      "every server it's in, DM users) until the token is regenerated. So the "
-                      "keyless-Prax invariant genuinely does not cover this one; mitigate with "
-                      "minimal bot permissions/intents and rotate the token if Prax is ever "
-                      "suspected of compromise."),
     Credential("FLASK_SECRET_KEY", "Flask", "Session cookie signing (in-process)",
                PROXY_LOCAL, caveat="Never leaves the process; not an external-exfil target."),
     Credential("MCP_BEARER_TOKEN", "Prax MCP server", "INBOUND: authenticates other agents TO Prax",
@@ -208,7 +209,9 @@ def local_credentials() -> tuple[Credential, ...]:
 # credentials by destination host from a JSON map. We GENERATE that map from this
 # registry so the proxy config can't drift from Prax's own list of credentials.
 
-def build_forward_map() -> tuple[list[dict], list[tuple[str, str]]]:
+def build_forward_map(
+    exclusive_callers: dict[str, list[str]] | None = None,
+) -> tuple[list[dict], list[tuple[str, str]]]:
     """Return (rules, skipped) for the forward proxy.
 
     Covers BOTH the model providers and the REST APIs, so forward mode alone
@@ -217,7 +220,12 @@ def build_forward_map() -> tuple[list[dict], list[tuple[str, str]]]:
     is the JSON the proxy's ForwardInjector loads. ``skipped`` is ``[(env,
     reason)]`` for creds a transparent proxy *can't* inject (OAuth token-exchange,
     site login, or no fixed host) — kept honest, not hidden.
+
+    An ``exclusive`` credential (one instance only) is exported only with the
+    proxy callers allowed to use it, from *exclusive_callers* ``{env: [caller]}``;
+    without them it is skipped with the reason, never exported for every caller.
     """
+    exclusive_callers = exclusive_callers or {}
     rules: list[dict] = []
     skipped: list[tuple[str, str]] = []
     basic_user: dict[str, str] = {}
@@ -230,6 +238,20 @@ def build_forward_map() -> tuple[list[dict], list[tuple[str, str]]]:
             continue
         if scheme in ("oauth2", "login"):
             skipped.append((c.env, scheme))
+            continue
+        callers = sorted(exclusive_callers.get(c.env) or ())
+        if c.exclusive and not callers:
+            skipped.append((c.env, f"exclusive: name the one proxy caller allowed to use it "
+                                   f"(--exclusive-callers {c.env}=prax-prod)"))
+            continue
+        scoped = {"callers": callers, "exclusive": True} if c.exclusive else {}
+        if scheme == "discord-bot":
+            # REST wants "Authorization: Bot <token>"; the gateway carries the
+            # token in IDENTIFY/RESUME, which the proxy rewrites in the message.
+            rules.append({"host": c.host, "scheme": "header:Authorization", "prefix": "Bot ",
+                          "key_env": c.env, **scoped})
+            rules.append({"host": "discord.gg", "scheme": "ws-json:d.token",
+                          "key_env": c.env, **scoped})
             continue
         if scheme == "basic:user":
             basic_user[c.host] = c.env
@@ -250,10 +272,12 @@ def build_forward_map() -> tuple[list[dict], list[tuple[str, str]]]:
     return rules, skipped
 
 
-def export_forward_map(path: str) -> tuple[int, list[tuple[str, str]]]:
+def export_forward_map(
+    path: str, exclusive_callers: dict[str, list[str]] | None = None,
+) -> tuple[int, list[tuple[str, str]]]:
     """Write the forward-map JSON to *path*. Returns (rule_count, skipped)."""
     import json
-    rules, skipped = build_forward_map()
+    rules, skipped = build_forward_map(exclusive_callers)
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(rules, fh, indent=2)
         fh.write("\n")
@@ -265,9 +289,16 @@ def _main() -> None:  # pragma: no cover - thin CLI
     p = argparse.ArgumentParser(description="Prax credential registry tools")
     p.add_argument("--export-forward-map", metavar="PATH",
                    help="Write the secrets-proxy forward-map JSON from the registry")
+    p.add_argument("--exclusive-callers", metavar="ENV=caller[,caller]", action="append",
+                   default=[], help="proxy callers allowed to use a one-instance credential "
+                                    "(e.g. DISCORD_BOT_TOKEN=prax-prod); repeatable")
     args = p.parse_args()
     if args.export_forward_map:
-        n, skipped = export_forward_map(args.export_forward_map)
+        excl = {}
+        for item in args.exclusive_callers:
+            env, _, names = item.partition("=")
+            excl[env.strip()] = [n.strip() for n in names.split(",") if n.strip()]
+        n, skipped = export_forward_map(args.export_forward_map, excl)
         print(f"Wrote {n} forward-map rules to {args.export_forward_map}")
         if skipped:
             print("Skipped (a transparent proxy can't inject these — they stay in Prax):")
