@@ -87,7 +87,7 @@ Claude Opus 5, Claude Fable 5.1.
 | Overflow: roll back the newest turns and ask the model to compact | Overflow: compact or truncate without asking |
 | Edit-only turns are free | No such turns. The turn limits (#240/#243) would count compaction work like any other call |
 | Only the system prompt and task are protected | — |
-| Tool results fold into `user`; roles are rewritable | Provenance tainting of untrusted tool results (`loop_middleware`): a page re-read from the workspace keeps its untrusted tag (fixed 2026-08-07) |
+| Tool results fold into `user`; roles are rewritable | Provenance tainting of untrusted tool results (`loop_middleware`): a page re-read from the workspace keeps its untrusted tag ([provenance laundering](../security/provenance-laundering.md)) |
 | The edited-away original is not kept | The full record exists outside the context (traces, `conversations.db`), but nothing links a summary back to it |
 
 ## Adopt: agent-managed context, with Prax's invariants
@@ -108,7 +108,7 @@ be enforced.
    replaces them.
 3. **Roles and provenance are immutable.** A tool turn stays a tool turn, and a
    summary of untrusted content keeps the untrusted tag: provenance follows
-   content. The agent writes bodies, never headers. This closes the laundering
+   content. The agent writes bodies, never headers. This closes the [laundering](../security/provenance-laundering.md)
    channel the authors name, where injected text becomes a "user" turn or loses
    its taint.
 4. **Their mechanics:**
