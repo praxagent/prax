@@ -178,17 +178,6 @@ Plain HTTP belongs only on a trusted local leg or inside an encrypted tunnel.
 - Rate limits, payload limits, and trajectory monitoring are controls to configure
   or add; do not assume this integration implements them.
 
-## Production notes
-
-Use a production WSGI server, a nonempty reverse-proxy token, encrypted cross-host
-transport, and restricted reachability. `secrets_proxy/config.py` treats an empty
-`PROXY_AUTH_TOKEN` as **open** — any caller that can reach the port spends the
-keys — so set it, and bind loopback or a private network anyway so that
-reachability is a *second* control rather than the only one. Keep the proxy
-outside Prax's administrative and filesystem access, as its own container/user
-with the keys in *its* secret store only. The [proxy README](https://github.com/praxagent/prax-secrets-proxy)
-owns component setup; this page describes Prax's integration and limits.
-
 ## The channel between Prax and the proxy
 
 Audited 2026-10-01 on the production VM by probing the listeners from another
@@ -221,6 +210,17 @@ injected. That is the hole to close. In order:
 What is acceptable as it is: the proxy credential crosses loopback in clear text
 (in `Proxy-Authorization`), readable only by root, who can read the keys anyway;
 request contents are TLS inside the tunnel.
+
+## Production notes
+
+Use a production WSGI server, a nonempty reverse-proxy token, encrypted cross-host
+transport, and restricted reachability. `secrets_proxy/config.py` treats an empty
+`PROXY_AUTH_TOKEN` as **open** — any caller that can reach the port spends the
+keys — so set it, and bind loopback or a private network anyway so that
+reachability is a *second* control rather than the only one. Keep the proxy
+outside Prax's administrative and filesystem access, as its own container/user
+with the keys in *its* secret store only. The [proxy README](https://github.com/praxagent/prax-secrets-proxy)
+owns component setup; this page describes Prax's integration and limits.
 
 ## Tier 2 — general egress
 
