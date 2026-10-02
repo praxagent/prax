@@ -1,6 +1,6 @@
 # DeepSeek Harness (`dsh`)
 
-**Verdict: document + adopt two ideas; bank one; don't adopt the harness.**
+**Verdict (re-assessed from the code, 2026-10-01): document + adopt two ideas; bank one; don't adopt the harness.** This replaces a September README-only note, and corrects it (below).
 DeepSeek Harness is a peer, not a model for Prax's trust stance. Its own safety
 notice says it "has not undergone a security audit and must not be treated as
 secure", and network access sits outside its sandbox entirely. Three things are
@@ -29,6 +29,43 @@ worth taking:
    8 identical calls but never blocks. Prax now blocks (turn budgets and spoke
    limits, #243) without nudging first. A reminder would let a turn recover
    before it is cut off.
+
+## Correction to the earlier note (2026-09)
+
+This page replaces a README-only note written in September (at about 36.8k
+stars; see git history for #226). Its verdict was "document-don't-adopt: no
+governance layer", based on a README that says nothing about permissions,
+sandboxing, approvals or audit. **Reading the code shows that was partly
+wrong.** `dsh` has:
+- approval prompts that deny when nobody answers;
+- deny-only "monotonic" guards in the tool pipeline;
+- a same-host process sandbox (bubblewrap, Landlock or seatbelt);
+- a frank safety notice.
+
+What it lacks is still real: network policy is "outside this vocabulary";
+plugins run with whatever access the process has; there is no audit trail of
+the kind governance needs; and by its own notice it is unaudited.
+
+So the "governance gap" observation stands only in its narrower form:
+- **Egress control** and **out-of-process enforcement** are what other harnesses
+  leave out.
+- **Approvals and a sandbox** are not; they are table stakes now, and `dsh` has
+  them.
+
+The earlier note's "watch whether it adds a governance layer" is answered:
+it already had part of one. The rule the earlier note itself states,
+"absence of evidence in a preview README is not proof of absence in the
+codebase", is the lesson.
+
+Still valid from the earlier note:
+- **A vendor harness.** DeepSeek supplies a model Prax runs (the `low`/`base`
+  tier moved to `deepseek-v4-flash` on 2026-08-09) and a harness to run it in.
+  In the [Niklaus comparison](crush-charm-coding-agent.md), vendor harnesses
+  dropped on small models.
+- **Cordis stays parked.** The paper now has an arXiv id (2608.25512) but is
+  unread; don't summarise it from its title.
+- **`dsh` as a harness-lift target stays parked**: a developer preview is a
+  moving target.
 
 Source: [deepseek.com/en/harness](https://www.deepseek.com/en/harness/) (behind
 an AWS WAF challenge, so not readable without a browser) and the repository
