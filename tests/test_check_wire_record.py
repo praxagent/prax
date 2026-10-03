@@ -146,3 +146,63 @@ def test_load_tool_spans_reads_the_flag_strictly(tmp_path):
     spans = cwr.load_tool_spans(str(tmp_path / "graphs"), now - 200)
     assert [(s[1], s[4]) for s in spans] == [("a", True), ("b", False)]
     assert [s[1] for s in cwr.changed_before_running(spans)] == ["a"]
+
+
+# --- parallel same-name calls ---------------------------------------------------
+
+def _wire_calls(ts, *calls, caller="prax-prod"):
+    """One model response asking for several calls, as (name, hash) pairs."""
+    return {"ts": ts, "caller": caller, "host": "openrouter.ai", "model": "m",
+            "tool_calls": [{"name": n, "args_sha256": h} for n, h in calls]}
+
+
+def _kinds(wire_entries, spans, *, since):
+    return [m["kind"] for m in cwr.unaccounted(wire_entries, spans, slack=300, caller=None, since=since)]
+
+
+def test_a_mismatch_does_not_take_a_parallel_sibling_s_exact_span():
+    """Two parallel browser_fill calls; the trace misreports only the first.
+    The sibling's true span starts first, so a mismatch that took the earliest
+    same-name span would leave the sibling unmatched and report it too."""
+    now = time.time()
+    wire = [_wire_calls(now - 100, ("browser_fill", "aa"), ("browser_fill", "bb"))]
+    spans = [(now - 99, "browser_fill", "t1", "bb", False),   # the second call's true match
+             (now - 98, "browser_fill", "t1", "xx", False)]   # misreports the first call
+    assert _kinds(wire, spans, since=now - 200) == ["ARGS DIFFER"]
+
+
+def test_the_same_holds_across_two_model_responses():
+    now = time.time()
+    wire = [_wire_call(now - 100, "browser_fill", "aa"), _wire_call(now - 99, "browser_fill", "bb")]
+    spans = [(now - 98, "browser_fill", "t1", "bb", False),
+             (now - 97, "browser_fill", "t1", "xx", False)]
+    missing = cwr.unaccounted(wire, spans, slack=300, caller=None, since=now - 200)
+    assert [(m["kind"], m["ts"]) for m in missing] == [("ARGS DIFFER", now - 100)]
+
+
+def test_a_hashless_span_still_accounts_for_the_call_no_exact_span_matches():
+    # A hashless (pre-hash) span matches on name and time alone; the exact pass
+    # runs first, and the hashless span goes to the call left over.
+    now = time.time()
+    wire = [_wire_calls(now - 100, ("browser_fill", "aa"), ("browser_fill", "bb"))]
+    spans = [(now - 99, "browser_fill", "t1", "", False),
+             (now - 98, "browser_fill", "t1", "bb", False)]
+    assert _kinds(wire, spans, since=now - 200) == []
+
+
+def test_one_misreporting_span_does_not_explain_two_calls():
+    now = time.time()
+    wire = [_wire_calls(now - 100, ("browser_fill", "aa"), ("browser_fill", "bb"))]
+    spans = [(now - 99, "browser_fill", "t1", "xx", False)]
+    assert _kinds(wire, spans, since=now - 200) == ["ARGS DIFFER", "UNACCOUNTED"]
+
+
+def test_parallel_calls_through_main(tmp_path, capsys):
+    now = time.time()
+    _write_wire(tmp_path / "wire.jsonl",
+                [_wire_calls(now - 100, ("browser_fill", "aa"), ("browser_fill", "bb"))])
+    _write_hashed_graphs(tmp_path / "graphs", [(now - 99, "browser_fill", "bb", "bb"),
+                                               (now - 98, "browser_fill", "xx", "xx")])
+    assert cwr.main([str(tmp_path / "wire.jsonl"), "--graphs", str(tmp_path / "graphs")]) == 1
+    out = capsys.readouterr().out
+    assert "1 unaccounted" in out and out.count("ARGS DIFFER") == 1

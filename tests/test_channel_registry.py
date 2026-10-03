@@ -14,7 +14,10 @@ log, live output and status for it, so when the spoke roles were briefly
 registered their tool output — ``browser_login`` results included — flowed
 into the persistent activity log, and every turn's ``reset_all_idle`` grew
 from 5 to 16 synchronous PATCHes.  The role tests pin startup to the core
-roles so that sink cannot be switched on again by a one-line registry edit.
+roles plus the Health Monitor, so that sink cannot be switched on again by a
+one-line registry edit.  The Health Monitor is registered for its activity-log
+alerts alone (unregistered, TeamWork dropped every one); it has no status, so
+``reset_all_idle`` stays at the orchestrator and the four core roles.
 
 The rest covers the runtime half: the lazy ensure that recovers a registry
 channel the project lacks, the once-per-name warning, per-name ensure locks,
@@ -32,7 +35,12 @@ from pathlib import Path
 import pytest
 
 from prax.services import teamwork_hooks
-from prax.services.teamwork_channels import PRAX_CHANNELS, PRAX_ROLE_AGENTS, role_agent_names
+from prax.services.teamwork_channels import (
+    PRAX_CHANNELS,
+    PRAX_ROLE_AGENTS,
+    role_agent_names,
+    status_role_names,
+)
 from prax.services.teamwork_service import TeamWorkClient
 
 PRAX_ROOT = Path(__file__).resolve().parent.parent / "prax"
@@ -68,7 +76,17 @@ _LAZY_CHANNELS = set(teamwork_hooks._AGENT_DISPLAY_NAMES)
 # rather than read from PRAX_ROLE_AGENTS, so the registry cannot grow without
 # this file changing too.  Executor is also the workspace spoke's role_name;
 # that predates this guard.
+#
+# The core roles have a working/idle status that reset_all_idle resets every
+# turn.  The status-less roles are registered only so their log_activity
+# entries land; they are not spokes and stream no tool output.
 _CORE_ROLES = ["Planner", "Researcher", "Executor", "Auditor"]
+_STATUSLESS_ROLES = ["Health Monitor"]
+_REGISTERED_ROLES = _CORE_ROLES + _STATUSLESS_ROLES
+
+# The call shapes that give a role a status or live output: everything in
+# _ROLE_ARGS except log_activity and a channel post's attribution.
+_STATUS_ARGS = {name: _ROLE_ARGS[name] for name in ("set_role_status", "push_live_output", "run_spoke")}
 
 
 def _call_name(node: ast.Call) -> str | None:
@@ -131,12 +149,27 @@ def test_the_registry_has_no_stale_entries():
 
 
 def _spoke_roles() -> dict[str, list[str]]:
-    """Every literal role Prax reports under, other than the core roles."""
-    return {name: sites for name, sites in _scan(_ROLE_ARGS).items() if name not in _CORE_ROLES}
+    """Every literal role Prax reports under, other than the registered ones."""
+    return {name: sites for name, sites in _scan(_ROLE_ARGS).items() if name not in _REGISTERED_ROLES}
 
 
-def test_the_registry_holds_exactly_the_core_roles():
-    assert role_agent_names() == _CORE_ROLES
+def test_the_registry_holds_exactly_the_core_roles_and_the_health_monitor():
+    assert role_agent_names() == _REGISTERED_ROLES
+    assert status_role_names() == _CORE_ROLES
+
+
+def test_a_statusless_role_only_writes_to_the_activity_log():
+    """has_status=False keeps a role out of reset_all_idle, which is only right
+    while nothing sets its status or streams live output under it.  If this
+    fails: either stop doing that, or the role is not status-less."""
+    statusless = [a.name for a in PRAX_ROLE_AGENTS if not a.has_status]
+    assert statusless == _STATUSLESS_ROLES
+    # Guards the guard: the health monitor's alert call must still be found.
+    assert any(site.startswith("prax/agent/health_monitor.py:")
+               for site in _scan(_ROLE_ARGS)["Health Monitor"])
+    with_status = _scan(_STATUS_ARGS)
+    offending = {name: with_status[name] for name in statusless if name in with_status}
+    assert not offending, f"status-less roles given a status or live output: {offending}"
 
 
 def test_no_spoke_role_is_registered():
@@ -459,9 +492,9 @@ def test_startup_registers_the_core_roles_and_no_spoke_role(hooked):
     # What app.py's startup runs after registering the orchestrator.
     teamwork_hooks.register_role_agents()
     registered = [name for name, _, _ in hooked.created]
-    assert registered == _CORE_ROLES
+    assert registered == _REGISTERED_ROLES
     assert not set(registered) & set(_spoke_roles())
-    assert hooked.created == [tuple(a) for a in PRAX_ROLE_AGENTS]
+    assert hooked.created == [(a.name, a.role, a.soul) for a in PRAX_ROLE_AGENTS]
 
 
 def test_one_failed_registration_does_not_cost_the_rest(hooked, caplog):
@@ -469,17 +502,45 @@ def test_one_failed_registration_does_not_cost_the_rest(hooked, caplog):
     hooked.fail_on = {first}
     with caplog.at_level(logging.WARNING, logger="prax.services.teamwork_hooks"):
         teamwork_hooks.register_role_agents()
-    assert [c[0] for c in hooked.created] == _CORE_ROLES
+    assert [c[0] for c in hooked.created] == _REGISTERED_ROLES
     assert any(first in r.getMessage() for r in caplog.records)
 
 
 def test_reset_all_idle_patches_only_the_orchestrator_and_core_roles(monkeypatch):
     # It runs on every turn's critical path, one synchronous PATCH per role,
-    # and flips a role idle even if a concurrent turn is using it.
+    # and flips a role idle even if a concurrent turn is using it.  The Health
+    # Monitor is registered but has no status: no PATCH for it.
     from prax.settings import settings
 
+    monkeypatch.setattr(settings, "agent_name", "Prax")
     calls: list[tuple[str, str]] = []
     monkeypatch.setattr(teamwork_hooks, "set_role_status", lambda role, status: calls.append((role, status)))
     teamwork_hooks.reset_all_idle()
-    expected = list(dict.fromkeys([settings.agent_name, *_CORE_ROLES]))
-    assert calls == [(role, "idle") for role in expected]
+    assert calls == [(role, "idle") for role in ["Prax", *_CORE_ROLES]]
+    assert len(calls) == 5
+
+
+def test_health_monitor_alerts_reach_the_activity_log_after_startup(monkeypatch):
+    # TeamWorkClient drops activity for an unregistered agent, which is where
+    # every health alert went while the Health Monitor was not registered.
+    tw = TeamWorkClient(base_url="http://stub.invalid", api_key="stub")
+    tw._project_id = "p1"
+    posts: list[tuple[str, dict]] = []
+
+    def fake_post(path, json):
+        posts.append((path, json))
+        if path.endswith("/agents"):
+            return {"agent_id": f"id-{json['name']}"}
+        return {}
+
+    monkeypatch.setattr(tw, "_post", fake_post)
+    monkeypatch.setattr(teamwork_hooks, "_tw", lambda: tw)
+
+    teamwork_hooks.log_activity("Health Monitor", "health_alert", "[DEGRADED] x")
+    assert posts == []  # unregistered: dropped before any request
+
+    teamwork_hooks.register_role_agents()
+    teamwork_hooks.log_activity("Health Monitor", "health_alert", "[DEGRADED] x")
+    activity = [body for path, body in posts if path.endswith("/activity")]
+    assert activity == [{"agent_id": "id-Health Monitor", "activity_type": "health_alert",
+                         "description": "[DEGRADED] x", "extra_data": None}]

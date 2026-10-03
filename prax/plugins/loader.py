@@ -641,6 +641,17 @@ class PluginLoader:
         with self._lock:
             return dict(self._load_errors)
 
+    def get_load_failures(self) -> dict[str, str]:
+        """Plugins whose load raised during the most recent scan.
+
+        Maps the relative key to ``"ExceptionType: message"``.  Kept apart from
+        ``get_load_errors`` (the plugins the scan refused): a crash is not a
+        refusal.  For any plugin that is not builtin, both key and message are
+        written by the plugin's author.
+        """
+        with self._lock:
+            return dict(self._load_failures)
+
     def health_report(self) -> PluginHealthReport:
         """Loaded plugins, and the ones that need attention.
 

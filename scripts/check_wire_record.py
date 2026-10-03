@@ -126,28 +126,56 @@ def unaccounted(wire: list[dict], spans: list[tuple], *, slack: float,
     A span carrying ``requested_args_sha256`` matches only a call with the same
     argument hash; a same-name span in the window with a different hash is
     reported as ``ARGS DIFFER`` rather than as a match.
+
+    Matching runs in passes over every call in the window, so a mismatch can
+    never take a span another call matches exactly — with parallel same-name
+    calls, the first-come span may be a sibling's true match:
+
+    1. exact: same name and the same requested hash;
+    2. legacy: same name, a span from before the hashes (name and time only);
+    3. the rest are reported, ARGS DIFFER when a same-name span is still free
+       in the window (it is used up, so one misreporting span cannot explain
+       two calls), otherwise UNACCOUNTED.
+
+    Each pass takes the earliest free span in a call's window, calls in wire
+    order.
     """
+    calls = [(entry, call) for entry in wire
+             if entry.get("ts", 0) >= since and not (caller and entry.get("caller") != caller)
+             for call in entry.get("tool_calls") or []]
     used: set[int] = set()
-    missing = []
-    for entry in wire:
-        if entry.get("ts", 0) < since or (caller and entry.get("caller") != caller):
-            continue
-        for call in entry.get("tool_calls") or []:
-            want = call.get("args_sha256") or ""
-            in_window = [i for i, s in enumerate(spans)
-                         if i not in used and s[1] == call.get("name")
-                         and entry["ts"] - 5 <= s[0] <= entry["ts"] + slack]
-            exact = [i for i in in_window if spans[i][3] and spans[i][3] == want]
-            legacy = [i for i in in_window if not spans[i][3]]
-            match = (exact or legacy or [None])[0]
-            if match is not None:
-                used.add(match)
+    matched: set[int] = set()
+
+    def free_in_window(n: int) -> list[int]:
+        entry, call = calls[n]
+        return [i for i, s in enumerate(spans)
+                if i not in used and s[1] == call.get("name")
+                and entry["ts"] - 5 <= s[0] <= entry["ts"] + slack]
+
+    def assign(fits) -> None:
+        for n, (_entry, call) in enumerate(calls):
+            if n in matched:
                 continue
-            kind = "ARGS DIFFER" if in_window else "UNACCOUNTED"
-            if in_window:
-                used.add(in_window[0])
-            missing.append({"ts": entry["ts"], "tool": call.get("name"), "kind": kind,
-                            "model": entry.get("model"), "caller": entry.get("caller")})
+            want = call.get("args_sha256") or ""
+            for i in free_in_window(n):
+                if fits(spans[i][3], want):
+                    used.add(i)
+                    matched.add(n)
+                    break
+
+    assign(lambda have, want: bool(have) and have == want)  # exact
+    assign(lambda have, want: not have)                     # legacy (hashless)
+
+    missing = []
+    for n, (entry, call) in enumerate(calls):
+        if n in matched:
+            continue
+        rest = free_in_window(n)
+        if rest:
+            used.add(rest[0])
+        missing.append({"ts": entry["ts"], "tool": call.get("name"),
+                        "kind": "ARGS DIFFER" if rest else "UNACCOUNTED",
+                        "model": entry.get("model"), "caller": entry.get("caller")})
     return missing
 
 
