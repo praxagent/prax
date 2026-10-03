@@ -80,3 +80,43 @@ def test_a_tampered_record_fails_before_anything_else(tmp_path, capsys):
     _write_graphs(tmp_path / "graphs", [])
     assert cwr.main([str(tmp_path / "wire.jsonl"), "--graphs", str(tmp_path / "graphs")]) == 1
     assert "BROKEN CHAIN" in capsys.readouterr().out
+
+
+# --- with argument hashes in the traces ---------------------------------------
+
+def _wire_call(ts, name, h, caller="prax-prod"):
+    return {"ts": ts, "caller": caller, "host": "openrouter.ai", "model": "m",
+            "tool_calls": [{"name": name, "args_sha256": h}]}
+
+
+def _write_hashed_graphs(d: Path, spans: list[tuple[float, str, str, str]]) -> None:
+    d.mkdir(parents=True)
+    nodes = [{"name": n, "spoke_or_category": "tool",
+              "started_at": datetime.fromtimestamp(t, UTC).isoformat(),
+              "requested_args_sha256": req, "args_sha256": ran} for t, n, req, ran in spans]
+    (d / "graphs-2026-10-03.jsonl").write_text(json.dumps({"trace_id": "t1", "nodes": nodes}) + "\n")
+
+
+def test_matching_hashes_are_accounted_for(tmp_path, capsys):
+    now = time.time()
+    _write_wire(tmp_path / "wire.jsonl", [_wire_call(now - 100, "browser_fill", "aa")])
+    _write_hashed_graphs(tmp_path / "graphs", [(now - 99, "browser_fill", "aa", "aa")])
+    assert cwr.main([str(tmp_path / "wire.jsonl"), "--graphs", str(tmp_path / "graphs")]) == 0
+    assert "0 unaccounted, 0 changed before running" in capsys.readouterr().out
+
+
+def test_the_trace_misreporting_the_model_is_args_differ(tmp_path, capsys):
+    now = time.time()
+    _write_wire(tmp_path / "wire.jsonl", [_wire_call(now - 100, "browser_fill", "aa")])
+    _write_hashed_graphs(tmp_path / "graphs", [(now - 99, "browser_fill", "bb", "bb")])
+    assert cwr.main([str(tmp_path / "wire.jsonl"), "--graphs", str(tmp_path / "graphs")]) == 1
+    assert "ARGS DIFFER" in capsys.readouterr().out
+
+
+def test_arguments_changed_before_running_are_reported(tmp_path, capsys):
+    now = time.time()
+    _write_wire(tmp_path / "wire.jsonl", [_wire_call(now - 100, "browser_fill", "aa")])
+    _write_hashed_graphs(tmp_path / "graphs", [(now - 99, "browser_fill", "aa", "cc")])
+    assert cwr.main([str(tmp_path / "wire.jsonl"), "--graphs", str(tmp_path / "graphs")]) == 1
+    out = capsys.readouterr().out
+    assert "CHANGED BEFORE RUNNING" in out and "0 unaccounted" in out
