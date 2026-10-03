@@ -19,6 +19,14 @@ would send one more synchronous PATCH on every turn's critical path.  Spoke
 roles (Browser Agent, Content Editor, …) therefore stay unregistered; their
 channel posts still land, unattributed.  The drift guard pins this list.
 
+Two kinds of role are registered, and ``RoleAgent.has_status`` tells them
+apart.  The core roles (Planner, Researcher, Executor, Auditor) have a
+working/idle status, which ``reset_all_idle`` puts back to idle after every
+turn.  The Health Monitor is not a spoke and streams no tool output: it is
+registered only so the alerts ``prax/agent/health_monitor.py`` writes with
+``log_activity`` reach the activity log — unregistered, every one was dropped.
+It has no status, so ``reset_all_idle`` leaves it out.
+
 Deliberately import-free so ``teamwork_service`` and ``teamwork_hooks`` can
 both depend on it without a cycle.  Not listed: the coding-agent channels,
 created lazily on first use (``teamwork_hooks._AGENT_DISPLAY_NAMES``), and the
@@ -46,6 +54,10 @@ class RoleAgent(NamedTuple):
     name: str
     role: str
     soul: str
+    # True for a role with a working/idle status that reset_all_idle resets
+    # after every turn; False for one registered only so its activity-log
+    # entries land.
+    has_status: bool = True
 
 
 # The internal role agents registered at startup, besides the orchestrator
@@ -56,9 +68,15 @@ PRAX_ROLE_AGENTS: tuple[RoleAgent, ...] = (
     RoleAgent("Researcher", "researcher", "Investigates questions via web search and document analysis"),
     RoleAgent("Executor", "executor", "Executes tool calls and workspace operations"),
     RoleAgent("Auditor", "auditor", "Reviews claims for accuracy and audits governance logs"),
+    RoleAgent("Health Monitor", "monitor", "Reports health alerts to the activity log", has_status=False),
 )
 
 
 def role_agent_names() -> list[str]:
-    """Registered role-agent names, in order, without duplicates."""
+    """Every registered role-agent name, in order, without duplicates."""
     return list(dict.fromkeys(agent.name for agent in PRAX_ROLE_AGENTS))
+
+
+def status_role_names() -> list[str]:
+    """The registered roles with a working/idle status (``reset_all_idle``'s list)."""
+    return list(dict.fromkeys(agent.name for agent in PRAX_ROLE_AGENTS if agent.has_status))

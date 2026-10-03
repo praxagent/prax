@@ -190,7 +190,7 @@ flowchart TD
    - Run the `prax_doctor` tool for deeper self-diagnostics
    - Inform the user about the issue
    - Take corrective action (e.g., switch models, retry a failed operation)
-5. **TeamWork notification**: The advisory is also pushed to TeamWork's activity log via `teamwork_hooks.log_activity()`, making it visible in the UI's activity feed.
+5. **TeamWork notification**: The advisory is also pushed to TeamWork's activity log via `teamwork_hooks.log_activity()` under the `Health Monitor` agent, making it visible in the UI's activity feed. TeamWork drops activity for an agent that is not registered, so startup registers `Health Monitor` with the core roles (`prax/services/teamwork_channels.py`); it has no working/idle status, so `reset_all_idle` leaves it out.
 6. **Alert history**: All alerts are stored in `_alert_history` (capped at 50 entries) and exposed via the health API.
 
 ## TeamWork UI
@@ -370,13 +370,15 @@ Alert history is capped at `_MAX_ALERT_HISTORY = 50` entries in `health_monitor.
 |---|---|---|
 | LLM | Builds the model for every enabled tier through `llm_factory.build_llm` (no network call; the builds are not recorded as tier choices in the trace) | `[FAIL]` with the factory's exception text: missing key, unsupported provider, open circuit breaker |
 | Sandbox | `configured_client().health()` when `SANDBOX_ENABLED` | `[WARN]` unreachable |
-| Plugins | `PluginLoader.health_report()` -- the same report `system_status` prints | `[WARN]` a plugin the last scan refused (`get_load_errors()`), a plugin whose load raised, or a loaded plugin whose tools have failed since their last success (`failure_count`). Only builtin plugins are described in full: a workspace or imported plugin's key, manifest and exception text are plugin-authored and neither output carries an untrusted-content banner, so it appears as a sanitised key (`[A-Za-z0-9._/-]`, 80 chars) plus `blocked`, `failed to load` or `failing` and "see plugin_list for details" |
+| Plugins | `PluginLoader.health_report()` -- the same report `system_status` prints | `[WARN]` a plugin the last scan refused (`get_load_errors()`), a plugin whose load raised, or a loaded plugin whose tools have failed since their last success (`failure_count`). Only builtin plugins are described in full: a workspace or imported plugin's key, manifest and exception text are plugin-authored and neither output carries an untrusted-content banner, so it appears as a sanitised key (`[A-Za-z0-9._/-]`, 80 chars) plus `blocked`, `failed to load` or `failing` and "see plugin_list for details". `plugin_list` lists blocked plugins and, under "Failed to load", each crash's exception message, labelled as plugin-reported text and flattened to one line of at most 300 characters |
 | Workspace | `WORKSPACE_DIR` exists and is writable | `[WARN]` |
 | TeamWork | `settings.teamwork_active`; then `GET {TEAMWORK_URL}/health` | `[WARN]` unreachable or non-2xx, and when `TEAMWORK_URL` is set but the deprecated `TEAMWORK_ENABLED=false` overrides it |
 | Scheduler | APScheduler initialised and running | `[WARN]` |
 | Settings | `agent_max_tool_calls` range; `FLASK_SECRET_KEY` from settings | `[WARN]` weak or placeholder secret |
 | Health Monitor | `get_check()`: the last check, re-run first if missing or older than 5 minutes | `[WARN]` degraded, `[FAIL]` unhealthy |
 | Log health | Counts from the in-process log-health handler (below) | `[WARN]` when one call site has logged `LOG_HEALTH_WARN_COUNT` records |
+
+`system_status` reports recent errors as a count, never as log lines: the number of `[ERROR]` lines in the last 256 KB of `app.log` and, with log health on, its three busiest ERROR call sites (location and template only). A raw error line can carry a plugin's key, exception text, a traceback or a plugin's stderr, and `system_status` has no untrusted-content banner; `read_logs` is the explicit raw reader.
 
 There is no spoke check. It used to import six hard-coded spoke modules, but `build_all_spoke_tools()` imports every registered spoke unguarded while building the orchestrator's tool list -- the same list `prax_doctor` is in -- so whenever the doctor can run, every spoke has already imported. Spoke *failures* are the health monitor's spoke-failure rate.
 

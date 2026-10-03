@@ -301,7 +301,10 @@ within a few minutes — activity Prax didn't account for. It is read-only.
   in the wire record's canonical form — and never the arguments themselves.
   So beyond a hidden or dropped call, the check reports **ARGS DIFFER** (the
   trace misreports what the model asked for). Traces written before the hash
-  existed are matched on name and time only.
+  existed are matched on name and time only. Every exact match (name and
+  hash) is assigned before any hashless one, and both before anything is
+  reported, so with parallel same-name calls a misreported call never takes
+  the span of a sibling that matches exactly.
 - **CHANGED BEFORE RUNNING** comes from the span's `args_changed` flag. While
   a call runs, Prax keeps the model's arguments in memory (never in the trace)
   and compares them with the inputs of every layer of the call — governance,

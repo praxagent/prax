@@ -1238,7 +1238,8 @@ def system_status() -> str:
     """Show system health: loaded plugins, tool count, recent errors, and config.
 
     Use this to diagnose issues, check what's available, or verify that
-    a plugin/tool is loaded after changes.
+    a plugin/tool is loaded after changes.  Recent errors are counted, not
+    quoted; read_logs shows the raw log lines.
     """
     lines = []
     try:
@@ -1264,22 +1265,96 @@ def system_status() -> str:
         lines.append(f"**Self-improve:** {'enabled' if _settings.self_improve_enabled else 'disabled'}")
         lines.append(f"**Sandbox:** {'persistent' if _settings.sandbox_available else 'disabled'}")
 
-        # Recent errors from app log.
-        log_path = _settings.log_path
-        import os
-        if os.path.isfile(log_path):
-            with open(log_path, encoding="utf-8", errors="replace") as f:
-                log_lines = f.readlines()
-            errors = [ln.strip() for ln in log_lines[-500:] if "[ERROR]" in ln]
-            if errors:
-                lines.append(f"**Recent errors:** {len(errors)} in last 500 log lines")
-                for e in errors[-3:]:
-                    lines.append(f"  {e[:200]}")
-            else:
-                lines.append("**Recent errors:** none")
+        lines.extend(_recent_errors(_settings))
     except Exception as e:
         lines.append(f"Error gathering status: {e}")
     return "\n".join(lines)
+
+
+# system_status reads only the end of app.log, which is never rotated (tens of
+# MB on a dev box).
+_STATUS_LOG_TAIL_BYTES = 256 * 1024
+# How many of log health's busiest error call sites system_status lists.
+_STATUS_ERROR_SITES = 3
+_STATUS_ERROR_LEVELS = ("ERROR", "CRITICAL")
+_UNSAFE_LOCATION_CHARS = re.compile(r"[^A-Za-z0-9._/<>:-]")
+_LOCATION_MAX = 120
+
+
+def _read_log_tail(path: str, max_bytes: int) -> tuple[list[str], bool]:
+    """The lines in the last *max_bytes* of *path*, and whether that cut the file.
+
+    A line the cut lands inside is dropped rather than counted as a fragment.
+    """
+    with open(path, "rb") as f:
+        size = f.seek(0, os.SEEK_END)
+        start = max(0, size - max_bytes)
+        starts_mid_line = False
+        if start:
+            f.seek(start - 1)
+            starts_mid_line = f.read(1) != b"\n"
+        f.seek(start)
+        data = f.read(max_bytes)
+    lines = data.decode("utf-8", errors="replace").split("\n")
+    if starts_mid_line:
+        lines = lines[1:]
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines, start > 0
+
+
+def _recent_errors(settings) -> list[str]:
+    """system_status's "Recent errors": a count, never the lines themselves.
+
+    A raw ``[ERROR]`` line can carry a plugin's key, exception text, a
+    traceback or a plugin's stderr — text the plugin's author controls — and
+    system_status has no untrusted-content banner.  So this reports how many
+    there are and, with log health on, its busiest error call sites (location
+    and Prax-written template only); ``read_logs`` is the explicit raw reader.
+    """
+    log_path = settings.log_path
+    if not os.path.isfile(log_path):
+        return []
+    tail, cut = _read_log_tail(log_path, _STATUS_LOG_TAIL_BYTES)
+    window = f"the last {_STATUS_LOG_TAIL_BYTES // 1024} KB of the log" if cut else "the log"
+    count = sum(1 for ln in tail if "[ERROR]" in ln)
+    if not count:
+        return [f"**Recent errors:** none in {window}"]
+    out = [f"**Recent errors:** {count} [ERROR] line(s) in {window}"]
+    sites = _error_sites(settings)
+    if sites:
+        out.extend(sites)
+    out.append(
+        '  Raw lines: read_logs(level="ERROR") — log text, which can include '
+        "plugin-written messages."
+    )
+    return out
+
+
+def _error_sites(settings) -> list[str]:
+    """Log health's busiest ERROR+ call sites since startup; [] when it is off."""
+    if not settings.log_health_enabled:
+        return []
+    from prax.services import log_health
+
+    handler = log_health.get_handler()
+    if handler is None:
+        return []
+    rows = [r for r in handler.summarize(handler.max_groups) if r["level"] in _STATUS_ERROR_LEVELS]
+    if not rows:
+        return []
+    import time
+
+    since = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(handler.installed_at))
+    out = [f"  Busiest error call sites since {since} (log health):"]
+    for r in rows[:_STATUS_ERROR_SITES]:
+        # A workspace plugin's directory names are part of its location.
+        location = _UNSAFE_LOCATION_CHARS.sub("_", r["location"])[:_LOCATION_MAX]
+        out.append(
+            f"    {r['count']} × {r['level']} {location} — "
+            f"{r['template'] or '(message not kept)'}"
+        )
+    return out
 
 
 @tool

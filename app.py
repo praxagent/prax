@@ -211,7 +211,8 @@ def create_app():
                 sync_conversation_history,
             )
             # Register the internal role agents (Planner, Researcher, Executor,
-            # Auditor) so their status is visible in the UI.  Spoke roles stay
+            # Auditor) so their status is visible in the UI, and the Health
+            # Monitor so its alerts reach the activity log.  Spoke roles stay
             # unregistered on purpose — see prax/services/teamwork_channels.py.
             register_role_agents()
             # Ensure every channel Prax posts to exists — TeamWork's project
