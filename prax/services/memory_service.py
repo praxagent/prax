@@ -256,15 +256,31 @@ class MemoryService:
     # ------------------------------------------------------------------
 
     def consolidate(self, user_id: str) -> ConsolidationResult:
-        """Run the full consolidation pipeline for a user."""
+        """Run the full consolidation pipeline for a user — one run per user
+        at a time, whoever asks.
+
+        Two runs for one user would read the same pointer, extract the same
+        batches twice (double LLM cost, duplicate vector chunks) and race on
+        the pointer they save. The turn-end trigger runs in the background, so
+        a ``memory_consolidate`` call in the next turn can arrive mid-run; the
+        second caller gets ``already_running`` instead of a second run.
+        """
         if not self._available:
             return ConsolidationResult()
+        with _consolidating_lock:
+            if user_id in _consolidating:
+                logger.info("Consolidation for %s already running — not starting another", user_id)
+                return ConsolidationResult(already_running=True)
+            _consolidating.add(user_id)
         try:
             from prax.services.memory.consolidation import consolidate_user
             return consolidate_user(user_id)
         except Exception:
             logger.exception("consolidate() failed")
             return ConsolidationResult()
+        finally:
+            with _consolidating_lock:
+                _consolidating.discard(user_id)
 
     # ------------------------------------------------------------------
     # Stats / diagnostics
@@ -410,11 +426,17 @@ _consolidation_turns_since: dict[str, int] = {}
 _CONSOLIDATE_EVERY_N_TURNS = 5
 
 
-# Users with a consolidation run in flight. A second trigger while one runs
-# is skipped (its turns are picked up by the next run: the pointer only
-# advances over what was extracted).
+# Users with a consolidation run in flight, reserved by MemoryService.consolidate
+# (every caller goes through it). A trigger while one runs is skipped; its
+# turns are picked up by the next run, since the pointer only advances over
+# what was extracted.
 _consolidating: set[str] = set()
 _consolidating_lock = threading.Lock()
+
+
+def is_consolidating(user_id: str) -> bool:
+    with _consolidating_lock:
+        return user_id in _consolidating
 
 
 def maybe_consolidate(user_id: str) -> bool:
@@ -438,11 +460,11 @@ def maybe_consolidate(user_id: str) -> bool:
     if count < _CONSOLIDATE_EVERY_N_TURNS:
         _consolidation_turns_since[user_id] = count
         return False
-    with _consolidating_lock:
-        if user_id in _consolidating:
-            logger.info("Consolidation for %s already running — skipping this trigger", user_id)
-            return False
-        _consolidating.add(user_id)
+    if is_consolidating(user_id):
+        # Keep counting rather than resetting, so the next turn tries again.
+        _consolidation_turns_since[user_id] = count
+        logger.info("Consolidation for %s already running — skipping this trigger", user_id)
+        return False
     _consolidation_turns_since[user_id] = 0
     if getattr(settings, "memory_consolidation_in_background", True):
         threading.Thread(target=_consolidate_now, args=(user_id,),
@@ -454,6 +476,8 @@ def maybe_consolidate(user_id: str) -> bool:
 def _consolidate_now(user_id: str) -> bool:
     try:
         result = get_memory_service().consolidate(user_id)
+        if result.already_running:
+            return False
         # These are the real field names on ConsolidationResult; the previous
         # `getattr(result, "entities_added", 0)` etc. named fields that do not
         # exist, so this line logged 0/0/0 on every run.
@@ -469,6 +493,3 @@ def _consolidate_now(user_id: str) -> bool:
     except Exception:
         logger.debug("Auto-consolidation failed for %s", user_id, exc_info=True)
         return False
-    finally:
-        with _consolidating_lock:
-            _consolidating.discard(user_id)
