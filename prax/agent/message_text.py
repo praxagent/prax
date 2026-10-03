@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import Any
 
-__all__ = ["message_text", "content_text"]
+__all__ = ["message_text", "content_text", "tool_output_text"]
 
 
 def content_text(raw: Any) -> str:
@@ -56,3 +56,33 @@ def content_text(raw: Any) -> str:
 def message_text(msg: Any) -> str:
     """Return the plain text of a message object (or "" if it has none)."""
     return content_text(getattr(msg, "content", None))
+
+
+def _is_content_block(item: Any) -> bool:
+    return isinstance(item, str) or (
+        isinstance(item, dict) and any(k in item for k in ("type", "text", "content"))
+    )
+
+
+def tool_output_text(output: Any) -> str:
+    """Return the plain text of a tool result, as a tool callback receives it.
+
+    ``on_tool_end`` is handed a ``ToolMessage`` whenever the tool was invoked
+    with a ToolCall — every ToolNode call — and the tool's raw return value
+    otherwise: a str, a dict, a list of records, a ``Command``, anything.
+    ``str()`` of the message is its pydantic repr (``content='…' name='…'
+    tool_call_id='…'``) and slicing the message raises ``TypeError``, so read
+    its content and flatten it. Never raises: callbacks run on every tool call,
+    and a preview must not cost the span or trace node it decorates.
+    """
+    if output is None:
+        return ""
+    try:
+        raw = getattr(output, "content", output)
+        if isinstance(raw, list) and not all(_is_content_block(b) for b in raw):
+            # A list of records, not message content: content_text keeps only
+            # text blocks and would reduce it to "".
+            return str(raw)
+        return content_text(raw)
+    except Exception:  # noqa: BLE001 - a broken __str__ must not escape a callback
+        return f"<unprintable {type(output).__name__}>"
