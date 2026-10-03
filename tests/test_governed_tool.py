@@ -1,6 +1,8 @@
 """Tests for prax.agent.governed_tool — the single governance choke point."""
 from __future__ import annotations
 
+from collections import deque
+
 import pytest
 from langchain_core.tools import StructuredTool
 
@@ -197,6 +199,8 @@ class TestHealthTelemetry:
 
         monkeypatch.setattr(settings_mod.settings, "health_monitor_enabled", True)
         monkeypatch.setattr(tel, "_events", [])
+        monkeypatch.setattr(tel, "_tool_successes", deque(maxlen=tel._MAX_SUCCESS_TIMESTAMPS))
+        monkeypatch.setattr(tel, "_disk_rows", 0)
         monkeypatch.setattr(tel, "_initialized", True)
         monkeypatch.setattr(tel, "_file_path", tmp_path / ".health_telemetry.jsonl")
         _reset()
@@ -221,6 +225,8 @@ class TestHealthTelemetry:
         assert stats["tool_calls"] == 10
         assert stats["tool_errors"] == 1
         assert stats["tool_error_rate"] == 0.1
+        # Successes are counted, not stored: the event list holds the error only.
+        assert [e["category"] for e in _telemetry._events] == ["tool_error"]
 
     def test_spoke_layer_records_neither(self, _telemetry):
         # Only the hub records TOOL_ERROR, so only the hub may record

@@ -59,7 +59,7 @@ Without health monitoring, these issues accumulate silently until the user notic
 
 ```mermaid
 flowchart TD
-    GT[governed_tool.py] -->|TOOL_SUCCESS, TOOL_ERROR, BUDGET_EXHAUSTED| HT
+    GT[governed_tool.py] -->|TOOL_ERROR, BUDGET_EXHAUSTED, success count| HT
     ORC[orchestrator.py] -->|TURN_COMPLETED, TURN_TIMEOUT, CONTEXT_OVERFLOW, RETRY| HT
     SR[spokes/_runner.py] -->|SPOKE_SUCCESS, SPOKE_FAILURE, CONTEXT_OVERFLOW| HT
     CM[context_manager.py] -->|CONTEXT_COMPACTION| HT
@@ -88,7 +88,7 @@ Every event is a `HealthEvent` with: `category`, `severity`, `component`, `detai
 | `CONTEXT_OVERFLOW` | `context_overflow` | Context exceeds model budget; orchestrator or spoke retries with compaction | WARNING | `orchestrator` or `spoke:<label>` |
 | `CONTEXT_COMPACTION` | `context_compaction` | ContextManager summarizes oldest half of conversation | INFO | `context_manager` |
 | `TOOL_ERROR` | `tool_error` | An orchestrator-level (hub) governed tool raises an exception; also a loop-detector block and a recursion-limit stop | WARNING | Tool name (e.g., `web_search`), `loop_detector`, `orchestrator` |
-| `TOOL_SUCCESS` | `tool_success` | An orchestrator-level (hub) governed tool returns | INFO | Tool name |
+| `TOOL_SUCCESS` | `tool_success` | An orchestrator-level (hub) governed tool returns. **Counted in memory, never stored** (`count_tool_success`): it is not in `/teamwork/health/events` or the JSONL file -- see Tool Execution | -- | -- |
 | `SPOKE_FAILURE` | `spoke_failure` | A spoke sub-agent fails (exception during delegation) | WARNING | Spoke label (e.g., `browser`, `content`) |
 | `SPOKE_SUCCESS` | `spoke_success` | A spoke sub-agent completes successfully | INFO | Spoke label |
 | `LLM_ERROR` | `llm_error` | LLM provider returns an error (rate limit, timeout, etc.) | ERROR | Provider name |
@@ -127,7 +127,11 @@ The overall status is derived from the worst subsystem:
 
 Tracks the ratio of `TOOL_ERROR` to total tool calls (`TOOL_SUCCESS` + `TOOL_ERROR`) within the rolling window. A sustained error rate above 15% indicates a systemic tool issue -- a broken API key, a service outage, or a misconfigured tool.
 
-Both events are recorded at the hub layer only, so a `delegate_*` call counts once however many steps its spoke takes. Until 2026-10 `governed_tool.py` recorded `TOOL_ERROR` but never `TOOL_SUCCESS`, so the denominator held only errors and the rate read 0% or 100% -- one failed call in a window raised the alert.
+Both are recorded at the hub layer only, so a `delegate_*` call counts once however many steps its spoke takes. Until 2026-10 `governed_tool.py` recorded `TOOL_ERROR` but never `TOOL_SUCCESS`, so the denominator held only errors and the rate read 0% or 100% -- one failed call in a window raised the alert.
+
+Successes are a count, not events: a deque of timestamps pruned to `SUCCESS_WINDOW_MINUTES` (60). Stored as events they arrived at tool-call rate, evicted the rare alerts (`LLM_ERROR`, `TURN_TIMEOUT`, `SPOKE_FAILURE`) from the 2000-event cap so the check read healthy, flooded the Health tab's recent-events feed, and grew the JSONL file at the same rate.
+
+Because successes are not persisted, `TOOL_ERROR` events reloaded from the file after a restart have no denominator. The rate therefore uses only events since the process started (and within the success window): `tool_calls`/`tool_errors` still count every error in the window, while `tool_error_rate_calls`/`tool_error_rate_errors` are the counts the rate came from, and the alert quotes those.
 
 ### Spoke Delegation
 
@@ -238,6 +242,8 @@ Returns the full health status: latest check result, rolling statistics, alert h
     "tool_calls": 40,
     "tool_errors": 8,
     "tool_error_rate": 0.2,
+    "tool_error_rate_calls": 40,
+    "tool_error_rate_errors": 8,
     "spoke_calls": 10,
     "spoke_failures": 1,
     "spoke_failure_rate": 0.1,
@@ -350,6 +356,9 @@ Telemetry store constants (in `health_telemetry.py`):
 |---|---|---|
 | `MAX_AGE_HOURS` | `24` | Events older than this are pruned on read and during `prune_old_events()` |
 | `_MAX_EVENTS_IN_MEMORY` | `2000` | Maximum events kept in the in-memory ring buffer |
+| `_MAX_ROWS_ON_DISK` | `4000` | `record_event` rewrites the JSONL file from memory past this many rows |
+| `SUCCESS_WINDOW_MINUTES` | `60` | How long tool-success timestamps are kept (the health monitor's window) |
+| `_MAX_SUCCESS_TIMESTAMPS` | `50000` | Backstop cap on the success deque |
 
 Alert history is capped at `_MAX_ALERT_HISTORY = 50` entries in `health_monitor.py`.
 
@@ -361,7 +370,7 @@ Alert history is capped at `_MAX_ALERT_HISTORY = 50` entries in `health_monitor.
 |---|---|---|
 | LLM | Builds the model for every enabled tier through `llm_factory.build_llm` (no network call; the builds are not recorded as tier choices in the trace) | `[FAIL]` with the factory's exception text: missing key, unsupported provider, open circuit breaker |
 | Sandbox | `configured_client().health()` when `SANDBOX_ENABLED` | `[WARN]` unreachable |
-| Plugins | `PluginLoader.health_report()` -- the same report `system_status` prints | `[WARN]` a plugin the last scan refused (`get_load_errors()`), a plugin whose load raised, or a loaded plugin whose tools have failed since their last success (`failure_count`) |
+| Plugins | `PluginLoader.health_report()` -- the same report `system_status` prints | `[WARN]` a plugin the last scan refused (`get_load_errors()`), a plugin whose load raised, or a loaded plugin whose tools have failed since their last success (`failure_count`). Only builtin plugins are described in full: a workspace or imported plugin's key, manifest and exception text are plugin-authored and neither output carries an untrusted-content banner, so it appears as a sanitised key (`[A-Za-z0-9._/-]`, 80 chars) plus `blocked`, `failed to load` or `failing` and "see plugin_list for details" |
 | Workspace | `WORKSPACE_DIR` exists and is writable | `[WARN]` |
 | TeamWork | `settings.teamwork_active`; then `GET {TEAMWORK_URL}/health` | `[WARN]` unreachable or non-2xx, and when `TEAMWORK_URL` is set but the deprecated `TEAMWORK_ENABLED=false` overrides it |
 | Scheduler | APScheduler initialised and running | `[WARN]` |
@@ -375,7 +384,7 @@ There is no spoke check. It used to import six hard-coded spoke modules, but `bu
 
 `prax/services/log_health.py` is a `logging.Handler` on the root logger, installed by `app.py` at startup when `LOG_HEALTH_ENABLED=true` (default `false`). It counts WARNING-and-above records grouped by `(levelname, logger name, pathname:lineno)`, with first/last time per group, and the doctor lists the top `LOG_HEALTH_TOP_N` as `count × level location — template`, stating the window ("since <install time>"). It never reads the log file (unrotated, tens of MB on a dev box).
 
-Privacy: log records carry user data and fetched, untrusted text. The formatted message (`record.getMessage()`) and exception text are never stored. `record.msg` -- the %-style template -- is kept only when `record.args` is non-empty, because then the data is in the args; a message with no args may be an f-string with the data baked in, so only its location is kept (shown as `(message not kept)`). Templates are flattened and truncated to 160 characters. The table holds at most 500 call sites; records from sites past that are counted as overflow.
+Privacy: log records carry user data and fetched, untrusted text. The formatted message (`record.getMessage()`) and exception text are never stored. `record.msg` -- the %-style template -- is kept only for Prax's own call sites (`prax/` or `app.py` in the checkout, never a `site-packages` path such as the in-repo `.venv`; werkzeug's template has the client IP and a timestamp baked in), and only when `record.args` is non-empty, because then the data is in the args; a message with no args may be an f-string with the data baked in, so only its location is kept (shown as `(message not kept)`). Templates are flattened and truncated to 160 characters. Locations name no user: repo-relative for Prax, package-relative for libraries, `<workspace>/…` (the user-id directory dropped) for workspace code, `<external>/<basename>` for anything else. The table holds at most 500 call sites; records from sites past that are counted as overflow.
 
 | Setting | Default | Description |
 |---|---|---|
@@ -385,14 +394,14 @@ Privacy: log records carry user data and fetched, untrusted text. The formatted 
 
 ## Storage
 
-Telemetry events are persisted to `{workspace_dir}/.health_telemetry.jsonl` -- one JSON object per line. The file is:
-- **Append-only** during normal operation (fire-and-forget writes, failures are silently ignored)
-- **Rewritten** only during `prune_old_events()` to remove entries older than 24 hours
-- **Loaded lazily** on first access, with old events filtered out during load
+Telemetry events are persisted to `{workspace_dir}/.health_telemetry.jsonl` -- one JSON object per line. Tool successes are not: they are counted in memory only (see Tool Execution). The file is:
+- **Appended to** during normal operation (fire-and-forget writes, failures are silently ignored)
+- **Loaded lazily** on first access, with expired events, unreadable lines and `tool_success` rows from earlier builds dropped; when anything was dropped, the file is rewritten from what was kept
+- **Rewritten from memory** once it holds more than `_MAX_ROWS_ON_DISK` (twice the in-memory cap) rows, and by `prune_old_events()`
+
+Every rewrite goes to a temporary file beside it and is `os.replace`d, so a crash mid-write leaves the previous file. One writer per workspace is assumed: a rewrite drops rows another process appended since this one loaded the file.
 
 The in-memory store is bounded at 2000 events. If the limit is exceeded, the oldest events are dropped (FIFO).
-
-**Known gap (2026-10):** nothing calls `prune_old_events()`, so the file is never trimmed -- only the in-memory view is filtered to 24 hours. Even if it were called, it rewrites the file only when an in-memory event is older than 24 hours, which never happens once more than 2000 events arrive a day. The file therefore grows without bound, about one line (~180 bytes) per hub tool call now that successes are recorded, and the whole file is parsed on the first telemetry access after a restart.
 
 ## Loop detection
 
@@ -484,7 +493,7 @@ Separate runtime that watches behavioral logs, classifies events (strengths, opp
 - [health_monitor.py](../../prax/agent/health_monitor.py) -- Anomaly detection, thresholds, advisory generation, rollback awareness, API status
 - [loop_detector.py](../../prax/agent/loop_detector.py) -- Tool call loop detection with escalation ladder
 - [circuit_breaker.py](../../prax/agent/circuit_breaker.py) -- Per-dependency circuit breaker (Closed/Open/Half-Open)
-- [governed_tool.py](../../prax/agent/governed_tool.py) -- Emits `TOOL_SUCCESS`, `TOOL_ERROR` and `BUDGET_EXHAUSTED`; loop detection gate
+- [governed_tool.py](../../prax/agent/governed_tool.py) -- Emits `TOOL_ERROR` and `BUDGET_EXHAUSTED`, counts tool successes; loop detection gate
 - [orchestrator.py](../../prax/agent/orchestrator.py) -- Emits `TURN_COMPLETED`, `TURN_TIMEOUT`, `CONTEXT_OVERFLOW`, `RETRY`; calls `on_turn_end()`; injects health advisory
 - [llm_factory.py](../../prax/agent/llm_factory.py) -- Circuit breaker gate on LLM provider construction
 - [callbacks.py](../../prax/observability/callbacks.py) -- Records circuit breaker success/failure on LLM calls
