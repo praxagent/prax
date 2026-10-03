@@ -33,9 +33,15 @@ class TeamWorkClient:
         self._channels: dict[str, str] = {}  # name -> id
         self._agents: dict[str, str] = {}  # name -> id
         # Channel-name resolution state (see _resolve_channel).  The client is
-        # a process singleton, so "per client" is "per process".
-        self._channel_lock = threading.Lock()
+        # a process singleton, so "per client" is "per process".  One ensure
+        # lock per registry name, built here so the dict is never mutated: a
+        # slow lazy ensure of one channel must not stall posts to any other.
+        self._ensure_locks: dict[str, threading.Lock] = {
+            name: threading.Lock() for name in PRAX_CHANNELS
+        }
         self._lazily_ensured: set[str] = set()
+        # Guards the drop bookkeeping only, and is never held across I/O.
+        self._drop_lock = threading.Lock()
         self._unknown_channel_drops: dict[str, int] = {}  # name -> drops since its warning
 
     @property
@@ -350,19 +356,24 @@ class TeamWorkClient:
         repeated on every post it would bury everything else in the log.
         """
         channel_id = self._channels.get(name)
-        if not channel_id and name in PRAX_CHANNELS:
-            # Held across the request so concurrent posts to the same channel
-            # wait for the ensure instead of dropping while it is in flight.
-            with self._channel_lock:
+        ensure_lock = self._ensure_locks.get(name)
+        if not channel_id and ensure_lock is not None:
+            # This name's lock is held across the request so concurrent posts
+            # to the same channel wait for the ensure instead of dropping
+            # while it is in flight.  Other names have their own locks.
+            with ensure_lock:
                 if name not in self._lazily_ensured and not self._channels.get(name):
                     self._lazily_ensured.add(name)
                     self.ensure_channels([{"name": name, "description": PRAX_CHANNELS[name]}])
                 channel_id = self._channels.get(name)
         if channel_id:
-            # Re-arm the warning in case the channel goes missing again.
-            self._unknown_channel_drops.pop(name, None)
+            # Re-arm the warning in case the channel goes missing again.  The
+            # membership test keeps the common path lock-free.
+            if name in self._unknown_channel_drops:
+                with self._drop_lock:
+                    self._unknown_channel_drops.pop(name, None)
             return channel_id
-        with self._channel_lock:
+        with self._drop_lock:
             dropped = self._unknown_channel_drops.get(name)
             self._unknown_channel_drops[name] = 0 if dropped is None else dropped + 1
         if dropped is None:

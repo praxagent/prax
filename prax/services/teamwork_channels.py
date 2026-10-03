@@ -1,16 +1,23 @@
-"""The TeamWork channels and role agents Prax posts as — one registry.
+"""The TeamWork channels Prax posts to, and the role agents it registers.
 
 Prax posts to channels by *name*, and a post to a name the TeamWork project
 does not have is dropped before it is sent.  TeamWork's project defaults cover
 general, engineering, research, discord and sms, but the browser and content
 spokes posted to ``#browser`` and ``#content``, which nothing ever created — so
 every one of those posts was dropped behind an "Unknown channel" warning.
-Likewise the spoke role agents were never registered, so their posts were
-unattributed and their status updates were no-ops.
 
-Startup ensures everything listed here (``teamwork_hooks.ensure_prax_channels``
-and ``register_role_agents``), and ``tests/test_channel_registry.py`` fails CI
-when code posts to a channel name or as a role name that is not listed.
+Startup ensures every channel listed here (``teamwork_hooks.ensure_prax_channels``),
+and ``tests/test_channel_registry.py`` fails CI when code posts to a channel
+name that is not listed.
+
+The role agents are deliberately NOT every role Prax reports under.
+``TeamWorkClient`` skips activity-log, live-output and status calls for an
+agent that is not registered, so registering a role switches those sinks on
+for it: a spoke role would stream its tool output — ``browser_login`` results
+included — into TeamWork's persistent activity log, and ``reset_all_idle``
+would send one more synchronous PATCH on every turn's critical path.  Spoke
+roles (Browser Agent, Content Editor, …) therefore stay unregistered; their
+channel posts still land, unattributed.  The drift guard pins this list.
 
 Deliberately import-free so ``teamwork_service`` and ``teamwork_hooks`` can
 both depend on it without a cycle.  Not listed: the coding-agent channels,
@@ -41,26 +48,14 @@ class RoleAgent(NamedTuple):
     soul: str
 
 
-# Every role Prax posts as or reports status for, besides the orchestrator
-# itself (registered from settings.agent_name).
+# The internal role agents registered at startup, besides the orchestrator
+# itself (registered from settings.agent_name).  Do not add spoke roles here:
+# see the module docstring for what registering one switches on.
 PRAX_ROLE_AGENTS: tuple[RoleAgent, ...] = (
     RoleAgent("Planner", "planner", "Breaks complex requests into structured plans"),
     RoleAgent("Researcher", "researcher", "Investigates questions via web search and document analysis"),
     RoleAgent("Executor", "executor", "Executes tool calls and workspace operations"),
     RoleAgent("Auditor", "auditor", "Reviews claims for accuracy and audits governance logs"),
-    # Spoke roles — the role_name each spoke passes to run_spoke, plus the
-    # procedural pipelines that report under their own name.
-    RoleAgent("Browser Agent", "browser", "Navigates the web and handles login flows in the sandbox browser"),
-    RoleAgent("Content Editor", "content", "Runs the research, write, review and revise pipeline for long-form content"),
-    RoleAgent("Desktop Agent", "desktop", "Operates GUI applications on the sandbox desktop"),
-    RoleAgent("Environment", "environment", "Answers weather, local hazard and situational questions"),
-    RoleAgent("Finetune Agent", "finetune", "Manages the LoRA fine-tuning pipeline"),
-    RoleAgent("Note Editor", "notes", "Writes and reviews deep-dive notes"),
-    RoleAgent("Plugin Agent", "plugins", "Runs end-user plugin tools"),
-    RoleAgent("Sandbox Agent", "sandbox", "Writes and runs code in the sandbox container"),
-    RoleAgent("Sysadmin", "sysadmin", "Manages plugins, configuration and self-maintenance"),
-    RoleAgent("Tasks", "tasks", "Manages the todo list and the background task runner"),
-    RoleAgent("Health Monitor", "monitor", "Reports health alerts to the activity log"),
 )
 
 

@@ -210,8 +210,9 @@ def create_app():
                 reset_all_idle,
                 sync_conversation_history,
             )
-            # Register the internal and spoke role agents so their posts are
-            # attributed and their status is visible in the UI.
+            # Register the internal role agents (Planner, Researcher, Executor,
+            # Auditor) so their status is visible in the UI.  Spoke roles stay
+            # unregistered on purpose — see prax/services/teamwork_channels.py.
             register_role_agents()
             # Ensure every channel Prax posts to exists — TeamWork's project
             # defaults miss some, and older projects predate others.

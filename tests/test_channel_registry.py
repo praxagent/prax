@@ -1,15 +1,24 @@
-"""Drift guard: every TeamWork channel and role Prax posts as must be registered.
+"""Drift guard: every TeamWork channel Prax posts to must be registered, and
+no spoke role may be.
 
 ``prax/services/teamwork_channels.py`` lists the channels Prax ensures at
 startup and the role agents it registers.  A post to a channel the TeamWork
 project does not have is dropped, which is how every ``#browser`` and
 ``#content`` post was lost: the spokes named channels nothing ever created.
 These tests scan the source for the literal names at every posting call shape
-and FAIL if one is missing from the registry — so a new channel or role cannot
+and FAIL if one is missing from the registry — so a new channel cannot
 silently start dropping posts again.
 
+Roles run the other way.  Registering a role switches on TeamWork's activity
+log, live output and status for it, so when the spoke roles were briefly
+registered their tool output — ``browser_login`` results included — flowed
+into the persistent activity log, and every turn's ``reset_all_idle`` grew
+from 5 to 16 synchronous PATCHes.  The role tests pin startup to the core
+roles so that sink cannot be switched on again by a one-line registry edit.
+
 The rest covers the runtime half: the lazy ensure that recovers a registry
-channel the project lacks, the once-per-name warning, and the startup hooks.
+channel the project lacks, the once-per-name warning, per-name ensure locks,
+and the startup hooks.
 """
 from __future__ import annotations
 
@@ -54,6 +63,12 @@ _ROLE_ARGS: dict[str, tuple[int | None, str]] = {
 # The coding-agent channels are created lazily on first use, so they are
 # legitimately absent from the registry — taken from the code, not restated.
 _LAZY_CHANNELS = set(teamwork_hooks._AGENT_DISPLAY_NAMES)
+
+# The role agents startup registers besides the orchestrator.  Restated here
+# rather than read from PRAX_ROLE_AGENTS, so the registry cannot grow without
+# this file changing too.  Executor is also the workspace spoke's role_name;
+# that predates this guard.
+_CORE_ROLES = ["Planner", "Researcher", "Executor", "Auditor"]
 
 
 def _call_name(node: ast.Call) -> str | None:
@@ -115,12 +130,37 @@ def test_the_registry_has_no_stale_entries():
     assert not stale, f"PRAX_CHANNELS entries nothing posts to: {sorted(stale)}"
 
 
-def test_every_role_prax_posts_as_is_registered():
-    """An unregistered role's posts are unattributed and its status is a no-op.
-    If this fails: add a RoleAgent to PRAX_ROLE_AGENTS."""
-    roles = _scan(_ROLE_ARGS)
-    missing = {name: sites for name, sites in roles.items() if name not in role_agent_names()}
-    assert not missing, f"Roles used but not in PRAX_ROLE_AGENTS: {missing}"
+def _spoke_roles() -> dict[str, list[str]]:
+    """Every literal role Prax reports under, other than the core roles."""
+    return {name: sites for name, sites in _scan(_ROLE_ARGS).items() if name not in _CORE_ROLES}
+
+
+def test_the_registry_holds_exactly_the_core_roles():
+    assert role_agent_names() == _CORE_ROLES
+
+
+def test_no_spoke_role_is_registered():
+    """TeamWorkClient skips activity-log, live-output and status calls for an
+    unregistered agent; registering a spoke role turns them on, streaming its
+    tool output into the persistent activity log. If this fails: do not
+    register the spoke role (its channel posts land without it)."""
+    spoke_roles = _spoke_roles()
+    # Guards the guard: a scan that found nothing would pass for the wrong reason.
+    assert {"Browser Agent", "Content Editor"} <= set(spoke_roles)
+    registered = set(role_agent_names()) & set(spoke_roles)
+    assert not registered, f"Spoke roles registered in PRAX_ROLE_AGENTS: {sorted(registered)}"
+
+
+def test_no_create_agent_call_names_a_spoke_role():
+    # The registry is not the only way in: a direct create_agent at startup
+    # (app.py) or anywhere in the package registers the role just the same.
+    shape = {"create_agent": (0, "name")}
+    created = _scan(shape)
+    app_py = PRAX_ROOT.parent / "app.py"
+    for name, lineno in _literal_args(app_py.read_text(encoding="utf-8"), shape):
+        created.setdefault(name, []).append(f"app.py:{lineno}")
+    offending = {name: sites for name, sites in created.items() if name in _spoke_roles()}
+    assert not offending, f"create_agent registers spoke roles: {offending}"
 
 
 def test_the_role_list_has_no_stale_entries():
@@ -307,6 +347,46 @@ def test_concurrent_posts_to_a_missing_channel_ensure_it_once(client):
     assert len(fake.posts) == 8 and None not in results
 
 
+def test_a_slow_lazy_ensure_does_not_stall_other_channel_names(client, monkeypatch, caplog):
+    # forward_to_channel runs on Discord's event loop: a post to one name must
+    # not wait out another name's lazy ensure (a request with a 15 s timeout).
+    tw, fake = client
+    entered, release = threading.Event(), threading.Event()
+
+    def post(path, json):
+        if path.endswith("/ensure-channels") and json["channels"][0]["name"] == "browser":
+            entered.set()
+            release.wait(10)
+        return fake(path, json)
+
+    monkeypatch.setattr(tw, "_post", post)
+    slow_result: list[str | None] = []
+    others: list[str | None] = []
+    slow = threading.Thread(target=lambda: slow_result.append(tw.send_message("x", channel="browser")),
+                            daemon=True)
+    other = threading.Thread(target=lambda: others.extend([
+        tw.send_message("x", channel="not-a-channel"),   # unknown: dropped, warned
+        tw.send_message("x", channel="not-a-channel"),   # counted at DEBUG
+        tw.send_message("y", channel="content"),         # its own lazy ensure
+    ]), daemon=True)
+    try:
+        slow.start()
+        assert entered.wait(5), "the browser ensure never started"
+        with caplog.at_level(logging.WARNING, logger="prax.services.teamwork_service"):
+            other.start()
+            other.join(5)
+        assert not other.is_alive(), "posts to other channels waited behind the browser ensure"
+        assert others == [None, None, "m1"]
+        assert not slow_result  # still inside its ensure
+        warnings = [m for m in _messages(caplog, logging.WARNING) if "not-a-channel" in m]
+        assert len(warnings) == 1
+    finally:
+        release.set()
+        slow.join(5)
+    assert slow_result == ["m2"]
+    assert sorted(fake.ensure_calls) == [["browser"], ["content"]]
+
+
 def test_a_failed_ensure_is_a_warning_not_debug(client, caplog):
     tw, fake = client
     fake.ensure_fails = True
@@ -375,8 +455,12 @@ def test_after_the_startup_ensure_every_registry_post_lands(client, monkeypatch)
     assert len(fake.ensure_calls) == 1  # the startup one; nothing lazy needed
 
 
-def test_register_role_agents_registers_every_role(hooked):
+def test_startup_registers_the_core_roles_and_no_spoke_role(hooked):
+    # What app.py's startup runs after registering the orchestrator.
     teamwork_hooks.register_role_agents()
+    registered = [name for name, _, _ in hooked.created]
+    assert registered == _CORE_ROLES
+    assert not set(registered) & set(_spoke_roles())
     assert hooked.created == [tuple(a) for a in PRAX_ROLE_AGENTS]
 
 
@@ -385,17 +469,17 @@ def test_one_failed_registration_does_not_cost_the_rest(hooked, caplog):
     hooked.fail_on = {first}
     with caplog.at_level(logging.WARNING, logger="prax.services.teamwork_hooks"):
         teamwork_hooks.register_role_agents()
-    assert [c[0] for c in hooked.created] == role_agent_names()
+    assert [c[0] for c in hooked.created] == _CORE_ROLES
     assert any(first in r.getMessage() for r in caplog.records)
 
 
-def test_reset_all_idle_covers_every_role_agent(monkeypatch):
+def test_reset_all_idle_patches_only_the_orchestrator_and_core_roles(monkeypatch):
+    # It runs on every turn's critical path, one synchronous PATCH per role,
+    # and flips a role idle even if a concurrent turn is using it.
     from prax.settings import settings
 
     calls: list[tuple[str, str]] = []
     monkeypatch.setattr(teamwork_hooks, "set_role_status", lambda role, status: calls.append((role, status)))
     teamwork_hooks.reset_all_idle()
-    roles = [role for role, _ in calls]
-    assert {status for _, status in calls} == {"idle"}
-    assert set(roles) == {settings.agent_name, *role_agent_names()}
-    assert len(roles) == len(set(roles))
+    expected = list(dict.fromkeys([settings.agent_name, *_CORE_ROLES]))
+    assert calls == [(role, "idle") for role in expected]
