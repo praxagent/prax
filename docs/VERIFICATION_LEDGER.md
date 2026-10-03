@@ -69,6 +69,12 @@ This ledger is the honest complement to
 |---|---|---|---|
 | **`lean_check`** (compile + axiom-audit trust gate, in the sandbox) | ✅ | **Verified live 2026-07-14** against Lean 4.31.0 installed in the running sandbox container, driving the real tool through the sandbox client on 5 known-result theorems: `1+1=2` and `p∧q→q∧p` verify clean (no axioms); `1+1=3` fails with the correct type-mismatch diagnostic; a `sorry` hole compiles but the trust gate + axiom audit both catch it (`sorryAx`); an injected `axiom cheat` is flagged non-standard. | mathlib-dependent proofs (need a lake project + `lake exe cache get`) are out of scope — toolchain-only. The durable toolchain lives in the prax-sandbox image (Dockerfile `ENV ELAN_HOME=/opt/elan`); a from-clean **image rebuild** installing Lean has not been run yet (the live container was provisioned in place) — verify on the next sandbox rebuild. |
 
+## Artifacts (`ARTIFACTS_ENABLED`, docs/guides/artifacts.md)
+
+| Feature | Status | Evidence | Not verified |
+|---|---|---|---|
+| **Store, tools, TeamWork routes, public-share floor** | 🧪 | Unit- and integration-tested keyless (2026-10-03): versions and git commits per write, size and id limits (no path escape), the always-on exposure floor (refused without a person; "yes" not enough; the user's own words naming it, or a TeamWork approval, allow it; a timed grant does not), one decision is enough, expiry capped at 168 h, revoke, the `/shared` page served with `sandbox allow-scripts` and no network, an expired link gone. | Not run against a live ngrok tunnel, and the TeamWork viewer that renders `[artifact:<id>]` is in a separate TeamWork change. The live path (Prax publishes, TeamWork shows, a person approves a public link, the link opens from outside, expiry) still needs one run. |
+
 ## Coding-agent benchmark (`terminal_bench`)
 
 | Surface | Status | Verified | Not verified / needs |
