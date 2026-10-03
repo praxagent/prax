@@ -918,7 +918,7 @@ Prax is a multi-channel AI assistant powered by a LangGraph ReAct agent. It conn
 
 **What you get:**
 
-- **Real-time chat** — public channels (#general, #engineering, #research) and private DMs with Prax, with typing indicators and WebSocket updates
+- **Real-time chat** — public channels (#general, #engineering, #research, plus #browser and #content for the browser and content spokes' results) and private DMs with Prax, with typing indicators and WebSocket updates. Prax ensures every channel it posts to at startup; the list is `PRAX_CHANNELS` in [`prax/services/teamwork_channels.py`](prax/services/teamwork_channels.py)
 - **Channel mirroring** — Discord and SMS conversations are mirrored to dedicated #discord and #sms channels in TeamWork, so you can follow cross-channel conversations in one place
 - **Kanban board** — task management with drag-and-drop columns (pending / in progress / review / completed). Prax creates, assigns, and completes tasks automatically as it works through plans
 - **Execution graphs** — real-time visualization of agent delegation trees. Watch LangGraph execution as it happens: see which spokes are running, tool call counts, timing, and status. Click any node to inspect its details and live output
@@ -926,7 +926,7 @@ Prax is a multi-channel AI assistant powered by a LangGraph ReAct agent. It conn
 - **In-browser terminal** — full PTY shell into the sandbox container (the sandbox image no longer ships coding-agent CLIs such as Claude Code)
 - **Browser screencast** — live view of the headless Chrome running in the sandbox, with mouse/keyboard passthrough
 - **File browser** — browse and manage workspace files
-- **Multi-agent status** — see which role agents (Planner, Executor, Researcher, etc.) are active
+- **Multi-agent status** — see which role agents (Planner, Researcher, Executor, Auditor) are active
 
 TeamWork is built into the `prax` image by the default `docker-compose.yml` (the `teamwork` build context). After `docker compose up --build`, open **http://localhost:3000** (subject to the compose known gap in Quick Start). API docs (Swagger) are at **http://localhost:8000/docs**.
 

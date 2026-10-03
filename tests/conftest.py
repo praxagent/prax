@@ -217,6 +217,11 @@ TEST_ENV = {
     # dev box with PRAX_API_KEY set would otherwise 401 every blueprint test.
     # tests/test_inbound_auth.py sets the key explicitly per test.
     "PRAX_API_KEY": "",
+    # TeamWork off, as shipped (and as in GitHub CI, which has no .env).  The
+    # dev .env points at a TeamWork that is usually not running during tests,
+    # and create_app() waits ~30 s for it on every call.  Tests that need the
+    # integration set the URL (or settings.teamwork_url) themselves.
+    "TEAMWORK_URL": "",
     "DISCORD_ALLOWED_USERS": '{"999000000000000001": "TestUser"}',
     "DISCORD_ALLOWED_CHANNELS": "",
     "DISCORD_TO_PHONE_MAP": "",

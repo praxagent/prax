@@ -31,6 +31,7 @@ COMPACTION_WARN = 5  # 5+ compactions in window
 LLM_ERROR_WARN = 3  # 3+ LLM errors in window
 LATENCY_WARN_MS = 60_000  # 60s average response time
 TIMEOUT_WARN = 2  # 2+ timeouts in window
+STALE_AFTER_S = 300  # get_check() re-runs a check older than this
 
 
 # ---------------------------------------------------------------------------
@@ -89,13 +90,21 @@ def run_health_check(window_minutes: int = WINDOW_MINUTES) -> HealthCheck:
     )
     if stats["tool_calls"] > 0 and stats["tool_error_rate"] >= TOOL_ERROR_RATE_WARN:
         tool_status.status = "warning"
+        # The rate's own counts: after a restart tool_calls/tool_errors also
+        # hold reloaded errors that the rate leaves out.
         tool_status.message = (
-            f"{stats['tool_errors']}/{stats['tool_calls']} tool calls failed "
+            f"{stats['tool_error_rate_errors']}/{stats['tool_error_rate_calls']} tool calls failed "
             f"({stats['tool_error_rate']:.0%} error rate)"
         )
         check.alerts.append(tool_status.message)
     else:
         tool_status.message = f"{stats['tool_calls']} calls, {stats['tool_errors']} errors"
+        if stats["tool_error_rate_calls"] != stats["tool_calls"]:
+            # Otherwise "3 calls, 3 errors" reads as healthy-but-broken.
+            tool_status.message += (
+                f" (rate over the {stats['tool_error_rate_calls']} call(s) "
+                "this process saw)"
+            )
     check.subsystems["tools"] = tool_status
 
     # --- Spoke delegation ---
@@ -321,6 +330,22 @@ def get_last_check() -> HealthCheck | None:
     return _last_check
 
 
+def get_check(max_age_s: float = STALE_AFTER_S) -> HealthCheck:
+    """The latest health check, re-run first if missing or older than *max_age_s*.
+
+    ``on_turn_end`` checks only every ``CHECK_EVERY_N_TURNS`` turns, so a reader
+    of ``get_last_check()`` sees None for the first nine turns after a restart
+    and a stale verdict between checks.  Anything that reports health on demand
+    (the API, prax_doctor) reads this instead.
+    """
+    global _last_check
+    check = _last_check
+    if check is None or time.time() - check.timestamp > max_age_s:
+        check = run_health_check()
+        _last_check = check
+    return check
+
+
 def get_alert_history() -> list[dict]:
     """Return recent alert history."""
     return list(_alert_history)
@@ -400,11 +425,10 @@ def on_turn_end() -> str | None:
 def get_health_status() -> dict:
     """Return the full health status for the API.
 
-    Runs a fresh check if none exists or the last one is stale (>5 min).
-    Returns ``{"enabled": false}`` when health monitoring is disabled.
+    Runs a fresh check if none exists or the last one is stale (see
+    ``get_check``).  Returns ``{"enabled": false}`` when health monitoring is
+    disabled.
     """
-    global _last_check
-
     try:
         from prax.settings import settings
         if not settings.health_monitor_enabled:
@@ -412,8 +436,7 @@ def get_health_status() -> dict:
     except Exception:
         pass
 
-    if _last_check is None or (time.time() - _last_check.timestamp > 300):
-        _last_check = run_health_check()
+    check = get_check()
 
     from prax.services.health_telemetry import get_rolling_stats
 
@@ -435,7 +458,7 @@ def get_health_status() -> dict:
 
     return {
         "enabled": True,
-        "check": _last_check.to_dict(),
+        "check": check.to_dict(),
         "stats": get_rolling_stats(WINDOW_MINUTES),
         "alert_history": _alert_history[-20:],
         "check_interval_turns": CHECK_EVERY_N_TURNS,

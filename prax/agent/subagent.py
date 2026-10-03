@@ -222,41 +222,32 @@ def _run_subagent(task: str, category: str) -> str:
         span.end(status="failed", summary=str(exc)[:200])
         return f"Sub-agent failed: {exc}"
 
-    # Log the sub-agent's tool call trace for debugging.
-    from langchain_core.messages import ToolMessage
-    tool_count = 0
-    live_lines: list[str] = []
-    for msg in result.get("messages", []):
-        if isinstance(msg, AIMessage):
-            for tc in getattr(msg, "tool_calls", []) or []:
-                tool_count += 1
-                logger.info("Sub-agent [%s] tool: %s(%s)", category, tc.get("name"), str(tc.get("args", {}))[:80])
-                live_lines.append(f"  → {tc.get('name')}({str(tc.get('args', {}))[:80]})")
-        elif isinstance(msg, ToolMessage):
-            preview = (msg.content or "")[:200]
-            if "error" in preview.lower() or "fail" in preview.lower():
-                logger.warning("Sub-agent [%s] tool error [%s]: %s", category, msg.name, preview)
-                live_lines.append(f"  ✗ {msg.name}: {preview[:120]}")
-            else:
-                logger.info("Sub-agent [%s] result [%s]: %s", category, msg.name, preview[:120])
-                live_lines.append(f"  ✓ {msg.name}: {preview[:120]}")
-
-    # Push tool call log to TeamWork live output for engineering categories
-    if category in _engineering_categories and live_lines:
-        from prax.services.teamwork_hooks import push_live_output
-        push_live_output("Executor", "\n".join(live_lines) + "\n")
+    # Log the sub-agent's tool calls (and push them to the Executor's TeamWork
+    # live output for engineering categories) through the spoke runner's
+    # logger: it withholds credential-tool output and masks the secret values
+    # handed out this turn, which this loop's own copy used to print verbatim.
+    from prax.agent.spokes._runner import _log_tool_calls
+    tool_count = _log_tool_calls(
+        result, category,
+        "Executor" if category in _engineering_categories else None,
+        kind="Sub-agent",
+    )
 
     # Extract the final AI response.
     for msg in reversed(result.get("messages", [])):
         if isinstance(msg, AIMessage) and msg.content:
-            logger.info("Sub-agent [%s] completed: %s", category, msg.content[:80])
-            span.end(status="completed", summary=msg.content[:200], tool_calls=tool_count)
+            # Sinks get this turn's secret values masked; the caller gets the
+            # answer as written (see spokes/_runner.py).
+            from prax.agent.turn_secrets import scrub
+            shown = scrub(str(msg.content))
+            logger.info("Sub-agent [%s] completed: %s", category, shown[:80])
+            span.end(status="completed", summary=shown[:200], tool_calls=tool_count)
             # Route engineering work to the #engineering channel.
             if category in _engineering_categories:
                 from prax.services.teamwork_hooks import post_to_channel, push_live_output, set_role_status
                 set_role_status("Executor", "idle")
-                post_to_channel("engineering", msg.content[:3000], agent_name="Executor")
-                push_live_output("Executor", f"\n[{category}] completed: {msg.content[:200]}\n", status="completed")
+                post_to_channel("engineering", shown[:3000], agent_name="Executor")
+                push_live_output("Executor", f"\n[{category}] completed: {shown[:200]}\n", status="completed")
             # Auto-advance the plan — mark the next incomplete step as done
             # so the orchestrator doesn't loop trying to re-delegate.
             _auto_advance_plan()

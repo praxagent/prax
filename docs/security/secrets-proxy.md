@@ -296,8 +296,27 @@ within a few minutes — activity Prax didn't account for. It is read-only.
 
 - Give each Prax instance its own proxy username (`http://<name>:<token>@…`)
   so `--caller` can separate dev from prod.
-- It matches on tool name and time, not arguments: it catches a hidden or
-  dropped call, not a silently changed argument.
+- **Arguments too.** Each tool span records `requested_args_sha256` — the hash
+  of the model's raw arguments, from its response, matched by `tool_call_id`,
+  in the wire record's canonical form — and never the arguments themselves.
+  So beyond a hidden or dropped call, the check reports **ARGS DIFFER** (the
+  trace misreports what the model asked for). Traces written before the hash
+  existed are matched on name and time only. Every exact match (name and
+  hash) is assigned before any hashless one, and both before anything is
+  reported, so with parallel same-name calls a misreported call never takes
+  the span of a sibling that matches exactly.
+- **CHANGED BEFORE RUNNING** comes from the span's `args_changed` flag. While
+  a call runs, Prax keeps the model's arguments in memory (never in the trace)
+  and compares them with the inputs of every layer of the call — governance,
+  context binding, the tool itself. A requested argument that is missing, or
+  whose value differs, sets the flag. The comparison is loose on purpose,
+  because LangChain validation changes ordinary calls: schema defaults are
+  filled in, `"5"` becomes `5`, and governance drops `expected_observation`.
+  None of that counts. The limits: a layer that *adds* an argument is not
+  detected (it looks like a default), and a change that only converts a
+  value's type is not reported. A span's `args_sha256` hashes what the
+  innermost layer received after validation. It is **not** comparable with the
+  requested hash, because the two differ on ordinary calls.
 - The chain is tamper-evident, not tamper-proof: keep the record writable only
   by the proxy and copy its head hash off the machine.
 

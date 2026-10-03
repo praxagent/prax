@@ -12,7 +12,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from prax.agent.agent_loop import build_agent_loop
 from prax.agent.checkpoint import CheckpointManager
 from prax.agent.llm_factory import build_llm
-from prax.agent.message_text import message_text
+from prax.agent.message_text import args_preview_for_tool, message_text, preview_for_tool
 from prax.agent.tool_registry import get_registered_tools
 from prax.agent.user_context import current_user_id
 from prax.plugins.prompt_manager import get_prompt_manager
@@ -2472,6 +2472,13 @@ class ConversationAgent:
         if not user_id:
             return
 
+        # trace.log is committed with the workspace, searchable and shown in
+        # TeamWork's file browser, so a credential tool's output is withheld
+        # and the secret values it handed out this turn are masked in every
+        # entry, with the values fixed for this write.
+        from prax.agent.turn_secrets import scrubber
+        mask = scrubber()
+
         # Flush the governance audit log into the trace.
         from prax.agent.governed_tool import drain_audit_log
         audit_entries = drain_audit_log()
@@ -2493,17 +2500,18 @@ class ConversationAgent:
                 # Log tool calls if present.
                 for tc in getattr(msg, "tool_calls", []) or []:
                     name = tc.get("name", "unknown")
-                    args = tc.get("args", {})
+                    args = args_preview_for_tool(name, tc.get("args", {}), None)
                     entries.append({
                         "type": TraceEvent.TOOL_CALL,
                         "content": f"{name}({args})",
                     })
-                if msg.content:
-                    entries.append({"type": TraceEvent.ASSISTANT, "content": msg.content})
+                text = message_text(msg)
+                if text:
+                    entries.append({"type": TraceEvent.ASSISTANT, "content": text})
             elif isinstance(msg, ToolMessage):
                 entries.append({
                     "type": TraceEvent.TOOL_RESULT,
-                    "content": f"[{msg.name}] {msg.content}",
+                    "content": f"[{msg.name}] {preview_for_tool(msg.name, msg, None)}",
                 })
 
         # Append governance audit entries to the trace.
@@ -2576,6 +2584,8 @@ class ConversationAgent:
         except Exception:
             pass
 
+        for entry in entries:
+            entry["content"] = mask(entry.get("content"))
         try:
             append_trace(user_id, entries)
         except Exception:

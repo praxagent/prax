@@ -109,6 +109,12 @@ def create_app():
     for noisy in ("httpx", "httpcore"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
+    # Count recurring warnings/errors by call site for prax_doctor, so it never
+    # has to read the (unrotated) log file. Keeps no formatted messages.
+    if settings.log_health_enabled:
+        from prax.services import log_health
+        log_health.install()
+
     logger = logging.getLogger(__name__)
     logger.info(
         "Starting %s — provider=%s default_model=%s temperature=%s encoding=%s",
@@ -198,18 +204,20 @@ def create_app():
                 workspace_dir=workspace_dir,
             )
             tw.create_agent(name=settings.agent_name, role="orchestrator", soul="Primary AI assistant")
-            # Register internal role agents so their status is visible in the UI.
-            for role_name, role_type, soul in [
-                ("Planner", "planner", "Breaks complex requests into structured plans"),
-                ("Researcher", "researcher", "Investigates questions via web search and document analysis"),
-                ("Executor", "executor", "Executes tool calls and workspace operations"),
-                ("Auditor", "auditor", "Reviews claims for accuracy and audits governance logs"),
-            ]:
-                tw.create_agent(name=role_name, role=role_type, soul=soul)
-            # Ensure #discord and #sms mirror channels exist (backfills
-            # for projects created before mirroring was added).
-            from prax.services.teamwork_hooks import ensure_mirror_channels, reset_all_idle, sync_conversation_history
-            ensure_mirror_channels()
+            from prax.services.teamwork_hooks import (
+                ensure_prax_channels,
+                register_role_agents,
+                reset_all_idle,
+                sync_conversation_history,
+            )
+            # Register the internal role agents (Planner, Researcher, Executor,
+            # Auditor) so their status is visible in the UI, and the Health
+            # Monitor so its alerts reach the activity log.  Spoke roles stay
+            # unregistered on purpose — see prax/services/teamwork_channels.py.
+            register_role_agents()
+            # Ensure every channel Prax posts to exists — TeamWork's project
+            # defaults miss some, and older projects predate others.
+            ensure_prax_channels()
             sync_conversation_history()
             # Reset all agents to idle on startup — clears stuck "working"
             # status from previous runs that crashed or were interrupted.

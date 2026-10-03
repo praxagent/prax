@@ -15,7 +15,9 @@ from __future__ import annotations
 import importlib.util
 import inspect
 import logging
+import re
 import threading
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from langchain_core.tools import BaseTool, StructuredTool
@@ -51,6 +53,30 @@ logger = logging.getLogger(__name__)
 
 _PLUGINS_ROOT = Path(__file__).parent / "tools"
 
+_UNSAFE_KEY_CHARS = re.compile(r"[^A-Za-z0-9._/-]")
+_REPORT_KEY_MAX = 80
+
+
+def _report_key(rel_key: str) -> str:
+    """A plugin key safe to print where untrusted text must not reach."""
+    return _UNSAFE_KEY_CHARS.sub("_", rel_key)[:_REPORT_KEY_MAX]
+
+
+@dataclass(frozen=True)
+class PluginHealthReport:
+    """What ``PluginLoader.health_report`` found.
+
+    ``plugins``: relative keys of the plugins that contributed tools.
+    ``problems``: one line per plugin that needs attention.
+
+    Keys and text from non-builtin plugins are reduced to a sanitised key and a
+    fixed category (see ``PluginLoader.health_report``).
+    """
+
+    plugins: list[str] = field(default_factory=list)
+    tool_count: int = 0
+    problems: list[str] = field(default_factory=list)
+
 
 class PluginLoader:
     """Discovers and manages hot-swappable tool plugins."""
@@ -61,6 +87,11 @@ class PluginLoader:
         self._tool_to_manifest: dict[str, PluginToolManifest] = {}
         self._plugin_manifests: dict[str, PluginManifest] = {}
         self._load_errors: dict[str, str] = {}
+        # Plugins whose load raised, kept apart from _load_errors: callers
+        # present those as "blocked", and a crash is not a refusal.
+        self._load_failures: dict[str, str] = {}
+        # Trust tier of every plugin the last scan saw, loaded or not.
+        self._plugin_tiers: dict[str, str] = {}
         self._version: int = 0
         self._lock = threading.Lock()
         self.registry = registry or PluginRegistry()
@@ -230,6 +261,12 @@ class PluginLoader:
         tool_manifests: dict[str, PluginToolManifest] = {}
         plugin_manifests: dict[str, PluginManifest] = {}
         load_errors: dict[str, str] = {}
+        load_failures: dict[str, str] = {}
+        # Keys are relative to each source's root, so two sources can share
+        # one; the first wins, so builtin (scanned last) never masks another.
+        plugin_tiers: dict[str, str] = {}
+        for _, rel_key, trust_tier in ordered_plugins:
+            plugin_tiers.setdefault(rel_key, trust_tier)
         seen_tool_names: set[str] = set()
         builtin_names = _get_builtin_tool_names()
 
@@ -368,8 +405,9 @@ class PluginLoader:
                                 rel_key,
                                 [t.name for t in new_tools],
                             )
-            except Exception:
+            except Exception as exc:
                 logger.exception("Failed to load plugin %s", rel_key)
+                load_failures[rel_key] = f"{type(exc).__name__}: {exc}"
 
         with self._lock:
             # Only bump the version when the tool set actually changed.
@@ -380,6 +418,8 @@ class PluginLoader:
             self._tool_to_manifest = tool_manifests
             self._plugin_manifests = plugin_manifests
             self._load_errors = load_errors
+            self._load_failures = load_failures
+            self._plugin_tiers = plugin_tiers
             if new_names != old_names:
                 self._version += 1
                 logger.info("Plugin tool set changed (%d tools), version now %d", len(tools), self._version)
@@ -600,6 +640,80 @@ class PluginLoader:
         """Return plugin load errors from the most recent scan."""
         with self._lock:
             return dict(self._load_errors)
+
+    def get_load_failures(self) -> dict[str, str]:
+        """Plugins whose load raised during the most recent scan.
+
+        Maps the relative key to ``"ExceptionType: message"``.  Kept apart from
+        ``get_load_errors`` (the plugins the scan refused): a crash is not a
+        refusal.  For any plugin that is not builtin, both key and message are
+        written by the plugin's author.
+        """
+        with self._lock:
+            return dict(self._load_failures)
+
+    def health_report(self) -> PluginHealthReport:
+        """Loaded plugins, and the ones that need attention.
+
+        The one definition of "unhealthy plugin" for every surface that reports
+        it (prax_doctor, system_status), so they cannot disagree.  Counts:
+
+        - a plugin the last scan refused (``get_load_errors``: blocked by the
+          integrity ledger, a bad manifest, unacknowledged warnings);
+        - a plugin whose load raised during the last scan;
+        - a loaded plugin whose tools have failed since their last success
+          (``failure_count``; it auto-rolls back at the registry's limit).
+
+        Not a registry ``rolled_back`` status: ``rollback()`` reloads at once
+        and the reload re-activates the plugin, so a loaded plugin never shows
+        it.
+
+        Only builtin plugins keep their text.  Every other tier's key,
+        manifest and exception messages are written by the plugin's author,
+        and this report lands in prax_doctor and system_status, which carry no
+        untrusted-content banner.  So those plugins appear as a sanitised,
+        length-capped key and a fixed category (blocked, failed to load,
+        failing) that points at ``plugin_list`` for the detail.  A plugin the
+        last scan did not see is treated as untrusted.
+        """
+        tool_map = self.get_tool_plugin_map()
+        loaded = sorted(set(tool_map.values()))
+        with self._lock:
+            crashed = dict(self._load_failures)
+            tiers = dict(self._plugin_tiers)
+
+        def builtin(rel: str) -> bool:
+            # The registry says "imported" for a key it has never seen.
+            tier = tiers.get(rel) or self.registry.get_trust_tier(rel)
+            return tier == PluginTrust.BUILTIN
+
+        def name(rel: str) -> str:
+            return rel if builtin(rel) else _report_key(rel)
+
+        def problem(rel: str, category: str, detail: str) -> str:
+            if builtin(rel):
+                return f"{rel}: {detail}"
+            return f"{_report_key(rel)}: {category} — see plugin_list for details"
+
+        problems = [
+            problem(rel, "blocked", f"not loaded — {err[:200]}")
+            for rel, err in sorted(self.get_load_errors().items())
+        ]
+        problems += [
+            problem(rel, "failed to load", f"failed to load — {err[:200]}")
+            for rel, err in sorted(crashed.items())
+        ]
+        for rel in loaded:
+            failures = (self.registry.get_plugin_info(rel) or {}).get("failure_count", 0)
+            if failures:
+                problems.append(problem(
+                    rel, "failing",
+                    f"{failures} tool failure(s) since its last success "
+                    f"(auto-rollback at {self.registry.max_failures(rel)})",
+                ))
+        return PluginHealthReport(
+            plugins=[name(rel) for rel in loaded], tool_count=len(tool_map), problems=problems,
+        )
 
     # ------------------------------------------------------------------
     # Hot-swap

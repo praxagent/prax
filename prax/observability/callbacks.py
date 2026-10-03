@@ -224,6 +224,10 @@ class OTelToolCallback(BaseCallbackHandler):
         super().__init__()
         self._spans: dict[UUID, Any] = {}
         self._start_times: dict[UUID, float] = {}
+        # Every open tool run → its name, so a wrapper layer can be recognised.
+        self._tool_names: dict[UUID, str] = {}
+        # Runs that are an inner layer of a call already being traced.
+        self._nested: set[UUID] = set()
 
     def on_tool_start(
         self,
@@ -234,34 +238,67 @@ class OTelToolCallback(BaseCallbackHandler):
         parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> None:
-        self._start_times[run_id] = time.monotonic()
         tool_name = serialized.get("name", "unknown_tool")
+        # Governance and context binding wrap a tool in StructuredTools of the
+        # SAME name that call ``inner.invoke(kwargs)``, and each layer fires
+        # on_tool_start as a child of the one above. Only the outermost run is
+        # the logical call: counting every layer inflated TOOL_CALLS 2-3x and
+        # opened a duplicate span per layer.
+        if parent_run_id is not None and self._tool_names.get(parent_run_id) == tool_name:
+            self._tool_names[run_id] = tool_name
+            self._nested.add(run_id)
+            return
+        self._tool_names[run_id] = tool_name
+        self._start_times[run_id] = time.monotonic()
 
         tracer = _get_tracer()
         if tracer:
+            from prax.agent.message_text import args_preview_for_tool
+            inputs = kwargs.get("inputs")
             span = tracer.start_span(
                 name=f"tool.{tool_name}",
                 attributes={
                     "prax.tool.name": tool_name,
-                    "prax.tool.input_preview": input_str[:200],
+                    "prax.tool.input_preview": args_preview_for_tool(
+                        tool_name, inputs if isinstance(inputs, dict) else input_str, 200),
                 },
             )
             self._spans[run_id] = span
 
         _record_tool_metric(tool_name)
 
+    def _finish_run(self, run_id: UUID) -> bool:
+        """Forget *run_id*; True when it was a nested layer (nothing to close)."""
+        self._tool_names.pop(run_id, None)
+        if run_id in self._nested:
+            self._nested.discard(run_id)
+            return True
+        self._start_times.pop(run_id, None)
+        return False
+
     def on_tool_end(
         self,
-        output: str,
+        output: Any,
         *,
         run_id: UUID,
         **kwargs: Any,
     ) -> None:
-        self._start_times.pop(run_id, None)
+        tool_name = self._tool_names.get(run_id)
+        if self._finish_run(run_id):
+            return
         span = self._spans.pop(run_id, None)
         if span:
-            span.set_attribute("prax.tool.output_preview", (output or "")[:200])
-            span.end()
+            # The span is already popped, so anything that raises before
+            # end() loses it for good. That was every successful tool span:
+            # a ToolCall invoke hands this callback a ToolMessage, which
+            # `(output or "")[:200]` cannot slice. A credential tool's output
+            # is withheld: this attribute goes to the exporter.
+            try:
+                from prax.agent.message_text import preview_for_tool
+                span.set_attribute("prax.tool.output_preview",
+                                   preview_for_tool(tool_name, output, 200))
+            finally:
+                span.end()
 
     def on_tool_error(
         self,
@@ -270,12 +307,17 @@ class OTelToolCallback(BaseCallbackHandler):
         run_id: UUID,
         **kwargs: Any,
     ) -> None:
-        self._start_times.pop(run_id, None)
+        tool_name = self._tool_names.get(run_id)
+        if self._finish_run(run_id):
+            return
         span = self._spans.pop(run_id, None)
         if span:
-            span.set_attribute("error", True)
-            span.set_attribute("error.message", str(error)[:500])
-            span.end()
+            try:
+                from prax.agent.message_text import error_preview_for_tool
+                span.set_attribute("error", True)
+                span.set_attribute("error.message", error_preview_for_tool(tool_name, error, 500))
+            finally:
+                span.end()
 
 
 def _get_tracer():
