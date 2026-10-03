@@ -276,31 +276,34 @@ def log_action(
     searchable, shown in TeamWork's file browser) and to a debug log. So for
     every caller:
 
-    - a credential tool (``hard_floors.CREDENTIAL_TOOLS``) has its argument
-      values masked, names kept (``message_text.args_preview_for_tool``), and
-      its output withheld when *result* is that output (``from_tool``, the
-      default);
-    - any other tool has the secret values handed out this turn masked in its
+    - a tool that returns a secret (``hard_floors.SECRET_RETURNING_TOOLS``:
+      ``browser_login``, ``browser_credentials``) has its output withheld when
+      *result* is that output (``from_tool``, the default). The other
+      credential tools keep theirs — "refused: not https", which site was
+      filled — because those outcomes are what the audit is for;
+    - every tool has the secret values handed out this turn masked in its
       arguments and result (``turn_secrets.scrub``) — a password the model
       passes on to ``browser_fill`` included — before truncating, so no
-      prefix of one survives the cut.
+      prefix of one survives the cut. Arguments are otherwise kept: no
+      credential tool takes a secret as input (that is the point of them), and
+      which domain was asked for is the audit's question.
 
     ``from_tool=False`` marks *result* as governance's own verdict ("BLOCKED —
     …", "REFUSED — hard floor …"). It is kept, scrubbed, for a credential tool
     too: a floor's decisions are what the audit is for.
     """
     # Lazy, so this module keeps no prax imports at import time.
-    from prax.agent.hard_floors import CREDENTIAL_TOOLS
-    from prax.agent.message_text import WITHHELD_OUTPUT, args_preview_for_tool
+    from prax.agent.hard_floors import SECRET_RETURNING_TOOLS
+    from prax.agent.message_text import WITHHELD_OUTPUT
     from prax.agent.turn_secrets import scrub
 
-    if from_tool and result is not None and tool_name in CREDENTIAL_TOOLS:
+    if from_tool and result is not None and tool_name in SECRET_RETURNING_TOOLS:
         result = WITHHELD_OUTPUT
     entry = {
         "timestamp": datetime.now(UTC).isoformat(),
         "tool_name": tool_name,
         "risk": risk.value,
-        "args": _truncate(args_preview_for_tool(tool_name, args, None)),
+        "args": _truncate(scrub(str(args))),
         "result": _truncate(scrub(result)),
     }
     if approval:

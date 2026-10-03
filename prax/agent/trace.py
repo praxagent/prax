@@ -1225,29 +1225,28 @@ def _as_bool(value) -> bool | None:
         return None
 
 
-def _exact_int(value) -> int | None:
-    """*value* as an exact integer — an int, an integral float, or text that
-    spells one (``"42"``, ``" 4_2 "``, ``"5.0"``) — else ``None``. Never goes
-    through float for text, so integers past 2**53 keep every digit."""
+def _as_decimal(value):
+    """*value* as an exact ``Decimal`` — an int, a float (by its shortest repr,
+    so ``5.0`` is 5), or text that spells a number (``"42"``, ``" 4_2 "``,
+    ``"5.0"``, ``"1e3"``) — else ``None``. Never builds an int from text, so a
+    model-sent ``"1e999999999"`` costs nothing (an int with that many digits
+    would freeze the process), and integers past 2**53 keep every digit."""
     from decimal import Decimal, InvalidOperation
 
     if isinstance(value, bool):
         return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value) if value.is_integer() else None  # False for inf/nan
-    if isinstance(value, str):
-        try:
-            return int(value)
-        except ValueError:
-            pass
-        try:
-            number = Decimal(value.strip())
-        except (InvalidOperation, ValueError):
+    try:
+        if isinstance(value, int):
+            return Decimal(value)
+        if isinstance(value, float):
+            number = Decimal(repr(value))
+        elif isinstance(value, str):
+            number = Decimal(value.strip().replace("_", ""))
+        else:
             return None
-        return int(number) if number.is_finite() and number == number.to_integral_value() else None
-    return None
+    except (InvalidOperation, ValueError):
+        return None
+    return number if number.is_finite() else None
 
 
 def _loosely_equal(asked, ran) -> bool:
@@ -1258,9 +1257,11 @@ def _loosely_equal(asked, ran) -> bool:
     scalars compare by ``str()`` (``"5"`` → ``5``); when either side is a
     boolean, by pydantic's own bool parsing (``1``/``"yes"``/``"on"`` →
     ``True``, ``0``/``"no"``/``"off"`` → ``False``; anything it rejects
-    differs); when either side is a number, as exact integers when both are
-    integral (``"9007199254740993"`` ≠ ``9007199254740992``), and as floats
-    only otherwise (``"5.5"`` → ``5.5``).
+    differs); when either side is a number: as floats when validation made
+    *ran* a float (that is the conversion validation itself performed, so
+    ``"0.1"`` → ``0.1`` and a big int → its float are equal), otherwise exactly
+    as decimals (``"9007199254740993"`` ≠ ``9007199254740992``, ``"5.0"`` →
+    ``5``).
     """
     if _canonical(asked) == _canonical(ran):
         return True
@@ -1278,10 +1279,10 @@ def _loosely_equal(asked, ran) -> bool:
             a, r = _as_bool(asked), _as_bool(ran)
             return a is not None and a == r
         if isinstance(asked, (int, float)) or isinstance(ran, (int, float)):
-            a, r = _exact_int(asked), _exact_int(ran)
-            if a is not None and r is not None:
-                return a == r
-            return float(asked) == float(ran)
+            if isinstance(ran, float):
+                return float(asked) == ran
+            a, r = _as_decimal(asked), _as_decimal(ran)
+            return a is not None and r is not None and a == r
     except (TypeError, ValueError, OverflowError):
         pass
     return False

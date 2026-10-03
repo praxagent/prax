@@ -32,9 +32,11 @@ would blank out ordinary words. Matching is exact: a secret the model splits,
 re-encodes or transforms is not caught.
 
 Lifetime: the values live on the turn's ``TurnGovernanceState`` — empty at
-``begin_turn``, cleared when the turn's audit log is drained, shared with the
-contexts the turn copies (tools, spokes, parallel workers) and with no other
-turn or user. (Outside any turn, a registration creates a state visible only
+``begin_turn``, shared with the contexts the turn copies (tools, spokes,
+parallel workers) and with no other turn or user. They are NOT cleared when the
+audit log is drained: a timed-out or stopped turn's worker can still be running
+tools on that same state, and its calls must stay masked. They go away with the
+state object, which the next ``begin_turn`` replaces. (Outside any turn, a registration creates a state visible only
 in the context that made it — ``governed_tool.current_turn_state``.) In
 memory only: never written, logged or hashed by this module,
 and no regex is compiled from them (``re`` caches compiled patterns
@@ -142,9 +144,9 @@ def scrub(text):
 def scrubber():
     """A :func:`scrub` bound to the values registered so far.
 
-    For a sink written while the turn is ending, after draining its audit log
-    has cleared the turn's state (the orchestrator's ``trace.log``). It holds
-    the values: keep it local to that one write.
+    For a sink written while the turn is ending (the orchestrator's
+    ``trace.log``), so the values it masks are fixed for that one write. It
+    holds the values: keep it local to that write.
     """
     secrets = _registered()
     return lambda text: _mask(text, secrets)

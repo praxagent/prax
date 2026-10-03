@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -82,6 +83,12 @@ def _workspace_roots() -> list[str]:
     return [r.rstrip(os.sep) + os.sep for r in roots]
 
 
+# A location can carry plugin-authored text (a workspace plugin's directory
+# name), so rows keep only characters a path needs, capped.
+_UNSAFE_LOCATION_CHARS = re.compile(r"[^A-Za-z0-9._/<>:-]")
+_LOCATION_MAX = 120
+
+
 def _short_path(pathname: str) -> str:
     """A location that is useful in a report and names no user."""
     idx = pathname.rfind(_SITE_PACKAGES)
@@ -118,7 +125,8 @@ class _Group:
         return {
             "level": self.level,
             "logger": self.logger,
-            "location": f"{_short_path(self.pathname)}:{self.lineno}",
+            "location": _UNSAFE_LOCATION_CHARS.sub(
+                "_", f"{_short_path(self.pathname)}:{self.lineno}")[:_LOCATION_MAX],
             "template": self.template,
             "count": self.count,
             "first_seen": self.first_seen,

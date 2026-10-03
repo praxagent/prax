@@ -125,8 +125,12 @@ class TurnGovernanceState:
     # Tool calls refused because the turn is over budget.
     budget_refusals: int = 0
     # Secret values a credential tool handed out this turn, masked by every
-    # observability sink (prax.agent.turn_secrets). In memory only.
-    secrets: set[str] = field(default_factory=set)
+    # observability sink (prax.agent.turn_secrets). In memory only, never in a
+    # repr. Not cleared by reset(): the audit drain runs at turn end, but a
+    # timed-out or stopped turn's graph worker can still be running tools on
+    # this same object — they must stay masked. The values go away with the
+    # object, which begin_turn replaces every turn.
+    secrets: set[str] = field(default_factory=set, repr=False)
 
     def reset(self) -> None:
         """Clear everything IN PLACE.
@@ -156,7 +160,6 @@ class TurnGovernanceState:
         self.spoke_failures.clear()
         self.spoke_calls.clear()
         self.budget_refusals = 0
-        self.secrets.clear()
 
 
 _turn_state: ContextVar[TurnGovernanceState | None] = ContextVar(

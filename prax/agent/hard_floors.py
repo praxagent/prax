@@ -46,6 +46,10 @@ CREDENTIAL_TOOLS: frozenset[str] = frozenset({
     "browser_request_login",  # starts a login the user completes
     "browser_finish_login",   # completes a login
 })
+# The credential tools whose OUTPUT is a secret. The others report what they
+# did ("filled the login form", "refused: page is not https") — outcomes the
+# audit must keep.
+SECRET_RETURNING_TOOLS: frozenset[str] = frozenset({"browser_login", "browser_credentials"})
 _CREDENTIALS = CREDENTIAL_TOOLS
 _AUTHORITY = {
     # code that then runs with Prax's own authority

@@ -174,11 +174,21 @@ class TestTurnScope:
             return turn_secrets.scrub(SECRET)
         assert contextvars.copy_context().run(_next_turn) == SECRET
 
-    def test_draining_the_turn_clears_them(self, turn):
+    def test_draining_the_audit_log_keeps_them(self, turn):
+        """A timed-out or stopped turn's worker can still run tools after the
+        turn-end drain, on this same state; its calls must stay masked."""
         turn_secrets.register(SECRET)
         gov.drain_audit_log()
-        assert turn.secrets == set()
+        assert turn_secrets.scrub(f"text={SECRET}") == "text=***"
+
+    def test_the_next_turn_starts_without_them(self, turn):
+        turn_secrets.register(SECRET)
+        gov.begin_turn()
         assert turn_secrets.scrub(SECRET) == SECRET
+
+    def test_the_state_repr_never_shows_them(self, turn):
+        turn_secrets.register(SECRET)
+        assert SECRET not in repr(turn)
 
     def test_another_users_turn_never_sees_them(self, turn):
         turn_secrets.register(SECRET)
@@ -191,7 +201,7 @@ class TestTurnScope:
         mask = turn_secrets.scrubber()
         gov.drain_audit_log()
         assert mask(f"a {SECRET}") == "a ***"
-        assert turn_secrets.scrub(SECRET) == SECRET
+        assert turn_secrets.scrub(SECRET) == "***"     # the drain no longer clears them
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +218,7 @@ class TestAuditLog:
         assert SECRET not in repr(audit)
         (entry,) = audit
         assert entry["result"] == WITHHELD_OUTPUT
-        assert entry["args"] == "{'domain': '***'}"
+        assert entry["args"] == f"{{'domain': '{SITE}'}}"   # which site: the audit's question
 
     def test_the_password_passed_on_to_browser_fill_is_masked(self, turn, quiet_governance):
         login, fill = gov.govern_spoke_tools([browser_login, browser_fill])
@@ -236,7 +246,7 @@ class TestAuditLog:
         entry = log_action("browser_login", RiskLevel.HIGH, {"domain": SITE},
                            result="REFUSED — hard floor, no person's decision", from_tool=False)
         assert entry["result"] == "REFUSED — hard floor, no person's decision"
-        assert entry["args"] == "{'domain': '***'}"
+        assert entry["args"] == f"{{'domain': '{SITE}'}}"
 
     def test_masked_before_truncation(self, turn):
         from prax.agent.action_policy import RiskLevel, log_action
@@ -386,3 +396,57 @@ def test_running_node_masks_a_registered_value(turn):
     handler.on_tool_start({"name": "browser_fill"}, str(inputs), run_id=uuid4(), inputs=inputs)
     (node,) = graph._nodes.values()
     assert node.summary == "{'selector': '#pw', 'text': '***'}"
+
+
+class TestOutcomesOfCredentialToolsThatReturnNoSecret:
+    def test_a_fill_login_outcome_stays_in_the_audit(self, turn):
+        """browser_fill_login types the password itself and reports what it did;
+        "refused: not https" is exactly what the audit is for."""
+        from prax.agent.action_policy import RiskLevel, log_action
+        turn_secrets.register(SECRET)
+        entry = log_action("browser_fill_login", RiskLevel.HIGH, {"domain": SITE},
+                           result=f"refused: {SITE} is not https (typed {SECRET}?)")
+        assert entry["result"].startswith(f"refused: {SITE} is not https")
+        assert SECRET not in entry["result"]
+        assert entry["args"] == f"{{'domain': '{SITE}'}}"
+
+    def test_a_secret_returning_tool_output_is_still_withheld(self, turn):
+        from prax.agent.action_policy import RiskLevel, log_action
+        entry = log_action("browser_credentials", RiskLevel.HIGH, {"domain": SITE},
+                           result=f"user: tj, password: {SECRET}")
+        assert entry["result"] == WITHHELD_OUTPUT
+
+
+
+class TestSpokeAnswers:
+    """A spoke that echoes a password it was handed must not post it to
+    TeamWork, the trace or the logs — the model still gets the answer."""
+
+    def test_a_spoke_answer_is_scrubbed_at_its_sinks(self, turn, monkeypatch, caplog):
+        from prax.agent.spokes import _runner
+
+        class _Graph:
+            def invoke(self, inputs, config=None):
+                return {"messages": [AIMessage(content=f"Logged in; the password was {SECRET}")]}
+
+        posted, pushed = [], []
+        monkeypatch.setattr(_runner, "build_agent_loop", lambda llm, tools, **k: _Graph())
+        monkeypatch.setattr(_runner, "build_llm", lambda **k: object())
+        import prax.services.teamwork_hooks as hooks
+        monkeypatch.setattr(hooks, "post_to_channel", lambda ch, content, agent_name=None: posted.append(content))
+        monkeypatch.setattr(hooks, "push_live_output", lambda *a, **k: pushed.append(a[1] if len(a) > 1 else ""))
+        monkeypatch.setattr(hooks, "set_role_status", lambda *a, **k: None)
+        turn_secrets.register(SECRET)
+        with caplog.at_level(logging.INFO):
+            answer = _runner.run_spoke(
+                task="log in", system_prompt="s", config_key="subagent_test",
+                tools=[_tool_named("noop")], role_name="Browser Agent", channel="browser")
+        assert SECRET in answer                       # the caller gets it as written
+        assert posted and SECRET not in "".join(posted)
+        assert SECRET not in "".join(pushed)
+        assert SECRET not in caplog.text
+
+
+def _tool_named(name):
+    from langchain_core.tools import StructuredTool
+    return StructuredTool.from_function(func=lambda x="": name, name=name, description=name)

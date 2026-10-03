@@ -304,16 +304,23 @@ def run_spoke(
         _finish(role_name, label=label, status="cancelled", start_time=_spoke_start)
         raise
     except Exception as exc:
-        logger.warning("Spoke [%s] failed: %s", label, exc, exc_info=True)
+        import traceback
+
+        from prax.agent.turn_secrets import scrub
+        shown_error = scrub(str(exc))
+        # The traceback is kept (operators and prax_doctor read these), with
+        # this turn's secret values masked like every other sink.
+        logger.warning("Spoke [%s] failed: %s\n%s", label, shown_error,
+                       scrub("".join(traceback.format_exception(exc))).rstrip())
         _record_failure(label, exc)
-        span.end(status="failed", summary=str(exc)[:200])
+        span.end(status="failed", summary=shown_error[:200])
         _finish(role_name, label=label, status="failed", start_time=_spoke_start)
         try:
             from prax.services.health_telemetry import EventCategory, Severity, record_event
             record_event(
                 EventCategory.SPOKE_FAILURE, Severity.WARNING,
                 component=label,
-                details=f"{type(exc).__name__}: {str(exc)[:200]}",
+                details=f"{type(exc).__name__}: {shown_error[:200]}",
                 latency_ms=((_time.monotonic() - _spoke_start) * 1000),
             )
         except Exception:
@@ -331,9 +338,14 @@ def run_spoke(
                 result.get("messages", []),
                 preserve_tool_result_prefixes,
             )
-            logger.info("Spoke [%s] completed (%d tool calls): %s", label, tool_count, final_content[:120])
-            span.end(status="completed", summary=final_content[:200], tool_calls=tool_count)
-            _finish(role_name, channel, final_content, label=label, status="success", start_time=_spoke_start)
+            # The sinks get a copy with this turn's secret values masked: a spoke
+            # that echoes a password it was handed must not post it to TeamWork,
+            # the trace or the logs. The model gets the answer as written.
+            from prax.agent.turn_secrets import scrub
+            shown = scrub(final_content)
+            logger.info("Spoke [%s] completed (%d tool calls): %s", label, tool_count, shown[:120])
+            span.end(status="completed", summary=shown[:200], tool_calls=tool_count)
+            _finish(role_name, channel, shown, label=label, status="success", start_time=_spoke_start)
             try:
                 from prax.services.health_telemetry import EventCategory, record_event
                 record_event(

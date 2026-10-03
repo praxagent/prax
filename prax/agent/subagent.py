@@ -236,14 +236,18 @@ def _run_subagent(task: str, category: str) -> str:
     # Extract the final AI response.
     for msg in reversed(result.get("messages", [])):
         if isinstance(msg, AIMessage) and msg.content:
-            logger.info("Sub-agent [%s] completed: %s", category, msg.content[:80])
-            span.end(status="completed", summary=msg.content[:200], tool_calls=tool_count)
+            # Sinks get this turn's secret values masked; the caller gets the
+            # answer as written (see spokes/_runner.py).
+            from prax.agent.turn_secrets import scrub
+            shown = scrub(str(msg.content))
+            logger.info("Sub-agent [%s] completed: %s", category, shown[:80])
+            span.end(status="completed", summary=shown[:200], tool_calls=tool_count)
             # Route engineering work to the #engineering channel.
             if category in _engineering_categories:
                 from prax.services.teamwork_hooks import post_to_channel, push_live_output, set_role_status
                 set_role_status("Executor", "idle")
-                post_to_channel("engineering", msg.content[:3000], agent_name="Executor")
-                push_live_output("Executor", f"\n[{category}] completed: {msg.content[:200]}\n", status="completed")
+                post_to_channel("engineering", shown[:3000], agent_name="Executor")
+                push_live_output("Executor", f"\n[{category}] completed: {shown[:200]}\n", status="completed")
             # Auto-advance the plan — mark the next incomplete step as done
             # so the orchestrator doesn't loop trying to re-delegate.
             _auto_advance_plan()

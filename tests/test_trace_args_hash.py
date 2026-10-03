@@ -252,6 +252,9 @@ def test_a_different_tool_called_inside_a_tool_is_its_own_span():
     ({"n": 1e20}, {"n": 10**20}),
     ({"n": "5.0"}, {"n": 5}),
     ({"n": "5.5"}, {"n": 5.5}),
+    # validation's own int -> float conversion for a float-typed parameter
+    ({"n": 10**20 + 1}, {"n": 1e20}),
+    ({"n": "0.1"}, {"n": 0.1}),
     ({"opts": {"k": "1"}}, {"opts": {"k": 1, "extra": None}}),  # nested model + default
     ({"tags": ["a", "b"]}, {"tags": ("a", "b")}),
     ({"q": "x", "expected_observation": "y"}, {"q": "x"}),
@@ -276,7 +279,6 @@ def test_arguments_that_survive_validation_do_not_differ(asked, ran):
     # a changed large integer is not lost in a float round trip
     ({"n": 2**53 + 1}, {"n": 2**53}),
     ({"n": "9007199254740993"}, {"n": 9007199254740992}),
-    ({"n": 10**20 + 1}, {"n": 1e20}),
     ({"n": 5}, {"n": 5.5}),
     ({"opts": {"k": 1}}, {"opts": {"k": 2}}),
     ({"tags": ["a", "b"]}, {"tags": ["a"]}),
@@ -334,3 +336,17 @@ def test_the_requested_arguments_never_reach_the_trace():
     dumped = json.dumps(graph.to_dict())
     assert span.summary == "filled"
     assert "#email" not in dumped and "tj@example.com" not in dumped
+
+
+def test_a_huge_exponent_is_compared_without_building_the_number():
+    """A model-sent "1e999999999" used to become a billion-digit int and freeze
+    the process (it holds the GIL); compared as a Decimal it costs nothing."""
+    import time
+
+    from prax.agent.trace import arguments_differ
+
+    t0 = time.monotonic()
+    assert arguments_differ({"n": "1e999999999"}, {"n": 5}) is True
+    assert arguments_differ({"n": "1e999999999"}, {"n": "1e999999999"}) is False
+    assert time.monotonic() - t0 < 1.0
+

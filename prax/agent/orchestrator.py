@@ -2475,7 +2475,7 @@ class ConversationAgent:
         # trace.log is committed with the workspace, searchable and shown in
         # TeamWork's file browser, so a credential tool's output is withheld
         # and the secret values it handed out this turn are masked in every
-        # entry. Bound BEFORE draining: the drain clears the turn's values.
+        # entry, with the values fixed for this write.
         from prax.agent.turn_secrets import scrubber
         mask = scrubber()
 
