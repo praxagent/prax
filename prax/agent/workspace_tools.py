@@ -1245,28 +1245,20 @@ def system_status() -> str:
         from prax.plugins.loader import get_plugin_loader
         from prax.settings import settings as _settings
 
-        loader = get_plugin_loader()
-        plugin_tools = loader.get_tools()
-        plugin_names = sorted({t.name.split("_")[0] for t in plugin_tools}) if plugin_tools else []
+        report = get_plugin_loader().health_report()
 
         from prax.agent.tool_registry import get_registered_tools
         total_tools = len(get_registered_tools())
 
         lines.append(f"**Tools:** {total_tools} total")
-        lines.append(f"**Plugins:** {len(plugin_names)} loaded ({', '.join(plugin_names)})")
-        lines.append(f"**Plugin tools:** {len(plugin_tools)}")
-
-        # Plugin health from monitored wrappers.
-        registry = loader._registry if hasattr(loader, "_registry") else None
-        if registry and hasattr(registry, "get_all_status"):
-            statuses = registry.get_all_status()
-            failing = {k: v for k, v in statuses.items() if v.get("failures", 0) > 0}
-            if failing:
-                lines.append("**Failing plugins:**")
-                for name, info in failing.items():
-                    lines.append(f"  - {name}: {info['failures']} failures")
-            else:
-                lines.append("**Plugin health:** all OK")
+        lines.append(f"**Plugins:** {len(report.plugins)} loaded ({', '.join(report.plugins)})")
+        lines.append(f"**Plugin tools:** {report.tool_count}")
+        if report.problems:
+            lines.append("**Plugins needing attention:**")
+            for problem in report.problems:
+                lines.append(f"  - {problem}")
+        else:
+            lines.append("**Plugin health:** all OK")
 
         lines.append(f"**LLM:** {_settings.default_llm_provider} / {_settings.base_model}")
         lines.append(f"**Self-improve:** {'enabled' if _settings.self_improve_enabled else 'disabled'}")

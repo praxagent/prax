@@ -109,6 +109,12 @@ def create_app():
     for noisy in ("httpx", "httpcore"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
+    # Count recurring warnings/errors by call site for prax_doctor, so it never
+    # has to read the (unrotated) log file. Keeps no formatted messages.
+    if settings.log_health_enabled:
+        from prax.services import log_health
+        log_health.install()
+
     logger = logging.getLogger(__name__)
     logger.info(
         "Starting %s — provider=%s default_model=%s temperature=%s encoding=%s",

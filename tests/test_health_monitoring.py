@@ -697,6 +697,44 @@ class TestGetHealthStatus:
         assert status["stats"]["tool_errors"] == 1
 
 
+class TestGetCheck:
+    """The staleness rule get_health_status and prax_doctor share."""
+
+    def test_runs_a_check_when_none_exists(self):
+        import prax.agent.health_monitor as _mon
+        from prax.agent.health_monitor import get_check
+
+        check = get_check()
+        assert check is _mon._last_check is not None
+
+    def test_reruns_a_stale_check(self):
+        import prax.agent.health_monitor as _mon
+        from prax.agent.health_monitor import STALE_AFTER_S, HealthCheck, get_check
+
+        stale = HealthCheck(timestamp=time.time() - STALE_AFTER_S - 1)
+        _mon._last_check = stale
+
+        check = get_check()
+        assert check is not stale
+        assert _mon._last_check is check
+
+    def test_reuses_a_fresh_check(self):
+        import prax.agent.health_monitor as _mon
+        from prax.agent.health_monitor import HealthCheck, get_check
+
+        fresh = HealthCheck(timestamp=time.time() - 10)
+        _mon._last_check = fresh
+        assert get_check() is fresh
+
+    def test_max_age_is_the_caller_s(self):
+        import prax.agent.health_monitor as _mon
+        from prax.agent.health_monitor import HealthCheck, get_check
+
+        recent = HealthCheck(timestamp=time.time() - 10)
+        _mon._last_check = recent
+        assert get_check(max_age_s=5) is not recent
+
+
 # ---------------------------------------------------------------------------
 # 12. Event pruning removes old events
 # ---------------------------------------------------------------------------
