@@ -310,6 +310,24 @@ class AppSettings(BaseSettings):
         default="label", alias="INJECTION_SCREEN_MODE",
         description="label = warn the model inline; block = withhold flagged content.",
     )
+    child_env_strip_proxy_credentials: bool = Field(
+        default=True, alias="CHILD_ENV_STRIP_PROXY_CREDENTIALS",
+        description=(
+            "Processes Prax starts (git, gh, uv, plugin subprocesses) get proxy URLs "
+            "without Prax's proxy credential, or CHILD_PROXY_URL's identity when set "
+            "(prax/services/child_env.py). On by default because it changes nothing "
+            "while HTTPS_PROXY carries no credential; once the forward proxy "
+            "authenticates callers, turning it off hands Prax's identity to every child."
+        ),
+    )
+    child_proxy_url: str | None = Field(
+        default=None, alias="CHILD_PROXY_URL",
+        description=(
+            "Proxy URL for processes Prax starts, with their OWN proxy identity, e.g. "
+            "http://prax-tools:<token>@127.0.0.1:8786. Unset: children get Prax's proxy "
+            "URL without its credential, so an authenticating proxy refuses them (407)."
+        ),
+    )
     discord_use_proxy: bool = Field(
         default=False, alias="DISCORD_USE_PROXY",
         description=(

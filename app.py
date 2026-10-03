@@ -25,6 +25,13 @@ from prax.token_management import get_encoding_for_model
 # See docs/security/deployment-topology.md.
 _export_proxy_env_from_dotenv()
 
+# ...and keep Prax's proxy credential out of every process it starts: children
+# get the proxy URL without it, or their own identity (CHILD_PROXY_URL).
+if settings.child_env_strip_proxy_credentials:
+    from prax.services import child_env
+
+    child_env.install(settings.child_proxy_url or "")
+
 
 def create_app():
     app = Flask(__name__)
