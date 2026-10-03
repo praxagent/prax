@@ -1,6 +1,8 @@
 """Tests for prax.agent.governed_tool — the single governance choke point."""
 from __future__ import annotations
 
+from collections import deque
+
 import pytest
 from langchain_core.tools import StructuredTool
 
@@ -185,6 +187,60 @@ class TestErrorAudit:
             governed.invoke({"x": "test"})
         assert len(_audit_buffer) == 1
         assert "ERROR" in _audit_buffer[0]["result"]
+
+
+class TestHealthTelemetry:
+    """The health monitor's tool error rate needs successes in its denominator."""
+
+    @pytest.fixture(autouse=True)
+    def _telemetry(self, tmp_path, monkeypatch):
+        import prax.services.health_telemetry as tel
+        import prax.settings as settings_mod
+
+        monkeypatch.setattr(settings_mod.settings, "health_monitor_enabled", True)
+        monkeypatch.setattr(tel, "_events", [])
+        monkeypatch.setattr(tel, "_tool_successes", deque(maxlen=tel._MAX_SUCCESS_TIMESTAMPS))
+        monkeypatch.setattr(tel, "_disk_rows", 0)
+        monkeypatch.setattr(tel, "_initialized", True)
+        monkeypatch.setattr(tel, "_file_path", tmp_path / ".health_telemetry.jsonl")
+        _reset()
+        return tel
+
+    @staticmethod
+    def _flaky(x: str = "") -> str:
+        if x == "boom":
+            raise RuntimeError("tool broke")
+        return f"ok:{x}"
+
+    def test_one_failure_in_ten_calls_is_a_ten_percent_error_rate(self, _telemetry):
+        from prax.agent.governed_tool import wrap_with_governance
+
+        governed = wrap_with_governance(_make_tool("get_current_datetime", self._flaky))
+        for i in range(9):
+            governed.invoke({"x": str(i)})  # distinct args: the loop detector stays quiet
+        with pytest.raises(RuntimeError, match="tool broke"):
+            governed.invoke({"x": "boom"})
+
+        stats = _telemetry.get_rolling_stats(60)
+        assert stats["tool_calls"] == 10
+        assert stats["tool_errors"] == 1
+        assert stats["tool_error_rate"] == 0.1
+        # Successes are counted, not stored: the event list holds the error only.
+        assert [e["category"] for e in _telemetry._events] == ["tool_error"]
+
+    def test_spoke_layer_records_neither(self, _telemetry):
+        # Only the hub records TOOL_ERROR, so only the hub may record
+        # TOOL_SUCCESS — or a delegation would count once per inner step.
+        from prax.agent.governed_tool import wrap_with_governance
+
+        governed = wrap_with_governance(
+            _make_tool("get_current_datetime", self._flaky), layer="spoke",
+        )
+        governed.invoke({"x": "1"})
+        with pytest.raises(RuntimeError):
+            governed.invoke({"x": "boom"})
+
+        assert _telemetry.get_rolling_stats(60)["tool_calls"] == 0
 
 
 class TestToolMetadataPrecedence:

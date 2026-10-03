@@ -4,6 +4,8 @@ from __future__ import annotations
 import logging
 import threading
 import time as _time
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models import BaseLanguageModel
@@ -26,6 +28,21 @@ logger = logging.getLogger(__name__)
 _tier_choice_log: list[dict] = []
 _tier_lock = threading.Lock()
 
+# Set while a diagnostic builds models only to prove they CAN be built
+# (prax_doctor).  Those builds are not tier choices: in the ledger they would
+# land in the turn's trace as if the turn had picked every enabled tier.
+_probing: ContextVar[bool] = ContextVar("llm_factory_probing", default=False)
+
+
+@contextmanager
+def probe_builds():
+    """Build LLMs inside this block without recording them as tier choices."""
+    token = _probing.set(True)
+    try:
+        yield
+    finally:
+        _probing.reset(token)
+
 
 def _record_tier_choice(
     *,
@@ -46,6 +63,8 @@ def _record_tier_choice(
         "span_id": span_id,
         "span_name": span_name,
     }
+    if _probing.get():
+        return entry
     with _tier_lock:
         _tier_choice_log.append(entry)
     return entry

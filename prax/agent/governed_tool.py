@@ -63,6 +63,8 @@ from prax.agent.action_policy import (
     get_tool_capability,
     log_action,
 )
+from prax.agent.hard_floors import CREDENTIAL_TOOLS
+from prax.agent.message_text import WITHHELD_OUTPUT
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +124,13 @@ class TurnGovernanceState:
     graph: Any = None
     # Tool calls refused because the turn is over budget.
     budget_refusals: int = 0
+    # Secret values a credential tool handed out this turn, masked by every
+    # observability sink (prax.agent.turn_secrets). In memory only, never in a
+    # repr. Not cleared by reset(): the audit drain runs at turn end, but a
+    # timed-out or stopped turn's graph worker can still be running tools on
+    # this same object — they must stay masked. The values go away with the
+    # object, which begin_turn replaces every turn.
+    secrets: set[str] = field(default_factory=set, repr=False)
 
     def reset(self) -> None:
         """Clear everything IN PLACE.
@@ -165,6 +174,11 @@ def current_turn_state() -> TurnGovernanceState:
         state = TurnGovernanceState()
         _turn_state.set(state)
     return state
+
+
+def peek_turn_state() -> TurnGovernanceState | None:
+    """The current context's turn state, or ``None`` — never creates one."""
+    return _turn_state.get()
 
 
 def begin_turn(budget: int = 0) -> TurnGovernanceState:
@@ -419,7 +433,7 @@ def wrap_with_governance(
                     logger.info("Epistemic gate blocked %s: %s", tool_name, gate_msg)
                     state.audit.append(log_action(
                         tool_name, static_risk, kwargs,
-                        result=f"BLOCKED — epistemic gate ({gate_msg[:80]})",
+                        result=f"BLOCKED — epistemic gate ({gate_msg[:80]})", from_tool=False,
                     ))
                     return gate_msg
             except Exception:
@@ -472,7 +486,7 @@ def wrap_with_governance(
                         state.trifecta_seen.add(_tf_key)
                         state.audit.append(log_action(
                             tool_name, RiskLevel.HIGH, kwargs,
-                            result="BLOCKED — lethal-trifecta confirmation required"))
+                            result="BLOCKED — lethal-trifecta confirmation required", from_tool=False))
                         logger.info("Lethal-trifecta: blocked external-sink %s pending "
                                     "confirmation (turn touched untrusted + private)", tool_name)
                         return (
@@ -495,7 +509,7 @@ def wrap_with_governance(
             if state.tool_call_count > state.tool_call_budget and tool_name != "request_extended_budget":
                 state.audit.append(log_action(
                     tool_name, risk, kwargs,
-                    result="BLOCKED — tool call budget exhausted",
+                    result="BLOCKED — tool call budget exhausted", from_tool=False,
                 ))
                 try:
                     from prax.services.health_telemetry import EventCategory, Severity, record_event
@@ -520,7 +534,7 @@ def wrap_with_governance(
                 if loop_msg:
                     state.audit.append(log_action(
                         tool_name, risk, kwargs,
-                        result=f"LOOP — {loop_msg[:80]}",
+                        result=f"LOOP — {loop_msg[:80]}", from_tool=False,
                     ))
                     return loop_msg
             except Exception:
@@ -560,7 +574,7 @@ def wrap_with_governance(
                 elif tool_name not in state.high_risk_seen:
                     state.high_risk_seen.add(tool_name)
                     state.audit.append(log_action(
-                        tool_name, risk, kwargs, result="BLOCKED — awaiting confirmation",
+                        tool_name, risk, kwargs, result="BLOCKED — awaiting confirmation", from_tool=False,
                     ))
                     logger.info(
                         "HIGH-risk tool %s blocked pending confirmation (args=%s)",
@@ -597,7 +611,7 @@ def wrap_with_governance(
                         pass
                     state.audit.append(log_action(
                         tool_name, risk, kwargs,
-                        result=f"BLOCKED — semantic entropy ({entropy_warning[:80]})",
+                        result=f"BLOCKED — semantic entropy ({entropy_warning[:80]})", from_tool=False,
                     ))
                     return entropy_warning
             except Exception:
@@ -624,6 +638,13 @@ def wrap_with_governance(
         try:
             result = tool.invoke(kwargs if kwargs else {})
             result_str = str(result) if result is not None else None
+            # A credential tool's secret values are masked by every sink for
+            # the rest of the turn — including when the model passes them on
+            # as another tool's argument (browser_login -> browser_fill).
+            if tool_name in CREDENTIAL_TOOLS:
+                from prax.agent.message_text import tool_output_text
+                from prax.agent.turn_secrets import register_from_output
+                register_from_output(tool_name, tool_output_text(result))
             state.audit.append(log_action(
                 tool_name, risk, kwargs, result=result_str,
                 approval=prov.get("approval") or (
@@ -687,10 +708,27 @@ def wrap_with_governance(
             elif reliability is not None and result is not None:
                 result = _tag_result(result, reliability, epistemic_note)
 
+            # The tool error rate's denominator.  Without it the window held
+            # only TOOL_ERROR events and every rate read 0% or 100%.  Counted
+            # last, so a raise in the tagging above counts once, as an error.
+            # Hub only, like TOOL_ERROR: a delegate's inner spoke tools are not
+            # counted, so a delegation is one call, not one plus its steps.
+            # A count, not an event: at tool-call rate, events evicted the
+            # rare alerts from the telemetry store's cap.
+            try:
+                from prax.services.health_telemetry import count_tool_success
+                count_tool_success()
+            except Exception:
+                pass
+
             return result
         except Exception as exc:
+            # A credential tool's exception text is its own output: the type
+            # is recorded, the message withheld (log_action's rule).
+            error = (f"ERROR: {type(exc).__name__} ({WITHHELD_OUTPUT})"
+                     if tool_name in CREDENTIAL_TOOLS else f"ERROR: {exc}")
             state.audit.append(log_action(
-                tool_name, risk, kwargs, result=f"ERROR: {exc}",
+                tool_name, risk, kwargs, result=error, from_tool=False,
             ))
             if hub:
                 try:
@@ -896,7 +934,7 @@ def _floor_gate(state: TurnGovernanceState, tool_name: str, kwargs: dict,
         return None
     if human_approval.enabled():
         state.audit.append(log_action(
-            tool_name, RiskLevel.HIGH, kwargs, result="PAUSED — hard floor, awaiting a person"))
+            tool_name, RiskLevel.HIGH, kwargs, result="PAUSED — hard floor, awaiting a person", from_tool=False))
         decision = human_approval.request(
             tool_name, kwargs, kind="hard_floor",
             reason=f"{tool_name} is a hard-floor action: it always needs a person's decision.",
@@ -905,13 +943,13 @@ def _floor_gate(state: TurnGovernanceState, tool_name: str, kwargs: dict,
             state.human_approved.add(call_key)
             state.audit.append(log_action(
                 tool_name, RiskLevel.HIGH, kwargs,
-                result=f"APPROVED by a person — hard floor (approval {decision.approval_id})"))
+                result=f"APPROVED by a person — hard floor (approval {decision.approval_id})", from_tool=False))
             prov["approval"] = f"person:{decision.approval_id}"
             return None
         why = ("a timed grant can't approve a hard-floor action"
                if decision.approved else decision.message[:120])
         state.audit.append(log_action(
-            tool_name, RiskLevel.HIGH, kwargs, result=f"REFUSED — hard floor: {why}"))
+            tool_name, RiskLevel.HIGH, kwargs, result=f"REFUSED — hard floor: {why}", from_tool=False))
         if decision.message.startswith("PARKED"):
             return decision.message  # the model must say the task is waiting, not refused
         return hard_floors.refusal(tool_name, target, approvals=True)
@@ -919,11 +957,11 @@ def _floor_gate(state: TurnGovernanceState, tool_name: str, kwargs: dict,
         state.human_approved.add(call_key)
         state.audit.append(log_action(
             tool_name, RiskLevel.HIGH, kwargs,
-            result="APPROVED by the user's own message — hard floor"))
+            result="APPROVED by the user's own message — hard floor", from_tool=False))
         prov["approval"] = "user_message"
         return None
     state.audit.append(log_action(
-        tool_name, RiskLevel.HIGH, kwargs, result="REFUSED — hard floor, no person's decision"))
+        tool_name, RiskLevel.HIGH, kwargs, result="REFUSED — hard floor, no person's decision", from_tool=False))
     return hard_floors.refusal(tool_name, target, approvals=False)
 
 
@@ -936,7 +974,7 @@ def _ask_a_person(state: TurnGovernanceState, tool_name: str, kwargs: dict,
 
     state.audit.append(log_action(
         tool_name, RiskLevel.HIGH, kwargs,
-        result=f"PAUSED — awaiting out-of-band approval ({kind})"))
+        result=f"PAUSED — awaiting out-of-band approval ({kind})", from_tool=False))
     decision = human_approval.request(
         tool_name, kwargs, kind=kind, reason=reason,
         summary=_summarize_args(kwargs, max_len=600))
@@ -944,19 +982,24 @@ def _ask_a_person(state: TurnGovernanceState, tool_name: str, kwargs: dict,
         state.human_approved.add(call_key)
         state.audit.append(log_action(
             tool_name, RiskLevel.HIGH, kwargs,
-            result=f"APPROVED by a person (approval {decision.approval_id})"))
+            result=f"APPROVED by a person (approval {decision.approval_id})", from_tool=False))
         if prov is not None:
             prov["approval"] = f"person:{decision.approval_id}"
         return None
     state.audit.append(log_action(
         tool_name, RiskLevel.HIGH, kwargs,
-        result=f"REFUSED — {decision.message[:120]}"))
+        result=f"REFUSED — {decision.message[:120]}", from_tool=False))
     return f"⛔ {decision.message}"
 
 
 def _summarize_args(args: dict, max_len: int = 120) -> str:
-    """Compact string summary of tool args for logging."""
-    s = str(args)
+    """Compact string summary of tool args for logs and approval requests.
+
+    Secret values a credential tool handed out this turn are masked
+    (``turn_secrets.scrub``) before truncating, so no prefix of one survives.
+    """
+    from prax.agent.turn_secrets import scrub
+    s = scrub(str(args))
     if len(s) > max_len:
         return s[:max_len] + "..."
     return s

@@ -5,6 +5,8 @@ so no TeamWork instance is required.
 """
 from __future__ import annotations
 
+import logging
+
 from prax.services.teamwork_service import TeamWorkClient
 
 name_for = TeamWorkClient.branch_channel_name
@@ -45,12 +47,21 @@ def test_the_name_is_bounded():
 # ── Behaviour ────────────────────────────────────────────────────────────────
 
 class _Stub(TeamWorkClient):
-    """A service with the network replaced, so ensure/post logic is testable."""
+    """The real client with the network replaced, so ensure/post logic is testable.
+
+    Built through the real constructor on purpose.  The previous stub skipped
+    it and assigned ``_enabled`` itself — a state no real client is ever in —
+    which hid ``ensure_branch_channel`` reading that never-assigned attribute
+    and raising AttributeError on every production call.
+    """
 
     def __init__(self, enabled=True, project="p1"):
-        self._enabled = enabled
+        super().__init__(base_url="http://stub.invalid", api_key="stub")
+        if not enabled:
+            # Cleared after construction: passing base_url="" would fall back
+            # to settings.teamwork_url, i.e. the developer's .env.
+            self.base_url = ""
         self._project_id = project
-        self._channels: dict[str, str] = {}
         self.ensured: list[list[dict]] = []
         self.sent: list[tuple[str, str]] = []
 
@@ -61,6 +72,7 @@ class _Stub(TeamWorkClient):
 
     def send_message(self, content, channel_id=None, agent_name=None, **kw):
         self.sent.append((channel_id, content))
+        return f"msg-{len(self.sent)}"
 
 
 def test_ensuring_a_branch_channel_creates_it_once():
@@ -108,3 +120,71 @@ def test_different_branches_get_different_channels():
     b = svc.ensure_branch_channel("fix/foo")
     assert a != b
     assert len(svc.ensured) == 2
+
+
+# ── Regression: a plain client, never a hand-built one ───────────────────────
+
+def _client(monkeypatch, *, send_result="msg-1"):
+    """A TeamWorkClient exactly as production builds it, network stubbed."""
+    tw = TeamWorkClient(base_url="http://stub.invalid")
+    tw._project_id = "p1"
+    ensured: list[list[dict]] = []
+    sent: list[dict] = []
+
+    def ensure_channels(channels):
+        ensured.append(channels)
+        for ch in channels:
+            tw._channels[ch["name"]] = f"id-{ch['name']}"
+
+    def send_message(content, **kw):
+        sent.append({"content": content, **kw})
+        return send_result
+
+    monkeypatch.setattr(tw, "ensure_channels", ensure_channels)
+    monkeypatch.setattr(tw, "send_message", send_message)
+    return tw, ensured, sent
+
+
+def test_a_real_client_can_ensure_a_branch_channel(monkeypatch):
+    # The bug: ensure_branch_channel read self._enabled, which __init__ never
+    # assigns, so this raised AttributeError on every real instance.
+    tw, ensured, _ = _client(monkeypatch)
+    assert tw.ensure_branch_channel("feat/foo") == "id-branch-feat-foo"
+    assert len(ensured) == 1
+
+
+def test_a_real_client_can_post_a_branch_update(monkeypatch):
+    tw, _, sent = _client(monkeypatch)
+    assert tw.post_branch_update("feat/foo", "CI passed", agent_name="Prax") is True
+    assert sent == [{"content": "CI passed", "channel_id": "id-branch-feat-foo",
+                     "agent_name": "Prax"}]
+
+
+def test_a_real_client_without_a_url_is_a_no_op(monkeypatch):
+    tw, ensured, sent = _client(monkeypatch)
+    tw.base_url = ""
+    assert tw.ensure_branch_channel("feat/foo") is None
+    assert tw.post_branch_update("feat/foo", "hi") is False
+    assert ensured == [] and sent == []
+
+
+def test_a_failing_ensure_never_escapes_a_branch_update(monkeypatch, caplog):
+    # post_branch_update promises a branch channel never blocks the work, but
+    # it used to call ensure_branch_channel outside its try.
+    tw, _, sent = _client(monkeypatch)
+
+    def boom(channels):
+        raise RuntimeError("teamwork down")
+    monkeypatch.setattr(tw, "ensure_channels", boom)
+    with caplog.at_level(logging.WARNING, logger="prax.services.teamwork_service"):
+        assert tw.post_branch_update("feat/foo", "hi") is False
+    assert sent == []
+    assert any("feat/foo" in r.getMessage() and r.exc_info for r in caplog.records)
+
+
+def test_an_undelivered_update_is_reported_as_undelivered(monkeypatch):
+    # send_message returns None when TeamWork rejects the post; reporting
+    # True then would claim a delivery that never happened.
+    tw, _, sent = _client(monkeypatch, send_result=None)
+    assert tw.post_branch_update("feat/foo", "hi") is False
+    assert len(sent) == 1

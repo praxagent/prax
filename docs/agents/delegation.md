@@ -11,7 +11,7 @@ Key infrastructure that makes this work:
 - **Execution tracing** -- every delegation chain gets a UUID.  Individual agent invocations get span IDs.  The execution graph tracks the full tree: timing, status, tool call counts, and parent/child relationships.  Governing agents see the big picture via the graph summary appended to `delegate_parallel` results.
 - **Read guard** -- spokes can verify preconditions before starting work (inspired by [smux](https://github.com/ShawnPana/smux)'s read-before-act pattern).  If the guard fails, the spoke aborts without wasting an LLM call.
 - **Identity injection** -- each agent receives execution context in its system prompt: trace ID, depth in the delegation tree, who delegated it, and what parallel peers are doing.
-- **Self-diagnostics** -- `prax_doctor` checks LLM configuration, sandbox health, plugin status, spoke availability, workspace integrity, TeamWork connectivity, and scheduler state in one call.
+- **Self-diagnostics** -- `prax_doctor` checks LLM configuration (it builds every enabled tier through the real factory), sandbox health, plugin status, workspace integrity, TeamWork connectivity, scheduler state, the health monitor's verdict, and recurring log warnings in one call.  See [Health Monitoring](../infrastructure/health-monitoring.md#prax_doctor).
 
 ## Orchestration Discipline
 
@@ -398,5 +398,5 @@ checkout (including `.env`).
 | `prax/agent/office_tools.py` | Office document export — .pptx, .xlsx, .pdf generation |
 | `prax/agent/subagent.py` | Generic delegation (`delegate_task`, `delegate_parallel`) with category and spoke routing |
 | `prax/agent/trace.py` | Execution tracing — chain UUIDs, named spans, execution graphs |
-| `prax/agent/doctor.py` | Self-diagnostics (`prax_doctor`) — LLM, sandbox, plugins, spokes, TeamWork |
+| `prax/agent/doctor.py` | Self-diagnostics (`prax_doctor`) — LLM, sandbox, plugins, TeamWork, health monitor, log health |
 | `scripts/watchdog.py` | Supervisor process — health checks, crash rollback, restart |
