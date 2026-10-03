@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.48.0](https://github.com/praxagent/prax/compare/v0.47.0...v0.48.0) (2026-10-03)
+
+
+### Features
+
+* check Prax's traces against the secrets proxy's wire record ([#250](https://github.com/praxagent/prax/issues/250)) ([cf61e2f](https://github.com/praxagent/prax/commit/cf61e2f85ab5e2a4113091657f0594a6d96a54ed))
+* hard floors, parked approvals for unattended runs, and why every call was allowed ([#249](https://github.com/praxagent/prax/issues/249)) ([72a09a1](https://github.com/praxagent/prax/commit/72a09a1bec25491d086846a16a7fbb2fc5acb792))
+* processes Prax starts never inherit its proxy credential ([#255](https://github.com/praxagent/prax/issues/255)) ([df3ca91](https://github.com/praxagent/prax/commit/df3ca917ef997ff5e9112c094cd1262e9e89524b))
+* the Discord bot token can live in the secrets proxy ([#254](https://github.com/praxagent/prax/issues/254)) ([3be897e](https://github.com/praxagent/prax/commit/3be897e5521d9a18cea6f043ab797ebc886f108a))
+
 ## [0.47.0](https://github.com/praxagent/prax/compare/v0.46.0...v0.47.0) (2026-09-28)
 
 
