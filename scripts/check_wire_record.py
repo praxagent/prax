@@ -17,9 +17,18 @@ after, is what this reports: activity Prax didn't account for.
 Exit 0: chain intact and every wire call accounted for. Exit 1: a broken
 chain or unaccounted calls (listed). Read-only; changes nothing.
 
-Honest limits: matching is by tool name and time window, not argument hash —
-traces don't record the model's raw arguments — so it catches a hidden or
-dropped call, not a call whose arguments were silently swapped. A call the
+Arguments: tool spans record ``requested_args_sha256`` (what the model asked
+for) and ``args_sha256`` (what the tool ran with), hashed exactly as the wire
+record hashes them. Where a span has them, a call matches only if the hashes
+agree, and two more findings are reported:
+
+- ARGS DIFFER — the trace says the model asked for different arguments than the
+  wire shows (the trace misreports the model);
+- CHANGED BEFORE RUNNING — the tool ran with arguments other than the ones the
+  model asked for.
+
+Traces written before those fields existed fall back to name and time window,
+which catches a hidden or dropped call but not swapped arguments. A call the
 model asked for that Prax legitimately refused (a floor, a budget) has a span
 too, so it matches; one Prax never attempted shows up, which is also worth
 knowing.
@@ -58,8 +67,9 @@ def load_wire(path: str) -> list[dict]:
         return [json.loads(line) for line in fh if line.strip()]
 
 
-def load_tool_spans(graphs_dir: str, since: float) -> list[tuple[float, str, str]]:
-    """(start time, tool name, trace id) for every tool span since *since*."""
+def load_tool_spans(graphs_dir: str, since: float) -> list[tuple]:
+    """(start time, tool name, trace id, requested args hash, ran args hash) for
+    every tool span since *since*; the hashes are "" in traces that predate them."""
     spans = []
     for path in sorted(glob.glob(os.path.join(graphs_dir, "graphs-*.jsonl"))):
         with open(path, encoding="utf-8") as fh:
@@ -76,28 +86,47 @@ def load_tool_spans(graphs_dir: str, since: float) -> list[tuple[float, str, str
                     except (KeyError, TypeError, ValueError):
                         continue
                     if started >= since:
-                        spans.append((started, str(node.get("name")), str(graph.get("trace_id"))))
+                        spans.append((started, str(node.get("name")), str(graph.get("trace_id")),
+                                      str(node.get("requested_args_sha256") or ""),
+                                      str(node.get("args_sha256") or "")))
     return sorted(spans)
 
 
-def unaccounted(wire: list[dict], spans: list[tuple[float, str, str]], *, slack: float,
+def unaccounted(wire: list[dict], spans: list[tuple], *, slack: float,
                 caller: str | None, since: float) -> list[dict]:
-    """Wire tool calls with no unused matching span within *slack* seconds after."""
+    """Wire tool calls with no unused matching span within *slack* seconds after.
+
+    A span carrying ``requested_args_sha256`` matches only a call with the same
+    argument hash; a same-name span in the window with a different hash is
+    reported as ``ARGS DIFFER`` rather than as a match.
+    """
     used: set[int] = set()
     missing = []
     for entry in wire:
         if entry.get("ts", 0) < since or (caller and entry.get("caller") != caller):
             continue
         for call in entry.get("tool_calls") or []:
-            match = next((i for i, (t, name, _) in enumerate(spans)
-                          if i not in used and name == call.get("name")
-                          and entry["ts"] - 5 <= t <= entry["ts"] + slack), None)
-            if match is None:
-                missing.append({"ts": entry["ts"], "tool": call.get("name"),
-                                "model": entry.get("model"), "caller": entry.get("caller")})
-            else:
+            want = call.get("args_sha256") or ""
+            in_window = [i for i, s in enumerate(spans)
+                         if i not in used and s[1] == call.get("name")
+                         and entry["ts"] - 5 <= s[0] <= entry["ts"] + slack]
+            exact = [i for i in in_window if spans[i][3] and spans[i][3] == want]
+            legacy = [i for i in in_window if not spans[i][3]]
+            match = (exact or legacy or [None])[0]
+            if match is not None:
                 used.add(match)
+                continue
+            kind = "ARGS DIFFER" if in_window else "UNACCOUNTED"
+            if in_window:
+                used.add(in_window[0])
+            missing.append({"ts": entry["ts"], "tool": call.get("name"), "kind": kind,
+                            "model": entry.get("model"), "caller": entry.get("caller")})
     return missing
+
+
+def changed_before_running(spans: list[tuple]) -> list[tuple]:
+    """Spans whose tool ran with arguments other than the ones the model asked for."""
+    return [s for s in spans if s[3] and s[4] and s[3] != s[4]]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -121,12 +150,17 @@ def main(argv: list[str] | None = None) -> int:
     missing = unaccounted(wire, spans, slack=args.slack, caller=args.caller, since=since)
     calls = sum(len(e.get("tool_calls") or []) for e in wire
                 if e.get("ts", 0) >= since and (not args.caller or e.get("caller") == args.caller))
+    changed = changed_before_running(spans)
     print(f"chain intact ({len(wire)} lines); last {args.hours:g} h: {calls} tool call(s) on the "
-          f"wire, {len(spans)} tool span(s) in traces, {len(missing)} unaccounted")
+          f"wire, {len(spans)} tool span(s) in traces, {len(missing)} unaccounted, "
+          f"{len(changed)} changed before running")
     for m in missing:
         when = datetime.fromtimestamp(m["ts"]).isoformat(timespec="seconds")
-        print(f"  UNACCOUNTED {when} {m['tool']} (model {m['model']}, caller {m['caller']})")
-    return 1 if missing else 0
+        print(f"  {m['kind']} {when} {m['tool']} (model {m['model']}, caller {m['caller']})")
+    for s in changed:
+        when = datetime.fromtimestamp(s[0]).isoformat(timespec="seconds")
+        print(f"  CHANGED BEFORE RUNNING {when} {s[1]} (trace {s[2]})")
+    return 1 if (missing or changed) else 0
 
 
 if __name__ == "__main__":

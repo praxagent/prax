@@ -93,6 +93,13 @@ class SpanNode:
     cached_tokens_in: int = 0
     cache_write_tokens: int = 0
     usage_by_model: dict = field(default_factory=dict)
+    # Tool spans: sha256 of the arguments the tool actually ran with, and of the
+    # arguments the model asked for in its response (matched by tool_call_id).
+    # Hashes only — never the arguments — in the same canonical form as the
+    # secrets proxy's wire record, so scripts/check_wire_record.py can tell a
+    # dropped call from a call whose arguments changed on the way.
+    args_sha256: str = ""
+    requested_args_sha256: str = ""
 
 
 class ExecutionGraph:
@@ -250,6 +257,9 @@ class ExecutionGraph:
                     "finished_at": n.finished_at.isoformat() if n.finished_at else None,
                     "tool_calls": n.tool_calls,
                     "summary": n.summary,
+                    **({"args_sha256": n.args_sha256} if n.args_sha256 else {}),
+                    **({"requested_args_sha256": n.requested_args_sha256}
+                       if n.requested_args_sha256 else {}),
                     "models_used": models_used,
                     "duration_s": round(
                         (n.finished_at - n.started_at).total_seconds(), 1
@@ -641,6 +651,8 @@ def _graph_from_dict(data: dict) -> ExecutionGraph | None:
             finished_at=finished_at,
             tool_calls=nd.get("tool_calls", 0),
             summary=nd.get("summary", ""),
+            args_sha256=nd.get("args_sha256", ""),
+            requested_args_sha256=nd.get("requested_args_sha256", ""),
         )
         graph._nodes[node.span_id] = node
     return graph
@@ -1142,6 +1154,22 @@ def build_identity_context(name: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def args_sha256(args) -> str:
+    """Canonical hash of tool-call arguments — identical to the secrets proxy's
+    wire record (prax-secrets-proxy ``wire_record._args_hash``): a JSON string is
+    parsed first, then dumped with sorted keys and compact separators."""
+    import hashlib
+
+    if isinstance(args, str):
+        try:
+            args = json.loads(args) if args.strip() else {}
+        except ValueError:
+            return hashlib.sha256(args.encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        json.dumps(args, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    ).hexdigest()
+
+
 class GraphCallbackHandler(BaseCallbackHandler):
     """LangChain callback handler that creates child SpanNodes for tool calls.
 
@@ -1154,7 +1182,9 @@ class GraphCallbackHandler(BaseCallbackHandler):
 
     # Tell LangChain to skip non-tool events.
     raise_error: bool = False
-    ignore_llm: bool = True
+    # LLM events are needed for on_llm_end: the tool calls the model ASKED for,
+    # whose argument hashes are matched to the tool spans by tool_call_id.
+    ignore_llm: bool = False
     ignore_chain: bool = True
     # NOTE: ignore_agent MUST be False — LangChain's CallbackManager.on_tool_start
     # uses "ignore_agent" as the ignore condition, so setting it True silently
@@ -1182,6 +1212,20 @@ class GraphCallbackHandler(BaseCallbackHandler):
         self._active_names: dict[str, str] = {}  # tool_name → span_id
         self._live_agent = live_agent_name  # push live output to TeamWork
         self._tool_count = 0
+        # tool_call_id → hash of the arguments the model asked for.
+        self._requested: dict[str, str] = {}
+
+    def on_llm_end(self, response, *, run_id, **kwargs) -> None:
+        """Remember the argument hash of every tool call the model asked for."""
+        try:
+            for gens in getattr(response, "generations", None) or []:
+                for gen in gens:
+                    msg = getattr(gen, "message", None)
+                    for tc in getattr(msg, "tool_calls", None) or []:
+                        if tc.get("id"):
+                            self._requested[tc["id"]] = args_sha256(tc.get("args") or {})
+        except Exception:  # noqa: BLE001 - tracing must never break a turn
+            logger.debug("could not record requested tool-call hashes", exc_info=True)
 
     def _span_depth(self, span_id: str) -> int:
         """Return the graph depth of a span, best-effort."""
@@ -1211,6 +1255,7 @@ class GraphCallbackHandler(BaseCallbackHandler):
         # run_id to the existing span instead of creating a duplicate.
         if tool_name in self._active_names:
             self._active[rid] = self._active_names[tool_name]
+            self._record_args(self._active_names[tool_name], kwargs)
             return
 
         # Push live output to TeamWork so the user sees tool calls in real time.
@@ -1239,6 +1284,7 @@ class GraphCallbackHandler(BaseCallbackHandler):
         self._graph.add_node(node)
         self._active[rid] = span_id
         self._active_names[tool_name] = span_id
+        self._record_args(span_id, kwargs)
 
         # For delegation tools (delegate_*), update the trace context so
         # that run_spoke's start_span() nests under this tool span instead
@@ -1260,6 +1306,30 @@ class GraphCallbackHandler(BaseCallbackHandler):
             )
             self._ctx_tokens[rid] = _current_trace.set(tool_ctx)
             register_pending_delegation_context(tool_name, tool_ctx, input_str)
+
+    def _record_args(self, span_id: str, kwargs: dict) -> None:
+        """Hash what the tool ran with, and what the model asked for.
+
+        LangGraph fires on_tool_start more than once for one call: first the
+        outer wrapper (which carries the tool_call_id and the model's arguments),
+        then each inner invocation, innermost last. So "what was asked" is taken
+        from the call with the tool_call_id, and "what ran" from the LAST start —
+        the innermost, which receives the arguments the tool really gets. Taking
+        the first would hide a wrapper that rewrote them.
+        """
+        try:
+            with self._graph._lock:
+                node = self._graph._nodes.get(span_id)
+            if node is None:
+                return
+            inputs = kwargs.get("inputs")
+            if inputs is not None:
+                node.args_sha256 = args_sha256(inputs)
+            tcid = kwargs.get("tool_call_id")
+            if tcid and not node.requested_args_sha256 and tcid in self._requested:
+                node.requested_args_sha256 = self._requested.pop(tcid)
+        except Exception:  # noqa: BLE001 - tracing must never break a turn
+            logger.debug("could not record tool-call argument hashes", exc_info=True)
 
     def on_tool_end(self, output, *, run_id, **kwargs) -> None:
         rid = str(run_id)

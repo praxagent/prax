@@ -296,8 +296,14 @@ within a few minutes — activity Prax didn't account for. It is read-only.
 
 - Give each Prax instance its own proxy username (`http://<name>:<token>@…`)
   so `--caller` can separate dev from prod.
-- It matches on tool name and time, not arguments: it catches a hidden or
-  dropped call, not a silently changed argument.
+- **Arguments too.** Each tool span records two hashes, never the arguments:
+  `requested_args_sha256` (what the model asked for, from its response, matched
+  by `tool_call_id`) and `args_sha256` (what the tool actually ran with, taken
+  from the innermost tool start). Both use the wire record's canonical form.
+  So beyond a hidden or dropped call, the check reports **ARGS DIFFER** (the
+  trace misreports what the model asked for) and **CHANGED BEFORE RUNNING**
+  (the tool ran with arguments other than the model's). Traces written before
+  these fields existed are matched on name and time only.
 - The chain is tamper-evident, not tamper-proof: keep the record writable only
   by the proxy and copy its head hash off the machine.
 
