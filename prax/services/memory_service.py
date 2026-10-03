@@ -21,6 +21,7 @@ References:
 from __future__ import annotations
 
 import logging
+import threading
 
 from prax.services.memory.models import ConsolidationResult, Entity, MemoryResult, STMEntry
 from prax.settings import settings
@@ -409,6 +410,13 @@ _consolidation_turns_since: dict[str, int] = {}
 _CONSOLIDATE_EVERY_N_TURNS = 5
 
 
+# Users with a consolidation run in flight. A second trigger while one runs
+# is skipped (its turns are picked up by the next run: the pointer only
+# advances over what was extracted).
+_consolidating: set[str] = set()
+_consolidating_lock = threading.Lock()
+
+
 def maybe_consolidate(user_id: str) -> bool:
     """Run consolidation for *user_id* if at least N turns have passed.
 
@@ -417,7 +425,12 @@ def maybe_consolidate(user_id: str) -> bool:
     that automatically writes to the user's STM/LTM — without this hook,
     memory stays empty even though the infrastructure is in place.
 
-    Returns True if consolidation actually ran, False if skipped.
+    With ``MEMORY_CONSOLIDATION_IN_BACKGROUND`` (default on) the run happens
+    on a background thread, so the user's reply is not held for it. It was
+    held: a run is up to 8 LLM extraction batches, and on 2026-10-02 one held
+    a finished answer for 22m43s, with the user's turn lock taken.
+
+    Returns True if consolidation ran or was started, False if skipped.
     """
     if not user_id:
         return False
@@ -425,7 +438,20 @@ def maybe_consolidate(user_id: str) -> bool:
     if count < _CONSOLIDATE_EVERY_N_TURNS:
         _consolidation_turns_since[user_id] = count
         return False
+    with _consolidating_lock:
+        if user_id in _consolidating:
+            logger.info("Consolidation for %s already running — skipping this trigger", user_id)
+            return False
+        _consolidating.add(user_id)
     _consolidation_turns_since[user_id] = 0
+    if getattr(settings, "memory_consolidation_in_background", True):
+        threading.Thread(target=_consolidate_now, args=(user_id,),
+                         name=f"consolidate-{user_id[:8]}", daemon=True).start()
+        return True
+    return _consolidate_now(user_id)
+
+
+def _consolidate_now(user_id: str) -> bool:
     try:
         result = get_memory_service().consolidate(user_id)
         # These are the real field names on ConsolidationResult; the previous
@@ -443,3 +469,6 @@ def maybe_consolidate(user_id: str) -> bool:
     except Exception:
         logger.debug("Auto-consolidation failed for %s", user_id, exc_info=True)
         return False
+    finally:
+        with _consolidating_lock:
+            _consolidating.discard(user_id)
