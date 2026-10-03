@@ -46,6 +46,9 @@ class ConsolidationResult:
     batches: int = 0
     pending_lines: int = 0
     pending_bytes: int = 0
+    # Set when nothing ran because a run for this user was already in flight
+    # (MemoryService.consolidate allows one per user at a time).
+    already_running: bool = False
     # Symbolic consistency pass (MEMORY_CONSISTENCY_ENABLED): conflicts a
     # single-valued relation write had with existing current edges, and how
     # many of those stale edges were closed (0 unless auto-supersede is on).

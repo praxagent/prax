@@ -1286,6 +1286,16 @@ class AppSettings(BaseSettings):
         default="http://localhost:11434", alias="OLLAMA_BASE_URL",
         description="Ollama endpoint for local embeddings (when EMBEDDING_PROVIDER=ollama).",
     )
+    memory_consolidation_in_background: bool = Field(
+        default=True, alias="MEMORY_CONSOLIDATION_IN_BACKGROUND",
+        description=(
+            "Run the every-N-turns memory consolidation on a background thread "
+            "after the turn, instead of before its reply is returned. A run is up "
+            "to 8 LLM extraction batches; in line it held a finished answer for "
+            "22m43s (2026-10-02). On by default because in-line was a bug; set "
+            "false only to debug consolidation in the turn's own thread."
+        ),
+    )
     memory_consolidation_interval: int = Field(
         default=3600, alias="MEMORY_CONSOLIDATION_INTERVAL",
         description="Seconds between automatic consolidation runs.",

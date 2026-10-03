@@ -267,6 +267,10 @@ def memory_consolidate() -> str:
 
     svc = get_memory_service()
     result = svc.consolidate(_uid())
+    if result.already_running:
+        return ("A consolidation for this user is already running (the automatic one "
+                "started after a recent turn). It will finish on its own; no need to "
+                "start another.")
     return (
         f"Consolidation complete: {result.memories_created} memories, "
         f"{result.entities_upserted} entities, {result.relations_upserted} relations. "
