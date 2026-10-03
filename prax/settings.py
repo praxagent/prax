@@ -1339,6 +1339,17 @@ class AppSettings(BaseSettings):
     # Set to false to disable for minimal RAM / lightweight deployments.
     health_monitor_enabled: bool = Field(default=True, alias="HEALTH_MONITOR_ENABLED")
 
+    # Log health — an in-process counter of WARNING-and-above log records,
+    # grouped by call site (prax/services/log_health.py), so prax_doctor can
+    # name what keeps going wrong without reading the log file.  It keeps only
+    # locations and %-style templates, never formatted messages (those carry
+    # user data and fetched text).  Off by default: it adds a root handler.
+    log_health_enabled: bool = Field(default=False, alias="LOG_HEALTH_ENABLED")
+    # prax_doctor warns when one call site has logged this many records.
+    log_health_warn_count: int = Field(default=5, alias="LOG_HEALTH_WARN_COUNT")
+    # How many of the busiest call sites prax_doctor lists.
+    log_health_top_n: int = Field(default=10, alias="LOG_HEALTH_TOP_N")
+
     # Task runner — background worker that picks up Kanban and todo
     # items assigned to Prax and executes them via a synthetic
     # orchestrator turn.  Opt-in per deployment.  Polls every

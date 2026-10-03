@@ -16,6 +16,7 @@ import importlib.util
 import inspect
 import logging
 import threading
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from langchain_core.tools import BaseTool, StructuredTool
@@ -52,6 +53,19 @@ logger = logging.getLogger(__name__)
 _PLUGINS_ROOT = Path(__file__).parent / "tools"
 
 
+@dataclass(frozen=True)
+class PluginHealthReport:
+    """What ``PluginLoader.health_report`` found.
+
+    ``plugins``: relative keys of the plugins that contributed tools.
+    ``problems``: one line per plugin that needs attention.
+    """
+
+    plugins: list[str] = field(default_factory=list)
+    tool_count: int = 0
+    problems: list[str] = field(default_factory=list)
+
+
 class PluginLoader:
     """Discovers and manages hot-swappable tool plugins."""
 
@@ -61,6 +75,9 @@ class PluginLoader:
         self._tool_to_manifest: dict[str, PluginToolManifest] = {}
         self._plugin_manifests: dict[str, PluginManifest] = {}
         self._load_errors: dict[str, str] = {}
+        # Plugins whose load raised, kept apart from _load_errors: callers
+        # present those as "blocked", and a crash is not a refusal.
+        self._load_failures: dict[str, str] = {}
         self._version: int = 0
         self._lock = threading.Lock()
         self.registry = registry or PluginRegistry()
@@ -230,6 +247,7 @@ class PluginLoader:
         tool_manifests: dict[str, PluginToolManifest] = {}
         plugin_manifests: dict[str, PluginManifest] = {}
         load_errors: dict[str, str] = {}
+        load_failures: dict[str, str] = {}
         seen_tool_names: set[str] = set()
         builtin_names = _get_builtin_tool_names()
 
@@ -368,8 +386,9 @@ class PluginLoader:
                                 rel_key,
                                 [t.name for t in new_tools],
                             )
-            except Exception:
+            except Exception as exc:
                 logger.exception("Failed to load plugin %s", rel_key)
+                load_failures[rel_key] = f"{type(exc).__name__}: {exc}"
 
         with self._lock:
             # Only bump the version when the tool set actually changed.
@@ -380,6 +399,7 @@ class PluginLoader:
             self._tool_to_manifest = tool_manifests
             self._plugin_manifests = plugin_manifests
             self._load_errors = load_errors
+            self._load_failures = load_failures
             if new_names != old_names:
                 self._version += 1
                 logger.info("Plugin tool set changed (%d tools), version now %d", len(tools), self._version)
@@ -600,6 +620,43 @@ class PluginLoader:
         """Return plugin load errors from the most recent scan."""
         with self._lock:
             return dict(self._load_errors)
+
+    def health_report(self) -> PluginHealthReport:
+        """Loaded plugins, and the ones that need attention.
+
+        The one definition of "unhealthy plugin" for every surface that reports
+        it (prax_doctor, system_status), so they cannot disagree.  Counts:
+
+        - a plugin the last scan refused (``get_load_errors``: blocked by the
+          integrity ledger, a bad manifest, unacknowledged warnings);
+        - a plugin whose load raised during the last scan;
+        - a loaded plugin whose tools have failed since their last success
+          (``failure_count``; it auto-rolls back at the registry's limit).
+
+        Not a registry ``rolled_back`` status: ``rollback()`` reloads at once
+        and the reload re-activates the plugin, so a loaded plugin never shows
+        it.
+        """
+        tool_map = self.get_tool_plugin_map()
+        plugins = sorted(set(tool_map.values()))
+        with self._lock:
+            crashed = dict(self._load_failures)
+        problems = [
+            f"{rel}: not loaded — {err[:200]}"
+            for rel, err in sorted(self.get_load_errors().items())
+        ]
+        problems += [
+            f"{rel}: failed to load — {err[:200]}"
+            for rel, err in sorted(crashed.items())
+        ]
+        for rel in plugins:
+            failures = (self.registry.get_plugin_info(rel) or {}).get("failure_count", 0)
+            if failures:
+                problems.append(
+                    f"{rel}: {failures} tool failure(s) since its last success "
+                    f"(auto-rollback at {self.registry.max_failures(rel)})"
+                )
+        return PluginHealthReport(plugins=plugins, tool_count=len(tool_map), problems=problems)
 
     # ------------------------------------------------------------------
     # Hot-swap

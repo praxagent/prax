@@ -1,12 +1,20 @@
 """Self-diagnostic tool -- Prax's equivalent of ``brew doctor``.
 
-Checks LLM configuration, sandbox health, plugin status, spoke availability,
-workspace integrity, TeamWork connectivity, and scheduler state.
+Checks LLM configuration, sandbox health, plugin status, workspace integrity,
+TeamWork connectivity, scheduler state, the health monitor, and recurring log
+warnings.
+
+Every reading comes from the ``settings`` object, never ``os.environ``:
+pydantic loads ``.env`` itself and does not export it, so on a host-process
+deployment an environment lookup sees nothing for a value that lives only in
+``.env`` -- which is how this tool used to report "TeamWork: not configured"
+and a missing API key on a box where both were set.
 """
 from __future__ import annotations
 
 import logging
 import os
+import time
 
 from langchain_core.tools import tool
 
@@ -17,8 +25,10 @@ logger = logging.getLogger(__name__)
 def prax_doctor() -> str:
     """Run self-diagnostics on Prax's health.
 
-    Checks LLM configuration, sandbox availability, plugin status, spoke
-    imports, workspace integrity, TeamWork connectivity, and scheduler state.
+    Checks LLM configuration (builds a model for every enabled tier), sandbox
+    availability, plugin status, workspace integrity, TeamWork connectivity,
+    scheduler state, the health monitor's verdict, and the warnings and errors
+    that keep recurring in the log.
 
     Use this when:
     - Something isn't working and you want to understand why
@@ -30,12 +40,12 @@ def prax_doctor() -> str:
     checks.append(_check_llm())
     checks.append(_check_sandbox())
     checks.append(_check_plugins())
-    checks.append(_check_spokes())
     checks.append(_check_workspace())
     checks.append(_check_teamwork())
     checks.append(_check_scheduler())
     checks.append(_check_settings())
     checks.append(_check_health_monitor())
+    checks.append(_check_log_health())
 
     ok = sum(1 for c in checks if c.startswith("[OK]"))
     warn = sum(1 for c in checks if c.startswith("[WARN]"))
@@ -51,37 +61,43 @@ def prax_doctor() -> str:
 # ---------------------------------------------------------------------------
 
 
+def _error_text(exc: BaseException) -> str:
+    return f"{type(exc).__name__}: {str(exc)[:200]}"
+
+
 def _check_llm() -> str:
     try:
-        from prax.agent.llm_factory import build_llm
+        from prax.agent.llm_factory import build_llm, probe_builds
+        from prax.agent.model_tiers import get_available_tiers
         from prax.settings import settings
 
         provider = settings.default_llm_provider
-        model = settings.base_model
 
-        # Check API key presence for known providers
-        key_vars = {
-            "openai": "OPENAI_KEY",
-            "anthropic": "ANTHROPIC_API_KEY",
-            "google": "GOOGLE_API_KEY",
-        }
-        key_var = key_vars.get(provider)
-        if key_var and not os.environ.get(key_var):
-            return f"[FAIL] LLM: {provider} configured but {key_var} not set"
-
-        # Verify each enabled tier can build an LLM object
-        tiers_ok = []
-        for tier in ("low", "medium", "high"):
-            if getattr(settings, f"{tier}_enabled", False):
+        # Construct the model for every enabled tier through the real factory:
+        # it is the code that raises on a missing key, an unsupported provider
+        # or an open circuit breaker, so no hand-kept provider->key map can
+        # drift from it.  Construction makes no network call.
+        built: list[str] = []
+        failed: list[str] = []
+        with probe_builds():
+            for tc in get_available_tiers():
                 try:
-                    build_llm(tier=tier)
-                    tiers_ok.append(tier)
+                    build_llm(tier=tc.tier.value)
+                    built.append(f"{tc.tier.value}={tc.model}")
                 except Exception as e:
-                    return f"[WARN] LLM: tier '{tier}' failed to build: {e}"
+                    failed.append(f"{tc.tier.value} ({tc.model}): {_error_text(e)}")
 
-        return f"[OK] LLM: {provider}/{model}, tiers: {', '.join(tiers_ok)}"
+        if failed:
+            return f"[FAIL] LLM: {provider} — cannot build {'; '.join(failed)}"
+        if not built:
+            return (
+                f"[WARN] LLM: {provider} — no model tier is enabled "
+                f"(a deprecated <TIER>_ENABLED=false wins over ENABLED_TIERS); "
+                f"every call falls back to BASE_MODEL={settings.base_model}"
+            )
+        return f"[OK] LLM: {provider}, tiers: {', '.join(built)}"
     except Exception as e:
-        return f"[FAIL] LLM: {e}"
+        return f"[FAIL] LLM: {_error_text(e)}"
 
 
 def _check_sandbox() -> str:
@@ -104,57 +120,13 @@ def _check_plugins() -> str:
     try:
         from prax.plugins.loader import get_plugin_loader
 
-        loader = get_plugin_loader()
-        tools = loader.get_tools()
-
-        # Check for unhealthy plugins
-        unhealthy: list[str] = []
-        if hasattr(loader, "get_health"):
-            health = loader.get_health()
-            unhealthy = [name for name, ok in health.items() if not ok]
-
-        plugins = loader.list_plugins() if hasattr(loader, "list_plugins") else []
-        plugin_count = len(plugins) if plugins else "?"
-
-        if unhealthy:
-            return (
-                f"[WARN] Plugins: {plugin_count} plugins, {len(tools)} tools, "
-                f"unhealthy: {', '.join(unhealthy)}"
-            )
-        return f"[OK] Plugins: {plugin_count} plugins, {len(tools)} tools loaded"
+        report = get_plugin_loader().health_report()
+        summary = f"{len(report.plugins)} plugin(s), {report.tool_count} tool(s) loaded"
+        if report.problems:
+            return f"[WARN] Plugins: {summary}; needs attention: {'; '.join(report.problems)}"
+        return f"[OK] Plugins: {summary}"
     except Exception as e:
         return f"[FAIL] Plugins: {e}"
-
-
-def _check_spokes() -> str:
-    spoke_modules = {
-        "browser": "prax.agent.spokes.browser",
-        "content": "prax.agent.spokes.content",
-        "finetune": "prax.agent.spokes.finetune",
-        "knowledge": "prax.agent.spokes.knowledge",
-        "sandbox": "prax.agent.spokes.sandbox",
-        "sysadmin": "prax.agent.spokes.sysadmin",
-    }
-    import importlib
-
-    loaded: list[str] = []
-    failed: list[str] = []
-    for name, module_path in spoke_modules.items():
-        try:
-            importlib.import_module(module_path)
-            loaded.append(name)
-        except Exception as e:
-            failed.append(f"{name} ({e})")
-
-    if failed:
-        return (
-            f"[WARN] Spokes: {len(loaded)} OK, "
-            f"failed: {', '.join(failed)}"
-        )
-    return (
-        f"[OK] Spokes: all {len(loaded)} importable "
-        f"({', '.join(loaded)})"
-    )
 
 
 def _check_workspace() -> str:
@@ -179,19 +151,29 @@ def _check_workspace() -> str:
 
 def _check_teamwork() -> str:
     try:
-        tw_url = os.environ.get("TEAMWORK_URL", "")
-        if not tw_url:
-            return "[OK] TeamWork: not configured (standalone mode)"
+        from prax.settings import settings
+
+        tw_url = settings.teamwork_url.rstrip("/")
+        if not settings.teamwork_active:
+            if tw_url:
+                # Exactly the "URL set but silently skipped" trap the legacy
+                # switch exists to allow, so it is a warning, not a shrug.
+                return (
+                    f"[WARN] TeamWork: off — TEAMWORK_URL={tw_url} is set, but the "
+                    f"deprecated TEAMWORK_ENABLED=false overrides it (unset "
+                    f"TEAMWORK_ENABLED to connect, or clear TEAMWORK_URL)"
+                )
+            return "[OK] TeamWork: not configured — TEAMWORK_URL is empty (standalone mode)"
 
         import requests
 
         try:
             resp = requests.get(f"{tw_url}/health", timeout=3)
-            if resp.ok:
-                return f"[OK] TeamWork: connected at {tw_url}"
-            return f"[WARN] TeamWork: {tw_url} returned {resp.status_code}"
-        except Exception:
-            return f"[WARN] TeamWork: {tw_url} configured but unreachable"
+        except Exception as e:
+            return f"[WARN] TeamWork: {tw_url} configured but unreachable ({type(e).__name__})"
+        if resp.ok:
+            return f"[OK] TeamWork: connected at {tw_url}"
+        return f"[WARN] TeamWork: {tw_url}/health returned {resp.status_code}"
     except Exception as e:
         return f"[FAIL] TeamWork: {e}"
 
@@ -220,7 +202,7 @@ def _check_scheduler() -> str:
 
 def _check_settings() -> str:
     try:
-        from prax.settings import settings
+        from prax.settings import _WEAK_SECRET_KEYS, settings
 
         issues: list[str] = []
 
@@ -234,9 +216,9 @@ def _check_settings() -> str:
                 f"(very high, cost risk)"
             )
 
-        secret = os.environ.get("FLASK_SECRET_KEY", "")
-        if not secret or secret == "change-me" or len(secret) < 16:
-            issues.append("FLASK_SECRET_KEY is weak or default")
+        secret = settings.flask_secret_key or ""
+        if secret.lower().strip() in _WEAK_SECRET_KEYS or len(secret) < 16:
+            issues.append("FLASK_SECRET_KEY is weak or a placeholder")
 
         if issues:
             return f"[WARN] Settings: {'; '.join(issues)}"
@@ -254,21 +236,65 @@ def _check_health_monitor() -> str:
         if not settings.health_monitor_enabled:
             return "[OK] Health Monitor: disabled (HEALTH_MONITOR_ENABLED=false)"
 
-        from prax.agent.health_monitor import get_last_check
-        check = get_last_check()
-        if check is None:
-            return "[OK] Health Monitor: enabled, no checks run yet"
+        from prax.agent.health_monitor import get_check
+        check = get_check()
+        age = f"checked {int(time.time() - check.timestamp)}s ago"
 
         if check.overall == "healthy":
             return (
                 f"[OK] Health Monitor: {check.overall} "
-                f"({len(check.subsystems)} subsystems checked)"
+                f"({len(check.subsystems)} subsystems, {age})"
             )
         alert_summary = "; ".join(check.alerts[:3])
         prefix = "[WARN]" if check.overall == "degraded" else "[FAIL]"
-        return f"{prefix} Health Monitor: {check.overall} — {alert_summary}"
+        return f"{prefix} Health Monitor: {check.overall} ({age}) — {alert_summary}"
     except Exception as e:
         return f"[WARN] Health Monitor: {e}"
+
+
+def _check_log_health() -> str:
+    # In-process counts only.  The log file is never read: it is unrotated
+    # (tens of MB) and every line of it is formatted user data.
+    try:
+        from prax.settings import settings
+        if not settings.log_health_enabled:
+            return (
+                "[OK] Log health: off — set LOG_HEALTH_ENABLED=true and restart "
+                "to count recurring warnings and errors by call site"
+            )
+
+        from prax.services import log_health
+        handler = log_health.get_handler()
+        if handler is None:
+            return (
+                "[WARN] Log health: LOG_HEALTH_ENABLED is true but no counter is "
+                "installed (app startup installs it; restart Prax)"
+            )
+
+        since = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(handler.installed_at))
+        sites = handler.group_count()
+        overflow = (
+            f", plus {handler.overflow} record(s) past the {handler.max_groups}-site cap"
+            if handler.overflow else ""
+        )
+        threshold = settings.log_health_warn_count
+        rows = handler.summarize(settings.log_health_top_n)
+        if not rows or rows[0]["count"] < threshold:
+            return (
+                f"[OK] Log health: {sites} warning/error call site(s) since {since}"
+                f"{overflow}; none has logged {threshold}+ times"
+            )
+        listing = "\n".join(
+            f"    {r['count']} × {r['level']} {r['location']} — "
+            f"{r['template'] or '(message not kept)'}"
+            for r in rows
+        )
+        return (
+            f"[WARN] Log health: a call site has logged {threshold}+ warnings/errors "
+            f"since {since} (top {len(rows)} of {sites} site(s){overflow}):\n{listing}"
+        )
+    except Exception as e:
+        return f"[WARN] Log health: {e}"
 
 
 def build_doctor_tools() -> list:

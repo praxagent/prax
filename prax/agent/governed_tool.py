@@ -687,6 +687,17 @@ def wrap_with_governance(
             elif reliability is not None and result is not None:
                 result = _tag_result(result, reliability, epistemic_note)
 
+            # The tool error rate's denominator.  Without it the window held
+            # only TOOL_ERROR events and every rate read 0% or 100%.  Recorded
+            # last, so a raise in the tagging above counts once, as an error.
+            # Hub only, like TOOL_ERROR: a delegate's inner spoke tools are not
+            # counted, so a delegation is one call, not one plus its steps.
+            try:
+                from prax.services.health_telemetry import EventCategory, record_event
+                record_event(EventCategory.TOOL_SUCCESS, component=tool_name)
+            except Exception:
+                pass
+
             return result
         except Exception as exc:
             state.audit.append(log_action(
