@@ -164,6 +164,7 @@ def fetch_url_content(url: str) -> str:
 
 
 def build_default_tools():
+    from prax.agent.artifact_tools import build_artifact_tools
     from prax.agent.turn_tools import build_turn_tools
     from prax.settings import settings
 
@@ -179,6 +180,8 @@ def build_default_tools():
         + build_workspace_tools()
         # Stop the user's other running tasks (TURN_STOP_ENABLED)
         + build_turn_tools()
+        # Artifacts: pages Prax makes and keeps updating (ARTIFACTS_ENABLED)
+        + build_artifact_tools()
         # Image understanding — handles inbound image attachments from
         # Discord/SMS/TeamWork via the configured vision provider.  Empty
         # list when no provider is configured (graceful degradation).

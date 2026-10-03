@@ -93,7 +93,21 @@ def serve_shared_file(token, filename):
     if not file_path or not os.path.isfile(file_path):
         return "Not found", 404
     directory = os.path.dirname(file_path)
-    return send_from_directory(directory, os.path.basename(file_path))
+    response = send_from_directory(directory, os.path.basename(file_path))
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    if file_path.lower().endswith((".html", ".htm")):
+        # A shared HTML page runs in an opaque origin: its scripts cannot use
+        # this app's origin (cookies, same-origin requests to Prax's routes).
+        policy = "sandbox allow-scripts"
+        parts = file_path.split(os.sep)
+        if len(parts) >= 3 and parts[-3] == "artifacts" and parts[-1] == "index.html":
+            # An artifact also gets no network, as in TeamWork's viewer.
+            policy += ("; default-src 'none'; script-src 'unsafe-inline'; "
+                       "style-src 'unsafe-inline'; img-src data: blob:; font-src data:; "
+                       "media-src data: blob:; connect-src 'none'; form-action 'none'; "
+                       "base-uri 'none'; frame-ancestors 'none'")
+        response.headers["Content-Security-Policy"] = policy
+    return response
 
 
 def _serve_hugo_path(path: str):

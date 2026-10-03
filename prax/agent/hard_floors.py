@@ -51,6 +51,14 @@ _MONEY = {
 }
 BUILT_IN: frozenset[str] = frozenset(_CREDENTIALS | _AUTHORITY | _MONEY)
 
+# Floors that hold even when HARD_FLOORS_ENABLED is off. Putting something on
+# the open internet is one: a public link has no password — anyone who gets
+# the link can open it — so a person decides every time (TJ, 2026-10-03).
+_EXPOSURE = {
+    "artifact_share_public",  # an artifact at a public (ngrok) link
+}
+ALWAYS_ON: frozenset[str] = frozenset(_EXPOSURE)
+
 
 def enabled() -> bool:
     try:
@@ -70,7 +78,7 @@ def floor_tools() -> frozenset[str]:
 
 
 def is_floor(tool_name: str) -> bool:
-    return enabled() and tool_name in floor_tools()
+    return tool_name in ALWAYS_ON or (enabled() and tool_name in floor_tools())
 
 
 # --- the chat fallback: the user's own message names the action and target ---
@@ -78,10 +86,12 @@ def is_floor(tool_name: str) -> bool:
 _LOGIN_VERB = re.compile(r"\b(log\s*-?\s*in|sign\s*-?\s*in|login|signin|authenticate)\b", re.I)
 _INSTALL_VERB = re.compile(r"\b(install|import|activate|enable|add|write|deploy)\b", re.I)
 _POWER_ON = re.compile(r"\b(start|turn\s+on|power\s+on|spin\s+up|launch|boot)\b", re.I)
+_SHARE_VERB = re.compile(r"\b(share|sharing|public|publicly|publish|ngrok|link)\b", re.I)
 
 
 def _target(kwargs: dict) -> str:
-    for key in ("domain", "url", "name", "plugin_name", "plugin", "repo", "source", "instance"):
+    for key in ("domain", "url", "name", "plugin_name", "plugin", "repo", "source", "instance",
+                "artifact_id"):
         value = kwargs.get(key)
         if isinstance(value, str) and value.strip():
             value = value.strip().lower()
@@ -112,7 +122,28 @@ def user_named_it(tool_name: str, kwargs: dict, message: str) -> bool:
         return bool(_INSTALL_VERB.search(msg) and target and target in msg)
     if tool_name in _MONEY:
         return bool(_POWER_ON.search(msg) and "gpu" in msg)
+    if tool_name in _EXPOSURE:
+        # A share verb AND this artifact, by its id or its title: "share the
+        # retention chart publicly". "Go ahead" or "yes" is not enough.
+        return bool(_SHARE_VERB.search(msg) and target
+                    and any(n in msg for n in _artifact_names(target)))
     return False  # an operator-added floor: approval in TeamWork only
+
+
+def _artifact_names(artifact_id: str) -> list[str]:
+    """How a user might name the artifact: its id, and its title if long enough
+    to be specific."""
+    names = [artifact_id.lower()]
+    try:
+        from prax.agent.user_context import current_user_id
+        from prax.services import artifact_service
+        item = artifact_service.get(current_user_id.get() or "", artifact_id)
+        title = (item or {}).get("title", "").strip().lower()
+        if len(title) >= 4:
+            names.append(title)
+    except Exception:  # noqa: BLE001 - no title: the id alone must be named
+        pass
+    return names
 
 
 def refusal(tool_name: str, target: str, *, approvals: bool) -> str:
@@ -134,4 +165,6 @@ def _example(tool_name: str, target: str) -> str:
         return f"install {target or 'the plugin'}"
     if tool_name in _MONEY:
         return "start the GPU"
+    if tool_name in _EXPOSURE:
+        return f"share {target or 'that artifact'} publicly"
     return f"run {tool_name}"

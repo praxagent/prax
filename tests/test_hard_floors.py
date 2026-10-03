@@ -177,3 +177,25 @@ def test_a_refusal_in_teamwork_refuses(approvals, said):
 ])
 def test_login_matcher(msg, kwargs, ok):
     assert hard_floors.user_named_it("browser_request_login", kwargs, msg) is ok
+
+
+def test_a_floor_tool_that_is_also_high_risk_asks_a_person_once(monkeypatch):
+    """At the hub, the floor gate keys the call before governance pops
+    expected_observation and the HIGH-risk gate after. They must agree it is the
+    same call, or a person who approved it in TeamWork is asked a second time
+    (2026-10-03)."""
+    asked = []
+    monkeypatch.setattr(prax_settings.settings, "out_of_band_approvals_enabled", True)
+    monkeypatch.setattr(human_approval, "request", lambda tool, *a, **k: (
+        asked.append(tool), human_approval.Decision(True, "", "ap1", "person:tj"))[1])
+    calls: list = []
+
+    def fn(domain: str = "", name: str = "") -> str:
+        calls.append((domain, name))
+        return "ran"
+    # The hub layer: there governance pops expected_observation between the two gates.
+    hub_tool = gov.wrap_with_governance(
+        StructuredTool.from_function(func=fn, name="browser_request_login", description="t"))
+    out = hub_tool.invoke({"domain": "leetcode.com", "expected_observation": "a login page"})
+    assert out == "ran" and calls == [("leetcode.com", "")]
+    assert asked == ["browser_request_login"]

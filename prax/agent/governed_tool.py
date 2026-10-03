@@ -237,9 +237,17 @@ def _trifecta_key(tool_name: str, kwargs: dict) -> str:
     DIFFERENT (e.g. injection-substituted) arguments — so the arguments are hashed
     into the latch key. A second call only counts as confirmed if its arguments
     match the call the user was actually shown.
+
+    ``expected_observation`` is governance's own field, not an argument of the
+    action, and it is popped partway through a call: the hard-floor gate keys
+    the call before the pop, the HIGH-risk gate after. Keying it would give one
+    call two keys, so a person's floor approval was not recognised by the HIGH
+    gate — which then asked again (twice, with out-of-band approvals on), or let
+    the model "confirm" by calling a second time.
     """
     import hashlib
     import json
+    kwargs = {k: v for k, v in (kwargs or {}).items() if k != "expected_observation"}
     try:
         blob = json.dumps(kwargs, sort_keys=True, default=str)
     except Exception:

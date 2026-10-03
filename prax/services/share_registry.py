@@ -164,11 +164,14 @@ def _public_url(token: str, *, kind: str, public_name: str | None = None,
 
 
 def register_file(user_id: str, abs_path: str, *,
-                  channel: str | None = None) -> dict[str, Any]:
+                  channel: str | None = None,
+                  expires_at: str | None = None) -> dict[str, Any]:
     """Register a workspace file for public sharing.
 
     Generates a random token + a randomized public filename (extension
     preserved) so the URL leaks nothing about the original file.
+    *expires_at* (ISO 8601) sets this share's expiry explicitly — artifacts
+    always expire — otherwise SHARE_LINK_TTL_* decides.
     """
     ext = os.path.splitext(abs_path)[1]
     token = uuid.uuid4().hex
@@ -182,7 +185,7 @@ def register_file(user_id: str, abs_path: str, *,
         "created_at": created.isoformat(),
         "created_via": channel or "unknown",
     }
-    expires_at = _ttl_expiry_iso(created)
+    expires_at = expires_at or _ttl_expiry_iso(created)
     if expires_at:
         entry["expires_at"] = expires_at
     with _lock_for(user_id):
