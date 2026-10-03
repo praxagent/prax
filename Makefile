@@ -678,21 +678,27 @@ _local-sandbox:
 	  echo "        * Or point at an existing checkout:  make run-local-all SANDBOX_PATH=/path/to/prax-sandbox"; \
 	else \
 	  ( cd "$(SANDBOX_PATH)" && \
-	    { docker image inspect prax-sandbox:latest >/dev/null 2>&1 || \
-	      { echo "Building prax-sandbox image (first run only, this can take several minutes)..."; \
-	        docker build -t prax-sandbox:latest sandbox/ ; } ; } && \
-	    { docker compose -p $(SANDBOX_PROJECT) $(SANDBOX_COMPOSE_FILES) down --remove-orphans >/dev/null 2>&1 || true; } && \
+	    { if [ -x scripts/ensure-image.sh ]; then scripts/ensure-image.sh; \
+	      else docker image inspect prax-sandbox:latest >/dev/null 2>&1 || \
+	        { echo "Building prax-sandbox image (first run only, this can take several minutes)..."; \
+	          docker build -t prax-sandbox:latest sandbox/ ; } ; fi ; } && \
 	    mkdir -p "$(APP_WORKSPACE_DIR)/$(PRAX_USER)/active" && \
 	    { ak=""; ok=""; \
 	      if [ -f "$(CURDIR)/.env" ]; then \
 	        ak=$$(grep -E '^ANTHROPIC_KEY=' "$(CURDIR)/.env" | tail -1 | cut -d= -f2- | tr -d '\"'); \
 	        ok=$$(grep -E '^OPENAI_KEY=' "$(CURDIR)/.env" | tail -1 | cut -d= -f2- | tr -d '\"'); \
 	      fi; \
-	      ANTHROPIC_API_KEY="$$ak" OPENAI_API_KEY="$$ok" \
-	        WORKSPACE_DIR="$(APP_WORKSPACE_DIR)/$(PRAX_USER)" \
-	        $(SANDBOX_PORT_ENV) docker compose -p $(SANDBOX_PROJECT) $(SANDBOX_COMPOSE_FILES) up -d; } ) \
+	      export ANTHROPIC_API_KEY="$$ak" OPENAI_API_KEY="$$ok" \
+	        WORKSPACE_DIR="$(APP_WORKSPACE_DIR)/$(PRAX_USER)" $(SANDBOX_PORT_ENV); \
+	      dc="docker compose -p $(SANDBOX_PROJECT) $(SANDBOX_COMPOSE_FILES)"; \
+	      before=$$($$dc ps -q sandbox 2>/dev/null); \
+	      $$dc up -d --remove-orphans && \
+	      if [ -n "$(SANDBOX_RESTART)" ] && [ -n "$$before" ] && [ "$$before" = "$$($$dc ps -q sandbox 2>/dev/null)" ]; then \
+	        echo "==> restarting the existing container"; $$dc restart sandbox; \
+	      fi; } ) \
 	      >$(LOCAL_RUN)/sandbox.log 2>&1 \
 	    && { touch $(LOCAL_RUN)/.sandbox-on; \
+	         awk '/^==> local packages/{p=1;print;next} p&&/^    /{print;next} {p=0}' $(LOCAL_RUN)/sandbox.log; \
 	         echo "Sandbox started -> :$(SANDBOX_CDP_PORT) (CDP) :$(SANDBOX_VNC_PORT) (desktop) :$(SANDBOX_CLIPBOARD_PORT) (clipboard)"; } \
 	    || { echo "ERROR: sandbox failed to start - see $(LOCAL_RUN)/sandbox.log"; \
 	         echo "       run-local-all aborts here: the sandbox was expected to come up (Docker + checkout present)."; \
@@ -755,12 +761,14 @@ restart-teamwork:
 	 echo "Restarting TeamWork (dev=$${dev:-false}, tailscale=$${tl:-false})..."; \
 	 $(MAKE) --no-print-directory _local-teamwork RESTART=true TEAMWORK_DEV="$$dev" TEAMWORK_TAILSCALE="$$tl"
 
-# Force-restart ONLY the sandbox container (docker compose down + up) — leaves
-# TeamWork, Prax, and the backing stores running. Recreates the container, so an
-# in-flight coding session is lost; the browser/terminal/desktop panels reconnect
-# on refresh.
+# Restart ONLY the sandbox container — leaves TeamWork, Prax, and the backing
+# stores running. The container is restarted, not recreated, so packages you
+# installed in it stay. It is recreated only when it must be: the image was
+# rebuilt (scripts/ensure-image.sh, when sandbox/local-packages.txt changed) or
+# its compose settings changed. Running processes stop either way; the
+# browser/terminal/desktop panels reconnect on refresh.
 restart-sandbox:
-	@$(MAKE) --no-print-directory _local-sandbox
+	@$(MAKE) --no-print-directory _local-sandbox SANDBOX_RESTART=1
 
 shutdown:
 	@echo "Stopping native local stack..."
@@ -846,7 +854,9 @@ local-status:
 	@printf "  %-9s" "Sandbox"; \
 	  st=$$(docker inspect --format '{{.State.Health.Status}}' $(SANDBOX_CONTAINER_NAME) 2>/dev/null); \
 	  if [ "$$st" = "healthy" ]; then echo " up   -> $(SANDBOX_CONTAINER_NAME) healthy (:$(SANDBOX_CDP_PORT) CDP, :$(SANDBOX_VNC_PORT) desktop)"; \
-	  else echo " down -> $(SANDBOX_CONTAINER_NAME) ($${st:-not running})"; fi
+	  else echo " down -> $(SANDBOX_CONTAINER_NAME) ($${st:-not running})"; fi; \
+	  sk=$$(docker exec $(SANDBOX_CONTAINER_NAME) sh -c "grep '^skipped ' /etc/prax-sandbox/local-packages.report 2>/dev/null | cut -d' ' -f2- | paste -sd, -" 2>/dev/null); \
+	  [ -z "$$sk" ] || echo "             local packages SKIPPED at build: $$sk (fix sandbox/local-packages.txt)"
 	@printf "  %-9s" "Prax";     curl -s -o /dev/null --max-time 3 http://localhost:5001/health        && echo " up   -> :5001" || echo " down -> :5001"
 	@printf "  %-9s" "Grafana";  curl -s -o /dev/null --max-time 3 http://localhost:3002/api/health    && echo " up   -> :3002 (Loki/Tempo/Prometheus; tailnet :3001)" || echo " n/a  -> :3002 (observability stack not running)"
 	@echo "Logs: make local-logs   Stop: make shutdown   Connectivity: make smoke"

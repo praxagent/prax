@@ -48,6 +48,18 @@ container's `/tmp`. Two switches, both recommended:
   group is stopped at the deadline, and the tool sees exit code 124. A process
   that `setsid`s itself escapes the group; the pids limit is the backstop.
 
+**Packages installed in the container last as long as the container.**
+`make restart-sandbox` restarts it rather than recreating it (since 2026-10;
+it used to run `down` + `up`, which threw away everything installed), and
+`make run-local-*` and `deploy/update.sh` reuse it unless its image or compose
+settings changed. To keep a package across a recreation, list it in
+`../prax-sandbox/sandbox/local-packages.txt`: both start paths run
+prax-sandbox's `scripts/ensure-image.sh`, which rebuilds the image only when
+that list changed. A bad entry is skipped and reported (in the start output,
+`make local-status`, and the container's log), not fatal. What was installed by
+hand is recorded in the workspace at `.sandbox/installed-apt.txt`. Details:
+prax-sandbox's README, "Your own packages".
+
 **What `/workspace` is depends on how you started it.** `make run-local-all`
 passes `WORKSPACE_DIR=<workspaces>/<PRAX_USER_ID>` (the user's own workspace);
 `deploy/update.sh` passes `WORKSPACE_DIR` through and defaults it to the whole
