@@ -22,7 +22,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 
 from prax.agent.agent_loop import build_agent_loop, invoke_isolated
 from prax.agent.llm_factory import build_llm
-from prax.agent.message_text import message_text
+from prax.agent.message_text import args_preview_for_tool, message_text, preview_for_tool
 from prax.services.turn_registry import TurnCancelled
 
 logger = logging.getLogger(__name__)
@@ -442,19 +442,26 @@ def _append_preserved_tool_results(
 
 
 def _log_tool_calls(result: dict, label: str, role_name: str | None = None) -> int:
-    """Log all tool calls and flag errors.  Returns the total call count."""
+    """Log all tool calls and flag errors.  Returns the total call count.
+
+    Both the log and TeamWork live output outlive the model's context, so a
+    credential tool's output is withheld and its arguments show names only
+    (``message_text.preview_for_tool`` / ``args_preview_for_tool``).
+    """
     tool_count = 0
     live_lines: list[str] = []
     for msg in result.get("messages", []):
         if isinstance(msg, AIMessage):
             for tc in getattr(msg, "tool_calls", []) or []:
                 tool_count += 1
-                tool_line = f"  → {tc.get('name')}({str(tc.get('args', {}))[:80]})"
-                logger.info("Spoke [%s] tool: %s(%s)", label, tc.get("name"), str(tc.get("args", {}))[:80])
+                args = args_preview_for_tool(tc.get("name"), tc.get("args", {}), 80)
+                tool_line = f"  → {tc.get('name')}({args})"
+                logger.info("Spoke [%s] tool: %s(%s)", label, tc.get("name"), args)
                 live_lines.append(tool_line)
         elif isinstance(msg, ToolMessage):
-            preview = (msg.content or "")[:200]
-            if "error" in preview.lower() or "fail" in preview.lower():
+            preview = preview_for_tool(msg.name, msg, 200)
+            if (getattr(msg, "status", None) == "error"
+                    or "error" in preview.lower() or "fail" in preview.lower()):
                 logger.warning("Spoke [%s] tool error [%s]: %s", label, msg.name, preview)
                 live_lines.append(f"  ✗ {msg.name}: {preview[:120]}")
             else:

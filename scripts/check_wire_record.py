@@ -17,17 +17,36 @@ after, is what this reports: activity Prax didn't account for.
 Exit 0: chain intact and every wire call accounted for. Exit 1: a broken
 chain or unaccounted calls (listed). Read-only; changes nothing.
 
-Arguments: tool spans record ``requested_args_sha256`` (what the model asked
-for) and ``args_sha256`` (what the tool ran with), hashed exactly as the wire
-record hashes them. Where a span has them, a call matches only if the hashes
-agree, and two more findings are reported:
+Arguments: tool spans record ``requested_args_sha256`` — the model's raw
+arguments, hashed exactly as the wire record hashes them — and, when it is
+true, ``args_changed``. Where a span has the hash, a call matches only if the
+hashes agree, and two more findings are reported:
 
 - ARGS DIFFER — the trace says the model asked for different arguments than the
   wire shows (the trace misreports the model);
-- CHANGED BEFORE RUNNING — the tool ran with arguments other than the ones the
-  model asked for.
+- CHANGED BEFORE RUNNING — the span's ``args_changed`` flag: some layer of the
+  call (a governance or context wrapper, the tool itself) ran without an
+  argument the model asked for, or with a different value for one.
 
-Traces written before those fields existed fall back to name and time window,
+``args_sha256`` on a span is NOT compared with the requested hash: it hashes
+what the innermost layer received after LangChain validation (defaults filled
+in, values coerced, ``expected_observation`` removed), so it differs from the
+request on ordinary calls.
+
+Honest limits of CHANGED BEFORE RUNNING. Prax compares each layer's inputs with
+the model's arguments in memory, while the call runs (the arguments are never
+stored); this script only reads the resulting flag.
+
+- Extra keys are not detected: a layer that ADDS an argument the model did not
+  send looks the same as a schema default being filled in, so it is ignored.
+- Values are compared loosely across validation's coercions (``"5"`` and ``5``,
+  ``"true"`` and ``True``, a dict and the model built from it are equal), so a
+  wrapper that changes only a value's type is not reported.
+- A requested key the tool's schema does not define is dropped by validation
+  and reads as changed: the tool really did not receive it.
+- Traces written before ``args_changed`` existed never report it.
+
+Traces written before the hashes existed fall back to name and time window,
 which catches a hidden or dropped call but not swapped arguments. A call the
 model asked for that Prax legitimately refused (a floor, a budget) has a span
 too, so it matches; one Prax never attempted shows up, which is also worth
@@ -68,8 +87,9 @@ def load_wire(path: str) -> list[dict]:
 
 
 def load_tool_spans(graphs_dir: str, since: float) -> list[tuple]:
-    """(start time, tool name, trace id, requested args hash, ran args hash) for
-    every tool span since *since*; the hashes are "" in traces that predate them."""
+    """(start time, tool name, trace id, requested args hash, args changed) for
+    every tool span since *since*; the hash is "" and the flag False in traces
+    that predate them."""
     spans = []
     for path in sorted(glob.glob(os.path.join(graphs_dir, "graphs-*.jsonl"))):
         with open(path, encoding="utf-8") as fh:
@@ -88,7 +108,7 @@ def load_tool_spans(graphs_dir: str, since: float) -> list[tuple]:
                     if started >= since:
                         spans.append((started, str(node.get("name")), str(graph.get("trace_id")),
                                       str(node.get("requested_args_sha256") or ""),
-                                      str(node.get("args_sha256") or "")))
+                                      node.get("args_changed") is True))
     return sorted(spans)
 
 
@@ -125,8 +145,10 @@ def unaccounted(wire: list[dict], spans: list[tuple], *, slack: float,
 
 
 def changed_before_running(spans: list[tuple]) -> list[tuple]:
-    """Spans whose tool ran with arguments other than the ones the model asked for."""
-    return [s for s in spans if s[3] and s[4] and s[3] != s[4]]
+    """Spans whose tool ran with arguments other than the ones the model asked
+    for — Prax's own ``args_changed`` flag, never a hash comparison (see the
+    module docstring for why the two hashes are not comparable)."""
+    return [s for s in spans if s[4]]
 
 
 def main(argv: list[str] | None = None) -> int:

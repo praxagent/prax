@@ -253,11 +253,14 @@ class OTelToolCallback(BaseCallbackHandler):
 
         tracer = _get_tracer()
         if tracer:
+            from prax.agent.message_text import args_preview_for_tool
+            inputs = kwargs.get("inputs")
             span = tracer.start_span(
                 name=f"tool.{tool_name}",
                 attributes={
                     "prax.tool.name": tool_name,
-                    "prax.tool.input_preview": input_str[:200],
+                    "prax.tool.input_preview": args_preview_for_tool(
+                        tool_name, inputs if isinstance(inputs, dict) else input_str, 200),
                 },
             )
             self._spans[run_id] = span
@@ -280,6 +283,7 @@ class OTelToolCallback(BaseCallbackHandler):
         run_id: UUID,
         **kwargs: Any,
     ) -> None:
+        tool_name = self._tool_names.get(run_id)
         if self._finish_run(run_id):
             return
         span = self._spans.pop(run_id, None)
@@ -287,10 +291,12 @@ class OTelToolCallback(BaseCallbackHandler):
             # The span is already popped, so anything that raises before
             # end() loses it for good. That was every successful tool span:
             # a ToolCall invoke hands this callback a ToolMessage, which
-            # `(output or "")[:200]` cannot slice.
+            # `(output or "")[:200]` cannot slice. A credential tool's output
+            # is withheld: this attribute goes to the exporter.
             try:
-                from prax.agent.message_text import tool_output_text
-                span.set_attribute("prax.tool.output_preview", tool_output_text(output)[:200])
+                from prax.agent.message_text import preview_for_tool
+                span.set_attribute("prax.tool.output_preview",
+                                   preview_for_tool(tool_name, output, 200))
             finally:
                 span.end()
 

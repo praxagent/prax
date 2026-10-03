@@ -89,11 +89,17 @@ def _wire_call(ts, name, h, caller="prax-prod"):
             "tool_calls": [{"name": name, "args_sha256": h}]}
 
 
-def _write_hashed_graphs(d: Path, spans: list[tuple[float, str, str, str]]) -> None:
+def _write_hashed_graphs(d: Path, spans: list[tuple]) -> None:
+    """Spans as (time, name, requested hash, ran hash[, args_changed])."""
     d.mkdir(parents=True)
-    nodes = [{"name": n, "spoke_or_category": "tool",
-              "started_at": datetime.fromtimestamp(t, UTC).isoformat(),
-              "requested_args_sha256": req, "args_sha256": ran} for t, n, req, ran in spans]
+    nodes = []
+    for t, n, req, ran, *changed in spans:
+        node = {"name": n, "spoke_or_category": "tool",
+                "started_at": datetime.fromtimestamp(t, UTC).isoformat(),
+                "requested_args_sha256": req, "args_sha256": ran}
+        if changed and changed[0]:
+            node["args_changed"] = True
+        nodes.append(node)
     (d / "graphs-2026-10-03.jsonl").write_text(json.dumps({"trace_id": "t1", "nodes": nodes}) + "\n")
 
 
@@ -116,7 +122,27 @@ def test_the_trace_misreporting_the_model_is_args_differ(tmp_path, capsys):
 def test_arguments_changed_before_running_are_reported(tmp_path, capsys):
     now = time.time()
     _write_wire(tmp_path / "wire.jsonl", [_wire_call(now - 100, "browser_fill", "aa")])
-    _write_hashed_graphs(tmp_path / "graphs", [(now - 99, "browser_fill", "aa", "cc")])
+    _write_hashed_graphs(tmp_path / "graphs", [(now - 99, "browser_fill", "aa", "cc", True)])
     assert cwr.main([str(tmp_path / "wire.jsonl"), "--graphs", str(tmp_path / "graphs")]) == 1
     out = capsys.readouterr().out
     assert "CHANGED BEFORE RUNNING" in out and "0 unaccounted" in out
+
+
+def test_a_post_validation_hash_alone_is_not_a_change(tmp_path, capsys):
+    """args_sha256 hashes what the tool received AFTER validation — defaults
+    filled in, values coerced — so it differs from the model's request on
+    ordinary calls. Only Prax's own args_changed flag is a finding."""
+    now = time.time()
+    _write_wire(tmp_path / "wire.jsonl", [_wire_call(now - 100, "browser_fill", "aa")])
+    _write_hashed_graphs(tmp_path / "graphs", [(now - 99, "browser_fill", "aa", "cc")])
+    assert cwr.main([str(tmp_path / "wire.jsonl"), "--graphs", str(tmp_path / "graphs")]) == 0
+    assert "0 unaccounted, 0 changed before running" in capsys.readouterr().out
+
+
+def test_load_tool_spans_reads_the_flag_strictly(tmp_path):
+    now = time.time()
+    _write_hashed_graphs(tmp_path / "graphs", [(now - 99, "a", "aa", "aa", True),
+                                               (now - 98, "b", "bb", "bb")])
+    spans = cwr.load_tool_spans(str(tmp_path / "graphs"), now - 200)
+    assert [(s[1], s[4]) for s in spans] == [("a", True), ("b", False)]
+    assert [s[1] for s in cwr.changed_before_running(spans)] == ["a"]

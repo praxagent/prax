@@ -31,13 +31,20 @@ import re
 
 # Built-in floors. Settings can ADD tools (HARD_FLOOR_EXTRA_TOOLS); nothing can
 # remove these — a floor that can be configured away is not a floor.
-_CREDENTIALS = {
+#
+# CREDENTIAL_TOOLS is public and holds whether or not HARD_FLOORS_ENABLED is on:
+# the observability sinks (trace summaries, OTel previews, TeamWork live output,
+# spoke logs) use it to withhold what these tools return, because
+# browser_login hands back "username=…\npassword=…" in plain text under the
+# default BROWSER_SECRETS_OUT_OF_CONTEXT=false.
+CREDENTIAL_TOOLS: frozenset[str] = frozenset({
     "browser_login",          # returns a stored password to the model
     "browser_credentials",    # returns stored username and password
     "browser_fill_login",     # types stored credentials into a page
     "browser_request_login",  # starts a login the user completes
     "browser_finish_login",   # completes a login
-}
+})
+_CREDENTIALS = CREDENTIAL_TOOLS
 _AUTHORITY = {
     # code that then runs with Prax's own authority
     "plugin_import",

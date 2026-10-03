@@ -34,7 +34,7 @@ from pathlib import Path
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import ToolMessage
 
-from prax.agent.message_text import tool_output_text
+from prax.agent.message_text import args_preview_for_tool, preview_for_tool
 
 logger = logging.getLogger(__name__)
 
@@ -96,13 +96,24 @@ class SpanNode:
     cached_tokens_in: int = 0
     cache_write_tokens: int = 0
     usage_by_model: dict = field(default_factory=dict)
-    # Tool spans: sha256 of the arguments the tool actually ran with, and of the
-    # arguments the model asked for in its response (matched by tool_call_id).
-    # Hashes only — never the arguments — in the same canonical form as the
-    # secrets proxy's wire record, so scripts/check_wire_record.py can tell a
-    # dropped call from a call whose arguments changed on the way.
+    # Tool spans. `requested_args_sha256` is the hash of the arguments the model
+    # asked for in its response (matched by tool_call_id), in the same canonical
+    # form as the secrets proxy's wire record, so scripts/check_wire_record.py
+    # can tell a dropped call from one the trace misreports. Hashes only — the
+    # arguments themselves are never stored.
+    #
+    # `args_sha256` hashes the inputs of the innermost tool layer: arguments
+    # AFTER LangChain validation (schema defaults filled in, values coerced,
+    # governance's expected_observation removed). It is NOT comparable with
+    # `requested_args_sha256` — they differ on ordinary calls — and says only
+    # "this is what the tool body received".
+    #
+    # `args_changed` is the comparison that is meaningful: True when some layer
+    # of the call ran without a requested argument, or with a different value
+    # for one (see arguments_differ). Persisted only when True.
     args_sha256: str = ""
     requested_args_sha256: str = ""
+    args_changed: bool = False
 
 
 class ExecutionGraph:
@@ -263,6 +274,7 @@ class ExecutionGraph:
                     **({"args_sha256": n.args_sha256} if n.args_sha256 else {}),
                     **({"requested_args_sha256": n.requested_args_sha256}
                        if n.requested_args_sha256 else {}),
+                    **({"args_changed": True} if n.args_changed else {}),
                     "models_used": models_used,
                     "duration_s": round(
                         (n.finished_at - n.started_at).total_seconds(), 1
@@ -656,6 +668,7 @@ def _graph_from_dict(data: dict) -> ExecutionGraph | None:
             summary=nd.get("summary", ""),
             args_sha256=nd.get("args_sha256", ""),
             requested_args_sha256=nd.get("requested_args_sha256", ""),
+            args_changed=bool(nd.get("args_changed", False)),
         )
         graph._nodes[node.span_id] = node
     return graph
@@ -1173,6 +1186,99 @@ def args_sha256(args) -> str:
     ).hexdigest()
 
 
+# Keys a governance layer adds to a tool's schema and removes before the tool
+# runs (governed_tool.py pops expected_observation): the model may send them and
+# the tool never receives them, by design — not a change.
+_GOVERNANCE_ONLY_ARGS = frozenset({"expected_observation"})
+
+
+def _jsonable(value):
+    """*value* as plain JSON data — a validated model as a dict, an enum as its
+    value, a date as ISO text — i.e. the shape the model sent it in."""
+    try:
+        from pydantic_core import to_jsonable_python
+        return to_jsonable_python(value, fallback=str)
+    except Exception:  # noqa: BLE001 - comparison is best-effort
+        return value
+
+
+def _canonical(value) -> str:
+    try:
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    except Exception:  # noqa: BLE001 - comparison is best-effort
+        return repr(value)
+
+
+def _loosely_equal(asked, ran) -> bool:
+    """Whether *ran* is *asked* after validation's lossless conversions.
+
+    Equal when the canonical JSON matches. Otherwise containers compare element
+    by element (a dict ignores keys only *ran* has: nested schema defaults), and
+    scalars compare by ``str()`` (``"5"`` → ``5``), case-insensitively when one
+    side is a boolean (``"true"`` → ``True``), or as numbers (``"5"`` → ``5.0``).
+    """
+    if _canonical(asked) == _canonical(ran):
+        return True
+    if isinstance(asked, dict) and isinstance(ran, dict):
+        return all(k in ran and _loosely_equal(v, ran[k]) for k, v in asked.items())
+    if isinstance(asked, list) and isinstance(ran, list):
+        return len(asked) == len(ran) and all(
+            _loosely_equal(a, r) for a, r in zip(asked, ran, strict=True))
+    if isinstance(asked, (dict, list)) or isinstance(ran, (dict, list)):
+        return False
+    try:
+        if str(asked) == str(ran):
+            return True
+        if isinstance(asked, bool) or isinstance(ran, bool):
+            return str(asked).lower() == str(ran).lower()
+        if isinstance(asked, (int, float)) or isinstance(ran, (int, float)):
+            return float(asked) == float(ran)
+    except (TypeError, ValueError, OverflowError):
+        pass
+    return False
+
+
+def arguments_differ(asked, ran) -> bool:
+    """True when the inputs *ran* lack an argument the model asked for, or carry
+    a different value for one.
+
+    *asked* is the model's raw arguments; *ran* is one tool layer's inputs, as
+    its ``on_tool_start`` reports them. A wrapper layer's inputs are what
+    LangChain validated — schema defaults filled in, values coerced — so the two
+    are compared loosely rather than by hash: governance-only keys are dropped
+    from both, every key the model sent must be present with a value that is
+    equal by ``_loosely_equal``, and keys only *ran* has (defaults) are ignored.
+
+    Returns False when either side is not a dict of arguments (a plain string
+    input): there is nothing to compare, and a guess is not a finding.
+    """
+    if isinstance(asked, str):
+        try:
+            asked = json.loads(asked) if asked.strip() else {}
+        except ValueError:
+            return False
+    if not isinstance(asked, dict) or not isinstance(ran, dict):
+        return False
+    ran_plain = {k: _jsonable(v) for k, v in ran.items() if k not in _GOVERNANCE_ONLY_ARGS}
+    for key, value in asked.items():
+        if key in _GOVERNANCE_ONLY_ARGS:
+            continue
+        if key not in ran_plain or not _loosely_equal(_jsonable(value), ran_plain[key]):
+            return True
+    return False
+
+
+def _copy_args(args):
+    """A private copy of the model's arguments, so nothing downstream that
+    mutates the call's dict can change what we compare against."""
+    import copy
+
+    try:
+        return copy.deepcopy(args)
+    except Exception:  # noqa: BLE001
+        return dict(args) if isinstance(args, dict) else args
+
+
 class GraphCallbackHandler(BaseCallbackHandler):
     """LangChain callback handler that creates child SpanNodes for tool calls.
 
@@ -1181,12 +1287,24 @@ class GraphCallbackHandler(BaseCallbackHandler):
 
     Must inherit from ``BaseCallbackHandler`` so LangChain's
     ``CallbackManager`` recognises it during event dispatch.
+
+    One logical tool call is one span. Governance and context binding wrap a
+    tool in same-named StructuredTools that call ``inner.invoke()``, and every
+    layer fires ``on_tool_start`` as a CHILD run of the layer above
+    (``parent_run_id``). So a start whose parent is one of this handler's open
+    runs, with the same tool name, is a wrapper layer and maps to that run's
+    span; any other start opens its own span — including a second call to the
+    same tool running in parallel, which deduplicating by name used to fold
+    into the first. (There is no name-only fallback: a nested ``invoke`` only
+    reaches this handler through LangChain's propagated child config, which
+    always carries ``parent_run_id``; a thread hop that lost that config would
+    lose the handler too, so no same-name nested start can arrive without it.)
     """
 
     # Tell LangChain to skip non-tool events.
     raise_error: bool = False
     # LLM events are needed for on_llm_end: the tool calls the model ASKED for,
-    # whose argument hashes are matched to the tool spans by tool_call_id.
+    # whose arguments are matched to the tool spans by tool_call_id.
     ignore_llm: bool = False
     ignore_chain: bool = True
     # NOTE: ignore_agent MUST be False — LangChain's CallbackManager.on_tool_start
@@ -1208,25 +1326,42 @@ class GraphCallbackHandler(BaseCallbackHandler):
         self._graph = graph
         self._trace_id = trace_id
         self._heartbeat = heartbeat or get_trace_heartbeat(trace_id)
+        # Every open tool run — each wrapper layer included — → its span, its
+        # tool name, and the tool_call_id of the logical call it belongs to (the
+        # outermost layer carries it; inner layers inherit it from their parent).
         self._active: dict[str, str] = {}  # run_id → span_id
+        self._run_names: dict[str, str] = {}  # run_id → tool name
+        self._run_calls: dict[str, str] = {}  # run_id → tool_call_id
+        # Runs that opened a span: the outermost layer of each logical call.
+        self._roots: set[str] = set()
+        # Spans whose completion was already pushed to TeamWork live output.
+        self._live_pushed: set[str] = set()
         self._ctx_tokens: dict[str, object] = {}  # run_id → ContextVar token
-        # Track active tool names for deduplication (LangGraph fires
-        # on_tool_start at both ToolNode and individual invocation levels).
-        self._active_names: dict[str, str] = {}  # tool_name → span_id
         self._live_agent = live_agent_name  # push live output to TeamWork
         self._tool_count = 0
         # tool_call_id → hash of the arguments the model asked for.
         self._requested: dict[str, str] = {}
+        # tool_call_id → the model's raw arguments. IN MEMORY ONLY: compared
+        # with each layer's inputs while the call runs, dropped when it ends,
+        # never written to the trace (which holds hashes and a flag, no values).
+        self._requested_args: dict[str, object] = {}
+        # Parallel tool calls fire their callbacks from different threads.
+        self._lock = threading.Lock()
 
     def on_llm_end(self, response, *, run_id, **kwargs) -> None:
-        """Remember the argument hash of every tool call the model asked for."""
+        """Remember every tool call the model asked for: its hash and arguments."""
         try:
             for gens in getattr(response, "generations", None) or []:
                 for gen in gens:
                     msg = getattr(gen, "message", None)
                     for tc in getattr(msg, "tool_calls", None) or []:
-                        if tc.get("id"):
-                            self._requested[tc["id"]] = args_sha256(tc.get("args") or {})
+                        tcid = tc.get("id")
+                        if not tcid:
+                            continue
+                        args = tc.get("args") or {}
+                        with self._lock:
+                            self._requested[tcid] = args_sha256(args)
+                            self._requested_args[tcid] = _copy_args(args)
         except Exception:  # noqa: BLE001 - tracing must never break a turn
             logger.debug("could not record requested tool-call hashes", exc_info=True)
 
@@ -1243,38 +1378,45 @@ class GraphCallbackHandler(BaseCallbackHandler):
         return depth
 
     def on_tool_start(
-        self, serialized: dict, input_str: str, *, run_id, **kwargs
+        self, serialized: dict, input_str: str, *, run_id,
+        parent_run_id=None, **kwargs,
     ) -> None:
         rid = str(run_id)
-        # Dedup guard: if this run_id already has a node, skip.
-        if rid in self._active:
-            return
+        parent = str(parent_run_id) if parent_run_id else ""
         tool_name = serialized.get("name") or "unknown_tool"
+        with self._lock:
+            # Dedup guard: if this run_id already has a node, skip.
+            if rid in self._active:
+                return
+            # A wrapper layer of a call that is already open (see class doc).
+            outer_span = (self._active.get(parent)
+                          if parent and self._run_names.get(parent) == tool_name else None)
+            if outer_span:
+                self._active[rid] = outer_span
+                self._run_names[rid] = tool_name
+                if parent in self._run_calls:
+                    self._run_calls[rid] = self._run_calls[parent]
         self._heartbeat.touch(tool_name, f"started tool {tool_name}")
-
-        # Dedup: LangGraph fires on_tool_start at multiple levels for the
-        # same tool call (ToolNode processor + individual invocation).
-        # If we already have an active span with the same name, map this
-        # run_id to the existing span instead of creating a duplicate.
-        if tool_name in self._active_names:
-            self._active[rid] = self._active_names[tool_name]
-            self._record_args(self._active_names[tool_name], kwargs)
+        if outer_span:
+            self._record_args(outer_span, rid, kwargs)
             return
 
         # Push live output to TeamWork so the user sees tool calls in real time.
         if self._live_agent:
-            self._tool_count += 1
+            with self._lock:
+                self._tool_count += 1
+                count = self._tool_count
             try:
                 from prax.services.teamwork_hooks import push_live_output
-                is_first = self._tool_count == 1
-                line = f"[{self._tool_count}] {tool_name}..."
+                line = f"[{count}] {tool_name}..."
                 push_live_output(
                     self._live_agent, line + "\n",
-                    status="running", append=not is_first,
+                    status="running", append=count != 1,
                 )
             except Exception:
                 pass
 
+        inputs = kwargs.get("inputs")
         span_id = uuid.uuid4().hex[:12]
         node = SpanNode(
             span_id=span_id,
@@ -1282,12 +1424,18 @@ class GraphCallbackHandler(BaseCallbackHandler):
             parent_id=self._parent_span_id,
             trace_id=self._trace_id,
             spoke_or_category="tool",
-            summary=str(input_str)[:500],
+            summary=args_preview_for_tool(
+                tool_name, inputs if isinstance(inputs, dict) else input_str, 500),
         )
         self._graph.add_node(node)
-        self._active[rid] = span_id
-        self._active_names[tool_name] = span_id
-        self._record_args(span_id, kwargs)
+        with self._lock:
+            self._active[rid] = span_id
+            self._run_names[rid] = tool_name
+            self._roots.add(rid)
+            tcid = kwargs.get("tool_call_id")
+            if tcid:
+                self._run_calls[rid] = tcid
+        self._record_args(span_id, rid, kwargs)
 
         # For delegation tools (delegate_*), update the trace context so
         # that run_spoke's start_span() nests under this tool span instead
@@ -1310,15 +1458,18 @@ class GraphCallbackHandler(BaseCallbackHandler):
             self._ctx_tokens[rid] = _current_trace.set(tool_ctx)
             register_pending_delegation_context(tool_name, tool_ctx, input_str)
 
-    def _record_args(self, span_id: str, kwargs: dict) -> None:
-        """Hash what the tool ran with, and what the model asked for.
+    def _record_args(self, span_id: str, rid: str, kwargs: dict) -> None:
+        """Hash what the model asked for, and check every layer ran with it.
 
-        LangGraph fires on_tool_start more than once for one call: first the
-        outer wrapper (which carries the tool_call_id and the model's arguments),
-        then each inner invocation, innermost last. So "what was asked" is taken
-        from the call with the tool_call_id, and "what ran" from the LAST start —
-        the innermost, which receives the arguments the tool really gets. Taking
-        the first would hide a wrapper that rewrote them.
+        LangGraph fires on_tool_start once per layer of one call: first the
+        outermost wrapper (carrying the tool_call_id and the model's raw
+        arguments), then each inner invocation, innermost last, with the inputs
+        LangChain validated for it. "What was asked" is the model's arguments,
+        taken from its response by tool_call_id. Each layer's inputs are
+        compared with them (``arguments_differ``) and any difference sets
+        ``args_changed`` — so a wrapper that rewrote or dropped an argument
+        shows up whichever layer it sits at. ``args_sha256`` keeps the LAST
+        start's inputs: what the tool body itself received, post-validation.
         """
         try:
             with self._graph._lock:
@@ -1326,13 +1477,42 @@ class GraphCallbackHandler(BaseCallbackHandler):
             if node is None:
                 return
             inputs = kwargs.get("inputs")
+            with self._lock:
+                tcid = self._run_calls.get(rid)
+                requested = (self._requested.pop(tcid, None)
+                             if tcid and not node.requested_args_sha256 else None)
+                asked = self._requested_args.get(tcid) if tcid else None
             if inputs is not None:
                 node.args_sha256 = args_sha256(inputs)
-            tcid = kwargs.get("tool_call_id")
-            if tcid and not node.requested_args_sha256 and tcid in self._requested:
-                node.requested_args_sha256 = self._requested.pop(tcid)
+            if requested:
+                node.requested_args_sha256 = requested
+            if asked is not None and inputs is not None and arguments_differ(asked, inputs):
+                node.args_changed = True
         except Exception:  # noqa: BLE001 - tracing must never break a turn
             logger.debug("could not record tool-call argument hashes", exc_info=True)
+
+    def _end_run(self, rid: str) -> tuple[str | None, str, bool]:
+        """Forget *rid*: (its span, its tool name, whether to push live output).
+
+        Live output is pushed once per span, at the first layer to end (the
+        innermost, or the outermost when governance refused the call and no
+        inner layer ran). When the outermost layer ends the logical call is
+        over, and the model's raw arguments are dropped.
+        """
+        with self._lock:
+            span_id = self._active.pop(rid, None)
+            tool_name = self._run_names.pop(rid, "")
+            tcid = self._run_calls.pop(rid, None)
+            push = bool(span_id) and span_id not in self._live_pushed
+            if push:
+                self._live_pushed.add(span_id)
+            if rid in self._roots:
+                self._roots.discard(rid)
+                self._live_pushed.discard(span_id)
+                if tcid:
+                    self._requested_args.pop(tcid, None)
+                    self._requested.pop(tcid, None)
+        return span_id, tool_name, push
 
     def on_tool_end(self, output, *, run_id, **kwargs) -> None:
         rid = str(run_id)
@@ -1340,36 +1520,29 @@ class GraphCallbackHandler(BaseCallbackHandler):
         token = self._ctx_tokens.pop(rid, None)
         if token:
             _current_trace.reset(token)
-        span_id = self._active.pop(rid, None)
+        span_id, tool_name, push = self._end_run(rid)
         if span_id:
             discard_pending_delegation_context(span_id)
-            # Remove from active names dedup tracker.
-            tool_name = ""
-            for k, v in list(self._active_names.items()):
-                if v == span_id:
-                    tool_name = k
-            self._active_names = {
-                k: v for k, v in self._active_names.items() if v != span_id
-            }
             # A ToolCall invoke ends with a ToolMessage, whose str() is a
             # pydantic repr, so trace reports read "content='...' name='...'".
-            text = tool_output_text(output)
+            # A credential tool's output (a password) is withheld.
+            text = preview_for_tool(tool_name, output, 2000)
             # A tool that handles its own error (handle_tool_error, or one that
             # returns an error ToolMessage) ends HERE with status="error";
             # on_tool_error never fires for it.
             failed = isinstance(output, ToolMessage) and output.status == "error"
             self._graph.complete_node(
-                span_id, status="failed" if failed else "completed", summary=text[:2000],
+                span_id, status="failed" if failed else "completed", summary=text,
             )
             verb = "failed" if failed else "completed"
             self._heartbeat.touch(tool_name or "tool", f"{verb} tool {tool_name or span_id}")
 
             # Push completion to live output + activity log
-            if self._live_agent and tool_name:
+            if self._live_agent and tool_name and push:
                 try:
                     from prax.services.teamwork_hooks import log_activity, push_live_output
                     result_preview = text[:200] or "(no output)"
-                    mark = "\u2718" if failed else "\u2714"
+                    mark = "✘" if failed else "✔"
                     push_live_output(
                         self._live_agent,
                         f"    {mark} {tool_name}: {result_preview}\n",
@@ -1387,12 +1560,9 @@ class GraphCallbackHandler(BaseCallbackHandler):
         token = self._ctx_tokens.pop(rid, None)
         if token:
             _current_trace.reset(token)
-        span_id = self._active.pop(rid, None)
+        span_id, _tool_name, _push = self._end_run(rid)
         if span_id:
             discard_pending_delegation_context(span_id)
-            self._active_names = {
-                k: v for k, v in self._active_names.items() if v != span_id
-            }
             self._graph.complete_node(
                 span_id, status="failed", summary=str(error)[:2000]
             )
