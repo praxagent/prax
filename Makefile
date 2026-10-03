@@ -375,7 +375,7 @@ RESTART       ?=
 # + the container name — NOT TeamWork's in-Docker defaults (chrome_cdp_host=
 # `sandbox`, desktop_vnc_url=http://sandbox:6080, empty sandbox_container). Without
 # these, terminal (docker exec), browser (CDP), and desktop (noVNC) all break.
-TW_SANDBOX_ENV = SANDBOX_CONTAINER=$(SANDBOX_CONTAINER_NAME) CHROME_CDP_HOST=localhost CHROME_CDP_PORT=$(SANDBOX_CDP_PORT) DESKTOP_VNC_URL=http://localhost:$(SANDBOX_VNC_PORT)
+TW_SANDBOX_ENV = SANDBOX_CONTAINER=$(SANDBOX_CONTAINER_NAME) CHROME_CDP_HOST=localhost CHROME_CDP_PORT=$(SANDBOX_CDP_PORT) DESKTOP_VNC_URL=http://localhost:$(SANDBOX_VNC_PORT) CLIPBOARD_PORT=$(SANDBOX_CLIPBOARD_PORT)
 
 run-local-min:
 	@echo "Starting Prax core (no memory / sandbox / TeamWork). Ctrl-C to stop."
