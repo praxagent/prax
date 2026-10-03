@@ -56,6 +56,7 @@ agent-made artifacts for a person and sandboxes them; see TeamWork's
   while Prax was reading an untrusted page can't phone home.
 - **Discord and SMS** can't show an artifact. Prax says it is in TeamWork, or
   shares a public link if you ask.
-- **Other public-share tools are not gated yet.** `workspace_share_file` and
-  `note_publish`/`course_publish` with `public=True` are still MEDIUM risk and
-  are not gated.
+- **The same rule covers every public share.** `workspace_share_file` and
+  `course_publish(public=True)` are gated the same way, and the share registry
+  refuses anything made outside a person's decision. See
+  [public-exposure.md](../security/public-exposure.md).

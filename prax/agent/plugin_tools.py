@@ -902,11 +902,12 @@ def workspace_push() -> str:
 
 @tool
 def workspace_share_file(file_path: str) -> str:
-    """Publish a workspace file at a public ngrok URL — DO NOT call without
-    explicit user consent.
+    """Publish a workspace file at a public ngrok URL — anyone with the link
+    can open it; there is no password.
 
-    This puts the file on the public internet (token-gated, but anyone with
-    the token can fetch it).  Only call this when:
+    Always needs the user's decision for this exact file: they approve it in
+    TeamWork, or ask for it in their own words naming the file ("share
+    report.pdf publicly"). Without that it is refused. Only call this when:
       • the user has explicitly said "share this", "publish this", or
         equivalent, AND
       • the active channel can't carry the file inline — typically SMS or

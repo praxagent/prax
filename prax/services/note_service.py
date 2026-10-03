@@ -418,7 +418,12 @@ def save_and_publish(
             )
             logger.warning("save_and_publish: %s did not resolve (%s)", private_url, detail)
     if public:
-        entry = share_registry.register_note(user_id, meta["slug"])
+        from prax.services.exposure_gate import ExposureNotApproved
+        try:
+            entry = share_registry.register_note(user_id, meta["slug"])
+        except ExposureNotApproved as e:
+            response["public_url"] = f"(not made public: {e})"
+            return response
         public_url = share_registry.public_url_for(entry)
         response["public_url"] = public_url or "(NGROK_URL not configured)"
         response["share_token"] = entry["token"]

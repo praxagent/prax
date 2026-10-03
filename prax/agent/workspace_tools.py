@@ -404,24 +404,14 @@ def workspace_send_file(filename: str, message: str = "") -> str:
     if teamwork_delivered:
         return teamwork_delivered
 
-    # Fall back to ngrok share link.
-    try:
-        result = workspace_service.publish_file(uid, f"active/{filename}")
-        url = result.get("url")
-        if "error" not in result and url:
-            # Try to send the link via the user's channel.
-            _deliver_share_link(uid, url, filename, message)
-            return (
-                f"Shared {filename} via link ({size_mb:.1f} MB): {url}\n"
-                f"Token: `{result['token']}` — use workspace_unshare_file to revoke."
-            )
-    except Exception:
-        pass
-
-    # Final fallback — file is in the workspace, tell the user where.
+    # No public-link fallback: a public link has no password, so it is made
+    # only by workspace_share_file, on the user's decision for this file
+    # (prax/services/exposure_gate.py). Until then the file stays private.
     return (
-        f"File saved to your workspace: **{filename}** ({size_mb:.1f} MB).\n"
-        f"You can access it from the TeamWork file browser or your workspace directory."
+        f"File saved to your workspace: **{filename}** ({size_mb:.1f} MB). "
+        f"It could not be delivered directly on this channel; it is in the "
+        f"TeamWork file browser. If the user wants a link anyone can open, they "
+        f"can ask for one (workspace_share_file) and approve it."
     )
 
 
@@ -483,44 +473,6 @@ def _deliver_via_teamwork(
         )
     except Exception:
         return None
-
-
-def _deliver_share_link(user_id: str, url: str, filename: str, message: str) -> None:
-    """Best-effort: send the share link to the user via their active channel."""
-    text = f"{message}\n{url}" if message else f"Here's your file ({filename}): {url}"
-
-    # Try TeamWork first (if active channel).
-    try:
-        from prax.agent.user_context import current_channel_id
-        from prax.services.teamwork_service import get_teamwork_client
-
-        channel_id = current_channel_id.get(None)
-        if channel_id:
-            tw = get_teamwork_client()
-            if tw.enabled:
-                tw.send_message(
-                    content=text, channel_id=channel_id, agent_name="Prax",
-                )
-                return
-    except Exception:
-        pass
-
-    # Try Discord text message.
-    try:
-        from prax.services.discord_service import send_message
-        send_message(user_id, text)
-        return
-    except Exception:
-        pass
-
-    # Try SMS.
-    try:
-        from prax.sms import send_sms
-        # SMS users have phone-number user IDs (start with + or digit).
-        if user_id and user_id.lstrip("+").isdigit():
-            send_sms(text, user_id)
-    except Exception:
-        pass
 
 
 @tool

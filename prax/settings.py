@@ -1389,6 +1389,19 @@ class AppSettings(BaseSettings):
     # fail closed. The Twilio routes keep their signature validation; MCP keeps
     # its bearer; /health stays open.
     prax_api_key: str = Field(default="", alias="PRAX_API_KEY", repr=False)
+    tunnel_requests_need_key: bool = Field(
+        default=True, alias="PRAX_TUNNEL_REQUESTS_NEED_KEY",
+        description=(
+            "With PRAX_API_KEY unset, refuse requests to Prax's private routes "
+            "(/teamwork/*, /plugins/*, /api/users/*) that arrived through a proxy "
+            "or tunnel (they carry X-Forwarded-*/Forwarded headers) — an ngrok "
+            "tunnel publishes every Flask route. Only what a person shared "
+            "(/shared, /courses, /notes) and routes with their own auth stay "
+            "reachable that way. TeamWork's own calls come straight over "
+            "loopback and are unaffected. Set false only if a trusted reverse "
+            "proxy you run sits in front of Prax; better, set PRAX_API_KEY."
+        ),
+    )
 
     @property
     def teamwork_active(self) -> bool:

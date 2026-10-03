@@ -10,6 +10,11 @@ in ``X-API-Key`` (or ``Authorization: Bearer <key>``) or it is answered
 TeamWork sends the header on every upstream call when its own ``PRAX_API_KEY``
 is set to the same value (``teamwork/routers/prax.py::prax_headers``).
 
+With no key set, a request to these blueprints that came through a proxy or
+tunnel (forwarding headers present) is refused anyway
+(``PRAX_TUNNEL_REQUESTS_NEED_KEY``, default on): an ngrok tunnel publishes
+every Flask route, and these are private. See docs/security/public-exposure.md.
+
 Not covered on purpose: the Twilio routes (signature validation in
 ``twilio_auth.py``), ``/mcp`` (its own bearer), and the liveness probes
 (``/health``, ``/healthz/*``) — none of those live on the guarded blueprints.
@@ -32,6 +37,17 @@ def _presented_key() -> str:
     return ""
 
 
+_FORWARDING_HEADERS = ("X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto",
+                       "Forwarded", "X-Real-IP")
+
+
+def _came_through_a_proxy() -> bool:
+    """True when the request carries a reverse proxy's or tunnel's forwarding
+    headers (ngrok, cloudflared and tailscale funnel all add them). TeamWork's
+    calls to Prax are direct and carry none."""
+    return any(request.headers.get(h) for h in _FORWARDING_HEADERS)
+
+
 def require_prax_api_key():
     """``before_request`` hook: 401 unless the request carries ``PRAX_API_KEY``.
 
@@ -45,6 +61,10 @@ def require_prax_api_key():
 
     expected = settings.prax_api_key
     if not expected:
+        if settings.tunnel_requests_need_key and _came_through_a_proxy():
+            # No key to check, and this request crossed a proxy or tunnel: an
+            # ngrok tunnel publishes every route, and these are private.
+            return jsonify({"error": "not available through a public tunnel; set PRAX_API_KEY"}), 403
         return None
 
     presented = _presented_key()
