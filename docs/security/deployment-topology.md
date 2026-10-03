@@ -157,8 +157,8 @@ boundary above. Component run instructions live in the proxy repository.
 
 Even a working proxy deployment retains session-signing secrets, inbound MCP
 credentials, sandbox/UI/DB access, and any configured SSH keys. Discord's bot
-credential remains local because the gateway protocol uses it in its connection
-payload. Unsupported third-party authentication flows also remain local until
+credential remains local unless the forward proxy injects it for exactly one
+caller ([secrets-proxy.md](secrets-proxy.md#discord-through-the-forward-proxy)). Unsupported third-party authentication flows also remain local until
 implemented differently. These credentials and workspace contents have value;
 protect and rotate them according to their privileges.
 

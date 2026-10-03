@@ -125,6 +125,7 @@ def test_forward_map_skips_are_the_known_hard_cases():
         "AMADEUS_API_KEY",      # OAuth2 token exchange
         "AMADEUS_API_SECRET",
         "NYT_PASSWORD",         # site login
+        "DISCORD_BOT_TOKEN",    # exclusive: exported only with its callers named
     }
 
 
@@ -143,4 +144,29 @@ def test_forward_map_rules_are_well_formed():
     for r in rules:
         assert r.get("host") and r.get("scheme")
         assert (r["scheme"] in ("bearer", "basic")
-                or r["scheme"].startswith(("header:", "query:")))
+                or r["scheme"].startswith(("header:", "query:", "ws-json:")))
+
+
+# --- Discord: one instance only (two holders both answer every message) ------
+
+def test_discord_is_exported_only_with_its_callers():
+    rules, skipped = reg.build_forward_map()
+    assert not any(r.get("key_env") == "DISCORD_BOT_TOKEN" for r in rules)
+    assert any(env == "DISCORD_BOT_TOKEN" and "exclusive" in why for env, why in skipped)
+
+
+def test_discord_rules_carry_the_bot_prefix_gateway_path_and_callers():
+    rules, skipped = reg.build_forward_map({"DISCORD_BOT_TOKEN": ["prax-prod"]})
+    discord = [r for r in rules if r.get("key_env") == "DISCORD_BOT_TOKEN"]
+    assert {(r["host"], r["scheme"]) for r in discord} == {
+        ("discord.com", "header:Authorization"), ("discord.gg", "ws-json:d.token")}
+    rest = next(r for r in discord if r["host"] == "discord.com")
+    assert rest["prefix"] == "Bot "
+    assert all(r["callers"] == ["prax-prod"] and r["exclusive"] for r in discord)
+    assert "DISCORD_BOT_TOKEN" not in {env for env, _ in skipped}
+
+
+def test_only_exclusive_credentials_carry_callers():
+    rules, _ = reg.build_forward_map({"DISCORD_BOT_TOKEN": ["prax-prod"], "OPENAI_KEY": ["x"]})
+    assert not any("callers" in r for r in rules if r.get("key_env") == "OPENAI_KEY")
+

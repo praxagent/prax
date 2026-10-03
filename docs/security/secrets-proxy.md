@@ -189,6 +189,42 @@ outside Prax's administrative and filesystem access, as its own container/user
 with the keys in *its* secret store only. The [proxy README](https://github.com/praxagent/prax-secrets-proxy)
 owns component setup; this page describes Prax's integration and limits.
 
+## Discord through the forward proxy
+
+The bot token used to stay in Prax: Discord's REST API wants
+`Authorization: Bot <token>`, and the gateway carries the token *inside* its
+IDENTIFY and RESUME messages, not in a header. The forward proxy now handles
+both (prax-secrets-proxy: header injection with a `prefix`, and a `ws-json:d.token`
+rule that rewrites client→server WebSocket messages). discord.py sends those
+messages as plain JSON text — the gateway connects with `compress=0`, and
+zlib-stream compresses only the server's messages.
+
+**One instance only.** A token injected for every caller would turn any Prax
+holding the placeholder — a dev instance — into the bot as well, and both would
+answer every message. So the registry marks the credential `exclusive`: the
+map is exported with it only when its callers are named, and the proxy refuses
+to load an exclusive rule without them. Callers are per-program identities
+(prax-secrets-proxy `PROXY_FORWARD_CALLERS`), so production needs its own proxy
+token.
+
+Rollout (production `.env` changes — the operator's to make):
+
+1. Proxy: put the real `DISCORD_BOT_TOKEN` in the proxy's `.env`; give production
+   its own caller (`python -m secrets_proxy.callers new prax-prod`).
+2. Map: `python -m prax.services.credential_registry --export-forward-map
+   ../prax-secrets-proxy/forward-map.json --exclusive-callers DISCORD_BOT_TOKEN=prax-prod`,
+   then recreate the proxy.
+3. Prax: `HTTPS_PROXY=http://prax-prod:<token>@127.0.0.1:8786`,
+   `DISCORD_USE_PROXY=true`, and replace `DISCORD_BOT_TOKEN` with a placeholder.
+4. Rotate the bot token in the Discord developer portal once it lives only in
+   the proxy — the old one has been in Prax's `.env`.
+
+Verified 2026-10-01 with real discord.py 2.7.1 through the real mitmproxy
+against a fake Discord: the production caller logged in (REST got `Bot` + the
+token) and its IDENTIFY reached the gateway carrying the token although the
+client sent a placeholder; a second caller got `401` and `LoginFailure`, never
+reaching the gateway. Not yet run against Discord itself.
+
 ## Tier 2 — general egress
 
 The optional forward proxy is **shipped** as the companion repository's opt-in
