@@ -1,0 +1,82 @@
+"""The wire-record check: every tool call on the model path is accounted for in Prax's traces."""
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import json
+import time
+from datetime import UTC, datetime
+from pathlib import Path
+
+_spec = importlib.util.spec_from_file_location(
+    "check_wire_record", Path(__file__).resolve().parents[1] / "scripts" / "check_wire_record.py")
+cwr = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(cwr)
+
+
+def _write_wire(path: Path, entries: list[dict]) -> None:
+    prev = cwr.GENESIS
+    lines = []
+    for body in entries:
+        digest = hashlib.sha256((prev + json.dumps(body, sort_keys=True, separators=(",", ":")))
+                                .encode()).hexdigest()
+        lines.append(json.dumps({**body, "prev": prev, "hash": digest}))
+        prev = digest
+    path.write_text("\n".join(lines) + "\n")
+
+
+def _wire_entry(ts, *names, caller="prax-prod"):
+    return {"ts": ts, "caller": caller, "host": "openrouter.ai", "model": "m",
+            "tool_calls": [{"name": n, "args_sha256": "x"} for n in names]}
+
+
+def _write_graphs(d: Path, spans: list[tuple[float, str]]) -> None:
+    d.mkdir(parents=True)
+    nodes = [{"name": n, "spoke_or_category": "tool",
+              "started_at": datetime.fromtimestamp(t, UTC).isoformat()} for t, n in spans]
+    (d / "graphs-2026-10-01.jsonl").write_text(json.dumps({"trace_id": "t1", "nodes": nodes}) + "\n")
+
+
+def test_everything_accounted_for(tmp_path, capsys):
+    now = time.time()
+    _write_wire(tmp_path / "wire.jsonl", [_wire_entry(now - 100, "delegate_browser"),
+                                          _wire_entry(now - 90, "browser_click", "browser_fill")])
+    _write_graphs(tmp_path / "graphs", [(now - 99, "delegate_browser"), (now - 89, "browser_click"),
+                                        (now - 88, "browser_fill")])
+    assert cwr.main([str(tmp_path / "wire.jsonl"), "--graphs", str(tmp_path / "graphs")]) == 0
+    assert "0 unaccounted" in capsys.readouterr().out
+
+
+def test_a_call_missing_from_the_traces_is_reported(tmp_path, capsys):
+    now = time.time()
+    _write_wire(tmp_path / "wire.jsonl", [_wire_entry(now - 100, "browser_click", "workspace_send_file")])
+    _write_graphs(tmp_path / "graphs", [(now - 99, "browser_click")])
+    assert cwr.main([str(tmp_path / "wire.jsonl"), "--graphs", str(tmp_path / "graphs")]) == 1
+    out = capsys.readouterr().out
+    assert "1 unaccounted" in out and "UNACCOUNTED" in out and "workspace_send_file" in out
+
+
+def test_one_span_cannot_account_for_two_calls(tmp_path):
+    now = time.time()
+    _write_wire(tmp_path / "wire.jsonl", [_wire_entry(now - 100, "browser_click"),
+                                          _wire_entry(now - 95, "browser_click")])
+    _write_graphs(tmp_path / "graphs", [(now - 99, "browser_click")])
+    assert cwr.main([str(tmp_path / "wire.jsonl"), "--graphs", str(tmp_path / "graphs")]) == 1
+
+
+def test_other_callers_are_ignored(tmp_path):
+    now = time.time()
+    _write_wire(tmp_path / "wire.jsonl", [_wire_entry(now - 100, "browser_click", caller="prax-dev")])
+    _write_graphs(tmp_path / "graphs", [])
+    assert cwr.main([str(tmp_path / "wire.jsonl"), "--graphs", str(tmp_path / "graphs"),
+                     "--caller", "prax-prod"]) == 0
+
+
+def test_a_tampered_record_fails_before_anything_else(tmp_path, capsys):
+    now = time.time()
+    _write_wire(tmp_path / "wire.jsonl", [_wire_entry(now - 100, "a"), _wire_entry(now - 90, "b")])
+    lines = (tmp_path / "wire.jsonl").read_text().splitlines()
+    (tmp_path / "wire.jsonl").write_text(lines[1] + "\n")  # first line deleted
+    _write_graphs(tmp_path / "graphs", [])
+    assert cwr.main([str(tmp_path / "wire.jsonl"), "--graphs", str(tmp_path / "graphs")]) == 1
+    assert "BROKEN CHAIN" in capsys.readouterr().out

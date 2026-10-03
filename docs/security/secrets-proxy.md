@@ -212,3 +212,23 @@ and the sandbox container does not route through it. Both are tracked in the
 [adopt-tracker](../research/adopt-tracker.md). Trusting its CA permits
 interception of routed HTTPS traffic and does not authenticate the caller to the
 proxy.
+
+## Wire record — checking Prax's account against the model path
+
+Idea credit: NVIDIA's Open Agent Safety Platform. With the proxy's
+`PROXY_WIRE_RECORD` on, the forward proxy writes one hash-chained line per
+model response: the tool calls the model asked for, as names and argument
+hashes, never text, written outside Prax's process
+([proxy README](https://github.com/praxagent/prax-secrets-proxy#wire-record--opt-in-what-the-agent-actually-asked-the-model)).
+
+`scripts/check_wire_record.py WIRE.jsonl --caller <name>` verifies the chain,
+then lists every tool call on the wire that Prax's own traces don't show
+within a few minutes — activity Prax didn't account for. It is read-only.
+
+- Give each Prax instance its own proxy username (`http://<name>:<token>@…`)
+  so `--caller` can separate dev from prod.
+- It matches on tool name and time, not arguments: it catches a hidden or
+  dropped call, not a silently changed argument.
+- The chain is tamper-evident, not tamper-proof: keep the record writable only
+  by the proxy and copy its head hash off the machine.
+
