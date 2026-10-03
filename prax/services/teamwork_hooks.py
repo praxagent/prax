@@ -35,8 +35,9 @@ def set_role_status(role_name: str, status: str) -> None:
 
 def reset_all_idle() -> None:
     """Set all role agents to idle. Call at end of each agent turn."""
+    from prax.services.teamwork_channels import role_agent_names
     from prax.settings import settings
-    for role in (settings.agent_name, "Planner", "Researcher", "Executor", "Auditor"):
+    for role in dict.fromkeys((settings.agent_name, *role_agent_names())):
         set_role_status(role, "idle")
 
 
@@ -122,27 +123,54 @@ def forward_to_channel(
         logger.debug("TeamWork hook: forward_to_channel(%s) failed", channel_name, exc_info=True)
 
 
-def ensure_mirror_channels() -> None:
-    """Ensure #discord and #sms channels exist in TeamWork.
+def ensure_prax_channels() -> None:
+    """Ensure every channel Prax posts to exists in TeamWork.
 
-    Called during startup / project initialization to backfill channels
-    for projects created before mirroring was added.
+    Called on startup.  TeamWork's project defaults miss some of the channels
+    Prax posts to (``#browser``, ``#content``), and older projects predate
+    ``#discord``/``#sms``; a missing channel silently swallows every post to
+    it.  Idempotent and additive — existing channels are left untouched — so
+    it is safe on every start.
     """
     try:
         tw = _tw()
         if tw:
+            from prax.services.teamwork_channels import PRAX_CHANNELS
             tw.ensure_channels([
-                {"name": "discord", "description": "Mirrored conversations from Discord"},
-                {"name": "sms", "description": "Mirrored conversations from SMS/Twilio"},
+                {"name": name, "description": description}
+                for name, description in PRAX_CHANNELS.items()
             ])
     except Exception:
-        logger.debug("TeamWork hook: ensure_mirror_channels failed", exc_info=True)
+        logger.debug("TeamWork hook: ensure_prax_channels failed", exc_info=True)
+
+
+def ensure_mirror_channels() -> None:
+    """Backwards-compatible name for :func:`ensure_prax_channels`."""
+    ensure_prax_channels()
+
+
+def register_role_agents() -> None:
+    """Register every Prax role agent in TeamWork (see ``PRAX_ROLE_AGENTS``).
+
+    Without a registration a role's posts are unattributed and its status
+    updates are no-ops.  One failed registration must not cost the others, so
+    each is attempted on its own.
+    """
+    tw = _tw()
+    if not tw:
+        return
+    from prax.services.teamwork_channels import PRAX_ROLE_AGENTS
+    for agent in PRAX_ROLE_AGENTS:
+        try:
+            tw.create_agent(name=agent.name, role=agent.role, soul=agent.soul)
+        except Exception:
+            logger.warning("TeamWork: could not register role agent %s", agent.name, exc_info=True)
 
 
 def sync_conversation_history() -> None:
     """Sync historical SMS/Discord conversations to TeamWork.
 
-    Called after ensure_mirror_channels on startup. Only imports into
+    Called after ensure_prax_channels on startup. Only imports into
     channels that have zero messages (safe to call repeatedly).
     """
     try:

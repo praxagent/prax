@@ -13,6 +13,7 @@ from typing import Any
 
 import requests
 
+from prax.services.teamwork_channels import PRAX_CHANNELS
 from prax.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,11 @@ class TeamWorkClient:
         self._project_id: str | None = None
         self._channels: dict[str, str] = {}  # name -> id
         self._agents: dict[str, str] = {}  # name -> id
+        # Channel-name resolution state (see _resolve_channel).  The client is
+        # a process singleton, so "per client" is "per process".
+        self._channel_lock = threading.Lock()
+        self._lazily_ensured: set[str] = set()
+        self._unknown_channel_drops: dict[str, int] = {}  # name -> drops since its warning
 
     @property
     def enabled(self) -> bool:
@@ -176,9 +182,8 @@ class TeamWorkClient:
         if not self._project_id:
             return None
         if not channel_id:
-            channel_id = self._channels.get(channel)
+            channel_id = self._resolve_channel(channel)
         if not channel_id:
-            logger.warning("Unknown channel: %s (known: %s)", channel, list(self._channels.keys()))
             return None
         agent_id = self._agents.get(agent_name) if agent_name else None
         payload: dict = {
@@ -333,14 +338,56 @@ class TeamWorkClient:
     def add_channel(self, name: str, channel_id: str) -> None:
         self._channels[name] = channel_id
 
+    def _resolve_channel(self, name: str) -> str | None:
+        """Return the id of channel *name*, or ``None`` if the post must drop.
+
+        A registry name (``PRAX_CHANNELS``) the project lacks means the startup
+        ensure failed or the project predates the registry, so it is ensured
+        here — once per name, so an unreachable TeamWork costs one request
+        rather than one per post.  Anything still unknown is dropped with a
+        WARNING the first time and at DEBUG after, keeping a count: the
+        warning was the only signal that whole channels were being lost, but
+        repeated on every post it would bury everything else in the log.
+        """
+        channel_id = self._channels.get(name)
+        if not channel_id and name in PRAX_CHANNELS:
+            # Held across the request so concurrent posts to the same channel
+            # wait for the ensure instead of dropping while it is in flight.
+            with self._channel_lock:
+                if name not in self._lazily_ensured and not self._channels.get(name):
+                    self._lazily_ensured.add(name)
+                    self.ensure_channels([{"name": name, "description": PRAX_CHANNELS[name]}])
+                channel_id = self._channels.get(name)
+        if channel_id:
+            # Re-arm the warning in case the channel goes missing again.
+            self._unknown_channel_drops.pop(name, None)
+            return channel_id
+        with self._channel_lock:
+            dropped = self._unknown_channel_drops.get(name)
+            self._unknown_channel_drops[name] = 0 if dropped is None else dropped + 1
+        if dropped is None:
+            logger.warning(
+                "Unknown channel: %s (known: %s) — dropping the message; further "
+                "drops to it log at DEBUG",
+                name, list(self._channels.keys()),
+            )
+        else:
+            logger.debug(
+                "Unknown channel: %s — dropped %d more message(s) since the warning",
+                name, dropped + 1,
+            )
+        return None
+
     def ensure_channels(self, channels: list[dict[str, str]]) -> None:
         """Ensure the listed channels exist, creating any that are missing.
 
-        Called on startup to add channels (like #discord, #sms) that may
-        not have existed when the project was first created.
+        Called on startup to add channels that may not have existed when the
+        project was first created.  Failures log at WARNING: a channel that
+        does not exist silently swallows every post sent to it.
         """
         if not self._project_id:
             return
+        requested = [ch["name"] for ch in channels if ch.get("name")]
         try:
             result = self._post(
                 f"/projects/{self._project_id}/ensure-channels",
@@ -348,9 +395,16 @@ class TeamWorkClient:
             )
             updated = result.get("channels", {})
             self._channels.update(updated)
-            logger.info("Ensured channels: %s", list(updated.keys()))
         except Exception:
-            logger.debug("Failed to ensure channels", exc_info=True)
+            logger.warning("Failed to ensure TeamWork channels %s", requested, exc_info=True)
+            return
+        missing = [name for name in requested if name not in updated]
+        if missing:
+            logger.warning(
+                "TeamWork did not return channel(s) %s from ensure-channels; "
+                "posts to them will be dropped", missing,
+            )
+        logger.info("Ensured channels: %s", list(updated.keys()))
 
     # ----- Branch channels -----
 
@@ -378,7 +432,7 @@ class TeamWorkClient:
         Returns ``None`` when TeamWork is disabled or unreachable; a branch
         channel is a convenience and must never block the actual work.
         """
-        if not self._enabled or not self._project_id:
+        if not self.enabled or not self._project_id:
             return None
         name = self.branch_channel_name(branch)
         existing = self.get_channel_id(name)
@@ -392,15 +446,20 @@ class TeamWorkClient:
 
     def post_branch_update(self, branch: str, content: str,
                            agent_name: str | None = None) -> bool:
-        """Post an update into a branch's channel, creating it if needed."""
-        channel_id = self.ensure_branch_channel(branch)
-        if not channel_id:
-            return False
+        """Post an update into a branch's channel, creating it if needed.
+
+        Returns whether the update was delivered.  Never raises: like the
+        channel itself, the update must never block the work it reports on.
+        """
         try:
-            self.send_message(content, channel_id=channel_id, agent_name=agent_name)
-            return True
+            channel_id = self.ensure_branch_channel(branch)
+            if not channel_id:
+                return False
+            return self.send_message(
+                content, channel_id=channel_id, agent_name=agent_name,
+            ) is not None
         except Exception:
-            logger.debug("Failed to post branch update for %s", branch, exc_info=True)
+            logger.warning("Failed to post branch update for %s", branch, exc_info=True)
             return False
 
     def get_channel_message_count(self, channel_name: str) -> int:
@@ -674,7 +733,11 @@ class TeamWorkClient:
         Posts a formatted message to the #discord or #sms channel so users
         can see cross-channel conversations in TeamWork.
         """
-        channel_id = self._channels.get(channel_name)
+        # Checked first so a lookup before the project exists cannot spend
+        # the channel's one lazy ensure on a request that has nowhere to go.
+        if not self._project_id:
+            return None
+        channel_id = self._resolve_channel(channel_name)
         if not channel_id:
             return None
         formatted = f"**[{sender_label}]** {content}"
