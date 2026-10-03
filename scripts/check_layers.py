@@ -112,7 +112,7 @@ ALLOWLIST: set[str] = {
     "prax/services/trace_search_service.py:338 -> prax.agent.trace",
     # Services reaching into blueprints.  teamwork_hooks is a bridge
     # module and could legitimately move.
-    "prax/services/teamwork_hooks.py:60 -> prax.blueprints.teamwork_routes",
+    "prax/services/teamwork_hooks.py:61 -> prax.blueprints.teamwork_routes",
 }
 
 

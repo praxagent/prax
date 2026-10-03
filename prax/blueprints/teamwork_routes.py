@@ -2002,7 +2002,15 @@ def _handle_claude_code_interjection(tw, content: str, channel_id: str) -> bool:
     the caller can fall through to the normal conversation flow — letting
     Prax process the request (e.g. start a session himself).
     """
-    from prax.agent.claude_code_tools import _post, is_bridge_available
+    try:
+        from prax.agent.claude_code_tools import _post, is_bridge_available
+    except ImportError:
+        # The bridge helpers went with the coding-agent CLIs (removed from the
+        # sandbox 2026-07-20).  Raising here turned every human message in a
+        # legacy #claude-code/#codex/#opencode channel into a generic error
+        # reply; with no bridge there is no session to relay to, so Prax
+        # handles the message like any other.
+        return False
 
     if not is_bridge_available():
         return False  # Let Prax handle it through normal conversation
