@@ -32,6 +32,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.messages import ToolMessage
+
+from prax.agent.message_text import tool_output_text
 
 logger = logging.getLogger(__name__)
 
@@ -1348,18 +1351,28 @@ class GraphCallbackHandler(BaseCallbackHandler):
             self._active_names = {
                 k: v for k, v in self._active_names.items() if v != span_id
             }
-            preview = str(output)[:2000] if output else ""
-            self._graph.complete_node(span_id, status="completed", summary=preview)
-            self._heartbeat.touch(tool_name or "tool", f"completed tool {tool_name or span_id}")
+            # A ToolCall invoke ends with a ToolMessage, whose str() is a
+            # pydantic repr, so trace reports read "content='...' name='...'".
+            text = tool_output_text(output)
+            # A tool that handles its own error (handle_tool_error, or one that
+            # returns an error ToolMessage) ends HERE with status="error";
+            # on_tool_error never fires for it.
+            failed = isinstance(output, ToolMessage) and output.status == "error"
+            self._graph.complete_node(
+                span_id, status="failed" if failed else "completed", summary=text[:2000],
+            )
+            verb = "failed" if failed else "completed"
+            self._heartbeat.touch(tool_name or "tool", f"{verb} tool {tool_name or span_id}")
 
             # Push completion to live output + activity log
             if self._live_agent and tool_name:
                 try:
                     from prax.services.teamwork_hooks import log_activity, push_live_output
-                    result_preview = str(output)[:200] if output else "(no output)"
+                    result_preview = text[:200] or "(no output)"
+                    mark = "\u2718" if failed else "\u2714"
                     push_live_output(
                         self._live_agent,
-                        f"    \u2714 {tool_name}: {result_preview}\n",
+                        f"    {mark} {tool_name}: {result_preview}\n",
                         status="running",
                     )
                     log_activity(
