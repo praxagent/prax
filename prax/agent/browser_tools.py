@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from langchain_core.tools import tool
 
+from prax.agent import turn_secrets
 from prax.agent.action_policy import RiskLevel, risk_tool
 from prax.agent.user_context import current_user_id
 from prax.services import browser_service
@@ -259,6 +260,11 @@ def browser_credentials(domain: str) -> str:
     result = browser_service.get_credentials(domain)
     if "error" in result:
         return f"No credentials: {result['error']}"
+    # The secret-named fields printed below share one comma-joined line that
+    # the output parser cannot split, so they are registered here, with the
+    # password: every observability sink masks them for the rest of the turn.
+    turn_secrets.register(result.get("password"),
+                          *(v for k, v in result.items() if turn_secrets.is_secret_key(k)))
     # Don't expose the actual password in the tool output.
     cred_keys = [k for k in result if k not in ("password", "domain")]
     info = ", ".join(f"{k}: {result[k]}" for k in cred_keys)
@@ -282,6 +288,9 @@ def browser_login(domain: str) -> str:
         return f"No credentials: {result['error']}"
     password = result.get("password", "")
     username = result.get("username", result.get("email", ""))
+    # Masked by every observability sink for the rest of the turn — the model
+    # is told to pass it on to browser_fill, an ordinary tool.
+    turn_secrets.register(password)
     return f"username={username}\npassword={password}"
 
 
@@ -343,6 +352,7 @@ def browser_fill_login(domain: str, username_selector: str, password_selector: s
     password = creds.get("password") or ""
     if not password:
         return f"No stored password for {creds.get('domain', domain)}."
+    turn_secrets.register(password)  # masked if the page ever echoes it back
     refusal = wrong_site()  # re-checked: the page may have moved meanwhile
     if refusal:
         return refusal

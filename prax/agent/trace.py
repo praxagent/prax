@@ -22,6 +22,7 @@ Usage::
 from __future__ import annotations
 
 import contextvars
+import functools
 import json
 import logging
 import threading
@@ -34,7 +35,7 @@ from pathlib import Path
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import ToolMessage
 
-from prax.agent.message_text import args_preview_for_tool, preview_for_tool
+from prax.agent.message_text import args_preview_for_tool, error_preview_for_tool, preview_for_tool
 
 logger = logging.getLogger(__name__)
 
@@ -1209,13 +1210,57 @@ def _canonical(value) -> str:
         return repr(value)
 
 
+@functools.cache
+def _bool_adapter():
+    from pydantic import TypeAdapter
+    return TypeAdapter(bool)
+
+
+def _as_bool(value) -> bool | None:
+    """*value* as pydantic's lax bool validation reads it (``1``, ``"yes"``,
+    ``"off"``, ``"t"``, …), or ``None`` when validation would reject it."""
+    try:
+        return _bool_adapter().validate_python(value)
+    except Exception:  # noqa: BLE001 - not a bool pydantic accepts
+        return None
+
+
+def _exact_int(value) -> int | None:
+    """*value* as an exact integer — an int, an integral float, or text that
+    spells one (``"42"``, ``" 4_2 "``, ``"5.0"``) — else ``None``. Never goes
+    through float for text, so integers past 2**53 keep every digit."""
+    from decimal import Decimal, InvalidOperation
+
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else None  # False for inf/nan
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            pass
+        try:
+            number = Decimal(value.strip())
+        except (InvalidOperation, ValueError):
+            return None
+        return int(number) if number.is_finite() and number == number.to_integral_value() else None
+    return None
+
+
 def _loosely_equal(asked, ran) -> bool:
     """Whether *ran* is *asked* after validation's lossless conversions.
 
     Equal when the canonical JSON matches. Otherwise containers compare element
     by element (a dict ignores keys only *ran* has: nested schema defaults), and
-    scalars compare by ``str()`` (``"5"`` → ``5``), case-insensitively when one
-    side is a boolean (``"true"`` → ``True``), or as numbers (``"5"`` → ``5.0``).
+    scalars compare by ``str()`` (``"5"`` → ``5``); when either side is a
+    boolean, by pydantic's own bool parsing (``1``/``"yes"``/``"on"`` →
+    ``True``, ``0``/``"no"``/``"off"`` → ``False``; anything it rejects
+    differs); when either side is a number, as exact integers when both are
+    integral (``"9007199254740993"`` ≠ ``9007199254740992``), and as floats
+    only otherwise (``"5.5"`` → ``5.5``).
     """
     if _canonical(asked) == _canonical(ran):
         return True
@@ -1230,8 +1275,12 @@ def _loosely_equal(asked, ran) -> bool:
         if str(asked) == str(ran):
             return True
         if isinstance(asked, bool) or isinstance(ran, bool):
-            return str(asked).lower() == str(ran).lower()
+            a, r = _as_bool(asked), _as_bool(ran)
+            return a is not None and a == r
         if isinstance(asked, (int, float)) or isinstance(ran, (int, float)):
+            a, r = _exact_int(asked), _exact_int(ran)
+            if a is not None and r is not None:
+                return a == r
             return float(asked) == float(ran)
     except (TypeError, ValueError, OverflowError):
         pass
@@ -1560,10 +1609,9 @@ class GraphCallbackHandler(BaseCallbackHandler):
         token = self._ctx_tokens.pop(rid, None)
         if token:
             _current_trace.reset(token)
-        span_id, _tool_name, _push = self._end_run(rid)
+        span_id, tool_name, _push = self._end_run(rid)
         if span_id:
             discard_pending_delegation_context(span_id)
-            self._graph.complete_node(
-                span_id, status="failed", summary=str(error)[:2000]
-            )
-            self._heartbeat.touch("tool_error", f"tool failed: {str(error)[:160]}")
+            text = error_preview_for_tool(tool_name, error, 2000)
+            self._graph.complete_node(span_id, status="failed", summary=text)
+            self._heartbeat.touch("tool_error", f"tool failed: {text[:160]}")

@@ -34,9 +34,11 @@ import re
 #
 # CREDENTIAL_TOOLS is public and holds whether or not HARD_FLOORS_ENABLED is on:
 # the observability sinks (trace summaries, OTel previews, TeamWork live output,
-# spoke logs) use it to withhold what these tools return, because
-# browser_login hands back "username=…\npassword=…" in plain text under the
-# default BROWSER_SECRETS_OUT_OF_CONTEXT=false.
+# spoke logs, the audit entry in trace.log) use it to withhold what these tools
+# return, because browser_login hands back "username=…\npassword=…" in plain
+# text under the default BROWSER_SECRETS_OUT_OF_CONTEXT=false — and
+# turn_secrets uses it to mask those values when they come back as another
+# tool's arguments.
 CREDENTIAL_TOOLS: frozenset[str] = frozenset({
     "browser_login",          # returns a stored password to the model
     "browser_credentials",    # returns stored username and password

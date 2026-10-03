@@ -39,9 +39,16 @@ stored); this script only reads the resulting flag.
 
 - Extra keys are not detected: a layer that ADDS an argument the model did not
   send looks the same as a schema default being filled in, so it is ignored.
-- Values are compared loosely across validation's coercions (``"5"`` and ``5``,
-  ``"true"`` and ``True``, a dict and the model built from it are equal), so a
-  wrapper that changes only a value's type is not reported.
+- Values are compared across the conversions pydantic validation makes, and
+  no others (``prax.agent.trace._loosely_equal``): ``"5"``, ``5`` and ``5.0``
+  are equal; integers compare exactly, digit for digit, with no float round
+  trip (``"9007199254740993"`` and ``9007199254740992`` differ); a boolean
+  equals what pydantic's lax bool parsing reads from the other side (``1``,
+  ``"yes"``, ``"on"``, ``"true"`` and ``True``; ``0``, ``"no"``, ``"off"``,
+  ``"false"`` and ``False``), and a value that parsing rejects (``2``,
+  ``"maybe"``) differs; a dict and the model built from it are equal. So a
+  wrapper that changes only a value's type, within those conversions, is not
+  reported.
 - A requested key the tool's schema does not define is dropped by validation
   and reads as changed: the tool really did not receive it.
 - Traces written before ``args_changed`` existed never report it.

@@ -307,13 +307,15 @@ class OTelToolCallback(BaseCallbackHandler):
         run_id: UUID,
         **kwargs: Any,
     ) -> None:
+        tool_name = self._tool_names.get(run_id)
         if self._finish_run(run_id):
             return
         span = self._spans.pop(run_id, None)
         if span:
             try:
+                from prax.agent.message_text import error_preview_for_tool
                 span.set_attribute("error", True)
-                span.set_attribute("error.message", str(error)[:500])
+                span.set_attribute("error.message", error_preview_for_tool(tool_name, error, 500))
             finally:
                 span.end()
 

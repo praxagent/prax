@@ -272,3 +272,17 @@ class TestSpokeToolLog:
                                            tool_call_id="tc1", status="error")]}
         _log_tool_calls(result, "browser", role_name="Browser Agent")
         assert teamwork == [f"  ✗ browser_login: {WITHHELD_OUTPUT}\n"]
+
+    def test_a_credential_tool_reporting_failure_in_text_is_marked_failed(
+            self, caplog, teamwork, floors_off):
+        """The failure check reads the REAL output; the placeholder says
+        nothing about it. The text itself is still not shown."""
+        from prax.agent.spokes._runner import _log_tool_calls
+        result = {"messages": [ToolMessage(
+            content="Browser error filling the password field — check the selector.",
+            name="browser_fill_login", tool_call_id="tc1")]}       # status="success"
+        with caplog.at_level(logging.DEBUG, logger="prax.agent.spokes._runner"):
+            _log_tool_calls(result, "browser", role_name="Browser Agent")
+        assert teamwork == [f"  ✗ browser_fill_login: {WITHHELD_OUTPUT}\n"]
+        assert "tool error [browser_fill_login]" in caplog.text
+        assert "check the selector" not in caplog.text + "".join(teamwork)

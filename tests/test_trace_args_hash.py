@@ -238,6 +238,20 @@ def test_a_different_tool_called_inside_a_tool_is_its_own_span():
     ({"n": 5}, {"n": 5.0}),
     ({"n": "5"}, {"n": 5.0}),
     ({"flag": "true"}, {"flag": True}),
+    # pydantic's lax bool parsing, both ways round
+    ({"flag": 1}, {"flag": True}),
+    ({"flag": 0}, {"flag": False}),
+    ({"flag": "yes"}, {"flag": True}),
+    ({"flag": "no"}, {"flag": False}),
+    ({"flag": "on"}, {"flag": True}),
+    ({"flag": "off"}, {"flag": False}),
+    ({"flag": "False"}, {"flag": False}),
+    ({"flag": True}, {"flag": 1}),
+    # integers exactly, past float precision too
+    ({"n": "9007199254740993"}, {"n": 9007199254740993}),
+    ({"n": 1e20}, {"n": 10**20}),
+    ({"n": "5.0"}, {"n": 5}),
+    ({"n": "5.5"}, {"n": 5.5}),
     ({"opts": {"k": "1"}}, {"opts": {"k": 1, "extra": None}}),  # nested model + default
     ({"tags": ["a", "b"]}, {"tags": ("a", "b")}),
     ({"q": "x", "expected_observation": "y"}, {"q": "x"}),
@@ -255,6 +269,15 @@ def test_arguments_that_survive_validation_do_not_differ(asked, ran):
     ({"a": "x", "b": "z"}, {"a": "x"}),
     ({"n": "5"}, {"n": 6}),
     ({"flag": "false"}, {"flag": True}),
+    ({"flag": "on"}, {"flag": False}),
+    ({"flag": 1}, {"flag": False}),
+    ({"flag": 2}, {"flag": True}),           # pydantic rejects 2 as a bool
+    ({"flag": "maybe"}, {"flag": True}),
+    # a changed large integer is not lost in a float round trip
+    ({"n": 2**53 + 1}, {"n": 2**53}),
+    ({"n": "9007199254740993"}, {"n": 9007199254740992}),
+    ({"n": 10**20 + 1}, {"n": 1e20}),
+    ({"n": 5}, {"n": 5.5}),
     ({"opts": {"k": 1}}, {"opts": {"k": 2}}),
     ({"tags": ["a", "b"]}, {"tags": ["a"]}),
     ({"to": "tj@example.com"}, {"to": "attacker@evil.example"}),

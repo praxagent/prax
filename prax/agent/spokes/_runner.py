@@ -22,7 +22,12 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 
 from prax.agent.agent_loop import build_agent_loop, invoke_isolated
 from prax.agent.llm_factory import build_llm
-from prax.agent.message_text import args_preview_for_tool, message_text, preview_for_tool
+from prax.agent.message_text import (
+    args_preview_for_tool,
+    message_text,
+    preview_for_tool,
+    tool_output_text,
+)
 from prax.services.turn_registry import TurnCancelled
 
 logger = logging.getLogger(__name__)
@@ -441,12 +446,17 @@ def _append_preserved_tool_results(
     return f"{response.rstrip()}\n\n[Tool evidence preserved for audit]\n{evidence}"
 
 
-def _log_tool_calls(result: dict, label: str, role_name: str | None = None) -> int:
+def _log_tool_calls(result: dict, label: str, role_name: str | None = None,
+                    *, kind: str = "Spoke") -> int:
     """Log all tool calls and flag errors.  Returns the total call count.
 
     Both the log and TeamWork live output outlive the model's context, so a
-    credential tool's output is withheld and its arguments show names only
-    (``message_text.preview_for_tool`` / ``args_preview_for_tool``).
+    credential tool's output is withheld, its arguments show names only, and
+    secret values it handed out this turn are masked wherever else they appear
+    (``message_text.preview_for_tool`` / ``args_preview_for_tool``). Whether a
+    call failed is decided on the REAL output: the withheld placeholder says
+    nothing about it. ``kind`` names the caller in the log ("Spoke",
+    "Sub-agent").
     """
     tool_count = 0
     live_lines: list[str] = []
@@ -456,13 +466,14 @@ def _log_tool_calls(result: dict, label: str, role_name: str | None = None) -> i
                 tool_count += 1
                 args = args_preview_for_tool(tc.get("name"), tc.get("args", {}), 80)
                 tool_line = f"  → {tc.get('name')}({args})"
-                logger.info("Spoke [%s] tool: %s(%s)", label, tc.get("name"), args)
+                logger.info("%s [%s] tool: %s(%s)", kind, label, tc.get("name"), args)
                 live_lines.append(tool_line)
         elif isinstance(msg, ToolMessage):
+            real = tool_output_text(msg)[:200].lower()
             preview = preview_for_tool(msg.name, msg, 200)
             if (getattr(msg, "status", None) == "error"
-                    or "error" in preview.lower() or "fail" in preview.lower()):
-                logger.warning("Spoke [%s] tool error [%s]: %s", label, msg.name, preview)
+                    or "error" in real or "fail" in real):
+                logger.warning("%s [%s] tool error [%s]: %s", kind, label, msg.name, preview)
                 live_lines.append(f"  ✗ {msg.name}: {preview[:120]}")
             else:
                 live_lines.append(f"  ✓ {msg.name}: {preview[:120]}")
