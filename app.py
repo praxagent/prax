@@ -25,6 +25,13 @@ from prax.token_management import get_encoding_for_model
 # See docs/security/deployment-topology.md.
 _export_proxy_env_from_dotenv()
 
+# ...and keep Prax's proxy credential out of every process it starts: children
+# get the proxy URL without it, or their own identity (CHILD_PROXY_URL).
+if settings.child_env_strip_proxy_credentials:
+    from prax.services import child_env
+
+    child_env.install(settings.child_proxy_url or "")
+
 
 def create_app():
     app = Flask(__name__)
@@ -221,6 +228,11 @@ def create_app():
             egress_gate_service.start()
         except Exception:
             logger.warning("Egress gate integration failed to start", exc_info=True)
+        try:
+            from prax.services import parked_approvals
+            parked_approvals.start()
+        except Exception:
+            logger.warning("parked approvals poller did not start", exc_info=True)
 
     # --- Health probes (Kubernetes/Docker-compatible) ---
 

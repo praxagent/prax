@@ -178,6 +178,39 @@ Plain HTTP belongs only on a trusted local leg or inside an encrypted tunnel.
 - Rate limits, payload limits, and trajectory monitoring are controls to configure
   or add; do not assume this integration implements them.
 
+## The channel between Prax and the proxy
+
+Audited 2026-10-01 on the production VM by probing the listeners from another
+local account, with requests that could not reach a provider:
+
+| Listener | Caller auth | Encryption | State |
+|---|---|---|---|
+| `:8785` reverse proxy (model calls) | `PROXY_AUTH_TOKEN` required — `401` without it | TLS; self-signed cert with SANs `secrets-proxy`, `localhost`, `127.0.0.1`, trusted through the CA bundle; Prax never disables verification | sound |
+| `:8786` forward proxy (all other HTTPS) | **none** — an unauthenticated request was forwarded | plain-HTTP proxy protocol on loopback; TLS inside each CONNECT tunnel to the proxy's CA | **open to every local process** |
+| `:8791` egress admin | admin / taint tokens | loopback | not running (policy off) |
+
+Loopback is not a user boundary: every account on the machine, the dev tree,
+and every process Prax starts can use `:8786` and have production's keys
+injected. That is the hole to close. In order:
+
+1. **Authenticate every caller of the forward proxy** with its own identity
+   (prax-secrets-proxy: `PROXY_FORWARD_AUTH_TOKEN` works over HTTPS since its #5;
+   per-program identities since #6) — `prax-prod`, `prax-dev`, and for children
+   `prax-tools`. Then `HTTPS_PROXY=http://prax-prod:<token>@127.0.0.1:8786`.
+2. **Keep that credential out of child processes** before step 1:
+   `CHILD_ENV_STRIP_PROXY_CREDENTIALS` (on by default) hands every subprocess the
+   URL without it, or `CHILD_PROXY_URL`'s own identity
+   (`prax/services/child_env.py`). Verified with real `git` through an
+   authenticating mitmproxy: unprotected, the child used Prax's credential;
+   stripped, it got `407`; with its own identity, it worked as `prax-tools`.
+3. **Then give identities different rules**: the egress policy and forward-map
+   rules can name callers (`callers`), so `prax-tools` can be limited to, say,
+   GitHub, and one-instance credentials (the Discord bot token) to `prax-prod`.
+
+What is acceptable as it is: the proxy credential crosses loopback in clear text
+(in `Proxy-Authorization`), readable only by root, who can read the keys anyway;
+request contents are TLS inside the tunnel.
+
 ## Production notes
 
 Use a production WSGI server, a nonempty reverse-proxy token, encrypted cross-host
@@ -188,6 +221,42 @@ reachability is a *second* control rather than the only one. Keep the proxy
 outside Prax's administrative and filesystem access, as its own container/user
 with the keys in *its* secret store only. The [proxy README](https://github.com/praxagent/prax-secrets-proxy)
 owns component setup; this page describes Prax's integration and limits.
+
+## Discord through the forward proxy
+
+The bot token used to stay in Prax: Discord's REST API wants
+`Authorization: Bot <token>`, and the gateway carries the token *inside* its
+IDENTIFY and RESUME messages, not in a header. The forward proxy now handles
+both (prax-secrets-proxy: header injection with a `prefix`, and a `ws-json:d.token`
+rule that rewrites client→server WebSocket messages). discord.py sends those
+messages as plain JSON text — the gateway connects with `compress=0`, and
+zlib-stream compresses only the server's messages.
+
+**One instance only.** A token injected for every caller would turn any Prax
+holding the placeholder — a dev instance — into the bot as well, and both would
+answer every message. So the registry marks the credential `exclusive`: the
+map is exported with it only when its callers are named, and the proxy refuses
+to load an exclusive rule without them. Callers are per-program identities
+(prax-secrets-proxy `PROXY_FORWARD_CALLERS`), so production needs its own proxy
+token.
+
+Rollout (production `.env` changes — the operator's to make):
+
+1. Proxy: put the real `DISCORD_BOT_TOKEN` in the proxy's `.env`; give production
+   its own caller (`python -m secrets_proxy.callers new prax-prod`).
+2. Map: `python -m prax.services.credential_registry --export-forward-map
+   ../prax-secrets-proxy/forward-map.json --exclusive-callers DISCORD_BOT_TOKEN=prax-prod`,
+   then recreate the proxy.
+3. Prax: `HTTPS_PROXY=http://prax-prod:<token>@127.0.0.1:8786`,
+   `DISCORD_USE_PROXY=true`, and replace `DISCORD_BOT_TOKEN` with a placeholder.
+4. Rotate the bot token in the Discord developer portal once it lives only in
+   the proxy — the old one has been in Prax's `.env`.
+
+Verified 2026-10-01 with real discord.py 2.7.1 through the real mitmproxy
+against a fake Discord: the production caller logged in (REST got `Bot` + the
+token) and its IDENTIFY reached the gateway carrying the token although the
+client sent a placeholder; a second caller got `401` and `LoginFailure`, never
+reaching the gateway. Not yet run against Discord itself.
 
 ## Tier 2 — general egress
 

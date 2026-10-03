@@ -263,6 +263,10 @@ def _run_pickup(user_id: str, pickup: dict) -> None:
         except Exception:
             logger.exception("task_runner: failed to post start comment")
 
+    from prax.services import parked_approvals
+    recipe_token = parked_approvals.current_recipe.set(
+        parked_approvals.current_recipe.get() or {
+            "kind": "task_pickup", "resumes": 0, "args": {"pickup": pickup}})
     try:
         agent = ConversationAgent(tier="medium")
         svc = ConversationService(agent=agent)
@@ -271,6 +275,8 @@ def _run_pickup(user_id: str, pickup: dict) -> None:
         logger.exception("task_runner: synthetic turn failed for %s", user_id)
         _report_failure(user_id, pickup, str(e))
         return
+    finally:
+        parked_approvals.current_recipe.reset(recipe_token)
 
     failure = failure_reason(response)
     if failure:

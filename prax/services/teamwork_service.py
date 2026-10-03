@@ -614,12 +614,14 @@ class TeamWorkClient:
     # ----- Human approval of Prax's own actions (out of band) -----
 
     def ask_approval(self, capability: str, payload: dict, reason: str = "",
-                     project_id: str | None = None) -> dict:
+                     project_id: str | None = None,
+                     expires_in_seconds: int | None = None) -> dict:
         """Put one of Prax's own actions in front of a person in the TeamWork UI."""
-        return self._post("/approvals", {
-            "capability": capability, "payload": payload, "reason": reason,
-            "project_id": project_id,
-        })
+        body = {"capability": capability, "payload": payload, "reason": reason,
+                "project_id": project_id}
+        if expires_in_seconds:
+            body["expires_in_seconds"] = int(expires_in_seconds)
+        return self._post("/approvals", body)
 
     def approval_status(self, approval_id: str) -> dict:
         return self._get(f"/approvals/{approval_id}")

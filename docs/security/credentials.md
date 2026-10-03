@@ -50,8 +50,8 @@ one key per repository, so a leak exposes that repo and nothing else. Design:
   host mappings are skipped, and a deployment that does not run it keeps these
   keys in Prax.
 - `PROXY_LOCAL`: session signing, inbound authentication, infrastructure access,
-  or a protocol that the current HTTP injectors do not support (git-over-SSH,
-  the Discord gateway). These stay local by design.
+  or a protocol that the current HTTP injectors do not support (git-over-SSH).
+  These stay local by design.
 
 ## The registry
 
@@ -84,6 +84,7 @@ paths and routing in the intended configuration.
 | `NYT_PASSWORD` | Login/cookie session | Skipped; not an HTTP credential-injection flow. |
 | `HF_TOKEN_RO` | `huggingface.co`, bearer | Historical dataset-fetch request recorded; this is not an agent-runtime guarantee. |
 | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` | `api.twilio.com`, paired HTTP basic auth | Successful historical forward request recorded. |
+| `DISCORD_BOT_TOKEN` | `discord.com` REST (`Authorization: Bot <token>`) and the `discord.gg` gateway (token rewritten into IDENTIFY/RESUME at `d.token`) | **Exclusive:** exported only with the one proxy caller allowed to run the bot, or two instances would both answer. Verified 2026-10-01 with real discord.py through the real proxy against a fake Discord; not yet against Discord. Was LOCAL until then (`401` on 2026-07-22: no `Bot ` prefix, no WebSocket injection). See [secrets-proxy.md](secrets-proxy.md#discord-through-the-forward-proxy). |
 
 Only configured hosts and implemented authentication schemes are covered. A
 nonempty placeholder is needed for clients with credential-presence checks, but
@@ -118,7 +119,6 @@ own `.env`; this page cannot assert its absence.
 
 | Setting | Why it stays local |
 |---|---|
-| `DISCORD_BOT_TOKEN` | The Discord gateway uses the token in its websocket IDENTIFY payload (no header to inject), and REST wants `Authorization: Bot <token>`, which generic prefix injection omits — verified `401` through the proxy 2026-07-22. |
 | `FLASK_SECRET_KEY` | Prax session signing. |
 | `MCP_BEARER_TOKEN` | Authenticates inbound MCP callers. |
 | `SANDBOX_DAEMON_TOKEN`, `SANDBOX_CLIENT_KEY` | Remote sandbox access. |

@@ -261,15 +261,24 @@ def log_action(
     risk: RiskLevel,
     args: dict,
     result: str | None = None,
+    approval: str | None = None,
 ) -> dict:
-    """Build a structured audit-log entry (does not persist anywhere)."""
-    return {
+    """Build a structured audit-log entry (does not persist anywhere).
+
+    ``approval`` says why an executed call was allowed to run — see
+    ``governed_tool`` for the values (pattern credit: OpenWorker's approval
+    provenance on every tool call).
+    """
+    entry = {
         "timestamp": datetime.now(UTC).isoformat(),
         "tool_name": tool_name,
         "risk": risk.value,
         "args": _truncate(str(args)),
         "result": _truncate(result),
     }
+    if approval:
+        entry["approval"] = approval
+    return entry
 
 
 # ── decorator ────────────────────────────────────────────────────────

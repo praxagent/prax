@@ -6,6 +6,8 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from prax.services import parked_approvals as _parked
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
@@ -66,6 +68,7 @@ current_space_slug: ContextVar[str | None] = ContextVar("current_space_slug", de
 current_turn_source: ContextVar[str] = ContextVar("current_turn_source", default="")
 
 
+
 @dataclass(frozen=True)
 class UserContextSnapshot:
     """Copy of request context that can be restored around tool execution."""
@@ -80,6 +83,10 @@ class UserContextSnapshot:
     # Origin channel of the turn (see ``current_turn_source``).  Defaulted so a
     # snapshot built positionally by older code still constructs.
     turn_source: str = ""
+    # Parked approvals (prax.services.parked_approvals): what would re-run this
+    # unattended turn, and approvals a person already gave for a re-run.
+    parked_recipe: dict | None = None
+    parked_preapproved: dict | None = None
 
 
 def capture_user_context() -> UserContextSnapshot:
@@ -93,6 +100,8 @@ def capture_user_context() -> UserContextSnapshot:
         component=current_component.get(),
         active_view=current_active_view.get(),
         turn_source=current_turn_source.get(),
+        parked_recipe=_parked.current_recipe.get(),
+        parked_preapproved=_parked.current_preapproved.get(),
     )
 
 
@@ -108,6 +117,8 @@ def use_user_context(snapshot: UserContextSnapshot) -> Iterator[None]:
         (current_component, current_component.set(snapshot.component)),
         (current_active_view, current_active_view.set(snapshot.active_view)),
         (current_turn_source, current_turn_source.set(snapshot.turn_source)),
+        (_parked.current_recipe, _parked.current_recipe.set(snapshot.parked_recipe)),
+        (_parked.current_preapproved, _parked.current_preapproved.set(snapshot.parked_preapproved)),
     ]
     try:
         yield

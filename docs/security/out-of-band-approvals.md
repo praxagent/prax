@@ -77,6 +77,30 @@ Verified end to end (2026-09-24) against a live TeamWork:
   nobody answered.
 - Only the approved call executed.
 
+## 1b. Hard floors and unattended runs
+
+**Hard floors** (`HARD_FLOORS_ENABLED`; `prax/agent/hard_floors.py`; pattern
+credit: [OpenWorker](https://github.com/andrewyng/openworker), Andrew Ng et
+al.). Logging in or revealing stored credentials, installing or activating
+code that runs with Prax's authority, and starting a billable GPU run only
+happen on a person's decision about that exact call. That is an approval here
+that a timed grant did *not* give ("allow for 1 hour" never covers a floor),
+or, with approvals off, the user's own message naming the action and its
+target. Floors are checked before earned trust, smart auto-approve, the
+turn-wide latch and the spoke enforce switch, so none of those can lower one.
+`HARD_FLOOR_EXTRA_TOOLS` adds floors; the built-ins can't be removed.
+
+**Parked approvals** (`PARKED_APPROVALS_ENABLED`, needs
+`OUT_OF_BAND_APPROVALS_ENABLED`; `prax/services/parked_approvals.py`; same
+credit). A scheduled or task-runner turn has nobody watching, so instead of
+waiting `APPROVAL_WAIT_SECONDS` and losing the work it parks the request
+(answerable for `PARKED_APPROVAL_HOURS`, default 24 — TeamWork's
+`expires_in_seconds`) and ends saying it is waiting. When someone approves,
+the task re-runs and spends that approval on that exact action; a refusal or
+expiry is reported to the user as "not done". A re-run that reaches a
+different action asks again, up to `PARKED_MAX_RESUMES` times per task.
+Parked requests are kept on disk, so a restart doesn't lose them.
+
 ## 2. Secrets stay out of the model — `BROWSER_SECRETS_OUT_OF_CONTEXT`
 
 `browser_login` returned the stored site password (`SITES_CREDENTIALS_PATH`)
