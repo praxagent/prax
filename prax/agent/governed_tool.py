@@ -688,13 +688,15 @@ def wrap_with_governance(
                 result = _tag_result(result, reliability, epistemic_note)
 
             # The tool error rate's denominator.  Without it the window held
-            # only TOOL_ERROR events and every rate read 0% or 100%.  Recorded
+            # only TOOL_ERROR events and every rate read 0% or 100%.  Counted
             # last, so a raise in the tagging above counts once, as an error.
             # Hub only, like TOOL_ERROR: a delegate's inner spoke tools are not
             # counted, so a delegation is one call, not one plus its steps.
+            # A count, not an event: at tool-call rate, events evicted the
+            # rare alerts from the telemetry store's cap.
             try:
-                from prax.services.health_telemetry import EventCategory, record_event
-                record_event(EventCategory.TOOL_SUCCESS, component=tool_name)
+                from prax.services.health_telemetry import count_tool_success
+                count_tool_success()
             except Exception:
                 pass
 

@@ -254,8 +254,12 @@ class TestLegacyShimReadsDotEnvNotJustProcessEnv:
 
     def test_a_dot_env_teamwork_off_switch_is_honoured(self, tmp_path, monkeypatch):
         monkeypatch.delenv("TEAMWORK_ENABLED", raising=False)
+        # conftest pins TEAMWORK_URL="" in the environment, which outranks a
+        # .env; without this the off switch would be tested against no URL.
+        monkeypatch.delenv("TEAMWORK_URL", raising=False)
         s = self._settings_from_env_file(
             tmp_path, "TEAMWORK_URL=http://tw:8000\nTEAMWORK_ENABLED=false\n")
+        assert s.teamwork_url == "http://tw:8000"
         assert s.teamwork_active is False
 
     def test_absent_legacy_keys_leave_the_new_setting_in_charge(self, tmp_path, monkeypatch):

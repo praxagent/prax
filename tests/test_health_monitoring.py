@@ -24,6 +24,8 @@ def _reset_telemetry():
     import prax.services.health_telemetry as _tel
 
     _tel._events.clear()
+    _tel._tool_successes.clear()
+    _tel._disk_rows = 0
     _tel._initialized = True  # Skip disk init
     _tel._file_path = None
 
@@ -62,16 +64,16 @@ def _clean_state(tmp_path, monkeypatch):
 
 class TestRecordAndRetrieve:
     def test_record_event_appends_to_store(self):
-        record_event(EventCategory.TOOL_SUCCESS, Severity.INFO, component="note_list")
+        record_event(EventCategory.SPOKE_SUCCESS, Severity.INFO, component="browser")
         events = get_recent_events(minutes=60)
         assert len(events) == 1
-        assert events[0]["category"] == "tool_success"
+        assert events[0]["category"] == "spoke_success"
         assert events[0]["severity"] == "info"
-        assert events[0]["component"] == "note_list"
+        assert events[0]["component"] == "browser"
 
     def test_record_multiple_events(self):
         for i in range(5):
-            record_event(EventCategory.TOOL_SUCCESS, component=f"tool_{i}")
+            record_event(EventCategory.SPOKE_SUCCESS, component=f"spoke_{i}")
         events = get_recent_events(minutes=60)
         assert len(events) == 5
 
@@ -97,9 +99,9 @@ class TestRecordAndRetrieve:
         assert evt["extra"] == {"selector": "#btn"}
 
     def test_record_event_accepts_string_category(self):
-        record_event("tool_success", "info", component="test")
+        record_event("spoke_success", "info", component="test")
         events = get_recent_events(minutes=60)
-        assert events[0]["category"] == "tool_success"
+        assert events[0]["category"] == "spoke_success"
 
     def test_record_event_truncates_long_details(self):
         long_details = "x" * 1000
@@ -139,7 +141,7 @@ class TestRecordAndRetrieve:
 
     def test_limit_parameter(self):
         for i in range(10):
-            record_event(EventCategory.TOOL_SUCCESS, component=f"t{i}")
+            record_event(EventCategory.TURN_COMPLETED, component=f"t{i}")
         events = get_recent_events(minutes=60, limit=3)
         assert len(events) == 3
 
@@ -241,11 +243,12 @@ class TestRollingStats:
             "tokens": 0,
             "extra": {},
         })
-        # Add a recent event
+        # Add recent ones: a stored event and a counted success
+        record_event(EventCategory.TURN_COMPLETED)
         record_event(EventCategory.TOOL_SUCCESS)
 
         stats = get_rolling_stats(window_minutes=60)
-        assert stats["total_events"] == 1
+        assert stats["total_events"] == 1  # the turn; successes are not events
         assert stats["tool_errors"] == 0
         assert stats["tool_calls"] == 1
 
@@ -746,10 +749,10 @@ class TestEventPruning:
 
         # Inject events with old timestamps directly
         old_ts = time.time() - (25 * 3600)  # 25 hours ago
-        _tel._events.append({"category": "tool_success", "timestamp": old_ts, "severity": "info"})
-        _tel._events.append({"category": "tool_success", "timestamp": old_ts - 100, "severity": "info"})
+        _tel._events.append({"category": "turn_completed", "timestamp": old_ts, "severity": "info"})
+        _tel._events.append({"category": "turn_completed", "timestamp": old_ts - 100, "severity": "info"})
         # Add a recent event
-        record_event(EventCategory.TOOL_SUCCESS)
+        record_event(EventCategory.TURN_COMPLETED)
 
         assert len(_tel._events) == 3
         removed = prune_old_events()
@@ -760,7 +763,7 @@ class TestEventPruning:
         import prax.services.health_telemetry as _tel
 
         for _ in range(5):
-            record_event(EventCategory.TOOL_SUCCESS)
+            record_event(EventCategory.TURN_COMPLETED)
         removed = prune_old_events()
         assert removed == 0
         assert len(_tel._events) == 5
@@ -771,7 +774,7 @@ class TestEventPruning:
         # Add old + new events
         old_ts = time.time() - (25 * 3600)
         _tel._events.append({"category": "tool_error", "timestamp": old_ts, "severity": "error"})
-        record_event(EventCategory.TOOL_SUCCESS)
+        record_event(EventCategory.TURN_COMPLETED)
 
         # File should have the new event
         assert _tel._file_path.exists()
@@ -795,17 +798,17 @@ class TestEventPruning:
 
 class TestEventFiltering:
     def test_filter_by_category(self):
-        record_event(EventCategory.TOOL_SUCCESS)
-        record_event(EventCategory.TOOL_ERROR, Severity.ERROR)
         record_event(EventCategory.SPOKE_SUCCESS)
-        record_event(EventCategory.TOOL_SUCCESS)
+        record_event(EventCategory.TOOL_ERROR, Severity.ERROR)
+        record_event(EventCategory.TURN_COMPLETED)
+        record_event(EventCategory.SPOKE_SUCCESS)
 
-        events = get_recent_events(minutes=60, category="tool_success")
+        events = get_recent_events(minutes=60, category="spoke_success")
         assert len(events) == 2
-        assert all(e["category"] == "tool_success" for e in events)
+        assert all(e["category"] == "spoke_success" for e in events)
 
     def test_filter_by_severity(self):
-        record_event(EventCategory.TOOL_SUCCESS, Severity.INFO)
+        record_event(EventCategory.TURN_COMPLETED, Severity.INFO)
         record_event(EventCategory.TOOL_ERROR, Severity.ERROR)
         record_event(EventCategory.LLM_ERROR, Severity.ERROR)
         record_event(EventCategory.RETRY, Severity.WARNING)
@@ -818,7 +821,7 @@ class TestEventFiltering:
         record_event(EventCategory.TOOL_ERROR, Severity.ERROR)
         record_event(EventCategory.TOOL_ERROR, Severity.WARNING)
         record_event(EventCategory.LLM_ERROR, Severity.ERROR)
-        record_event(EventCategory.TOOL_SUCCESS, Severity.INFO)
+        record_event(EventCategory.TURN_COMPLETED, Severity.INFO)
 
         events = get_recent_events(
             minutes=60, category="tool_error", severity="error"
@@ -859,7 +862,7 @@ class TestEventFiltering:
         assert events[0]["component"] == "recent"
 
     def test_filter_returns_empty_when_no_match(self):
-        record_event(EventCategory.TOOL_SUCCESS, Severity.INFO)
+        record_event(EventCategory.TURN_COMPLETED, Severity.INFO)
         events = get_recent_events(minutes=60, category="llm_error")
         assert events == []
 
@@ -867,7 +870,7 @@ class TestEventFiltering:
         for _ in range(10):
             record_event(EventCategory.TOOL_ERROR, Severity.ERROR)
         for _ in range(10):
-            record_event(EventCategory.TOOL_SUCCESS, Severity.INFO)
+            record_event(EventCategory.TURN_COMPLETED, Severity.INFO)
 
         events = get_recent_events(minutes=60, category="tool_error", limit=5)
         assert len(events) == 5
@@ -914,7 +917,7 @@ class TestMemoryBounds:
         import prax.services.health_telemetry as _tel
 
         for i in range(2100):
-            record_event(EventCategory.TOOL_SUCCESS, component=str(i))
+            record_event(EventCategory.TURN_COMPLETED, component=str(i))
         assert len(_tel._events) <= 2000
 
 
@@ -978,3 +981,196 @@ class TestOnTurnEndExceptionHandling:
         ):
             result = on_turn_end()
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Tool successes are counted, never stored
+# ---------------------------------------------------------------------------
+
+
+def _write_rows(path, rows):
+    import json
+
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+
+def _row(category: str, ts: float, severity: str = "info") -> dict:
+    return {
+        "category": category, "severity": severity, "component": "", "details": "",
+        "timestamp": ts, "latency_ms": 0, "tokens": 0, "extra": {},
+    }
+
+
+class TestToolSuccessCounter:
+    """Successes arrive at tool-call rate; as events they evicted the alerts."""
+
+    def test_successes_do_not_evict_rare_alerts(self):
+        import prax.services.health_telemetry as _tel
+        from prax.agent.health_monitor import run_health_check
+        from prax.services.health_telemetry import count_tool_success
+
+        for _ in range(3):
+            record_event(EventCategory.LLM_ERROR, Severity.ERROR)
+        for _ in range(1000):
+            count_tool_success()
+        for _ in range(1000):
+            record_event(EventCategory.TOOL_SUCCESS)  # the generic path too
+
+        assert len(_tel._events) == 3
+        stats = get_rolling_stats()
+        assert stats["llm_errors"] == 3
+        assert stats["tool_calls"] == 2000
+        check = run_health_check()
+        assert check.subsystems["llm"].status == "error"
+        assert check.overall == "unhealthy"
+
+    def test_successes_stay_out_of_the_feed_and_the_file(self):
+        import prax.services.health_telemetry as _tel
+
+        record_event(EventCategory.TOOL_SUCCESS, component="note_list")
+        record_event(EventCategory.TURN_COMPLETED)
+
+        assert [e["category"] for e in get_recent_events()] == ["turn_completed"]
+        assert "tool_success" not in _tel._file_path.read_text()
+
+    def test_one_error_in_ten_calls_is_ten_percent(self):
+        from prax.services.health_telemetry import count_tool_success
+
+        for _ in range(9):
+            count_tool_success()
+        record_event(EventCategory.TOOL_ERROR, Severity.ERROR)
+
+        stats = get_rolling_stats()
+        assert stats["tool_calls"] == 10
+        assert stats["tool_errors"] == 1
+        assert stats["tool_error_rate"] == 0.1
+
+    def test_successes_older_than_the_window_are_pruned(self):
+        import prax.services.health_telemetry as _tel
+
+        _tel._tool_successes.append(time.time() - 2 * 3600)
+        assert get_rolling_stats()["tool_calls"] == 0
+        assert len(_tel._tool_successes) == 0
+
+    def test_disabled_counts_nothing(self, monkeypatch):
+        import prax.services.health_telemetry as _tel
+        import prax.settings as settings_mod
+
+        monkeypatch.setattr(settings_mod.settings, "health_monitor_enabled", False)
+        _tel.count_tool_success()
+        record_event(EventCategory.TOOL_SUCCESS)
+        assert len(_tel._tool_successes) == 0
+
+
+class TestRestart:
+    """Successes are not persisted, so reloaded errors must not be rated."""
+
+    def test_reloaded_errors_do_not_read_as_a_100_percent_error_rate(self, monkeypatch):
+        import prax.services.health_telemetry as _tel
+        from prax.agent.health_monitor import run_health_check
+
+        now = time.time()
+        _write_rows(_tel._file_path, [_row("tool_error", now - 300, "error")] * 3)
+        monkeypatch.setattr(_tel, "_PROCESS_START", now)
+        _tel._initialized = False
+
+        stats = get_rolling_stats()
+        assert stats["tool_errors"] == 3  # still reported as having happened
+        assert stats["tool_error_rate"] == 0
+        assert stats["tool_error_rate_calls"] == 0
+        tools = run_health_check().subsystems["tools"]
+        assert tools.status == "healthy"
+        assert tools.message == "3 calls, 3 errors (rate over the 0 call(s) this process saw)"
+
+    def test_the_rate_resumes_from_what_this_process_saw(self, monkeypatch):
+        import prax.services.health_telemetry as _tel
+        from prax.agent.health_monitor import run_health_check
+
+        now = time.time()
+        _write_rows(_tel._file_path, [_row("tool_error", now - 300, "error")] * 3)
+        monkeypatch.setattr(_tel, "_PROCESS_START", now - 1)
+        _tel._initialized = False
+        _tel.count_tool_success()
+        _tel.count_tool_success()
+        record_event(EventCategory.TOOL_ERROR, Severity.ERROR)
+
+        stats = get_rolling_stats()
+        assert stats["tool_calls"] == 6 and stats["tool_errors"] == 4
+        assert stats["tool_error_rate_calls"] == 3
+        assert stats["tool_error_rate_errors"] == 1
+        assert stats["tool_error_rate"] == round(1 / 3, 4)
+        # The alert quotes the counts its percentage came from.
+        assert "1/3 tool calls failed (33% error rate)" in run_health_check().alerts
+
+    def test_a_window_past_success_retention_does_not_inflate_the_rate(self, monkeypatch):
+        import prax.services.health_telemetry as _tel
+
+        now = time.time()
+        monkeypatch.setattr(_tel, "_PROCESS_START", now - 4 * 3600)
+        # Its successes, if any, are already pruned: rating it would be 100%.
+        _tel._events.append(_row("tool_error", now - 2 * 3600, "error"))
+        _tel.count_tool_success()
+
+        stats = get_rolling_stats(window_minutes=180)
+        assert stats["tool_errors"] == 1
+        assert stats["tool_error_rate"] == 0
+
+
+class TestFileBound:
+    """The JSONL file stays bounded, not just the in-memory view."""
+
+    def test_load_rewrites_the_file_without_dropped_rows(self):
+        import prax.services.health_telemetry as _tel
+
+        now = time.time()
+        _write_rows(_tel._file_path, (
+            [_row("turn_completed", now - 30 * 3600)] * 5  # expired
+            + [_row("tool_success", now - 60)] * 4  # stored by an earlier build
+            + [_row("llm_error", now - 60, "error")] * 2
+        ))
+        _tel._initialized = False
+
+        assert [e["category"] for e in get_recent_events()] == ["llm_error", "llm_error"]
+        lines = _tel._file_path.read_text().splitlines()
+        assert len(lines) == 2
+        assert all("llm_error" in ln for ln in lines)
+        # Atomic replace: no temporary file left behind.
+        assert not list(_tel._file_path.parent.glob("*.tmp"))
+
+    def test_load_leaves_a_fully_kept_file_alone(self):
+        import prax.services.health_telemetry as _tel
+
+        now = time.time()
+        _write_rows(_tel._file_path, [_row("llm_error", now - 60, "error")] * 2)
+        before = _tel._file_path.stat().st_mtime_ns
+        _tel._initialized = False
+
+        get_recent_events()
+        assert _tel._file_path.stat().st_mtime_ns == before
+        assert _tel._disk_rows == 2
+
+    def test_record_event_compacts_past_twice_the_memory_cap(self, monkeypatch):
+        import prax.services.health_telemetry as _tel
+
+        monkeypatch.setattr(_tel, "_MAX_EVENTS_IN_MEMORY", 10)
+        monkeypatch.setattr(_tel, "_MAX_ROWS_ON_DISK", 20)
+
+        for i in range(55):
+            record_event(EventCategory.TURN_COMPLETED, component=str(i))
+            assert len(_tel._file_path.read_text().splitlines()) <= 20
+
+        lines = _tel._file_path.read_text().splitlines()
+        assert len(lines) == _tel._disk_rows
+        assert '"component": "54"' in lines[-1]
+        # The file still holds everything memory does.
+        assert len(lines) >= len(_tel._events) == 10
+
+    def test_prune_rewrite_is_atomic(self):
+        import prax.services.health_telemetry as _tel
+
+        _tel._events.append(_row("tool_error", time.time() - 25 * 3600, "error"))
+        record_event(EventCategory.TURN_COMPLETED)
+
+        assert prune_old_events() == 1
+        assert len(_tel._file_path.read_text().splitlines()) == 1
+        assert not list(_tel._file_path.parent.glob("*.tmp"))
