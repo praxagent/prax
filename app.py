@@ -221,6 +221,11 @@ def create_app():
             egress_gate_service.start()
         except Exception:
             logger.warning("Egress gate integration failed to start", exc_info=True)
+        try:
+            from prax.services import parked_approvals
+            parked_approvals.start()
+        except Exception:
+            logger.warning("parked approvals poller did not start", exc_info=True)
 
     # --- Health probes (Kubernetes/Docker-compatible) ---
 

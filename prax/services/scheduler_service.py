@@ -301,24 +301,34 @@ def _on_fire(user_id: str, schedule_id: str, prompt: str, channel: str | None = 
         scheduled_agent = ConversationAgent(tier="medium")
         svc = ConversationService(agent=scheduled_agent)
 
-        response = svc.reply(
-            user_id,
-            f"[SCHEDULED_TASK — CRITICAL RULES: "
-            f"1) Do NOT ask follow-up questions — the user is not present. "
-            f"2) Do NOT use schedule_create, schedule_reminder, or any scheduling tools. "
-            f"3) Do NOT ask for confirmation or clarification. "
-            f"4) Just execute the task using your best judgment and respond with the result. "
-            f"5) If the task is ambiguous, take the most reasonable interpretation and do it. "
-            f"6) Keep your response concise — it will be delivered as a notification. "
-            f"7) For news/headlines/briefings, use delegate_research to run the news tool; "
-            f"background_search_tool snippets are not sufficient. "
-            f"8) For weather/local conditions, use delegate_environment. It must resolve "
-            f"a concrete city/region first; timezone alone is not enough. If no location "
-            f"or live source can be confirmed, ask for location or say weather is "
-            f"unavailable rather than inventing a forecast.] "
-            f"{prompt}",
-            source="scheduler",
-        )
+        # What would re-run this turn if it parks on an approval (a re-run
+        # started by parked_approvals arrives with its recipe already set).
+        from prax.services import parked_approvals
+        recipe_token = parked_approvals.current_recipe.set(
+            parked_approvals.current_recipe.get() or {
+                "kind": "schedule", "resumes": 0,
+                "args": {"schedule_id": schedule_id, "prompt": prompt, "channel": channel}})
+        try:
+            response = svc.reply(
+                user_id,
+                f"[SCHEDULED_TASK — CRITICAL RULES: "
+                f"1) Do NOT ask follow-up questions — the user is not present. "
+                f"2) Do NOT use schedule_create, schedule_reminder, or any scheduling tools. "
+                f"3) Do NOT ask for confirmation or clarification. "
+                f"4) Just execute the task using your best judgment and respond with the result. "
+                f"5) If the task is ambiguous, take the most reasonable interpretation and do it. "
+                f"6) Keep your response concise — it will be delivered as a notification. "
+                f"7) For news/headlines/briefings, use delegate_research to run the news tool; "
+                f"background_search_tool snippets are not sufficient. "
+                f"8) For weather/local conditions, use delegate_environment. It must resolve "
+                f"a concrete city/region first; timezone alone is not enough. If no location "
+                f"or live source can be confirmed, ask for location or say weather is "
+                f"unavailable rather than inventing a forecast.] "
+                f"{prompt}",
+                source="scheduler",
+            )
+        finally:
+            parked_approvals.current_recipe.reset(recipe_token)
         if not _deliver_message(user_id, response, channel=channel):
             logger.error("Schedule %s (user %s) generated a response but it was "
                          "delivered nowhere (channel=%s)", schedule_id, user_id, channel)
