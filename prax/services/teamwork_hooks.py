@@ -34,7 +34,12 @@ def set_role_status(role_name: str, status: str) -> None:
 
 
 def reset_all_idle() -> None:
-    """Set all role agents to idle. Call at end of each agent turn."""
+    """Set the orchestrator and the core role agents to idle.
+
+    Called at the end of each agent turn, on its critical path: every role
+    here costs one synchronous PATCH per turn, which is one reason spoke roles
+    are not registered (see ``teamwork_channels``).
+    """
     from prax.services.teamwork_channels import role_agent_names
     from prax.settings import settings
     for role in dict.fromkeys((settings.agent_name, *role_agent_names())):
@@ -150,11 +155,12 @@ def ensure_mirror_channels() -> None:
 
 
 def register_role_agents() -> None:
-    """Register every Prax role agent in TeamWork (see ``PRAX_ROLE_AGENTS``).
+    """Register the core role agents in TeamWork (see ``PRAX_ROLE_AGENTS``).
 
-    Without a registration a role's posts are unattributed and its status
-    updates are no-ops.  One failed registration must not cost the others, so
-    each is attempted on its own.
+    Only the internal roles (Planner, Researcher, Executor, Auditor): a
+    registered role's tool output flows into TeamWork's activity log, so spoke
+    roles stay unregistered.  One failed registration must not cost the others
+    or abort TeamWork startup, so each is attempted on its own.
     """
     tw = _tw()
     if not tw:
