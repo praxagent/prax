@@ -1368,8 +1368,17 @@ class AppSettings(BaseSettings):
     # The orchestrator types into the user's desktop terminal and reads the
     # screen directly (desktop_type, desktop_screenshot), as sandbox_shell
     # does for the Terminal tab, instead of through a delegate_desktop round
-    # trip. On by default: TJ asked for desktop pairing (2026-10-04).
+    # trip. On by default, for desktop pairing.
     desktop_kernel_tools: bool = Field(default=True, alias="DESKTOP_KERNEL_TOOLS")
+    # desktop_screenshot sends the screen to the vision model, billed per look.
+    # Off: Prax still lists windows and types into them, but cannot see.
+    # Changeable from TeamWork's Settings page (runtime_settings).
+    desktop_screenshots_enabled: bool = Field(default=True, alias="DESKTOP_SCREENSHOTS_ENABLED")
+    # Where TeamWork's Settings page keeps what an admin changed. Wins over
+    # .env for the settings prax/services/runtime_settings.py allows, only.
+    teamwork_overrides_path: str = Field(
+        default=".env-teamwork-override", alias="TEAMWORK_OVERRIDES_PATH",
+    )
     tempo_url: str = Field(default="", alias="TEMPO_URL")  # e.g. "http://tempo:3200"
 
     # Health monitoring watchdog — periodic self-checks every N turns.

@@ -32,6 +32,12 @@ if settings.child_env_strip_proxy_credentials:
 
     child_env.install(settings.child_proxy_url or "")
 
+# Settings an admin changed in TeamWork (.env-teamwork-override) win over .env.
+# Only the server applies them; see prax/services/runtime_settings.py.
+from prax.services.runtime_settings import apply_overrides  # noqa: E402
+
+apply_overrides()
+
 
 def create_app():
     app = Flask(__name__)

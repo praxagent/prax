@@ -3328,6 +3328,44 @@ def set_model():
 
 
 # ---------------------------------------------------------------------------
+# Settings an admin may change from TeamWork (prax/services/runtime_settings.py)
+# ---------------------------------------------------------------------------
+
+
+@teamwork_routes.route("/teamwork/runtime-settings", methods=["GET"])
+def runtime_settings_list():
+    """The settings TeamWork's Settings page may change, with their values and
+    where each value comes from (``env`` or ``teamwork``)."""
+    from prax.services import runtime_settings
+    return jsonify({"settings": runtime_settings.list_settings()})
+
+
+@teamwork_routes.route("/teamwork/runtime-settings/<key>", methods=["PUT"])
+def runtime_settings_set(key: str):
+    """JSON body ``{"value": true|false}``. Applies at once, no restart."""
+    from prax.services import runtime_settings
+    data = request.get_json(silent=True) or {}
+    if "value" not in data:
+        return jsonify({"error": "value is required"}), 400
+    try:
+        return jsonify(runtime_settings.set_override(key, data["value"]))
+    except KeyError as e:
+        return jsonify({"error": str(e).strip("'\"")}), 404
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@teamwork_routes.route("/teamwork/runtime-settings/<key>", methods=["DELETE"])
+def runtime_settings_reset(key: str):
+    """Go back to the value in .env (or the default)."""
+    from prax.services import runtime_settings
+    try:
+        return jsonify(runtime_settings.clear_override(key))
+    except KeyError as e:
+        return jsonify({"error": str(e).strip("'\"")}), 404
+
+
+# ---------------------------------------------------------------------------
 # Health monitoring
 # ---------------------------------------------------------------------------
 

@@ -498,6 +498,11 @@ def desktop_screenshot(question: str = "") -> str:
         question: What you need to know, e.g. "what did the last command print
             in the terminal?" or "where is the Save button?".
     """
+    from prax.settings import settings
+    if not settings.desktop_screenshots_enabled:
+        return ("Screenshots are turned off (Settings → Prax: \"Prax can look at the "
+                "desktop\"), so I can't see the screen. desktop_list_windows still "
+                "works; ask the user to turn screenshots on if you need to read it.")
     # JPEG keeps a 1920x1080 screen around 150-250 KB; base64 on stdout, so
     # nothing is written outside the container.
     script = (
