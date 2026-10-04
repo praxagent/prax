@@ -184,6 +184,38 @@ def sandbox_rebuild(dockerfile_content: str | None = None) -> str:
     return f"Sandbox rebuilt and restarted successfully (image: {result['image']})."
 
 
+@tool
+def sandbox_restart(reason: str) -> str:
+    """Restart the sandbox container when the desktop, a terminal or the
+    browser is stuck (frozen screen, commands that never return, a runaway
+    process).
+
+    Files, installed packages and the browser profile stay. Everything running
+    in the sandbox stops, including the user's open terminals and desktop
+    apps, so tell the user first and why. The user can also restart it from
+    TeamWork's Desktop tab.
+
+    Args:
+        reason: Why, in a few words. Repeated back in the result.
+    """
+    from prax.settings import settings
+    if not settings.sandbox_available:
+        return "The sandbox is off (SANDBOX_ENABLED=false); there is nothing to restart."
+    restart = getattr(get_client(), "restart_sandbox", None)
+    if restart is None:
+        return "This prax-sandbox client can't restart the sandbox; update prax-sandbox."
+    try:
+        result = restart()
+    except Exception as e:
+        return f"Restart failed: {e}"
+    if "error" in result:
+        return f"Restart failed: {result['error']}"
+    state = ("and it is ready" if result.get("ready")
+             else "but it is not answering yet; check again in a minute")
+    return (f"Sandbox restarted ({reason}) {state}. Programs that were running in it "
+            "(terminals, desktop apps) stopped; files and installed packages are still there.")
+
+
 # ---------------------------------------------------------------------------
 # Desktop interaction — the sandbox's Linux desktop (TeamWork's Desktop tab)
 # ---------------------------------------------------------------------------
@@ -627,7 +659,7 @@ def build_sandbox_tools() -> list:
     # NO coding-agent server and are always available with the sandbox.
     tools = [
         sandbox_shell, terminal_history,
-        sandbox_install, sandbox_rebuild,
+        sandbox_install, sandbox_rebuild, sandbox_restart,
         sandbox_view, sandbox_scroll, sandbox_goto,
         desktop_screenshot, desktop_click, desktop_type, desktop_key,
         desktop_list_windows, desktop_open,

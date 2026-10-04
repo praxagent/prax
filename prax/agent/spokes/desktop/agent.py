@@ -52,6 +52,8 @@ everything you type and click happens in front of them.
 - **sandbox_shell** — runs in the BACKGROUND: the user sees none of it. Use it
   for setup the user doesn't need to watch (installing, checking files), never
   for something they asked to see happen in a window.
+- **sandbox_restart(reason)** — if the desktop is frozen or nothing responds.
+  Everything running stops (files and packages stay), so tell the user first.
 
 ## Installed Software
 
@@ -97,6 +99,7 @@ def build_tools() -> list:
         desktop_open,
         desktop_screenshot,
         desktop_type,
+        sandbox_restart,
         sandbox_shell,
     )
 
@@ -108,6 +111,7 @@ def build_tools() -> list:
         desktop_list_windows,
         desktop_open,
         sandbox_shell,
+        sandbox_restart,
     ]
 
 

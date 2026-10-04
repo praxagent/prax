@@ -186,6 +186,9 @@ _MEDIUM: set[str] = {
     "course_create",
     "course_update",
     "course_publish",
+    # interrupts everything running in the sandbox (the user's terminals and
+    # desktop apps too); destroys nothing — files and packages stay
+    "sandbox_restart",
     # workspace writes
     "project_create",
     "project_add_note",

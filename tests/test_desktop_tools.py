@@ -238,3 +238,40 @@ def test_the_orchestrator_can_pair_on_the_desktop(monkeypatch):
     monkeypatch.setattr(prax.settings.settings, "desktop_kernel_tools", False)
     names = {t.name for t in build_default_tools()}
     assert "desktop_type" not in names
+
+
+# --- restarting a stuck sandbox ----------------------------------------------------
+
+def test_prax_can_restart_a_stuck_sandbox(monkeypatch):
+    import prax.settings
+    monkeypatch.setattr(prax.settings.settings, "sandbox_enabled", True)
+
+    class Client:
+        def restart_sandbox(self):
+            return {"restarted": "prax-sandbox-sandbox-1", "ready": True}
+    monkeypatch.setattr(st, "get_client", lambda: Client())
+    out = st.sandbox_restart.invoke({"reason": "the desktop froze"})
+    assert out.startswith("Sandbox restarted (the desktop froze) and it is ready")
+    assert "files and installed packages are still there" in out
+
+
+def test_restart_failures_and_an_old_client_say_so(monkeypatch):
+    import prax.settings
+    monkeypatch.setattr(prax.settings.settings, "sandbox_enabled", True)
+
+    class Failing:
+        def restart_sandbox(self):
+            return {"error": "No sandbox container to restart"}
+    monkeypatch.setattr(st, "get_client", lambda: Failing())
+    assert "No sandbox container" in st.sandbox_restart.invoke({"reason": "x"})
+    monkeypatch.setattr(st, "get_client", lambda: object())
+    assert "update prax-sandbox" in st.sandbox_restart.invoke({"reason": "x"})
+
+
+def test_restart_is_medium_risk_and_in_both_spokes():
+    from prax.agent.action_policy import TOOL_RISK_MAP, RiskLevel
+    from prax.agent.spokes.desktop.agent import build_tools
+    assert TOOL_RISK_MAP["sandbox_restart"] is RiskLevel.MEDIUM
+    assert "sandbox_restart" in {t.name for t in build_tools()}
+    src = open(st.__file__).read()
+    assert "sandbox_install, sandbox_rebuild, sandbox_restart," in src
