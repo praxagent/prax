@@ -506,6 +506,35 @@ def library_set_note_editable(space: str, notebook: str, slug: str):
 # situational awareness without the cost of a full Kanban or the risks of
 # mid-execution oversight (see docs/research/agentic-todo-flows.md §22).
 
+# Artifacts (ARTIFACTS_ENABLED): TeamWork's viewer reads them here and renders
+# them in a sandboxed frame — see prax/services/artifact_service.py.
+
+@teamwork_routes.route("/teamwork/artifacts", methods=["GET"])
+def list_artifacts():
+    """Every artifact's manifest, newest first."""
+    from prax.settings import settings
+    if not settings.artifacts_enabled:
+        return jsonify({"error": "artifacts are disabled (ARTIFACTS_ENABLED)"}), 404
+    from prax.services import artifact_service
+    return jsonify({"artifacts": artifact_service.list_all(_get_teamwork_user_id())})
+
+
+@teamwork_routes.route("/teamwork/artifacts/<artifact_id>", methods=["GET"])
+def get_artifact(artifact_id):
+    """One artifact: its manifest plus ``html``. ``?meta=1`` omits the page, for
+    the viewer's cheap check whether the version changed."""
+    from prax.settings import settings
+    if not settings.artifacts_enabled:
+        return jsonify({"error": "artifacts are disabled (ARTIFACTS_ENABLED)"}), 404
+    from prax.services import artifact_service
+    item = artifact_service.get(_get_teamwork_user_id(), artifact_id)
+    if item is None:
+        return jsonify({"error": "no such artifact"}), 404
+    if request.args.get("meta"):
+        item.pop("html", None)
+    return jsonify(item)
+
+
 @teamwork_routes.route("/teamwork/agent-plan", methods=["GET"])
 def get_agent_plan():
     """Return Prax's current agent_plan (or null if none active).

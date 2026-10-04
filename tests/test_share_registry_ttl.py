@@ -26,6 +26,16 @@ def _ws(tmp_path, monkeypatch):
     return tmp_path
 
 
+@pytest.fixture(autouse=True)
+def _a_person_decided():
+    """These tests are about expiry, not approval: the registry refuses any
+    public share made outside a person's decision (exposure_gate), so each
+    test runs inside one, as an approved publishing tool would."""
+    from prax.services.exposure_gate import person_decided
+    with person_decided("person:test"):
+        yield
+
+
 def _enable_ttl(monkeypatch, seconds=3600):
     from prax.settings import settings
     monkeypatch.setattr(settings, "share_link_ttl_enabled", True, raising=False)

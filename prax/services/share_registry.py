@@ -164,12 +164,17 @@ def _public_url(token: str, *, kind: str, public_name: str | None = None,
 
 
 def register_file(user_id: str, abs_path: str, *,
-                  channel: str | None = None) -> dict[str, Any]:
+                  channel: str | None = None,
+                  expires_at: str | None = None) -> dict[str, Any]:
     """Register a workspace file for public sharing.
 
     Generates a random token + a randomized public filename (extension
     preserved) so the URL leaks nothing about the original file.
+    *expires_at* (ISO 8601) sets this share's expiry explicitly — artifacts
+    always expire — otherwise SHARE_LINK_TTL_* decides.
     """
+    from prax.services.exposure_gate import require_decision
+    approved_by = require_decision(f"the file {os.path.basename(abs_path)!r}")
     ext = os.path.splitext(abs_path)[1]
     token = uuid.uuid4().hex
     public_name = f"{uuid.uuid4().hex}{ext}"
@@ -181,8 +186,9 @@ def register_file(user_id: str, abs_path: str, *,
         "public_name": public_name,
         "created_at": created.isoformat(),
         "created_via": channel or "unknown",
+        "approved_by": approved_by,
     }
-    expires_at = _ttl_expiry_iso(created)
+    expires_at = expires_at or _ttl_expiry_iso(created)
     if expires_at:
         entry["expires_at"] = expires_at
     with _lock_for(user_id):
@@ -200,6 +206,8 @@ def register_course(user_id: str, course_id: str, *,
     (Hugo's internal links assume the original slug).  Idempotent — calling
     twice with the same course_id returns the existing entry.
     """
+    from prax.services.exposure_gate import require_decision
+    approved_by = require_decision(f"the course {course_id!r}")
     with _lock_for(user_id):
         entries = _load(user_id)
         for existing in entries.values():
@@ -213,6 +221,7 @@ def register_course(user_id: str, course_id: str, *,
             "slug": course_id,
             "created_at": _now().isoformat(),
             "created_via": channel or "unknown",
+            "approved_by": approved_by,
         }
         expires_at = _ttl_expiry_iso()
         if expires_at:
@@ -228,6 +237,8 @@ def register_note(user_id: str, note_slug: str, *,
 
     Same idempotent semantics as register_course().
     """
+    from prax.services.exposure_gate import require_decision
+    approved_by = require_decision(f"the note {note_slug!r}")
     with _lock_for(user_id):
         entries = _load(user_id)
         for existing in entries.values():
@@ -241,6 +252,7 @@ def register_note(user_id: str, note_slug: str, *,
             "slug": note_slug,
             "created_at": _now().isoformat(),
             "created_via": channel or "unknown",
+            "approved_by": approved_by,
         }
         expires_at = _ttl_expiry_iso()
         if expires_at:

@@ -128,6 +128,8 @@ def get_tool_capability(tool_name: str) -> dict | None:
 # ── tool classification ──────────────────────────────────────────────
 
 _HIGH: set[str] = {
+    # a public link with no password (also an always-on hard floor)
+    "artifact_share_public",
     # browser state changes / form submission
     "browser_click",
     "browser_fill",
@@ -150,6 +152,9 @@ _HIGH: set[str] = {
 }
 
 _MEDIUM: set[str] = {
+    # artifacts: written to the workspace and shown in TeamWork (private)
+    "artifact_publish",
+    "artifact_unshare",
     # outbound file delivery — user asked for it, don't gate it
     "workspace_send_file",
     # external reads
@@ -189,6 +194,7 @@ _MEDIUM: set[str] = {
 }
 
 _LOW: set[str] = {
+    "artifact_list",
     # sandbox_shell runs inside the sandbox container — the container IS the
     # safety boundary, so the tool itself is low-risk.
     "sandbox_shell",

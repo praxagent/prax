@@ -251,9 +251,17 @@ def _trifecta_key(tool_name: str, kwargs: dict) -> str:
     DIFFERENT (e.g. injection-substituted) arguments — so the arguments are hashed
     into the latch key. A second call only counts as confirmed if its arguments
     match the call the user was actually shown.
+
+    ``expected_observation`` is governance's own field, not an argument of the
+    action, and it is popped partway through a call: the hard-floor gate keys
+    the call before the pop, the HIGH-risk gate after. Keying it would give one
+    call two keys, so a person's floor approval was not recognised by the HIGH
+    gate — which then asked again (twice, with out-of-band approvals on), or let
+    the model "confirm" by calling a second time.
     """
     import hashlib
     import json
+    kwargs = {k: v for k, v in (kwargs or {}).items() if k != "expected_observation"}
     try:
         blob = json.dumps(kwargs, sort_keys=True, default=str)
     except Exception:
@@ -404,10 +412,15 @@ def wrap_with_governance(
         # Before earned trust, smart auto-approve, the turn-wide latch and the
         # spoke enforce switch: none of them may lower a floor. See hard_floors.
         from prax.agent import hard_floors
-        if hard_floors.is_floor(tool_name):
+        exposure_decision = None
+        if hard_floors.is_floor(tool_name, kwargs):
             floor_refusal = _floor_gate(state, tool_name, kwargs, prov)
             if floor_refusal:
                 return floor_refusal
+            if hard_floors.is_exposure(tool_name, kwargs):
+                # The share registry accepts a public share only inside this
+                # decision (prax/services/exposure_gate.py).
+                exposure_decision = prov.get("approval") or "person"
 
         # --- Active Inference: extract expected observation (Phase 1) ---
         expected_observation = kwargs.pop("expected_observation", None)
@@ -636,7 +649,12 @@ def wrap_with_governance(
             if risk is RiskLevel.HIGH:
                 set_role_status("Auditor", "working")
         try:
-            result = tool.invoke(kwargs if kwargs else {})
+            if exposure_decision:
+                from prax.services.exposure_gate import person_decided
+                with person_decided(exposure_decision):
+                    result = tool.invoke(kwargs if kwargs else {})
+            else:
+                result = tool.invoke(kwargs if kwargs else {})
             result_str = str(result) if result is not None else None
             # A credential tool's secret values are masked by every sink for
             # the rest of the turn — including when the model passes them on
@@ -937,7 +955,7 @@ def _floor_gate(state: TurnGovernanceState, tool_name: str, kwargs: dict,
             tool_name, RiskLevel.HIGH, kwargs, result="PAUSED — hard floor, awaiting a person", from_tool=False))
         decision = human_approval.request(
             tool_name, kwargs, kind="hard_floor",
-            reason=f"{tool_name} is a hard-floor action: it always needs a person's decision.",
+            reason=hard_floors.approval_reason(tool_name, target),
             summary=_summarize_args(kwargs, max_len=600))
         if decision.approved and not decision.decided_by.startswith("grant:"):
             state.human_approved.add(call_key)

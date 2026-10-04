@@ -56,6 +56,10 @@ tunnel — see "Public tunnels" below.
 
 ## Public tunnels (ngrok, `tailscale funnel`, Cloudflare Tunnel)
 
+> What Prax itself may put on a public link, and how a person approves each
+> share, is in [public-exposure.md](public-exposure.md). In short: TeamWork is
+> trusted (so secure it); a public link needs an explicit decision every time.
+
 It works: files Prax posts to TeamWork chat are relative links
 (`/api/workspace/…/download?path=…`), so they resolve against whatever address
 TeamWork was opened at — tailnet name, localhost or tunnel URL.

@@ -196,12 +196,12 @@ def course_publish(course_id: str, public: bool = False) -> str:
 
     Args:
         course_id: The course to publish (triggers a full site rebuild).
-        public: When True, also register the course in the user's share
-            registry so it's reachable over the public ngrok URL.  Default
-            False — only the local TeamWork URL is returned, which the user
-            reaches via localhost / Tailscale / SSH tunnel.  Only set True
-            when the user has explicitly asked to share the course
-            publicly.
+        public: When True, also make the course reachable over the public
+            ngrok URL — anyone with the link can open it, no password. That
+            needs the user's decision every time (approved in TeamWork, or
+            asked for in their own words naming the course); without it the
+            call is refused. Default False — only the TeamWork URL, which the
+            user reaches via localhost / Tailscale / SSH tunnel.
     """
     from prax.services import share_registry
     from prax.services.deployment_info import effective_base_url

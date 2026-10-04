@@ -735,6 +735,28 @@ class AppSettings(BaseSettings):
             "Re-publishing a course/note renews its lease."
         ),
     )
+    artifacts_enabled: bool = Field(
+        default=False, alias="ARTIFACTS_ENABLED",
+        description=(
+            "Artifacts: self-contained HTML pages Prax makes and keeps updating "
+            "(plans, tables, charts, small apps), stored in the workspace under "
+            "artifacts/ and shown in TeamWork's sandboxed artifact viewer "
+            "(prax/services/artifact_service.py). Adds artifact_publish, "
+            "artifact_list, artifact_share_public and artifact_unshare."
+        ),
+    )
+    artifact_max_bytes: int = Field(
+        default=2_000_000, alias="ARTIFACT_MAX_BYTES",
+        description="Largest artifact page accepted, in bytes.",
+    )
+    artifact_public_hours: int = Field(
+        default=24, alias="ARTIFACT_PUBLIC_HOURS",
+        description=(
+            "Default lifetime of a public artifact link (artifact_share_public), "
+            "in hours; a share may ask for up to 168. Every public share needs a "
+            "person's decision, whatever this says."
+        ),
+    )
     knowledge_hybrid_enabled: bool = Field(
         default=True, alias="KNOWLEDGE_HYBRID_ENABLED",
         description=(
@@ -1388,6 +1410,19 @@ class AppSettings(BaseSettings):
     # fail closed. The Twilio routes keep their signature validation; MCP keeps
     # its bearer; /health stays open.
     prax_api_key: str = Field(default="", alias="PRAX_API_KEY", repr=False)
+    tunnel_requests_need_key: bool = Field(
+        default=True, alias="PRAX_TUNNEL_REQUESTS_NEED_KEY",
+        description=(
+            "With PRAX_API_KEY unset, refuse requests to Prax's private routes "
+            "(/teamwork/*, /plugins/*, /api/users/*) that arrived through a proxy "
+            "or tunnel (they carry X-Forwarded-*/Forwarded headers) — an ngrok "
+            "tunnel publishes every Flask route. Only what a person shared "
+            "(/shared, /courses, /notes) and routes with their own auth stay "
+            "reachable that way. TeamWork's own calls come straight over "
+            "loopback and are unaffected. Set false only if a trusted reverse "
+            "proxy you run sits in front of Prax; better, set PRAX_API_KEY."
+        ),
+    )
 
     @property
     def teamwork_active(self) -> bool:
