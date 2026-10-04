@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.49.0](https://github.com/praxagent/prax/compare/v0.48.0...v0.49.0) (2026-10-04)
+
+
+### Features
+
+* artifacts, and a universal public-exposure gate — TeamWork is trusted, a public link needs a person's decision ([#260](https://github.com/praxagent/prax/issues/260)) ([2ea5c18](https://github.com/praxagent/prax/commit/2ea5c18cd2360e842533e95763edb6648f07bcc8))
+* Prax's self-diagnosed bugs fixed, an honest prax_doctor with log health, and credential secrets kept out of traces ([#259](https://github.com/praxagent/prax/issues/259)) ([7dcc883](https://github.com/praxagent/prax/commit/7dcc883c63b9e163d2c8622b221015e8f93199cc))
+
+
+### Bug Fixes
+
+* memory consolidation no longer holds the user's reply ([#258](https://github.com/praxagent/prax/issues/258)) ([05abcb3](https://github.com/praxagent/prax/commit/05abcb3b1cced3f08bdd5ac8a68c8e3d7a147860))
+
 ## [0.48.0](https://github.com/praxagent/prax/compare/v0.47.0...v0.48.0) (2026-10-03)
 
 
