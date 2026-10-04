@@ -130,6 +130,16 @@ if ! $CHECK_ONLY; then
           echo "    WARN: SANDBOX_EGRESS is set but EGRESS_ADMIN_TOKEN is empty or this prax-sandbox has no docker-compose.egress.yml — egress gate NOT enabled"
         fi ;;
     esac
+    # Rebuild the image only if sandbox/local-packages.txt changed (your own
+    # packages, built in so they survive the container). A failed build keeps
+    # the current image and does not stop the deploy; skipped packages are
+    # listed here. `up -d` then recreates the container only if the image or
+    # its settings changed, so packages installed in it by hand survive a
+    # deploy otherwise.
+    if [[ -x "$PRAX_ROOT/prax-sandbox/scripts/ensure-image.sh" ]]; then
+      (cd "$PRAX_ROOT/prax-sandbox" && scripts/ensure-image.sh 2>&1 | grep -E '^==> |^    ') \
+        || echo "    WARN: sandbox image build failed; keeping the current image"
+    fi
     (cd "$PRAX_ROOT/prax-sandbox" \
       && WORKSPACE_DIR="${WORKSPACE_DIR:-$PRAX_ROOT/workspaces}" \
          docker compose "${sandbox_files[@]}" up -d 2>&1 | tail -2)
