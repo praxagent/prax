@@ -16,6 +16,12 @@
 # browser panels had nothing behind them. The failure surfaced to the user as an
 # HTTP 403 in a browser console, which points at authentication and is nowhere
 # near the truth.
+#
+# Restarting the services needs root. Run as a service account (the usual
+# shape: `sudo -u praxsvc ... update.sh`), it needs a NOPASSWD sudoers rule for
+# exactly `systemctl restart teamwork` and `systemctl restart prax`; units with
+# NoNewPrivileges=yes keep the running services themselves from using it.
+# Without the rule it stops before the restart and prints what to run instead.
 set -euo pipefail
 
 PRAX_ROOT="${PRAX_ROOT:-$HOME/PRAX}"
@@ -33,13 +39,31 @@ esac
 
 export PATH="$HOME/.local/bin:$PATH"
 
-# Ports the sandbox publishes on loopback. Fixed by its compose file.
-SANDBOX_NOVNC=6080
-SANDBOX_CLIPBOARD=6090
-SANDBOX_CDP=9223
+# Ports the sandbox publishes on loopback: its compose file's defaults, or the
+# same overrides it takes (a second checkout on one machine uses others).
+SANDBOX_NOVNC="${SANDBOX_VNC_PORT:-6080}"
+SANDBOX_CLIPBOARD="${SANDBOX_CLIPBOARD_PORT:-6090}"
+SANDBOX_CDP="${SANDBOX_CDP_PORT:-9223}"
 
 fail=0
 note() { printf '    %-22s %s\n' "$1" "$2"; }
+
+restart_unit() {
+  sudo -n systemctl restart "$1" 2>/dev/null && return 0
+  [[ -t 0 ]] && sudo systemctl restart "$1"
+}
+
+not_restarted() {
+  echo "    ! could not restart the services: this account may not run"
+  echo "      'systemctl restart teamwork' / 'systemctl restart prax' through sudo."
+  echo "      The new code is on disk, but the OLD processes are still running."
+  echo "      Restart them now, TeamWork first:"
+  echo "        sudo systemctl restart teamwork && sleep 15 && sudo systemctl restart prax"
+  echo "      then verify:  $0 --check"
+  echo "      To let this account do it itself, give it a sudoers rule for exactly"
+  echo "      those two commands (visudo -f /etc/sudoers.d/prax-deploy):"
+  echo "        $(id -un) ALL=(root) NOPASSWD: $(command -v systemctl) restart teamwork, $(command -v systemctl) restart prax"
+}
 
 # ── Config preflight ────────────────────────────────────────────────────────
 # Cross-service settings that fail SILENTLY when unset are the suite's sharpest
@@ -156,9 +180,14 @@ if ! $CHECK_ONLY; then
   echo "==> restarting services"
   # TeamWork first: Prax's startup reconnects to its TeamWork project and silently
   # skips if the UI is unreachable, leaving a confusingly empty workspace.
-  sudo systemctl restart teamwork
+  # A service account restarts its units through a NOPASSWD sudoers rule for
+  # exactly these two commands (praxvm: /etc/sudoers.d/praxsvc-deploy); an
+  # operator running this by hand may be asked for a password. Without either,
+  # stop and say so: the new code is on disk but the OLD processes are still
+  # running, and a half-deployed box must not go on to report itself healthy.
+  if ! restart_unit teamwork; then not_restarted; exit 2; fi
   sleep 15
-  sudo systemctl restart prax
+  if ! restart_unit prax; then not_restarted; exit 2; fi
 
   echo "==> waiting for health"
   for _ in $(seq 1 40); do

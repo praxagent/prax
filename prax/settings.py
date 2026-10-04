@@ -1366,6 +1366,15 @@ class AppSettings(BaseSettings):
     loki_url: str = Field(default="", alias="LOKI_URL")  # e.g. "http://loki:3100"
     prometheus_url: str = Field(default="", alias="PROMETHEUS_URL")  # e.g. "http://prometheus:9090"
     tempo_url: str = Field(default="", alias="TEMPO_URL")  # e.g. "http://tempo:3200"
+    # Where OpenTelemetry spans go (OTLP/HTTP; prax/observability/setup.py).
+    # The default is the compose service name; a native deploy sets
+    # http://127.0.0.1:4318. Read through settings: it used to be a bare
+    # os.environ.get, which never sees a value set in .env (pydantic reads
+    # .env without exporting it), so a native deploy's setting was ignored and
+    # spans went to the compose name, through HTTP_PROXY, and failed.
+    otel_exporter_otlp_endpoint: str = Field(
+        default="http://tempo:4318", alias="OTEL_EXPORTER_OTLP_ENDPOINT",
+    )
 
     # Health monitoring watchdog — periodic self-checks every N turns.
     # Set to false to disable for minimal RAM / lightweight deployments.
