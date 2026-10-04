@@ -178,6 +178,27 @@ def library_note_read(project: str, notebook: str, slug: str) -> str:
 
 
 @tool
+def library_search(query: str, space: str = "") -> str:
+    """Search the Library's notes by words in their title, tags and text.
+
+    Use this to find notes on a topic before reading or answering from them,
+    instead of listing every note. Every word must match (a "quoted phrase"
+    counts as one). Leave ``space`` empty to search all spaces.
+    """
+    try:
+        hits = library_service.search_notes(_uid(), query, space=space or None)
+    except ValueError as exc:
+        return f"Search failed: {exc}"
+    if not hits:
+        return f"No notes match {query!r}" + (f" in space '{space}'." if space else ".")
+    lines = [f"{len(hits)} note(s) match {query!r}:"]
+    for h in hits:
+        lines.append(f"- **{h['title']}** ({h['space']}/{h['notebook']}/{h['slug']})"
+                     + (f": {h['snippet']}" if h["snippet"] else ""))
+    return "\n".join(lines)
+
+
+@tool
 def library_note_update(
     project: str,
     notebook: str,
@@ -1248,6 +1269,7 @@ def build_library_tools() -> list:
         library_notebook_reorder,
         library_note_create,
         library_note_read,
+        library_search,
         library_note_update,
         library_note_move,
         library_note_mark,

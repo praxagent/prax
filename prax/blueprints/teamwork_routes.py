@@ -366,6 +366,20 @@ def library_delete_notebook(space: str, notebook: str):
         return jsonify({"error": "Failed to delete notebook"}), 500
 
 
+@teamwork_routes.route("/teamwork/library/search", methods=["GET"])
+def library_search_route():
+    """Search note titles, tags and text: ``?q=…&space=…&limit=…``."""
+    from prax.services import library_service
+    query = request.args.get("q", "")
+    try:
+        hits = library_service.search_notes(
+            _get_teamwork_user_id(), query, space=request.args.get("space") or None,
+            limit=request.args.get("limit", 20, type=int))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"query": query, "results": hits})
+
+
 @teamwork_routes.route("/teamwork/library/notes", methods=["POST"])
 def library_create_note():
     """Create a note. Defaults to author=human because this endpoint is

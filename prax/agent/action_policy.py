@@ -203,6 +203,7 @@ _LOW: set[str] = {
     "sandbox_shell",
     # read-only utilities
     "get_current_datetime",
+    "library_search",
     # cloud GPU power — read-only status check
     "gpu_power_status",
 }
