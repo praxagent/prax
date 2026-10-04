@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.49.1](https://github.com/praxagent/prax/compare/v0.49.0...v0.49.1) (2026-10-04)
+
+
+### Bug Fixes
+
+* restarting the sandbox keeps what you installed in it ([#262](https://github.com/praxagent/prax/issues/262)) ([8a763de](https://github.com/praxagent/prax/commit/8a763de9a2999476c1dfd32e6699df9bc7d7e82a))
+
 ## [0.49.0](https://github.com/praxagent/prax/compare/v0.48.0...v0.49.0) (2026-10-04)
 
 
