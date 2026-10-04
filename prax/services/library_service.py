@@ -1095,8 +1095,8 @@ def generate_space_cover(
     full_prompt = " ".join(prompt_parts)
 
     try:
-        from openai import OpenAI
-        client = OpenAI(api_key=_settings.openai_key)
+        from prax.agent.llm_factory import openai_client
+        client = openai_client()
         # Use the image-GENERATION model (not vision_model, which is the
         # analysis chat model); fall back to dall-e-3 for non-image names.
         model = _settings.image_model or "dall-e-3"

@@ -1,13 +1,10 @@
 import logging
 
 import openai
-from openai import OpenAI
 
 from prax.clients import get_twilio_client
 from prax.convo_states import convo_states
 from prax.settings import settings
-
-openai_client = OpenAI(api_key=settings.openai_key)
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +28,8 @@ def latex_to_english(reader_data, call_sid, redirect=True):
 
         get_twilio_client().calls(call_sid).update(url=f"{settings.ngrok_url}/conference", method='POST')
         try:
-            response = openai_client.chat.completions.create(model=settings.base_model,
+            from prax.agent.llm_factory import openai_client
+            response = openai_client().chat.completions.create(model=settings.base_model,
             messages=conversation,
             max_tokens=4096)
 

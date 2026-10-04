@@ -123,8 +123,12 @@ def _embed_openai(texts: list[str], model: str) -> list[list[float]]:
     # server (vLLM, llama.cpp server, LM Studio, SIE, ...). Unset → SDK default
     # (api.openai.com), exactly the prior behaviour. Local servers typically
     # accept any key, so a placeholder keeps the keyless-local path working.
-    base_url = getattr(settings, "embedding_base_url", None) or None
-    api_key = settings.openai_key or ("sk-local-no-key" if base_url else None)
+    embedding_url = getattr(settings, "embedding_base_url", None) or None
+    api_key = settings.openai_key or ("sk-local-no-key" if embedding_url else None)
+    # Otherwise OPENAI_KEY's own route (the secrets proxy on keyless Prax), set
+    # explicitly: left to the SDK it came from the environment, if anything had
+    # put it there, and a 401 here falls back to a different embedding size.
+    base_url = embedding_url or getattr(settings, "openai_base_url", None) or None
     client = OpenAI(api_key=api_key, base_url=base_url)
     # OpenAI supports up to 2048 texts per batch
     all_vectors: list[list[float]] = []

@@ -237,6 +237,10 @@ def start_training(data_path: str | None = None) -> dict[str, Any]:
         }
         env = os.environ.copy()
         env["FINETUNE_STATUS_FILE"] = status_file
+        # A gated base model needs a Hugging Face token. Passed on purpose to
+        # this one child: credentials are not in Prax's environment.
+        if settings.hf_token_ro and not env.get("HF_TOKEN"):
+            env["HF_TOKEN"] = settings.hf_token_ro
         try:
             _training_process = subprocess.Popen(
                 cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,

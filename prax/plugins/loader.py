@@ -970,10 +970,13 @@ class PluginLoader:
         if trust_tier == PluginTrust.IMPORTED:
             with restricted_import_env(plugin_name=str(path)):
                 spec.loader.exec_module(mod)
-            # Post-import: replace module's os.environ with sanitized version.
-            if hasattr(mod, "os"):
-                from prax.plugins.restricted_env import SanitizedEnviron
-                mod.os.environ = SanitizedEnviron(plugin_name=str(path))
+            # Post-import: the plugin's `os` becomes one whose environ is
+            # sanitized. Its own name only: assigning mod.os.environ replaced
+            # os.environ for the whole process (mod.os IS the os module).
+            import os as _os
+            if getattr(mod, "os", None) is _os:
+                from prax.plugins.restricted_env import restricted_os
+                mod.os = restricted_os(plugin_name=str(path))
         else:
             spec.loader.exec_module(mod)
 

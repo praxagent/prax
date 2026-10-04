@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import types
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -123,3 +124,32 @@ def restricted_import_env(plugin_name: str = "<unknown>"):
     finally:
         os.environ = original_environ  # noqa: B003
         os.getenv = original_getenv  # type: ignore[assignment]
+
+
+class _RestrictedOs(types.ModuleType):
+    """The ``os`` one plugin sees: ``environ`` and ``getenv`` are sanitized,
+    everything else is the real module."""
+
+    def __init__(self, plugin_name: str) -> None:
+        super().__init__("os")
+        self.environ = SanitizedEnviron(plugin_name=plugin_name)
+        self._plugin_name = plugin_name
+
+    def getenv(self, key: str, default: str | None = None) -> str | None:
+        return self.environ.get(key, default)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(os, name)
+
+
+def restricted_os(plugin_name: str = "<unknown>") -> types.ModuleType:
+    """A stand-in for the ``os`` module, for one IMPORTED plugin's namespace.
+
+    The loader used to assign ``mod.os.environ = SanitizedEnviron(...)``. But
+    ``mod.os`` is the process's one ``os`` module, so that replaced
+    ``os.environ`` for all of Prax: once an imported plugin loaded, Prax's own
+    reads of anything matching the patterns (``OPENAI_BASE_URL``, …) came back
+    empty, and the environment was a frozen copy whose writes no longer
+    reached child processes. This gives the plugin its own ``os`` instead.
+    """
+    return _RestrictedOs(plugin_name)

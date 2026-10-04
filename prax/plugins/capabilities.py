@@ -329,10 +329,8 @@ class PluginCapabilities:
             self.plugin_rel_path, provider, voice, len(text),
         )
         if provider == "openai":
-            from openai import OpenAI
-
-            from prax.settings import settings
-            client = OpenAI(api_key=settings.openai_key)
+            from prax.agent.llm_factory import openai_client
+            client = openai_client()
             response = client.audio.speech.create(
                 model="tts-1", voice=voice, input=text,
             )
@@ -378,10 +376,8 @@ class PluginCapabilities:
                 f"Split the file or compress it first."
             )
 
-        from openai import OpenAI
-
-        from prax.settings import settings
-        client = OpenAI(api_key=settings.openai_key)
+        from prax.agent.llm_factory import openai_client
+        client = openai_client()
         with open(audio_path, "rb") as f:
             transcript = client.audio.transcriptions.create(
                 model="whisper-1",
