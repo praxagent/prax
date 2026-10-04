@@ -25,12 +25,12 @@ _MAX_IMAGE_BYTES = 10 * 1024 * 1024
 # The only files OUTSIDE the user's workspace that analyze_image may read: the
 # temp-dir screenshots the harness's own tools write, matched by exact
 # directory + basename pattern per writer. Nothing else on the host filesystem.
+# (Desktop screenshots never touch the host: sandbox_tools.desktop_screenshot
+# passes the image inline as a data: URI.)
 #   prax_sandbox.cdp_service.screenshot          -> <tempdir>/cdp_screenshot_<epoch>.jpg
 #   browser_service.screenshot(save_to_workspace=False) -> <tempdir>/browser_<mkstemp>.png
-#   sandbox_tools.desktop_screenshot             -> /tmp/screenshot_<epoch>.png (literal /tmp)
 _CDP_SCREENSHOT_RE = re.compile(r"cdp_screenshot_\d+\.jpg")
 _BROWSER_SCREENSHOT_RE = re.compile(r"browser_[A-Za-z0-9_]+\.png")
-_DESKTOP_SCREENSHOT_RE = re.compile(r"screenshot_\d+\.png")
 
 
 def _screenshot_allowlist() -> list[tuple[Path, re.Pattern[str]]]:
@@ -38,7 +38,6 @@ def _screenshot_allowlist() -> list[tuple[Path, re.Pattern[str]]]:
     return [
         (tmp, _CDP_SCREENSHOT_RE),
         (tmp, _BROWSER_SCREENSHOT_RE),
-        (Path("/tmp").resolve(), _DESKTOP_SCREENSHOT_RE),
     ]
 
 
@@ -113,6 +112,14 @@ def _fetch_image_base64(url: str) -> tuple[str, str]:
     Sends an explicit ``User-Agent`` for http(s) because several image hosts
     (Wikimedia, some news CDNs) reject ``python-requests``'s default UA with 403.
     """
+    # An inline image (a data: URI), e.g. a desktop screenshot captured in the
+    # sandbox and handed over as bytes: nothing to fetch.
+    if url.startswith("data:image/"):
+        header, sep, b64 = url.partition(",")
+        if not sep or ";base64" not in header:
+            raise ValueError("only base64 data: URIs are supported")
+        media_type = header[len("data:"):].split(";", 1)[0]
+        return b64, media_type
     # Local file path (or file:// URL): read off disk, but only from the user's
     # workspace or a harness screenshot file (see _resolve_local_image_path).
     if url.startswith("file://"):

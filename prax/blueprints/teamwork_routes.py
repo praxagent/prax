@@ -237,6 +237,7 @@ _VIEW_LABELS = {
     "chat": "the chat tab",
     "browser": "the browser panel (they can see the live browser)",
     "terminal": "the terminal tab",
+    "desktop": "the Desktop tab — the sandbox's Linux desktop, live (they see every window, keystroke and click)",
     "execution_graphs": "the execution graphs tab",
     "observability": "the observability/tracing tab",
     "tasks": "the task board",
@@ -2168,6 +2169,23 @@ def _handle_message(
                     "3) You are an expert pair programmer — infer the right command "
                     "from context and execute it immediately."
                 )
+            elif active_view == "desktop":
+                tool_guidance = (
+                    "You and the user SHARE the sandbox desktop — they watch it live "
+                    "in the Desktop tab. RULES: "
+                    "1) 'The terminal' / 'my terminal' means the terminal WINDOW on that "
+                    "desktop. To type or run something there use desktop_type(text, "
+                    "window=\"terminal\", press_enter=True); if none is open, launch one "
+                    "first (delegate_desktop or desktop_open(\"xterm\")). "
+                    "2) In this view sandbox_shell runs in the BACKGROUND: its output "
+                    "appears nowhere the user can see. Use it only for work they don't "
+                    "need to watch, and say so. "
+                    "3) To read what a command printed, or to see any app, use "
+                    "desktop_screenshot(question). For multi-step GUI work (open an app, "
+                    "click through it) use delegate_desktop. "
+                    "4) Never tell the user something appeared on their screen unless a "
+                    "desktop tool put it there; check with desktop_screenshot if unsure."
+                )
             elif active_view == "library":
                 # Library view — the user is browsing their hierarchical
                 # knowledge base (projects, notebooks, notes, raw, outputs,
@@ -3307,6 +3325,44 @@ def set_model():
     except Exception:
         logger.exception("Failed to set model override")
         return jsonify({"error": "Failed to set model override"}), 500
+
+
+# ---------------------------------------------------------------------------
+# Settings an admin may change from TeamWork (prax/services/runtime_settings.py)
+# ---------------------------------------------------------------------------
+
+
+@teamwork_routes.route("/teamwork/runtime-settings", methods=["GET"])
+def runtime_settings_list():
+    """The settings TeamWork's Settings page may change, with their values and
+    where each value comes from (``env`` or ``teamwork``)."""
+    from prax.services import runtime_settings
+    return jsonify({"settings": runtime_settings.list_settings()})
+
+
+@teamwork_routes.route("/teamwork/runtime-settings/<key>", methods=["PUT"])
+def runtime_settings_set(key: str):
+    """JSON body ``{"value": true|false}``. Applies at once, no restart."""
+    from prax.services import runtime_settings
+    data = request.get_json(silent=True) or {}
+    if "value" not in data:
+        return jsonify({"error": "value is required"}), 400
+    try:
+        return jsonify(runtime_settings.set_override(key, data["value"]))
+    except KeyError as e:
+        return jsonify({"error": str(e).strip("'\"")}), 404
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@teamwork_routes.route("/teamwork/runtime-settings/<key>", methods=["DELETE"])
+def runtime_settings_reset(key: str):
+    """Go back to the value in .env (or the default)."""
+    from prax.services import runtime_settings
+    try:
+        return jsonify(runtime_settings.clear_override(key))
+    except KeyError as e:
+        return jsonify({"error": str(e).strip("'\"")}), 404
 
 
 # ---------------------------------------------------------------------------

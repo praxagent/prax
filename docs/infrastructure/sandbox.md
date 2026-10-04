@@ -94,6 +94,29 @@ event-stream route; the client's `pull_tar`/`push_tar` exist but Prax does not c
 them). Empty `SANDBOX_DAEMON_URL` → in-process. See the prax-sandbox repo's
 `docs/remote.md` for deploying the daemon (TLS, tokens, Tailscale-or-not).
 
+## Prax on the desktop
+
+TeamWork's Desktop tab shows the sandbox's Linux desktop live, and Prax can use
+it with the user, the way ChatGPT's and Claude's computer use do, but
+structured first, with pixels last:
+
+1. `desktop_list_windows` — what is open, which window has focus, where.
+2. `desktop_type(text, window="terminal" | id | title, press_enter)` and
+   `desktop_key(keys, window)` — the window is brought to the front and the
+   keys go to it. "The terminal" means the terminal window on that desktop.
+3. `desktop_screenshot(question)` — the configured vision model reads the
+   screen (a terminal's output, a button's position). The fallback, not the
+   first move.
+
+They run inside the sandbox container through the sandbox client in every
+deployment shape (they used to run on the Prax host on a native install). When
+the user is on the Desktop tab, Prax is told so and given these rules;
+`sandbox_shell` says in its result that its output was not visible there, and
+the claim auditor flags a reply that says something is on the user's screen
+when no tool put it there. The orchestrator carries `desktop_type` and
+`desktop_screenshot` itself (`DESKTOP_KERNEL_TOOLS`, default on); multi-step GUI
+work goes to `delegate_desktop`.
+
 ## How Prax uses it
 
 > **2026-07 — no coding-agent crutch.** The sandbox image no longer ships the

@@ -39,7 +39,7 @@ Key fields:
 | `EGRESS_GATE_URL` / `EGRESS_GATE_TAINT_TOKEN` | prax-sandbox's egress gate and its **raise-only** taint token. TeamWork (`EGRESS_GATES`, admin tokens) relays the gate's questions; Prax never holds an admin token | empty |
 | `PRAX_EGRESS_GATE_URL` / `PRAX_EGRESS_GATE_TAINT_TOKEN` | The forward proxy's egress policy (Prax's own traffic) and its raise-only taint token; TeamWork relays its questions | empty |
 | `DISCORD_USE_PROXY` | Discord bot (REST + gateway) through `HTTPS_PROXY` — required under the loopback-only egress drop-in | `false` |
-| `SANDBOX_ROUTE_COMMANDS` | On a host install, run `prax.utils.shell.run_command` (desktop tools, plugin `caps.run_command`, mermaid) in the sandbox instead of on the Prax host; fails closed if the sandbox is down. Compose deployments always route. Recommended `true` | `false` |
+| `SANDBOX_ROUTE_COMMANDS` | On a host install, run `prax.utils.shell.run_command` (plugin `caps.run_command`, mermaid; the desktop tools always use the sandbox) in the sandbox instead of on the Prax host; fails closed if the sandbox is down. Compose deployments always route. Recommended `true` | `false` |
 | `SANDBOX_WORKSPACE_MOUNT_SOURCE` | The directory (as Prax sees it) mounted at the sandbox's `/workspace`. Empty = read it from Docker, else compose → the `PRAX_USER_ID` workspace, host install → the whole `workspaces/` tree | empty |
 | `WORKSPACE_PLUGIN_INTEGRITY_ENABLED` | Run workspace/imported plugin code only when its digest was recorded by a Prax plugin tool or `scripts/plugin_trust.py approve`; closes the sandbox→host plugin path (see sandbox-execution-boundary.md). Recommended `true` | `false` |
 | `SANDBOX_EXEC_TIMEOUT_ENFORCED` | Enforce each sandbox command's timeout inside the container (TERM to its process group, KILL 5 s later, exit 124). Off, `docker exec` has no deadline and every timeout Prax passes is ignored. Recommended `true` | `false` |
@@ -70,6 +70,23 @@ Key fields:
 | `DISCORD_ALLOWED_USERS` | JSON: `{"123456789": "Alice"}` — maps Discord user IDs to names | `None` |
 | `DISCORD_ALLOWED_CHANNELS` | Comma-separated channel IDs the bot responds in (empty = DMs + all visible) | `None` |
 | `DISCORD_TO_PHONE_MAP` | JSON: `{"discord_id": "+phone"}` — link Discord to Twilio identity | `None` |
+
+## Changing settings from TeamWork
+
+A few settings can be changed on TeamWork's Settings page ("Prax settings")
+while Prax runs, with no restart:
+
+| Setting | What it does |
+|---|---|
+| `DESKTOP_SCREENSHOTS_ENABLED` | Prax may look at the sandbox desktop. Each look sends a screenshot to the vision model (`VISION_MODEL`), billed per look. Off: he still lists windows and types into them. |
+| `DESKTOP_KERNEL_TOOLS` | Prax types into the desktop and reads the screen himself, not only through his desktop helper. |
+| `ARTIFACTS_ENABLED` | Artifacts (pages Prax keeps updating). Public links still need a person each time. |
+| `CLAIM_AUDIT_ATTENDED_QUARANTINE` | Self-check warnings appear in the reply, not only in the Auditor channel. |
+| `LOG_HEALTH_ENABLED` | `prax_doctor` also reads Prax's own log. |
+
+- **Where changes go.** They are written to `.env-teamwork-override`, beside `.env` (path: `TEAMWORK_OVERRIDES_PATH`). It is not in git, and it wins over `.env`. The page shows which settings come from it, and "reset" removes a setting from it.
+- **What can be on the list.** The list is `prax/services/runtime_settings.py`. A setting is there only if Prax reads it each time it is used, and **nothing that loosens protection** is on it: approvals, hard floors, public exposure, network and credentials stay in `.env`, where changing them takes shell access. A key that is not on the list is ignored, even if someone writes it into the override file by hand. No agent tool writes the file.
+- **Who may change them.** Anyone logged in to TeamWork, for now (one login). With per-person accounts in TeamWork, it becomes admin-only.
 
 ## Channel Setup
 

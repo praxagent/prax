@@ -25,6 +25,9 @@ share/python-wheels/
 # This repo is public, and a blanket `git add -A` once swept a DB backup in.
 # `.env-example` uses a hyphen, so it stays tracked.
 .env.*
+# Settings changed from TeamWork's Settings page (prax/services/runtime_settings.py)
+.env-teamwork-override
+.env-teamwork-override.tmp
 .env.bak*
 
 # Machine-local config. Both are per-checkout by design: local.mk carries the
