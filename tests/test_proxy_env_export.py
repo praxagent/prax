@@ -22,9 +22,10 @@ import pytest
 from prax.settings import _export_dotenv_config, is_secret_env
 
 SECRETS = ("OPENAI_KEY", "SERPER_DEV_API_KEY", "ELEVENLABS_API_KEY", "DISCORD_BOT_TOKEN",
-           "PRAX_SSH_KEY_B64", "SENDGRID_API_KEY", "SOME_NEW_SERVICE_SECRET")
+           "PRAX_SSH_KEY_B64", "SENDGRID_API_KEY", "SOME_NEW_SERVICE_SECRET", "NEO4J_AUTH",
+           "PLUGIN_REPO_URL")
 CONFIG = ("HTTPS_PROXY", "REQUESTS_CA_BUNDLE", "NO_PROXY", "ORCHESTRATOR_TIER", "GIT_AUTHOR_NAME",
-          "OPENAI_BASE_URL")
+          "OPENAI_BASE_URL", "QDRANT_URL")
 
 
 @pytest.fixture(autouse=True)
@@ -54,6 +55,9 @@ def test_exports_config_and_proxy_vars_but_never_secrets(tmp_path):
         "PRAX_SSH_KEY_B64=c3No\n"
         "export SENDGRID_API_KEY=sg-REAL\n"
         "SOME_NEW_SERVICE_SECRET=x\n"
+        "NEO4J_AUTH=neo4j/hunter2\n"
+        "PLUGIN_REPO_URL=https://bot:ghp_REAL@github.com/org/plugins.git\n"
+        "QDRANT_URL=http://localhost:6333\n"
     )
     withheld = _export_dotenv_config(str(env))
 
@@ -63,6 +67,7 @@ def test_exports_config_and_proxy_vars_but_never_secrets(tmp_path):
     assert os.environ["ORCHESTRATOR_TIER"] == "high"            # llm_config reads the environment
     assert os.environ["GIT_AUTHOR_NAME"] == "Prax Bot"          # registry: not a secret
     assert os.environ["OPENAI_BASE_URL"] == "https://127.0.0.1:8785/v1"
+    assert os.environ["QDRANT_URL"] == "http://localhost:6333"   # a URL without a password is config
     for secret in SECRETS:
         assert secret not in os.environ, secret
     assert set(withheld) == set(SECRETS)

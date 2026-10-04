@@ -35,8 +35,9 @@ def _install_fake_openai(monkeypatch, b64=True, capture=None):
         url = None if b64 else "http://x/img.png"
 
     class _Client:
-        def __init__(self, api_key=None):
-            pass
+        def __init__(self, api_key=None, base_url=None):
+            if capture is not None:
+                capture["client_base_url"] = base_url
         class images:
             @staticmethod
             def generate(**kwargs):
@@ -63,6 +64,17 @@ def test_generates_and_saves_png(monkeypatch):
     assert caps.saved[0].endswith(".png")
     assert "workspace_send_file" in out
     assert cap["prompt"] == "a red fox in snow" and cap["n"] == 1
+
+
+def test_the_client_goes_where_openai_key_goes(monkeypatch):
+    """OPENAI_KEY is the secrets proxy's token on keyless Prax: the client
+    takes OPENAI_BASE_URL from settings, not from the process environment."""
+    import prax.settings
+    monkeypatch.setattr(prax.settings.settings, "openai_base_url", "https://proxy.test/v1")
+    cap = {}
+    _install_fake_openai(monkeypatch, b64=True, capture=cap)
+    _tool(FakeCaps()).func("a red fox in snow")
+    assert cap["client_base_url"] == "https://proxy.test/v1"
 
 
 def test_url_response_downloads(monkeypatch):

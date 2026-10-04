@@ -1544,7 +1544,7 @@ _PROXY_ENV_ALLOWLIST = (
 )
 
 # A name shaped like a credential is withheld even when no registry row names it.
-_SECRET_SHAPED = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTHTOKEN|CREDENTIALS?|_API|_B64)$")
+_SECRET_SHAPED = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTH|CREDENTIALS?|_API|_B64)$")
 
 
 def is_secret_env(name: str) -> bool:
@@ -1559,13 +1559,23 @@ def is_secret_env(name: str) -> bool:
     return name in all_envs() or bool(_SECRET_SHAPED.search(name))
 
 
+def _url_has_password(value: str) -> bool:
+    """``https://user:secret@host`` — a URL carrying a credential."""
+    from urllib.parse import urlsplit
+    try:
+        return "://" in value and bool(urlsplit(value.strip()).password)
+    except ValueError:
+        return False
+
+
 def _export_dotenv_config(env_file: str = ".env") -> list[str]:
     """Export ``.env`` into ``os.environ`` for the live server, credentials excepted.
 
     Pydantic reads ``.env`` itself; this is for what reads the process
     environment instead: the proxy/TLS vars HTTP clients need, per-component
     overrides such as ``ORCHESTRATOR_TIER`` (``plugins/llm_config.py``), and
-    third-party libraries' own settings. Credentials stay out: every process
+    third-party libraries' own settings. Credentials stay out (and any URL
+    carrying a password, outside the proxy variables): every process
     Prax starts inherits its environment, and a key there is a key any child
     can print — the opposite of keyless.
 
@@ -1591,7 +1601,7 @@ def _export_dotenv_config(env_file: str = ".env") -> list[str]:
             ku = key.strip().upper()
             if val is None or ku in os.environ or key in os.environ or ku.lower() in os.environ:
                 continue
-            if ku not in _PROXY_ENV_ALLOWLIST and is_secret_env(ku):
+            if ku not in _PROXY_ENV_ALLOWLIST and (is_secret_env(ku) or _url_has_password(val)):
                 withheld.append(ku)
                 continue
             os.environ[ku] = val
