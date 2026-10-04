@@ -2252,6 +2252,7 @@ class ConversationAgent:
                 audit_scheduled_task_grounding,
                 audit_tool_failures,
                 audit_undelivered_artifact,
+                audit_unseen_on_screen,
                 decide_scheduled_briefing_action,
                 format_audit_warning,
             )
@@ -2279,6 +2280,8 @@ class ConversationAgent:
             tool_failures = audit_tool_failures(response, tool_results)
             fabricated_links = audit_fabricated_links(response, tool_results)
             undelivered = audit_undelivered_artifact(response, messages)
+            from prax.agent.user_context import current_active_view
+            unseen_on_screen = audit_unseen_on_screen(response, messages, current_active_view.get())
             trifecta_trail = audit_trajectory_messages(messages)
             scheduled_grounding = (
                 audit_scheduled_task_grounding(task_input, response, messages)
@@ -2333,6 +2336,13 @@ class ConversationAgent:
                     "succeeded this turn — a filename or path in a message is "
                     "not a delivery; send it with workspace_send_file"
                 )
+            if unseen_on_screen:
+                flagged_parts.append(
+                    f"UNSEEN ON-SCREEN CLAIM: the response says {unseen_on_screen['phrases'][0]!r} "
+                    "but no tool put anything on the user's screen this turn — outside "
+                    "TeamWork's Terminal tab sandbox_shell runs in the background; type "
+                    "into their terminal with desktop_type, or check with desktop_screenshot"
+                )
             if trifecta_trail:
                 flagged_parts.append(
                     f"COMPLETED LETHAL TRIFECTA: an external sink "
@@ -2378,6 +2388,8 @@ class ConversationAgent:
                     _guard_types.append("fabricated_link")
                 if undelivered:
                     _guard_types.append("undelivered_artifact")
+                if unseen_on_screen:
+                    _guard_types.append("unseen_on_screen")
                 if trifecta_trail:
                     _guard_types.append("lethal_trifecta")
                 if scheduled_grounding:
@@ -2446,6 +2458,7 @@ class ConversationAgent:
                         "tool_failure": "a tool that crashed without being mentioned",
                         "fabricated_link": "a link no tool actually produced",
                         "undelivered_artifact": "a promised file/link that was never sent",
+                        "unseen_on_screen": "something I said is on your screen that no tool put there",
                         "lethal_trifecta": "an external send after reading private data",
                         "scheduled_evidence_floor": "insufficiently-sourced content",
                     }

@@ -237,6 +237,7 @@ _VIEW_LABELS = {
     "chat": "the chat tab",
     "browser": "the browser panel (they can see the live browser)",
     "terminal": "the terminal tab",
+    "desktop": "the Desktop tab — the sandbox's Linux desktop, live (they see every window, keystroke and click)",
     "execution_graphs": "the execution graphs tab",
     "observability": "the observability/tracing tab",
     "tasks": "the task board",
@@ -2167,6 +2168,23 @@ def _handle_message(
                     "If they say 'list files', run ls -la. ACT, don't ask. "
                     "3) You are an expert pair programmer — infer the right command "
                     "from context and execute it immediately."
+                )
+            elif active_view == "desktop":
+                tool_guidance = (
+                    "You and the user SHARE the sandbox desktop — they watch it live "
+                    "in the Desktop tab. RULES: "
+                    "1) 'The terminal' / 'my terminal' means the terminal WINDOW on that "
+                    "desktop. To type or run something there use desktop_type(text, "
+                    "window=\"terminal\", press_enter=True); if none is open, launch one "
+                    "first (delegate_desktop or desktop_open(\"xterm\")). "
+                    "2) In this view sandbox_shell runs in the BACKGROUND: its output "
+                    "appears nowhere the user can see. Use it only for work they don't "
+                    "need to watch, and say so. "
+                    "3) To read what a command printed, or to see any app, use "
+                    "desktop_screenshot(question). For multi-step GUI work (open an app, "
+                    "click through it) use delegate_desktop. "
+                    "4) Never tell the user something appeared on their screen unless a "
+                    "desktop tool put it there; check with desktop_screenshot if unsure."
                 )
             elif active_view == "library":
                 # Library view — the user is browsing their hierarchical

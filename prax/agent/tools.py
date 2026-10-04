@@ -172,6 +172,12 @@ def build_default_tools():
     if settings.sandbox_available:
         from prax.agent.sandbox_tools import sandbox_shell
         kernel.append(sandbox_shell)
+        if settings.desktop_kernel_tools:
+            # Pairing on the desktop, as sandbox_shell is for the Terminal tab:
+            # type into the user's terminal window and read the screen without
+            # a spoke round trip. GUI work stays in delegate_desktop.
+            from prax.agent.sandbox_tools import desktop_screenshot, desktop_type
+            kernel.extend([desktop_type, desktop_screenshot])
 
     return (
         # Kernel tools — essential for basic reasoning

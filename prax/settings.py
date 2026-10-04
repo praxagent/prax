@@ -1365,6 +1365,11 @@ class AppSettings(BaseSettings):
     # these are empty ("observability not available in this deployment mode").
     loki_url: str = Field(default="", alias="LOKI_URL")  # e.g. "http://loki:3100"
     prometheus_url: str = Field(default="", alias="PROMETHEUS_URL")  # e.g. "http://prometheus:9090"
+    # The orchestrator types into the user's desktop terminal and reads the
+    # screen directly (desktop_type, desktop_screenshot), as sandbox_shell
+    # does for the Terminal tab, instead of through a delegate_desktop round
+    # trip. On by default: TJ asked for desktop pairing (2026-10-04).
+    desktop_kernel_tools: bool = Field(default=True, alias="DESKTOP_KERNEL_TOOLS")
     tempo_url: str = Field(default="", alias="TEMPO_URL")  # e.g. "http://tempo:3200"
 
     # Health monitoring watchdog — periodic self-checks every N turns.

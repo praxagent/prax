@@ -820,6 +820,60 @@ def audit_undelivered_artifact(response: str, messages: list) -> dict | None:
     return {"promises": promises, "delivered": False}
 
 
+# A reply telling the user something is on their screen right now — in their
+# terminal, on the desktop, in a window. Live regression (2026-10-04): in the
+# Desktop tab Prax ran `echo` with sandbox_shell, which runs in the background
+# there, and said "You should see that message pop up in your terminal right
+# now". Nothing appeared; the user saw the claim was false.
+_ON_SCREEN_CLAIM_PATTERNS: list[re.Pattern] = [
+    re.compile(r"\byou(?:'ll| will| should| can)?(?: now)? see\b[^.!?\n]{0,80}"
+               r"\b(?:terminal|screen|desktop|window)\b", re.IGNORECASE),
+    re.compile(r"\b(?:pop(?:ped|s)? up|appear(?:ed|s|ing)?|show(?:n|s|ing|ed)? up)\b[^.!?\n]{0,60}"
+               r"\b(?:in|on) (?:your|the) (?:terminal|screen|desktop|window)\b", re.IGNORECASE),
+    re.compile(r"\btyp(?:ed|ing) (?:it |that |this |something )?(?:directly |right )?"
+               r"(?:in|into) (?:your|the) terminal\b", re.IGNORECASE),
+]
+
+# Tools that put something in front of the user on the sandbox desktop.
+_ON_SCREEN_TOOLS = frozenset({
+    "desktop_type", "desktop_key", "desktop_click", "desktop_open",
+    "desktop_screenshot", "delegate_desktop",
+})
+
+
+def audit_unseen_on_screen(response: str, messages: list, active_view: str = "") -> dict | None:
+    """Flag a reply that says something is visible on the user's screen when
+    no tool put anything there this turn.
+
+    Visible: a desktop tool that succeeded, or sandbox_shell while the user is
+    on TeamWork's Terminal tab (it runs in their shared terminal there). In
+    every other view sandbox_shell runs in the background, so it never counts.
+    Deterministic and conservative: an on-screen claim must be explicit.
+    """
+    if not response:
+        return None
+    phrases = [m.group(0) for p in _ON_SCREEN_CLAIM_PATTERNS for m in [p.search(response)] if m]
+    if not phrases:
+        return None
+    try:
+        from langchain_core.messages import ToolMessage
+    except Exception:
+        return None
+    for msg in messages or []:
+        if not isinstance(msg, ToolMessage):
+            continue
+        name = str(getattr(msg, "name", "") or "")
+        content = str(getattr(msg, "content", "") or "")
+        failed = content.lower().startswith(("no desktop", "screenshot failed", "type failed",
+                                            "key press failed", "click failed", "launch failed",
+                                            "no window matches"))
+        if name in _ON_SCREEN_TOOLS and not failed:
+            return None
+        if name == "sandbox_shell" and active_view == "terminal":
+            return None
+    return {"phrases": phrases}
+
+
 def format_audit_warning(findings: list[dict]) -> str:
     """Format ungrounded-claim findings into a human-readable audit note."""
     if not findings:

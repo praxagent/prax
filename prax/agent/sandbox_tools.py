@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from langchain_core.tools import tool
 
@@ -22,10 +23,15 @@ def _get_user_id() -> str:
 def sandbox_shell(command: str, timeout: int = 60) -> str:
     """Run a shell command in the sandbox container.
 
-    When the user is viewing the terminal tab, this runs DIRECTLY in
-    their visible terminal — they see the command and output in real time.
-    This is the ONLY tool for terminal pairing. Use it for ANY shell
-    command: ls, df, git, pytest, pip, apt, curl, etc.
+    WHERE IT SHOWS depends on what the user is looking at:
+    - TeamWork's Terminal tab: it runs in their visible terminal, and they
+      see the command and its output live.
+    - Anywhere else, the Desktop tab included: it runs in the BACKGROUND.
+      The output comes back to you only and appears in no window the user
+      can see. To type into a terminal on the desktop, use desktop_type
+      (window="terminal") or delegate_desktop. Never tell the user they can
+      see output from a background run.
+    Use it for any shell command: ls, df, git, pytest, pip, apt, curl, etc.
 
     This is how Prax runs code directly — there is no separate coding-agent
     session to delegate to. Just call this tool with the command.
@@ -77,6 +83,15 @@ def sandbox_shell(command: str, timeout: int = 60) -> str:
     if "error" in result:
         return f"Shell error: {result['error']}"
     parts = []
+    if active_view == "desktop":
+        # The user is watching the desktop, where this run is invisible. Say
+        # so in the result itself, where the model reads it: on 2026-10-04
+        # Prax ran `echo` this way and told the user "you should see that
+        # message pop up in your terminal right now".
+        parts.append(
+            "[Ran in the background: the user did NOT see this. To show it in "
+            "their terminal, type it with desktop_type(window=\"terminal\").]"
+        )
     if result.get("stdout"):
         parts.append(result["stdout"])
     if result.get("stderr"):
@@ -170,146 +185,315 @@ def sandbox_rebuild(dockerfile_content: str | None = None) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Desktop interaction (computer-use via xdotool)
+# Desktop interaction — the sandbox's Linux desktop (TeamWork's Desktop tab)
 # ---------------------------------------------------------------------------
+#
+# Structured first, pixels last — the order ChatGPT's and Claude's computer use
+# docs themselves recommend:
+#   1. desktop_list_windows — what is open, which window has focus, and where.
+#   2. desktop_type / desktop_key aimed at a window ("terminal", a title, an
+#      id): it is brought to the front and the keys go to it.
+#   3. desktop_screenshot — the vision model reads the screen, for GUI state
+#      and terminal output. The fallback, not the first move.
+#
+# Every command runs INSIDE the sandbox container through the sandbox client,
+# whatever the deployment shape. They used to go through run_command, which
+# reaches the container only in a compose deploy (or with
+# SANDBOX_ROUTE_COMMANDS): on a host install they ran on the Prax host, where
+# there is no desktop at all, and desktop_open ran a model-written command with
+# `bash -c` on the host.
 
-@tool
-def desktop_screenshot() -> str:
-    """Take a screenshot of the sandbox Linux desktop.
-
-    Returns the file path to the screenshot image (PNG) saved in the
-    sandbox workspace.  Use this to see what's on the desktop before
-    clicking or typing.
-    """
-    import time
-
-    from prax.utils.shell import run_command
-    fname = f"/tmp/screenshot_{int(time.time())}.png"
-    try:
-        result = run_command(
-            ["sh", "-c", f"DISPLAY=:99 scrot -o {fname} && echo {fname}"],
-            timeout=10,
-        )
-        if result.returncode != 0:
-            return f"Screenshot failed: {result.stderr or 'unknown error'}"
-        return f"Screenshot saved to {fname}"
-    except Exception as e:
-        return f"Screenshot failed: {e}"
-
-
-@tool
-def desktop_click(x: int, y: int, button: str = "left", clicks: int = 1) -> str:
-    """Click at a specific position on the sandbox desktop.
-
-    Args:
-        x: X coordinate (pixels from left)
-        y: Y coordinate (pixels from top)
-        button: Mouse button — "left", "right", or "middle"
-        clicks: Number of clicks (1 for single, 2 for double)
-    """
-    from prax.utils.shell import run_command
-    button_map = {"left": "1", "middle": "2", "right": "3"}
-    btn = button_map.get(button, "1")
-    repeat = f"--repeat {clicks}" if clicks > 1 else ""
-    try:
-        result = run_command(
-            ["sh", "-c", f"DISPLAY=:99 xdotool mousemove {x} {y} click {repeat} {btn}"],
-            timeout=10,
-        )
-        if result.returncode != 0:
-            return f"Click failed: {result.stderr or 'unknown error'}"
-        return f"Clicked ({button}, {clicks}x) at ({x}, {y})"
-    except Exception as e:
-        return f"Click failed: {e}"
+_DISPLAY = ":99"
+# WM_CLASS names of terminal emulators, so window="terminal" finds the user's.
+_TERMINAL_CLASSES = frozenset({
+    "xterm", "uxterm", "xfce4-terminal", "gnome-terminal-server", "konsole",
+    "kitty", "alacritty", "urxvt", "rxvt", "st", "terminator", "tilix", "wezterm",
+})
+# Desktop furniture, never a target for "type into a window".
+_SHELL_CLASSES = frozenset({"xfce4-panel", "xfdesktop", "xfwm4", "wrapper-2.0"})
+_XDOTOOL_KEY = re.compile(r"^[A-Za-z0-9_+\-]+$")
 
 
-@tool
-def desktop_type(text: str, delay_ms: int = 12) -> str:
-    """Type text on the sandbox desktop (simulates keyboard input).
-
-    Args:
-        text: Text to type.  For special keys use desktop_key instead.
-        delay_ms: Delay between keystrokes in milliseconds.
-    """
-    from prax.utils.shell import run_command
-    # Escape single quotes for shell
-    safe_text = text.replace("'", "'\\''")
-    try:
-        result = run_command(
-            ["sh", "-c", f"DISPLAY=:99 xdotool type --delay {delay_ms} '{safe_text}'"],
-            timeout=30,
-        )
-        if result.returncode != 0:
-            return f"Type failed: {result.stderr or 'unknown error'}"
-        return f"Typed {len(text)} characters"
-    except Exception as e:
-        return f"Type failed: {e}"
+class DesktopUnavailable(RuntimeError):
+    """There is no sandbox desktop to act on."""
 
 
-@tool
-def desktop_key(keys: str) -> str:
-    """Press keyboard keys/shortcuts on the sandbox desktop.
+def _desktop_run(argv: list[str], timeout: int = 15):
+    """Run *argv* on the sandbox desktop, inside the container."""
+    from prax.settings import settings
+    if not settings.sandbox_available:
+        raise DesktopUnavailable("the sandbox is off, so there is no desktop")
+    return get_client().run_command(["env", f"DISPLAY={_DISPLAY}", *argv], timeout=timeout)
 
-    Args:
-        keys: Key combination using xdotool syntax.
-              Examples: "Return", "ctrl+s", "alt+F4", "super",
-              "ctrl+shift+t", "Tab", "Escape", "BackSpace"
-    """
-    from prax.utils.shell import run_command
-    try:
-        result = run_command(
-            ["sh", "-c", f"DISPLAY=:99 xdotool key {keys}"],
-            timeout=10,
-        )
-        if result.returncode != 0:
-            return f"Key press failed: {result.stderr or 'unknown error'}"
-        return f"Pressed: {keys}"
-    except Exception as e:
-        return f"Key press failed: {e}"
+
+# One line per window: id, class, pid, active, x, y, width, height, title.
+# A fixed script: nothing the model writes is interpolated into it.
+_LIST_WINDOWS = r"""
+active=$(xdotool getactivewindow 2>/dev/null || echo 0)
+for w in $(xdotool search --onlyvisible --name '' 2>/dev/null); do
+  title=$(xdotool getwindowname "$w" 2>/dev/null) || continue
+  [ -n "$title" ] || continue
+  cls=$(xprop -id "$w" WM_CLASS 2>/dev/null | sed -n 's/.*", "\(.*\)"$/\1/p')
+  pid=$(xprop -id "$w" _NET_WM_PID 2>/dev/null | sed -n 's/.* = //p')
+  eval "$(xdotool getwindowgeometry --shell "$w" 2>/dev/null)"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$w" "$cls" "${pid:-}" \
+    "$([ "$w" = "$active" ] && echo 1 || echo 0)" "$X" "$Y" "$WIDTH" "$HEIGHT" "$title"
+done
+"""
+
+
+def _list_windows() -> list[dict]:
+    result = _desktop_run(["bash", "-c", _LIST_WINDOWS])
+    windows, seen = [], set()
+    for line in (result.stdout or "").splitlines():
+        parts = line.split("\t", 8)
+        if len(parts) != 9 or parts[0] in seen:
+            continue
+        seen.add(parts[0])
+        wid, cls, pid, active, x, y, w, h, title = parts
+        if cls.lower() in _SHELL_CLASSES:
+            continue
+        windows.append({
+            "id": int(wid), "cls": cls, "pid": pid, "active": active == "1",
+            "x": x, "y": y, "w": w, "h": h, "title": title,
+        })
+    return windows
+
+
+def _is_terminal(win: dict) -> bool:
+    return win["cls"].lower() in _TERMINAL_CLASSES
+
+
+def _resolve_window(spec: str, windows: list[dict]) -> tuple[dict | None, str]:
+    """The window *spec* names — an id (decimal or 0x hex), "terminal", or part
+    of a title or class — preferring the one that has focus. Returns
+    (window, note) or (None, why not)."""
+    spec = spec.strip()
+    if spec.lower().startswith("0x") or spec.isdigit():
+        try:
+            want = int(spec, 0)
+        except ValueError:
+            want = -1
+        matches = [w for w in windows if w["id"] == want]
+    elif spec.lower() in {"terminal", "the terminal", "term", "shell"}:
+        matches = [w for w in windows if _is_terminal(w)]
+    else:
+        low = spec.lower()
+        matches = [w for w in windows if low in w["title"].lower() or low == w["cls"].lower()]
+    if not matches:
+        open_list = "; ".join(f"{w['cls']} '{w['title']}'" for w in windows) or "none"
+        return None, f"No window matches {spec!r}. Open windows: {open_list}."
+    chosen = next((w for w in matches if w["active"]), matches[0])
+    note = f" ({len(matches)} matched; used the {'focused' if chosen['active'] else 'first'} one)" \
+        if len(matches) > 1 else ""
+    return chosen, note
+
+
+def _focus(win: dict) -> None:
+    _desktop_run(["xdotool", "windowactivate", "--sync", str(win["id"])], timeout=10)
+
+
+def _describe(win: dict) -> str:
+    return f"{win['cls'] or 'window'} '{win['title']}' (0x{win['id']:x})"
 
 
 @tool
 def desktop_list_windows() -> str:
-    """List all open windows on the sandbox desktop.
+    """List the windows open on the sandbox desktop: id, application, title,
+    position and size, and which one has keyboard focus (★).
 
-    Returns window ID, title, and position for each window.
+    Start here for any desktop task — it is cheap and exact. To act on a
+    window, pass its id, "terminal", or part of its title to desktop_type /
+    desktop_key.
     """
-    from prax.utils.shell import run_command
     try:
-        result = run_command(
-            ["sh", "-c", "DISPLAY=:99 xdotool search --name '' getwindowname %@ 2>/dev/null || true"],
-            timeout=10,
-        )
-        stdout = (result.stdout or "").strip()
-        if not stdout:
-            return "No windows open on the desktop."
-        return f"Open windows:\n{stdout}"
+        windows = _list_windows()
+    except DesktopUnavailable as e:
+        return f"No desktop: {e}."
     except Exception as e:
         return f"Window list failed: {e}"
+    if not windows:
+        return "No application windows are open on the desktop."
+    lines = [
+        f"{'★' if w['active'] else ' '} 0x{w['id']:x}  {w['cls'] or '?':<16} "
+        f"{w['x']},{w['y']} {w['w']}x{w['h']}  {w['title']}"
+        for w in windows
+    ]
+    return "Windows on the desktop (★ = has keyboard focus):\n" + "\n".join(lines)
+
+
+@tool
+def desktop_type(text: str, window: str = "", press_enter: bool = False) -> str:
+    """Type text into a window on the sandbox desktop, as if on the keyboard.
+
+    This is how to type into the user's terminal on the desktop: use
+    window="terminal" (or the window's id or part of its title) and
+    press_enter=True to run a command. The user sees it happen live in the
+    Desktop tab. To read what the command printed, use desktop_screenshot.
+
+    Args:
+        text: The text to type. For shortcuts and special keys use desktop_key.
+        window: Which window gets the keys — "terminal", an id from
+            desktop_list_windows, or part of a title. Empty = whatever has focus.
+        press_enter: Press Enter after typing (to run a command).
+    """
+    try:
+        target, note = None, ""
+        if window:
+            target, note = _resolve_window(window, _list_windows())
+            if target is None:
+                return note
+            _focus(target)
+        argv = ["xdotool", "type", "--clearmodifiers", "--delay", "12", "--", text]
+        result = _desktop_run(argv, timeout=max(15, len(text) // 20 + 10))
+        if result.returncode != 0:
+            return f"Type failed: {result.stderr or 'unknown error'}"
+        if press_enter:
+            _desktop_run(["xdotool", "key", "--clearmodifiers", "Return"])
+    except DesktopUnavailable as e:
+        return f"No desktop: {e}."
+    except Exception as e:
+        return f"Type failed: {e}"
+    where = f"into {_describe(target)}{note}" if target else "into the focused window"
+    return f"Typed {len(text)} characters {where}{' and pressed Enter' if press_enter else ''}."
+
+
+@tool
+def desktop_key(keys: str, window: str = "") -> str:
+    """Press keys or shortcuts on the sandbox desktop (xdotool key names).
+
+    Args:
+        keys: One or more key combinations separated by spaces, e.g. "Return",
+            "ctrl+c", "ctrl+shift+t", "alt+F4", "Tab Tab Return".
+        window: Which window gets them — "terminal", an id, or part of a title.
+            Empty = whatever has focus.
+    """
+    combos = keys.split()
+    if not combos or not all(_XDOTOOL_KEY.match(k) for k in combos):
+        return f"Not key names: {keys!r} (use xdotool names like Return, ctrl+c, alt+F4)."
+    try:
+        target, note = None, ""
+        if window:
+            target, note = _resolve_window(window, _list_windows())
+            if target is None:
+                return note
+            _focus(target)
+        result = _desktop_run(["xdotool", "key", "--clearmodifiers", *combos])
+        if result.returncode != 0:
+            return f"Key press failed: {result.stderr or 'unknown error'}"
+    except DesktopUnavailable as e:
+        return f"No desktop: {e}."
+    except Exception as e:
+        return f"Key press failed: {e}"
+    where = f" in {_describe(target)}{note}" if target else ""
+    return f"Pressed {keys}{where}."
+
+
+@tool
+def desktop_click(x: int, y: int, button: str = "left", clicks: int = 1) -> str:
+    """Click at screen coordinates on the sandbox desktop.
+
+    Get coordinates from desktop_screenshot (it reports them in screen
+    pixels) or from a window's position in desktop_list_windows.
+
+    Args:
+        x: Pixels from the left edge of the screen.
+        y: Pixels from the top.
+        button: "left", "right" or "middle".
+        clicks: 1 for a single click, 2 for a double click.
+    """
+    btn = {"left": "1", "middle": "2", "right": "3"}.get(button, "1")
+    argv = ["xdotool", "mousemove", str(int(x)), str(int(y)), "click"]
+    if clicks > 1:
+        argv += ["--repeat", str(min(int(clicks), 3))]
+    argv.append(btn)
+    try:
+        result = _desktop_run(argv)
+        if result.returncode != 0:
+            return f"Click failed: {result.stderr or 'unknown error'}"
+    except DesktopUnavailable as e:
+        return f"No desktop: {e}."
+    except Exception as e:
+        return f"Click failed: {e}"
+    return f"Clicked ({button}, {clicks}x) at ({x}, {y})."
 
 
 @tool
 def desktop_open(command: str) -> str:
-    """Launch an application on the sandbox desktop.
+    """Launch an application on the sandbox desktop, in the background.
 
-    The command runs in the background on DISPLAY :99.
-    Examples: "code-server", "xterm", "thunar /workspace"
+    Examples: "xterm", "thunar /workspace", "mousepad notes.txt".
 
     Args:
-        command: Shell command to launch the application.
+        command: The command line that starts the application.
     """
-    from prax.utils.shell import run_command
+    # Inside the container only; the command is an argument, not spliced in.
+    script = 'setsid bash -c "$1" >/dev/null 2>&1 </dev/null & echo $!'
     try:
-        result = run_command(
-            ["bash", "-c", f"DISPLAY=:99 {command} >/dev/null 2>&1 & echo $!"],
-            timeout=10,
-        )
+        result = _desktop_run(["bash", "-c", script, "desktop_open", command], timeout=10)
         if result.returncode != 0:
             return f"Launch failed: {result.stderr or 'unknown error'}"
-        pid = (result.stdout or "").strip()
-        return f"Launched: {command} (PID {pid})"
+    except DesktopUnavailable as e:
+        return f"No desktop: {e}."
     except Exception as e:
         return f"Launch failed: {e}"
+    return f"Launched: {command} (PID {(result.stdout or '').strip()}). Check it with desktop_list_windows."
+
+
+_SCREEN_PROMPT = """\
+This is a screenshot of a Linux desktop, {width}x{height} pixels. Coordinates
+are in this image's pixels, which are the screen's pixels.
+{question}
+Report:
+1. The windows you can see, and which one is in front.
+2. The text in the front window. For a terminal, copy its last lines verbatim.
+3. For anything the question asks about, its centre point as (x, y).
+Be exact. If you cannot read or locate something, say so instead of guessing.
+"""
+
+
+@tool
+def desktop_screenshot(question: str = "") -> str:
+    """Look at the sandbox desktop: the vision model describes what is on the
+    screen, copies the text of the front window (a terminal's output), and
+    gives screen coordinates for whatever *question* asks about.
+
+    Slower and costlier than desktop_list_windows — use it to read output or
+    see a GUI's state, and to confirm an action worked before telling the user
+    they can see it.
+
+    Args:
+        question: What you need to know, e.g. "what did the last command print
+            in the terminal?" or "where is the Save button?".
+    """
+    # JPEG keeps a 1920x1080 screen around 150-250 KB; base64 on stdout, so
+    # nothing is written outside the container.
+    script = (
+        "f=$(mktemp --suffix=.png) && scrot -o \"$f\" && "
+        "convert \"$f\" -quality 70 jpg:- | base64 -w0; "
+        "echo; convert \"$f\" -format '%w %h' info:; rm -f \"$f\""
+    )
+    try:
+        result = _desktop_run(["bash", "-c", script], timeout=20)
+        lines = (result.stdout or "").strip().splitlines()
+        if result.returncode != 0 or len(lines) < 2:
+            return f"Screenshot failed: {result.stderr or 'no image'}"
+        b64, size = lines[0], lines[-1].split()
+        width, height = (size + ["?", "?"])[:2]
+    except DesktopUnavailable as e:
+        return f"No desktop: {e}."
+    except Exception as e:
+        return f"Screenshot failed: {e}"
+    from prax.agent.vision_tools import analyze_image_impl
+    prompt = _SCREEN_PROMPT.format(
+        width=width, height=height,
+        question=f"Question: {question}" if question else "Describe the screen.",
+    )
+    try:
+        seen = analyze_image_impl(f"data:image/jpeg;base64,{b64}", prompt)
+    except Exception as e:
+        return f"Screenshot taken, but the vision model could not read it: {e}"
+    return f"Desktop ({width}x{height}):\n{seen}"
 
 
 # ---------------------------------------------------------------------------

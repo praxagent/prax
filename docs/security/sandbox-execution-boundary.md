@@ -19,7 +19,7 @@ that runs a model-authored string takes that path — see the Known gap below.
 | `data_query` (DuckDB) | container (same path; host never even loads duckdb) |
 | `lean_check` | container |
 | browser tools | the sandbox's Chromium over CDP |
-| `desktop_*` | **container only when `RUNNING_IN_DOCKER=true`** (the compose image); on a native install they run on the **Prax host** via `prax/utils/shell.py` — see the Known gap below |
+| `desktop_*` | **always the container** (since 2026-10-04): they call the sandbox client directly, not `prax/utils/shell.py`; with the sandbox off they refuse ("No desktop") |
 | `delegate_sandbox` (headless direct code-execution sub-agent) | container — writes+runs code via `sandbox_shell`; registered whenever `SANDBOX_ENABLED` |
 
 **The `prax_sandbox_client` dispatch has no host-`subprocess` fallback.** It
@@ -37,11 +37,11 @@ and that property is literally `settings.running_in_docker`
 `subprocess.run` on the Prax host. The native install (README host install,
 `make run-local-all`, `deploy/systemd/prax.service`) does not set
 `RUNNING_IN_DOCKER`, so there every caller of that helper executes on the host as
-the Prax OS user: all six `desktop_*` tools in `prax/agent/sandbox_tools.py`
-(`desktop_open` passes the model-supplied string to `bash -c`), plugin
-`caps.run_command` (`prax/plugins/capabilities.py`), and
-`prax/services/mermaid_validator.py`. No `desktop_*` tool is in
-`prax/agent/action_policy.py`'s `_HIGH` set, so nothing gates the call.
+the Prax OS user: plugin `caps.run_command` (`prax/plugins/capabilities.py`)
+and `prax/services/mermaid_validator.py`. (The six `desktop_*` tools were here
+too, with `desktop_open` passing a model-supplied string to `bash -c` on the
+host; since 2026-10-04 they always run in the container, through the sandbox
+client.)
 **Opt-in fix (2026-09-23):** `SANDBOX_ROUTE_COMMANDS=true` routes that helper into
 the sandbox whenever the sandbox is enabled, and raises — no host fallback — when
 the container is unreachable. Paths are translated through the directory Docker

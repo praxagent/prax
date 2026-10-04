@@ -75,6 +75,13 @@ This ledger is the honest complement to
 |---|---|---|---|
 | **Store, tools, TeamWork routes, public-share floor** | 🧪 | Unit- and integration-tested keyless (2026-10-03): versions and git commits per write, size and id limits (no path escape), the always-on exposure floor (refused without a person; "yes" not enough; the user's own words naming it, or a TeamWork approval, allow it; a timed grant does not), one decision is enough, expiry capped at 168 h, revoke, the `/shared` page served with `sandbox allow-scripts` and no network, an expired link gone. | Not run against a live ngrok tunnel, and the TeamWork viewer that renders `[artifact:<id>]` is in a separate TeamWork change. The live path (Prax publishes, TeamWork shows, a person approves a public link, the link opens from outside, expiry) still needs one run. |
 
+## Prax on the sandbox desktop (`desktop_*`, `DESKTOP_KERNEL_TOOLS`)
+
+| Thing | Status | Evidence | Gaps |
+|---|---|---|---|
+| Window list, typing into a window, keys, launch (`desktop_list_windows`, `desktop_type(window="terminal")`, `desktop_key`, `desktop_open`) | ✅ | **Verified live 2026-10-04** against the dev sandbox desktop through the real sandbox client: the list showed the focused xterm (★) and filtered panel furniture; `desktop_type("echo typed-by-prax > …", window="terminal", press_enter=True)` ran in that xterm (file created); a non-key string was refused; `desktop_open("xterm …")` opened a window. | Not yet run against production's sandbox. |
+| `desktop_screenshot` (screen → vision model, inline `data:` image) | 🧪 | Unit-tested with a fake client and a fake vision call. The live attempt on the dev tree reached OpenAI and was refused (the dev `.env` holds a placeholder key, so nothing was spent). | Confirm against production's vision path (`VISION_PROVIDER`/`VISION_MODEL` through the secrets proxy): does it copy a terminal's last lines verbatim and give usable click coordinates? |
+
 ## Coding-agent benchmark (`terminal_bench`)
 
 | Surface | Status | Verified | Not verified / needs |
