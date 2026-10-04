@@ -51,6 +51,22 @@ def test_every_write_is_a_commit_saying_who_and_what(ws):
     assert "library: human created note linear-algebra/lectures" in log
 
 
+def test_the_author_is_who_wrote_even_with_git_author_in_the_environment(ws, monkeypatch):
+    """Flask's app.run loads .env into the environment, and .env may set
+    GIT_AUTHOR_NAME for Prax's own commits. That outranks git config, so
+    every library write used to show that one author."""
+    monkeypatch.setenv("GIT_AUTHOR_NAME", "server-default")
+    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "server@example.com")
+    monkeypatch.setenv("GIT_COMMITTER_NAME", "server-default")
+    _note()
+    library_service.update_note(USER, "linear-algebra", "lectures", "eigenvalues",
+                                content="second draft", editor="prax", override_permission=True)
+    log = _git(ws, "log", "--format=%an <%ae> %cn|%s")
+    assert "Prax <prax@local> Prax|library: prax edited" in log
+    assert "You (TeamWork) <human@teamwork.local> You (TeamWork)|library: human created note" in log
+    assert "server-default" not in log
+
+
 def test_only_the_library_is_committed(ws):
     (ws / "active").mkdir()
     (ws / "active" / "unrelated.txt").write_text("not the library's")

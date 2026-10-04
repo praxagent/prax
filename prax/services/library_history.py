@@ -21,6 +21,7 @@ import contextlib
 import difflib
 import json
 import logging
+import os
 import re
 import secrets
 import shutil
@@ -53,8 +54,8 @@ def _library(root: Path) -> Path:
     return Path(root) / LIBRARY_DIR
 
 
-def _git(root: Path, *args: str, timeout: int = 20) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, timeout=timeout)
+def _git(root: Path, *args: str, timeout: int = 20, env: dict | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, timeout=timeout, env=env)
 
 
 @contextlib.contextmanager
@@ -77,11 +78,16 @@ def commit(root: Path, message: str, *, author: str | None = None) -> str | None
         return None
     who = author or library_actor.get()
     name, email = _AUTHORS.get(who, (who, "person@teamwork.local"))
+    # Set through the environment: GIT_AUTHOR_* outranks any config, and the
+    # server's own environment can carry them (Flask's app.run loads .env,
+    # which sets GIT_AUTHOR_NAME for Prax's workspace commits), which made
+    # every library write look like the same author.
+    env = {**os.environ, "GIT_AUTHOR_NAME": name, "GIT_AUTHOR_EMAIL": email,
+           "GIT_COMMITTER_NAME": name, "GIT_COMMITTER_EMAIL": email}
     with _git_lock:
         try:
             _git(root, "add", "-A", "--", LIBRARY_DIR)
-            r = _git(root, "-c", f"user.name={name}", "-c", f"user.email={email}",
-                     "commit", "-q", "--no-verify", "-m", message, "--", LIBRARY_DIR)
+            r = _git(root, "commit", "-q", "--no-verify", "-m", message, "--", LIBRARY_DIR, env=env)
             if r.returncode != 0:
                 if "nothing" not in (r.stdout + r.stderr).lower():
                     logger.warning("library commit failed: %s", (r.stderr or r.stdout)[:300])
