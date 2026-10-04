@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 
 _tracer = None  # lazily set by init_observability()
 
+# What a proxy returns when it cannot reach the host it was asked for.
+_GATEWAY_ERRORS = frozenset({502, 503, 504})
+
 
 def init_observability(service_name: str = "prax") -> None:
     """Initialize OpenTelemetry tracing with OTLP exporter.
@@ -32,9 +35,10 @@ def init_observability(service_name: str = "prax") -> None:
         logger.info("OpenTelemetry SDK not installed — tracing disabled")
         return
 
-    endpoint = os.environ.get(
-        "OTEL_EXPORTER_OTLP_ENDPOINT", "http://tempo:4318"
-    )
+    # Read at call time: tests reload prax.settings.
+    from prax.settings import settings
+
+    endpoint = (settings.otel_exporter_otlp_endpoint or "http://tempo:4318").rstrip("/")
 
     resource = Resource.create({
         "service.name": service_name,
@@ -49,8 +53,18 @@ def init_observability(service_name: str = "prax") -> None:
     try:
         probe_url = endpoint.rstrip("/")
         urllib.request.urlopen(f"{probe_url}/v1/traces", timeout=3)
-    except urllib.error.HTTPError:
-        pass  # 4xx/5xx means the endpoint is up — just rejecting empty POSTs
+    except urllib.error.HTTPError as e:
+        # The collector answering at all (405, 400…) means it is up. But a
+        # gateway error is a proxy speaking for a host it could not reach —
+        # HTTP_PROXY catches this probe too — and counting that as "up" left
+        # every export failing for the life of the process.
+        if e.code in _GATEWAY_ERRORS:
+            logger.warning(
+                "Tracing disabled: a proxy answered %s for %s, so the collector is "
+                "unreachable. Set OTEL_EXPORTER_OTLP_ENDPOINT to an address this "
+                "host can reach directly (listed in NO_PROXY).", e.code, endpoint,
+            )
+            return
     except Exception:
         logger.warning(
             "Tempo endpoint unreachable at %s — tracing disabled. "
