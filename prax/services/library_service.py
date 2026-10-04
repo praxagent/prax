@@ -1907,6 +1907,52 @@ def list_tag_tree(user_id: str) -> dict[str, Any]:
     return root
 
 
+def search_notes(user_id: str, query: str, space: str | None = None, limit: int = 20) -> list[dict]:
+    """Search note titles, tags and text. Every word of *query* must appear
+    somewhere in a note (a "quoted phrase" counts as one word). Title matches
+    rank above tag matches, which rank above body text; ties go to the most
+    recently edited. Each hit has a short snippet around its first match."""
+    terms = [t.strip('"').lower() for t in re.findall(r'"[^"]+"|\S+', query or "") if t.strip('"')]
+    if not terms:
+        return []
+    spaces_dir = _library_root(user_id) / SPACES_DIR
+    if not spaces_dir.exists():
+        return []
+    space_dirs = [_space_path(user_id, space)] if space else sorted(p for p in spaces_dir.iterdir() if p.is_dir())
+    hits: list[dict] = []
+    for space_dir in space_dirs:
+        notebooks_dir = space_dir / NOTEBOOKS_DIR
+        if not notebooks_dir.is_dir():
+            continue
+        for note_path in sorted(notebooks_dir.glob("*/*.md")):
+            try:
+                meta, body = _parse_frontmatter(note_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            title = str(meta.get("title") or note_path.stem)
+            tags = " ".join(str(t) for t in (meta.get("tags") or []))
+            low_title, low_tags, low_body = title.lower(), tags.lower(), body.lower()
+            score = 0
+            for term in terms:
+                in_title, in_tags, in_body = low_title.count(term), low_tags.count(term), low_body.count(term)
+                if not (in_title or in_tags or in_body):
+                    break
+                score += 10 * in_title + 4 * in_tags + min(in_body, 10)
+            else:
+                first = min((i for i in (low_body.find(t) for t in terms) if i >= 0), default=-1)
+                snippet = ""
+                if first >= 0:
+                    start = max(0, first - 80)
+                    snippet = ("…" if start else "") + " ".join(body[start:first + 120].split()) + "…"
+                hits.append({
+                    "space": space_dir.name, "notebook": note_path.parent.name, "slug": note_path.stem,
+                    "title": title, "tags": meta.get("tags") or [], "snippet": snippet,
+                    "updated_at": str(meta.get("updated_at") or ""), "score": score,
+                })
+    hits.sort(key=lambda h: (h["score"], h["updated_at"]), reverse=True)
+    return hits[:max(1, int(limit))]
+
+
 def list_notes_by_tag_prefix(user_id: str, tag_prefix: str) -> list[dict]:
     """Return all notes whose tags include ``tag_prefix`` or any nested
     descendant (e.g., ``math`` matches ``math/algebra/linear``).

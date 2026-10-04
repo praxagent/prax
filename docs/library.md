@@ -509,7 +509,9 @@ Registered in the knowledge spoke and the course spoke (alongside the legacy
 
 **Notes**: `library_note_create`, `library_note_read`,
 `library_note_update`, `library_note_move`, `library_note_mark`,
-`library_notes_list`
+`library_notes_list`, `library_search` (words in titles, tags and text;
+every word must match, a "quoted phrase" counts as one; title hits rank
+first)
 
 **Raw / outputs / health**: `library_raw_capture`, `library_raw_list`,
 `library_raw_promote`, `library_outputs_write`, `library_outputs_list`,
@@ -554,6 +556,7 @@ through `../teamwork/src/teamwork/routers/library.py` at the standard
 
 | Method | Path | Purpose |
 |---|---|---|
+| `GET` | `/library/search?q=…&space=…&limit=…` | Search note titles, tags and text (`library_service.search_notes`) |
 | `POST` | `/library/spaces/{space}/notebooks` | Create notebook |
 | `PATCH` | `/library/spaces/{space}/notebooks/{n}` | Update notebook meta (sequenced, current_slug) |
 | `POST` | `/library/spaces/{space}/notebooks/{n}/reorder` | Batch reorder notes |
