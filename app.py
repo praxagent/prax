@@ -15,15 +15,17 @@ from prax.services.discord_service import start_bot as start_discord_bot
 from prax.services.identity_service import init_identity_db, migrate_legacy_users, reconcile_workspace_dir
 from prax.services.scheduler_service import init_scheduler
 from prax.services.state_paths import ensure_conversation_db
-from prax.settings import _export_proxy_env_from_dotenv, settings
+from prax.settings import _export_dotenv_config, settings
 from prax.token_management import get_encoding_for_model
 
-# Route the LIVE server's egress through the secrets-proxy when configured: export
-# the proxy/TLS vars (HTTPS_PROXY, CA bundle) from .env into os.environ before any
-# HTTP client is built. Only the server does this — NOT settings.py, which every
-# process (tests/CLI/eval) imports. Never exports a secret (allow-list only).
+# Export .env into the LIVE server's environment, credentials excepted, before any
+# HTTP client is built: the proxy/TLS vars route egress through the secrets-proxy,
+# and per-component overrides and libraries read the environment. Only the server
+# does this — NOT settings.py, which every process (tests/CLI/eval) imports.
+# app.run() below is told not to load .env itself: Flask's default copies every
+# key into the environment, where every child process inherits it.
 # See docs/security/deployment-topology.md.
-_export_proxy_env_from_dotenv()
+_withheld = _export_dotenv_config()
 
 # ...and keep Prax's proxy credential out of every process it starts: children
 # get the proxy URL without it, or their own identity (CHILD_PROXY_URL).
@@ -297,8 +299,14 @@ app = create_app()
 
 if __name__ == '__main__':
     debug_bool = settings.debug
+    if _withheld:
+        logging.getLogger(__name__).info(
+            "%d credential(s) from .env kept out of the environment (settings read them)", len(_withheld))
     app.run(
         debug=debug_bool,
+        # Not Flask's .env loading: it would put every credential into the
+        # environment (_export_dotenv_config above exports the rest).
+        load_dotenv=False,
         host=settings.bind_host,  # 127.0.0.1 by default; PRAX_HOST=0.0.0.0 to expose (see settings)
         port=settings.port,
         exclude_patterns=[

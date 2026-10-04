@@ -9,7 +9,7 @@ import pytest
 #
 # Runs once, at conftest import, before any test module is collected.
 #
-# app.py calls _export_proxy_env_from_dotenv() at MODULE IMPORT, copying
+# app.py calls _export_dotenv_config() at MODULE IMPORT, copying
 # HTTPS_PROXY from the developer's .env into os.environ.  settings.py says in
 # as many words that doing this in tests is wrong, but any test that merely
 # imports `app` triggered it, and from then on every request in the session went
@@ -32,6 +32,11 @@ import pytest
 for _proxy_var in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
     os.environ[_proxy_var] = ""
     os.environ.pop(_proxy_var.lower(), None)
+# Nothing else from the developer's .env either: app.py exports .env's
+# non-secret entries (ORCHESTRATOR_TIER and the like) at import, which would make
+# local runs differ from CI, which has no .env. test_proxy_env_export.py clears
+# this to test the export itself.
+os.environ["PRAX_SKIP_DOTENV_EXPORT"] = "1"
 # Never start the cover-image thread.  With the proxy gone a fake key fails
 # fast anyway, but threads that outlive the test that started them made the
 # suite's memory numbers wrong: their ~3 MB responses landed during whatever

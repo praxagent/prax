@@ -829,7 +829,9 @@ incidental:
   leaves you staring at an empty workspace wondering what broke. The ordering
   is the difference between a wired-up workspace and a confusing one.
 - **No `EnvironmentFile`.** Prax reads `.env` from its working directory and
-  exports `HTTPS_PROXY` itself (`app.py` → `_export_proxy_env_from_dotenv`).
+  exports what reads the environment needs itself — `HTTPS_PROXY`,
+  per-component overrides — but never a credential (`app.py` →
+  `_export_dotenv_config`; Flask's own `.env` loading is switched off).
   systemd's `EnvironmentFile` parser does not handle quoted values the way a
   shell does, so pointing it at `.env` would silently mis-set variables.
 

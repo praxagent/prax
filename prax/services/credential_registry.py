@@ -87,6 +87,8 @@ REGISTRY: tuple[Credential, ...] = (
     Credential("JINA_API_KEY", "Jina AI", "URL reader + Jina search",
                PROXY_FORWARD, host="r.jina.ai", inject="bearer",
                caveat="Reader works keyless; the key only raises quota / enables Jina search."),
+    Credential("SENDGRID_API_KEY", "SendGrid", "Phone reader: e-mail an article's link on request",
+               PROXY_FORWARD, host="api.sendgrid.com", inject="bearer"),
     Credential("GOOGLE_API_KEY", "Google", "Programmable Search / Gemini vision / other Google APIs",
                PROXY_FORWARD, host="www.googleapis.com", inject="query:key",
                caveat="Deliberately left UNSET (2026-07-22): Google Cloud billing is NOT a "

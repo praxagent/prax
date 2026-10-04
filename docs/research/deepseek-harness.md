@@ -18,7 +18,11 @@ worth taking:
    from child environments. Prax never puts keys there in the first place: no
    `EnvironmentFile`, pydantic reads `.env` without exporting it, and
    `_export_proxy_env_from_dotenv` (`prax/settings.py`) exports only an
-   allowlist of proxy and CA variables. In keyless mode the provider keys are
+   allowlist of proxy and CA variables. *(Correction, 2026-10-04: not so in
+   practice. Flask's `app.run()` loads the whole `.env` into the environment
+   unless told not to, so every key was there and children inherited it.
+   Fixed: Flask's loading is off and `_export_dotenv_config` exports `.env`
+   minus credentials.)* In keyless mode the provider keys are
    not in Prax at all. **The gap:** `HTTPS_PROXY` is on that allowlist. Once
    the forward-proxy token is enabled (prax-secrets-proxy #5), it carries
    `http://prax:<token>@…`, and all 69 host subprocess calls would inherit
@@ -111,7 +115,7 @@ retry is a new call with a wider policy, and needs approval.
 | Monotonic guards that can only deny, run after the hooks and permission layer | **The same idea** as hard floors (#247), enforced after earned trust, auto-approve and every other risk-lowering rule |
 | No answer to an approval means deny | **The same** (fail-closed approvals; parked approvals, #248, for unattended runs) |
 | Sandboxes report `full` / `partial` enforcement | **Missing.** The systemd drop-ins and the proxy route are opt-in and installed by hand; Prax does not check them from inside |
-| Child processes get a scrubbed environment | **Keys never enter Prax's environment** (only a proxy/CA allowlist is exported). Gap: `HTTPS_PROXY` will carry the proxy token once #5 is enabled, and children inherit it |
+| Child processes get a scrubbed environment | **Keys never enter Prax's environment** (only a proxy/CA allowlist is exported; *corrected 2026-10-04: Flask's `app.run()` exported the whole `.env` until then*). Gap: `HTTPS_PROXY` will carry the proxy token once #5 is enabled, and children inherit it |
 | Repeated-call reminders at 3/5/8, advisory only | Hard limits (spoke-call limit, failure limit, cost and time budgets, #240/#243), no reminder first |
 | No network policy in the sandbox | Egress decided per host, method and path, out of process (secrets-proxy egress policy, sandbox egress gate) |
 | Keys held by the harness | Keyless Prax: real keys live only in the secrets proxy |
