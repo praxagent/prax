@@ -348,6 +348,32 @@ to modify this specific note?"
   `override_permission=true` on the API call.  That's the human's
   explicit per-turn consent, so it bypasses the gate without requiring
   the persistent `prax_may_edit: true` flag.
+- **Outside agents too.** The gate applies to any editor other than
+  `human`: Prax, and an agent writing over TeamWork's MCP server (which
+  passes its name as the editor).
+
+## History, trash and safe saves (`prax/services/library_history.py`)
+
+- **Every write is a commit.** After a library write succeeds, what changed
+  under `library/` — and only that — is committed in the workspace's git
+  repo, with who and what: `library: human edited linear-algebra/lectures/eigenvalues`,
+  authored "You (TeamWork)" for UI writes, "Prax" for his, or the outside
+  agent's name. A write made of writes (deleting a space that archives its
+  notes) is one commit. A failed commit is logged and never fails the write.
+- **History per note.** The versions of a note (following renames), its text
+  at any of them with a diff against now, and restoring an old version as a
+  new edit, so history stays linear.
+- **Trash.** Deleting a note, notebook, space or space file moves it to
+  `library/.trash/<id>/` with a manifest of where it came from. Restore puts
+  it back, and refuses rather than overwrite something now in its place or
+  restore into a notebook or space that is itself in the trash. Items older
+  than `LIBRARY_TRASH_DAYS` (default 30; 0 = keep forever) are purged.
+- **No silent overwrites.** A save carries the `updated_at` it started from
+  (`expected_updated_at`); if the note changed since — someone, or Prax,
+  saved in between — it is refused with `409` and the current note, instead
+  of the last save quietly winning.
+- **Live refresh.** Each write tells TeamWork (names only, never content), so
+  a note or board someone has open refreshes.
 
 ### Proactive engagement on unlock
 
@@ -560,8 +586,14 @@ through `../teamwork/src/teamwork/routers/library.py` at the standard
 | `DELETE` | `/library/spaces/{space}/notebooks/{n}` | Delete empty notebook |
 | `POST` | `/library/notes` | Create note (defaults to `author: human` — the UI is the caller) |
 | `GET` | `/library/notes/{space}/{n}/{slug}` | Read note |
-| `PATCH` | `/library/notes/{space}/{n}/{slug}` | Update note |
-| `DELETE` | `/library/notes/{space}/{n}/{slug}` | Delete note |
+| `PATCH` | `/library/notes/{space}/{n}/{slug}` | Update note (`expected_updated_at` → `409` with the current note on a stale save) |
+| `DELETE` | `/library/notes/{space}/{n}/{slug}` | Delete note (to the trash) |
+| `GET` | `/library/notes/{space}/{n}/{slug}/history` | Versions of a note |
+| `GET` | `/library/notes/{space}/{n}/{slug}/history/{commit}` | A version, with a diff against now |
+| `POST` | `/library/notes/{space}/{n}/{slug}/history/{commit}/restore` | Bring a version back as a new edit |
+| `GET` | `/library/trash` | Deleted items, newest first |
+| `POST` | `/library/trash/{id}/restore` | Put one back |
+| `DELETE` | `/library/trash/{id}` | Delete one for good |
 | `PATCH` | `/library/notes/{space}/{n}/{slug}/move` | Move note |
 | `PATCH` | `/library/notes/{space}/{n}/{slug}/editable` | Toggle `prax_may_edit` |
 | `PATCH` | `/library/notes/{space}/{n}/{slug}/status` | Mark todo/done |
