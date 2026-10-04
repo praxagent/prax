@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.50.0](https://github.com/praxagent/prax/compare/v0.49.1...v0.50.0) (2026-10-04)
+
+
+### Features
+
+* Library history, trash and safe saves ([#270](https://github.com/praxagent/prax/issues/270)) ([72e64ac](https://github.com/praxagent/prax/commit/72e64ac7bde31a242d2115278ed86058aed652e0))
+* Prax works on the sandbox desktop with the user — and stops claiming he typed where he didn't ([#266](https://github.com/praxagent/prax/issues/266)) ([dfc1e0b](https://github.com/praxagent/prax/commit/dfc1e0b03f020866bfb6bae659dff04fb7136681))
+* search the Library — for Prax and for the UI ([#271](https://github.com/praxagent/prax/issues/271)) ([24384d2](https://github.com/praxagent/prax/commit/24384d2858adb92ff2e6750b7bc04358395d09cb))
+
+
+### Bug Fixes
+
+* a Kanban card or schedule prompt is not the user saying yes ([#269](https://github.com/praxagent/prax/issues/269)) ([b77d113](https://github.com/praxagent/prax/commit/b77d113a6fa6481331b66417c5323a3c679612f5))
+* traces reach Tempo on a native deploy, and a deploy that can't restart says so ([#264](https://github.com/praxagent/prax/issues/264)) ([64d04e7](https://github.com/praxagent/prax/commit/64d04e79f3503f0d8828d12d2f1bfeb78249ab37))
+
 ## [0.49.1](https://github.com/praxagent/prax/compare/v0.49.0...v0.49.1) (2026-10-04)
 
 
