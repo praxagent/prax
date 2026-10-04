@@ -316,17 +316,37 @@ def spoke_governance_enforced() -> bool:
         return False
 
 
+# Turns nobody is present for. Their "user message" is a schedule's prompt or
+# a Kanban card, written earlier and possibly by an agent (any MCP client with
+# a space key can add a card), not a person speaking now.
+_UNATTENDED_SOURCES = frozenset({"scheduler", "task_runner"})
+
+
+def _attended_user_message() -> str:
+    """The user's own words this turn, or "" when nobody is present.
+
+    Consent read from a message ("share report.pdf publicly", "click the Buy
+    button") means a person said it just now. In a scheduler or task-runner
+    turn that is never true, so the text never counts as consent there; the
+    decision goes to a person (parked, when out-of-band approvals are on).
+    """
+    from prax.agent.user_context import current_turn_source, current_user_message
+    if current_turn_source.get() in _UNATTENDED_SOURCES:
+        return ""
+    return current_user_message.get("")
+
+
 def _user_explicitly_requested_action(tool_name: str) -> bool:
     """True when the user's own message explicitly requested *tool_name*'s
     browser interaction — see ``_USER_ACTION_VERB_PATTERN`` for the rule.
 
     The user message is the only trusted text here; tool results are never
-    consulted, so fetched content cannot satisfy this check.
+    consulted, so fetched content cannot satisfy this check, and neither can
+    the prompt of an unattended turn (see :func:`_attended_user_message`).
     """
     if tool_name not in _BROWSER_AUTO_APPROVE_TOOLS:
         return False
-    from prax.agent.user_context import current_user_message
-    msg = current_user_message.get("")
+    msg = _attended_user_message()
     if not msg:
         return False
     return bool(_USER_ACTION_VERB_PATTERN.search(msg) and _BROWSER_OBJECT_PATTERN.search(msg))
@@ -942,7 +962,6 @@ def _floor_gate(state: TurnGovernanceState, tool_name: str, kwargs: dict,
     action and its target. Each call is decided on its own.
     """
     from prax.agent import hard_floors, human_approval
-    from prax.agent.user_context import current_user_message
 
     call_key = _trifecta_key(tool_name, kwargs)
     target = hard_floors._target(kwargs)
@@ -971,7 +990,7 @@ def _floor_gate(state: TurnGovernanceState, tool_name: str, kwargs: dict,
         if decision.message.startswith("PARKED"):
             return decision.message  # the model must say the task is waiting, not refused
         return hard_floors.refusal(tool_name, target, approvals=True)
-    if hard_floors.user_named_it(tool_name, kwargs, current_user_message.get("")):
+    if hard_floors.user_named_it(tool_name, kwargs, _attended_user_message()):
         state.human_approved.add(call_key)
         state.audit.append(log_action(
             tool_name, RiskLevel.HIGH, kwargs,

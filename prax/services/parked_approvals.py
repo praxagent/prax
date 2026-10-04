@@ -146,9 +146,9 @@ def _resume(entry: dict, decided_by: str) -> None:
         pre_token = current_preapproved.set(preapproved)
         try:
             if kind == "schedule":
-                from prax.services.scheduler_service import _on_schedule_fire
-                _on_schedule_fire(entry["user_id"], args["schedule_id"], args["prompt"],
-                                  args.get("channel"))
+                from prax.services.scheduler_service import _on_fire
+                _on_fire(entry["user_id"], args["schedule_id"], args["prompt"],
+                         args.get("channel"))
             elif kind == "task_pickup":
                 from prax.services.task_runner_service import _run_pickup
                 _run_pickup(entry["user_id"], args["pickup"])
