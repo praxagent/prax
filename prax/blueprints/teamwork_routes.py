@@ -5,7 +5,7 @@ import hashlib
 import logging
 import threading
 
-from flask import Blueprint, Flask, jsonify, request
+from flask import Blueprint, Flask, g, jsonify, request
 
 from prax.blueprints.inbound_auth import require_prax_api_key
 
@@ -14,6 +14,24 @@ logger = logging.getLogger(__name__)
 teamwork_routes = Blueprint("teamwork", __name__)
 # Inbound credential check — a no-op until PRAX_API_KEY is set (see inbound_auth).
 teamwork_routes.before_request(require_prax_api_key)
+
+
+@teamwork_routes.before_request
+def _library_writes_are_the_users():
+    """A write through the Library routes comes from TeamWork's UI, so from
+    the person: their commits say so. A write that names its own editor or
+    author (an MCP client's, a refine Prax applies) says so itself."""
+    if request.path.startswith("/teamwork/library"):
+        from prax.services.library_history import library_actor
+        g.library_actor_token = library_actor.set("human")
+
+
+@teamwork_routes.teardown_request
+def _library_actor_reset(_exc=None):
+    token = g.pop("library_actor_token", None)
+    if token is not None:
+        from prax.services.library_history import library_actor
+        library_actor.reset(token)
 
 
 @teamwork_routes.route("/teamwork/observability", methods=["GET"])
@@ -416,7 +434,10 @@ def library_update_note(space: str, notebook: str, slug: str):
             tags=data.get("tags"),
             editor=data.get("editor", "human"),
             override_permission=bool(data.get("override_permission", False)),
+            expected_updated_at=data.get("expected_updated_at"),
         )
+        if result.get("conflict"):
+            return jsonify(result), 409
         if "error" in result:
             return jsonify({"error": result["error"]}), 400
         return jsonify(result)
@@ -442,6 +463,72 @@ def library_delete_note(space: str, notebook: str, slug: str):
     except Exception:
         logger.exception("Failed to delete library note")
         return jsonify({"error": "Failed to delete note"}), 500
+
+
+@teamwork_routes.route(
+    "/teamwork/library/notes/<space>/<notebook>/<slug>/history",
+    methods=["GET"],
+)
+def library_note_history(space: str, notebook: str, slug: str):
+    """Versions of a note (a commit per save), newest first."""
+    from prax.services import library_service
+    result = library_service.note_history(_get_teamwork_user_id(), space, notebook, slug)
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@teamwork_routes.route(
+    "/teamwork/library/notes/<space>/<notebook>/<slug>/history/<commit>",
+    methods=["GET"],
+)
+def library_note_version(space: str, notebook: str, slug: str, commit: str):
+    """A note as it was at one version, with a diff against now."""
+    from prax.services import library_service
+    result = library_service.note_version(_get_teamwork_user_id(), space, notebook, slug, commit)
+    if "error" in result:
+        return jsonify(result), 404
+    return jsonify(result)
+
+
+@teamwork_routes.route(
+    "/teamwork/library/notes/<space>/<notebook>/<slug>/history/<commit>/restore",
+    methods=["POST"],
+)
+def library_note_restore(space: str, notebook: str, slug: str, commit: str):
+    """Bring an old version back, as a new edit."""
+    from prax.services import library_service
+    result = library_service.restore_note_version(
+        _get_teamwork_user_id(), space, notebook, slug, commit, editor="human")
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@teamwork_routes.route("/teamwork/library/trash", methods=["GET"])
+def library_trash_list():
+    """Deleted notes, notebooks, spaces and space files, newest first."""
+    from prax.services import library_service
+    return jsonify({"items": library_service.trash_list(_get_teamwork_user_id())})
+
+
+@teamwork_routes.route("/teamwork/library/trash/<trash_id>/restore", methods=["POST"])
+def library_trash_restore(trash_id: str):
+    from prax.services import library_service
+    result = library_service.trash_restore(_get_teamwork_user_id(), trash_id)
+    if "error" in result:
+        return jsonify(result), 409 if "already" in result["error"] or "gone" in result["error"] else 404
+    return jsonify(result)
+
+
+@teamwork_routes.route("/teamwork/library/trash/<trash_id>", methods=["DELETE"])
+def library_trash_purge(trash_id: str):
+    """Delete one trashed item for good."""
+    from prax.services import library_service
+    result = library_service.trash_purge(_get_teamwork_user_id(), trash_id)
+    if "error" in result:
+        return jsonify(result), 404
+    return jsonify(result)
 
 
 @teamwork_routes.route(

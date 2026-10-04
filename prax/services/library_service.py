@@ -36,16 +36,20 @@ without risking their own writing being overwritten.
 """
 from __future__ import annotations
 
+import functools
+import inspect
 import logging
 import mimetypes
 import re
 import uuid
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from prax.services import library_history
 from prax.services.workspace_service import workspace_root
 
 logger = logging.getLogger(__name__)
@@ -165,6 +169,69 @@ cards with due dates actually ping you.
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Every write is recorded: one git commit, and a nudge to TeamWork
+# ---------------------------------------------------------------------------
+
+_in_write: ContextVar[bool] = ContextVar("library_in_write", default=False)
+_WHERE_ARGS = ("project", "space", "notebook", "slug", "filename", "deck_slug", "title")
+
+
+def _recorded(action: str):
+    """After a successful library write, commit what changed (only the
+    outermost write commits, so a write made of writes is one commit) and
+    tell TeamWork, so a note someone has open refreshes. Never fails the
+    write itself."""
+    def decorate(fn):
+        sig = inspect.signature(fn)
+
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            if _in_write.get():
+                return fn(*args, **kwargs)
+            token = _in_write.set(True)
+            try:
+                result = fn(*args, **kwargs)
+            finally:
+                _in_write.reset(token)
+            ok = bool(result) and not (isinstance(result, dict) and "error" in result)
+            if ok:
+                try:
+                    bound = sig.bind_partial(*args, **kwargs).arguments
+                    who = bound.get("editor") or bound.get("author") or library_history.library_actor.get()
+                    where = "/".join(str(bound[k]) for k in _WHERE_ARGS
+                                     if bound.get(k) and k != "title") or str(bound.get("title") or "")
+                    user_id = bound.get("user_id")
+                    if user_id:
+                        library_history.commit(Path(workspace_root(user_id)), f"library: {who} {action} {where}".strip(),
+                                               author=who)
+                        _announce(user_id, action, bound, who)
+                except Exception:
+                    logger.debug("recording a library write failed", exc_info=True)
+            return result
+        return wrapper
+    return decorate
+
+
+def _announce(user_id: str, action: str, bound: dict, who: str) -> None:
+    """Best effort: tell TeamWork the library changed, off the request path."""
+    try:
+        from prax.services.teamwork_service import get_teamwork_client
+        tw = get_teamwork_client()
+        if not getattr(tw, "enabled", False):
+            return
+        payload = {
+            "action": action, "actor": who,
+            "space": bound.get("project") or bound.get("space") or "",
+            "notebook": bound.get("notebook") or "", "slug": bound.get("slug") or "",
+        }
+        import threading
+        threading.Thread(target=tw.notify_library_changed, args=(payload,),
+                         name="prax-library-changed", daemon=True).start()
+    except Exception:
+        logger.debug("announcing a library write failed", exc_info=True)
 
 def _library_root(user_id: str) -> Path:
     return Path(workspace_root(user_id)) / LIBRARY_DIR
@@ -341,6 +408,7 @@ def _normalize_wikilink_target(
 # Projects
 # ---------------------------------------------------------------------------
 
+@_recorded("created space")
 def create_space(
     user_id: str,
     name: str,
@@ -429,6 +497,7 @@ _PROJECT_STATUSES = {"active", "paused", "completed", "archived"}
 _REMINDER_CHANNELS = {"all", "sms", "discord", "teamwork"}
 
 
+@_recorded("updated space")
 def update_space(
     user_id: str,
     project: str,
@@ -617,6 +686,7 @@ def expand_lesson_stubs(
     ).start()
 
 
+@_recorded("created learning space")
 def create_learning_space(
     user_id: str,
     subject: str,
@@ -763,6 +833,7 @@ def get_space_model(user_id: str, project: str) -> str | None:
         return None
 
 
+@_recorded("set the model of")
 def set_space_model(user_id: str, project: str, model: str | None) -> dict:
     """Pin a model to this space, or clear it to inherit the global setting.
 
@@ -914,6 +985,7 @@ def _downsize_cover(image_bytes: bytes, ext: str) -> tuple[bytes, str]:
     return image_bytes, ext
 
 
+@_recorded("set the cover of")
 def save_space_cover(
     user_id: str,
     project: str,
@@ -959,6 +1031,7 @@ def get_space_cover_path(user_id: str, project: str) -> Path | None:
     return proj_dir / fn
 
 
+@_recorded("removed the cover of")
 def delete_space_cover(user_id: str, project: str) -> dict[str, Any]:
     """Remove a space's cover image."""
     proj_dir = _space_path(user_id, project)
@@ -1098,6 +1171,7 @@ def list_spaces(user_id: str) -> list[dict]:
     return projects
 
 
+@_recorded("deleted space")
 def delete_space(
     user_id: str,
     project: str,
@@ -1136,17 +1210,17 @@ def delete_space(
                     )
                     archived_count += 1
 
-    import shutil
-    shutil.rmtree(proj)
+    trashed = library_history.to_trash(Path(workspace_root(user_id)), proj, kind="space", label=project)
     rebuild_index(user_id)
     logger.info(
-        "library: deleted space %s for user %s (archived %d notes)",
-        project, user_id, archived_count,
+        "library: deleted space %s for user %s (archived %d notes; in the trash as %s)",
+        project, user_id, archived_count, trashed["id"],
     )
     return {
         "status": "deleted",
         "project": project,
         "archived_notes": archived_count,
+        "trash_id": trashed["id"],
     }
 
 
@@ -1154,6 +1228,7 @@ def delete_space(
 # Notebooks
 # ---------------------------------------------------------------------------
 
+@_recorded("created notebook")
 def create_notebook(
     user_id: str,
     project: str,
@@ -1195,6 +1270,7 @@ def create_notebook(
     return {"status": "created", "notebook": meta}
 
 
+@_recorded("updated notebook")
 def update_notebook(
     user_id: str,
     project: str,
@@ -1308,6 +1384,7 @@ def list_notebooks(user_id: str, project: str | None = None) -> list[dict]:
     return out
 
 
+@_recorded("deleted notebook")
 def delete_notebook(user_id: str, project: str, notebook: str) -> dict[str, Any]:
     """Delete an empty notebook. Refuses if it still has notes."""
     try:
@@ -1319,15 +1396,15 @@ def delete_notebook(user_id: str, project: str, notebook: str) -> dict[str, Any]
     notes = list(nb.glob("*.md"))
     if notes:
         return {"error": f"Notebook '{project}/{notebook}' still has {len(notes)} notes"}
-    import shutil
-    shutil.rmtree(nb)
-    return {"status": "deleted", "notebook": f"{project}/{notebook}"}
+    trashed = library_history.to_trash(Path(workspace_root(user_id)), nb, kind="notebook", label=f"{project}/{notebook}")
+    return {"status": "deleted", "notebook": f"{project}/{notebook}", "trash_id": trashed["id"]}
 
 
 # ---------------------------------------------------------------------------
 # Notes
 # ---------------------------------------------------------------------------
 
+@_recorded("created note")
 def create_note(
     user_id: str,
     title: str,
@@ -1521,6 +1598,7 @@ def reorder_notes(
     return {"status": "reordered", "count": len(slug_order)}
 
 
+@_recorded("set the status of")
 def set_note_status(
     user_id: str,
     project: str,
@@ -1557,6 +1635,7 @@ def set_note_status(
     return {"status": "updated", "note_status": status}
 
 
+@_recorded("edited")
 def update_note(
     user_id: str,
     project: str,
@@ -1568,8 +1647,14 @@ def update_note(
     tags: list[str] | None = None,
     editor: str = "prax",
     override_permission: bool = False,
+    expected_updated_at: str | None = None,
 ) -> dict[str, Any]:
     """Update a note's content / title / tags.
+
+    ``expected_updated_at`` is the ``updated_at`` the editor started from.
+    When the note has changed since (someone, or Prax, saved in between), the
+    write is refused with ``conflict: True`` and the current note, instead of
+    silently overwriting the other edit.
 
     If ``editor`` is ``"prax"`` and the note is human-authored, the update
     is refused unless ``prax_may_edit`` is true on the note OR
@@ -1585,7 +1670,19 @@ def update_note(
     text = path.read_text(encoding="utf-8")
     meta, body = _parse_frontmatter(text)
 
-    if editor == "prax" and meta.get("author") == "human":
+    if expected_updated_at is not None and str(meta.get("updated_at") or "") != str(expected_updated_at):
+        return {
+            "error": (f"Note '{slug}' changed since it was opened "
+                      f"(last edited by {meta.get('last_edited_by') or 'someone'} "
+                      f"at {meta.get('updated_at')})."),
+            "conflict": True,
+            "current": {"meta": meta, "content": body},
+        }
+
+    # A person's note is theirs: no agent edits it until they allow it — Prax,
+    # or an outside agent writing over MCP (editor = its name). It used to
+    # check editor == "prax" only, and MCP edits arrived as "human".
+    if editor != "human" and meta.get("author") == "human":
         if not meta.get("prax_may_edit") and not override_permission:
             return {
                 "error": (
@@ -1619,6 +1716,7 @@ def update_note(
     return {"status": "updated", "note": meta}
 
 
+@_recorded("deleted")
 def delete_note(
     user_id: str,
     project: str,
@@ -1631,11 +1729,81 @@ def delete_note(
         return {"error": str(exc)}
     if not path.exists():
         return {"error": f"Note '{project}/{notebook}/{slug}' not found"}
-    path.unlink()
+    title = _parse_frontmatter(path.read_text(encoding="utf-8"))[0].get("title") or slug
+    trashed = library_history.to_trash(Path(workspace_root(user_id)), path, kind="note", label=str(title))
     rebuild_index(user_id)
-    return {"status": "deleted", "slug": slug}
+    return {"status": "deleted", "slug": slug, "trash_id": trashed["id"]}
 
 
+# ---------------------------------------------------------------------------
+# History and trash (prax/services/library_history.py does the git and files)
+# ---------------------------------------------------------------------------
+
+def _note_rel(user_id: str, project: str, notebook: str, slug: str) -> str:
+    path = _assert_in_library(user_id, _note_path(user_id, project, notebook, slug))
+    return str(path.relative_to(_library_root(user_id)))
+
+
+def note_history(user_id: str, project: str, notebook: str, slug: str) -> dict[str, Any]:
+    """The versions of a note, newest first."""
+    try:
+        rel = _note_rel(user_id, project, notebook, slug)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    return {"versions": library_history.history(Path(workspace_root(user_id)), rel)}
+
+
+def note_version(user_id: str, project: str, notebook: str, slug: str, commit: str) -> dict[str, Any]:
+    """A note as it was at *commit*, with a diff against what it is now."""
+    try:
+        rel = _note_rel(user_id, project, notebook, slug)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    old = library_history.version(Path(workspace_root(user_id)), rel, commit)
+    if old is None:
+        return {"error": f"No version {commit!r} of '{slug}'"}
+    old_meta, old_body = _parse_frontmatter(old)
+    current = _assert_in_library(user_id, _note_path(user_id, project, notebook, slug))
+    now_body = _parse_frontmatter(current.read_text(encoding="utf-8"))[1] if current.exists() else ""
+    return {"commit": commit, "meta": old_meta, "content": old_body,
+            "diff": library_history.diff(old_body, now_body, old_label=commit, new_label="now")}
+
+
+def restore_note_version(user_id: str, project: str, notebook: str, slug: str, commit: str,
+                         *, editor: str = "human") -> dict[str, Any]:
+    """Bring back an old version as a new edit (history stays linear)."""
+    old = note_version(user_id, project, notebook, slug, commit)
+    if "error" in old:
+        return old
+    return update_note(user_id, project, notebook, slug, content=old["content"],
+                       title=old["meta"].get("title"), editor=editor,
+                       override_permission=(editor == "human"))
+
+
+def trash_list(user_id: str) -> list[dict]:
+    return library_history.list_trash(Path(workspace_root(user_id)))
+
+
+@_recorded("restored from the trash")
+def trash_restore(user_id: str, trash_id: str) -> dict[str, Any]:
+    try:
+        result = library_history.restore(Path(workspace_root(user_id)), trash_id)
+    except KeyError as exc:
+        return {"error": str(exc).strip("'\"")}
+    if "error" not in result:
+        rebuild_index(user_id)
+    return result
+
+
+@_recorded("emptied from the trash")
+def trash_purge(user_id: str, trash_id: str) -> dict[str, Any]:
+    try:
+        return library_history.purge(Path(workspace_root(user_id)), trash_id)
+    except KeyError as exc:
+        return {"error": str(exc).strip("'\"")}
+
+
+@_recorded("moved")
 def move_note(
     user_id: str,
     from_project: str,
@@ -1670,6 +1838,7 @@ def move_note(
     return {"status": "moved", "note": meta}
 
 
+@_recorded("changed edit permission on")
 def set_prax_may_edit(
     user_id: str,
     project: str,
@@ -2113,6 +2282,7 @@ def read_schema(user_id: str) -> str:
     return path.read_text(encoding="utf-8") if path.exists() else _DEFAULT_LIBRARY_MD
 
 
+@_recorded("updated the library schema")
 def write_schema(user_id: str, content: str) -> dict[str, Any]:
     """Overwrite LIBRARY.md with the provided content."""
     ensure_library(user_id)
@@ -2205,6 +2375,7 @@ def get_raw(user_id: str, slug: str) -> dict | None:
     return {"meta": meta, "content": body}
 
 
+@_recorded("promoted")
 def promote_raw(
     user_id: str,
     raw_slug: str,
@@ -2258,6 +2429,7 @@ def promote_raw(
     return {"status": "promoted", "note": result["note"]}
 
 
+@_recorded("deleted raw capture")
 def delete_raw(user_id: str, slug: str) -> dict[str, Any]:
     """Delete a raw capture without promoting it."""
     try:
@@ -2274,6 +2446,7 @@ def delete_raw(user_id: str, slug: str) -> dict[str, Any]:
 # Outputs — generated briefs, reports, answers
 # ---------------------------------------------------------------------------
 
+@_recorded("wrote output")
 def write_output(
     user_id: str,
     title: str,
@@ -2334,6 +2507,7 @@ def get_output(user_id: str, slug: str) -> dict | None:
     return {"meta": meta, "content": body}
 
 
+@_recorded("deleted output")
 def delete_output(user_id: str, slug: str) -> dict[str, Any]:
     """Delete a generated output."""
     try:
@@ -2368,6 +2542,7 @@ def delete_output(user_id: str, slug: str) -> dict[str, Any]:
 #   the workspace archive dir for users who want to keep the
 #   source-of-truth PDF alongside the extracted text.
 
+@_recorded("archived")
 def archive_capture(
     user_id: str,
     title: str,
@@ -2447,6 +2622,7 @@ def get_archive(user_id: str, slug: str) -> dict | None:
     return {"meta": meta, "content": body}
 
 
+@_recorded("deleted archived")
 def delete_archive(user_id: str, slug: str) -> dict:
     """Remove an archive entry.  Does not touch the original binary
     in the workspace archive dir — that's the user's to manage."""
@@ -3006,6 +3182,7 @@ def get_flashcard_deck(user_id: str, space: str, deck_slug: str) -> dict | None:
     return None
 
 
+@_recorded("created deck")
 def create_flashcard_deck(
     user_id: str, space: str, title: str, slug: str | None = None,
 ) -> dict:
@@ -3029,6 +3206,7 @@ def create_flashcard_deck(
     return new_deck
 
 
+@_recorded("deleted deck")
 def delete_flashcard_deck(user_id: str, space: str, deck_slug: str) -> bool:
     """Delete a deck and all its cards. Returns True if found and deleted."""
     data = _load_flashcards(user_id, space)
@@ -3040,6 +3218,7 @@ def delete_flashcard_deck(user_id: str, space: str, deck_slug: str) -> bool:
     return True
 
 
+@_recorded("added a card to")
 def add_flashcard(
     user_id: str,
     space: str,
@@ -3069,6 +3248,7 @@ def add_flashcard(
     return {"error": f"Deck '{deck_slug}' not found"}
 
 
+@_recorded("edited a card in")
 def update_flashcard(
     user_id: str,
     space: str,
@@ -3103,6 +3283,7 @@ def update_flashcard(
     return None
 
 
+@_recorded("deleted a card from")
 def delete_flashcard(
     user_id: str, space: str, deck_slug: str, card_id: str,
 ) -> bool:
@@ -3122,6 +3303,7 @@ def delete_flashcard(
     return False
 
 
+@_recorded("added cards to")
 def add_flashcards_bulk(
     user_id: str,
     space: str,
@@ -3201,6 +3383,7 @@ def list_space_files(user_id: str, space: str) -> list[dict]:
     return results
 
 
+@_recorded("added a file to")
 def save_space_file(
     user_id: str,
     space: str,
@@ -3251,6 +3434,7 @@ def get_space_file(
     return p, mt or "application/octet-stream"
 
 
+@_recorded("deleted a file from")
 def delete_space_file(user_id: str, space: str, filename: str) -> bool:
     """Delete a file from the space. Returns ``True`` if deleted."""
     safe_name = _sanitize_filename(filename)
@@ -3261,6 +3445,6 @@ def delete_space_file(user_id: str, space: str, filename: str) -> bool:
         return False
     if not p.is_file():
         return False
-    p.unlink()
-    logger.info("library: deleted file %s from space %s", safe_name, space)
+    library_history.to_trash(Path(workspace_root(user_id)), p, kind="file", label=f"{space}/{safe_name}")
+    logger.info("library: moved file %s from space %s to the trash", safe_name, space)
     return True

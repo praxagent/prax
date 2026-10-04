@@ -206,6 +206,17 @@ class TeamWorkClient:
             logger.warning("Failed to send TeamWork message", exc_info=True)
             return None
 
+    def notify_library_changed(self, payload: dict) -> None:
+        """Tell TeamWork a Library item changed, so a note or board someone has
+        open refreshes. Names only (space, notebook, slug, action, who), never
+        content. Best effort: a missed nudge only means a later refresh."""
+        if not self._project_id:
+            return
+        try:
+            self._post(f"/projects/{self._project_id}/library-changed", json=payload)
+        except Exception:
+            logger.debug("library-changed notification failed", exc_info=True)
+
     def send_typing(
         self,
         channel: str = "general",

@@ -1379,6 +1379,9 @@ class AppSettings(BaseSettings):
     teamwork_overrides_path: str = Field(
         default=".env-teamwork-override", alias="TEAMWORK_OVERRIDES_PATH",
     )
+    # Deleted library items (notes, notebooks, spaces, space files) wait in
+    # library/.trash/ this many days before they are purged. 0 = keep forever.
+    library_trash_days: int = Field(default=30, alias="LIBRARY_TRASH_DAYS")
     tempo_url: str = Field(default="", alias="TEMPO_URL")  # e.g. "http://tempo:3200"
     # Where OpenTelemetry spans go (OTLP/HTTP; prax/observability/setup.py).
     # The default is the compose service name; a native deploy sets
