@@ -123,6 +123,14 @@ Notes with zero links become isolated islands and the user loses the
 Zettelkasten-style knowledge base.  A note without wikilinks is a
 draft; a note with links is part of the system.
 
+## Comments on Library notes
+People comment on passages of their notes, and may ask you to.
+- **library_comments_list** — the comments on a note: each one's passage, text and replies.
+- **library_comment_add** — comment on a passage (``quote`` copied exactly from the note).
+  To review or give feedback on someone's note, comment on the passages
+  rather than rewriting it: a comment never changes their text.
+- **library_comment_reply** — answer in an existing thread.
+
 ## Research Projects
 Projects group related notes, links, and source files for organized research.
 

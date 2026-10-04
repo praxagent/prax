@@ -242,6 +242,16 @@ lesson_order: 0               # only meaningful in sequenced notebooks
 status: todo                  # todo | done (only meaningful in sequenced notebooks)
 created_at: "..."
 updated_at: "..."
+comments:                     # see "Comments on a passage" below
+  - id: c-1a2b3c4d
+    author: human
+    text: "Is this always true? @prax"
+    quote: "keeps its direction"   # the passage, plus a little text around it
+    prefix: "An eigenvector "      # so it can be found again after edits
+    suffix: "."
+    created_at: "..."
+    resolved: false
+    replies: [{id: r-…, author: prax, text: "…", created_at: "…"}]
 ---
 ```
 
@@ -374,6 +384,28 @@ to modify this specific note?"
   of the last save quietly winning.
 - **Live refresh.** Each write tells TeamWork (names only, never content), so
   a note or board someone has open refreshes.
+
+## Comments on a passage
+
+Select text in a note and comment on it, the way you would in a shared
+document. Comments are stored in the note's frontmatter, so they move,
+version and go to the trash with the note. Adding, answering, resolving or
+deleting one is a commit like any other write, but never changes the note's
+text or `updated_at`: someone editing the note is not told it went stale.
+
+- **@prax in a comment or reply** starts a Prax turn about that note in the
+  background, and his answer is posted as a reply ("Prax is replying…" until
+  then). He edits the note only if he may (it is his, or `prax_may_edit` is
+  on), and otherwise writes the proposed wording in his reply. There is no
+  automatic unlock, unlike *Ask Prax to refine*.
+- **The turn's message is only the person's own comment.** The passage and
+  the rest of the thread come from the note, which can hold web captures or
+  other agents' words, so Prax reads them with `library_comments_list`.
+  Consent checks (a public link, a risky click) read the turn's message and
+  never tool results, so a note cannot say yes on the person's behalf.
+- **Prax can comment too** (`library_comment_add`): to review someone's note
+  he comments on passages instead of rewriting it. A comment he writes never
+  starts a turn, even if it says @prax.
 
 ### Proactive engagement on unlock
 
@@ -524,7 +556,7 @@ on a card and you'll be pinged; mark it done and the ping disappears.
 ## Agent tools (`prax/agent/library_tools.py`)
 
 Registered in the knowledge spoke and the course spoke (alongside the legacy
-`course_*` tools); 45 `@tool` functions in `library_tools.py` as of 2026-09.
+`course_*` tools); 49 `@tool` functions in `library_tools.py` as of 2026-10.
 
 **Spaces**: `library_space_create`, `library_spaces_list`,
 `library_space_update`, `library_create_learning_space`,
@@ -538,6 +570,9 @@ Registered in the knowledge spoke and the course spoke (alongside the legacy
 `library_notes_list`, `library_search` (words in titles, tags and text;
 every word must match, a "quoted phrase" counts as one; title hits rank
 first)
+
+**Comments**: `library_comments_list` (LOW), `library_comment_add`,
+`library_comment_reply`
 
 **Raw / outputs / health**: `library_raw_capture`, `library_raw_list`,
 `library_raw_promote`, `library_outputs_write`, `library_outputs_list`,
@@ -594,6 +629,11 @@ through `../teamwork/src/teamwork/routers/library.py` at the standard
 | `GET` | `/library/notes/{space}/{n}/{slug}/history` | Versions of a note |
 | `GET` | `/library/notes/{space}/{n}/{slug}/history/{commit}` | A version, with a diff against now |
 | `POST` | `/library/notes/{space}/{n}/{slug}/history/{commit}/restore` | Bring a version back as a new edit |
+| `GET` | `/library/notes/{space}/{n}/{slug}/comments` | Comments, with passages and replies |
+| `POST` | `/library/notes/{space}/{n}/{slug}/comments` | Comment (`text`, optional `quote`/`prefix`/`suffix`); `@prax` asks Prax |
+| `POST` | `/library/notes/{space}/{n}/{slug}/comments/{id}/replies` | Reply; `@prax` asks Prax |
+| `PATCH` | `/library/notes/{space}/{n}/{slug}/comments/{id}` | Resolve or reopen (`resolved`) |
+| `DELETE` | `/library/notes/{space}/{n}/{slug}/comments/{id}` | Delete a thread |
 | `GET` | `/library/trash` | Deleted items, newest first |
 | `POST` | `/library/trash/{id}/restore` | Put one back |
 | `DELETE` | `/library/trash/{id}` | Delete one for good |
@@ -743,6 +783,8 @@ minus the ordering.
 - **Backlinks panel** below the note body with every note that links
   here
 - Edit / delete / move / create actions in the header
+- **Comments**: select text → *Comment*; threads beside the note with
+  reply, resolve and delete; `@prax` asks Prax and his reply appears there
 - **Human-note action bar**: on notes you wrote, shows
   `Lock / Unlock for Prax` and `Ask Prax to refine` buttons
 - **Refine flow** offers two paths:

@@ -204,6 +204,7 @@ _LOW: set[str] = {
     # read-only utilities
     "get_current_datetime",
     "library_search",
+    "library_comments_list",
     # cloud GPU power — read-only status check
     "gpu_power_status",
 }

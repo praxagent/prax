@@ -174,7 +174,67 @@ def library_note_read(project: str, notebook: str, slug: str) -> str:
         f"prax_may_edit: {meta.get('prax_may_edit', False)}, "
         f"last_edited_by: {meta.get('last_edited_by', '?')}_\n\n"
     )
+    open_comments = sum(1 for c in meta.get("comments") or [] if not c.get("resolved"))
+    if open_comments:
+        header += (f"_{open_comments} open comment(s) on this note: "
+                   "library_comments_list to read them._\n\n")
     return header + note["content"]
+
+
+@tool
+def library_comments_list(project: str, notebook: str, slug: str, include_resolved: bool = False) -> str:
+    """Read the comments people left on a note: the passage each one is
+    about, what they said, and the replies."""
+    out = library_service.list_comments(_uid(), project, notebook, slug)
+    if "error" in out:
+        return out["error"]
+    comments = [c for c in out["comments"] if include_resolved or not c.get("resolved")]
+    if not comments:
+        return "No open comments on this note." if not include_resolved else "No comments on this note."
+    lines = []
+    for c in comments:
+        state = " (resolved)" if c.get("resolved") else ""
+        lines.append(f"[{c['id']}]{state} {c.get('author')}: {c.get('text')}")
+        if c.get("quote"):
+            lines.append(f"  on: \"{c['quote'][:300]}\"")
+        for r in c.get("replies") or []:
+            lines.append(f"  ↳ {r.get('author')}: {r.get('text')}")
+    return "\n".join(lines)
+
+
+@tool
+def library_comment_add(project: str, notebook: str, slug: str, text: str, quote: str = "") -> str:
+    """Leave a comment on a note, optionally on one passage (``quote`` is
+    that passage, copied exactly from the note). Use this to review or
+    suggest changes to a note you may not edit: a comment never changes the
+    note's text. To answer an existing comment, use library_comment_reply."""
+    note = library_service.get_note(_uid(), project, notebook, slug)
+    if not note:
+        return f"Note '{project}/{notebook}/{slug}' not found."
+    prefix = suffix = ""
+    if quote:
+        at = note["content"].find(quote)
+        if at < 0:
+            return ("That passage isn't in the note word for word. Copy it exactly "
+                    "(library_note_read), or leave quote empty for a comment on the whole note.")
+        prefix = note["content"][max(0, at - 32):at]
+        suffix = note["content"][at + len(quote):at + len(quote) + 32]
+    out = library_service.add_comment(_uid(), project, notebook, slug, text=text, quote=quote,
+                                      prefix=prefix, suffix=suffix, author="prax")
+    if "error" in out:
+        return out["error"]
+    return f"Commented on {project}/{notebook}/{slug} [{out['comment']['id']}]"
+
+
+@tool
+def library_comment_reply(project: str, notebook: str, slug: str, comment_id: str, text: str) -> str:
+    """Reply in an existing comment thread on a note (ids come from
+    library_comments_list)."""
+    out = library_service.reply_comment(_uid(), project, notebook, slug, comment_id,
+                                        text=text, author="prax")
+    if "error" in out:
+        return out["error"]
+    return f"Replied in [{comment_id}]"
 
 
 @tool
@@ -1269,6 +1329,9 @@ def build_library_tools() -> list:
         library_notebook_reorder,
         library_note_create,
         library_note_read,
+        library_comments_list,
+        library_comment_add,
+        library_comment_reply,
         library_search,
         library_note_update,
         library_note_move,
