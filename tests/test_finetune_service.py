@@ -208,3 +208,27 @@ class TestCorrectionDetection:
         assert not ft_mod._is_correction("What is the weather?")
         assert not ft_mod._is_correction("Thank you!")
         assert not ft_mod._is_correction("Tell me more about that")
+
+
+def test_the_trainer_gets_the_hugging_face_token_explicitly(ft_mod, monkeypatch, tmp_path):
+    """Credentials are not in Prax's environment any more (app.py withholds
+    them), so the one child that needs a Hugging Face token gets it passed."""
+    started = {}
+
+    class FakePopen:
+        pid = 1
+
+        def __init__(self, cmd, env=None, **kw):
+            started["env"] = env
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(ft_mod.subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(ft_mod.settings, "hf_token_ro", "hf_test_token")
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    data = tmp_path / "data.jsonl"
+    data.write_text("{}\n")
+    assert ft_mod.start_training(str(data))["status"] == "started"
+    assert started["env"]["HF_TOKEN"] == "hf_test_token"
+    monkeypatch.setattr(ft_mod, "_training_process", None)

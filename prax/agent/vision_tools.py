@@ -180,6 +180,11 @@ def _analyze_openai(image_url: str, prompt: str) -> str:
     client_kwargs: dict = {"api_key": api_key}
     if settings.vision_base_url:
         client_kwargs["base_url"] = settings.vision_base_url
+    elif not settings.vision_api_key and settings.openai_base_url:
+        # The key is OPENAI_KEY, so it goes where OPENAI_KEY goes (the secrets
+        # proxy, on keyless Prax). Left to the SDK, the base URL came from the
+        # environment, if anything had put it there.
+        client_kwargs["base_url"] = settings.openai_base_url
 
     client = OpenAI(**client_kwargs)
     response = client.chat.completions.create(
@@ -205,7 +210,7 @@ def _analyze_anthropic(image_url: str, prompt: str) -> str:
     import anthropic
 
     b64_data, media_type = _fetch_image_base64(image_url)
-    client = anthropic.Anthropic(api_key=settings.anthropic_key)
+    client = anthropic.Anthropic(api_key=settings.anthropic_key, base_url=settings.anthropic_base_url or None)
     response = client.messages.create(
         model=settings.vision_model,
         max_tokens=2000,

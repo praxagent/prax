@@ -41,8 +41,8 @@ Writing the wiring instructions exposed a real gap: the `openai` embedding
 provider (`memory/embedder.py:_embed_openai`) constructed its client with SDK
 defaults — no explicit base URL. Whether it could target a local server
 depended on `OPENAI_BASE_URL` happening to be in the process environment, which
-pydantic settings do **not** guarantee (only the proxy-networking allowlist is
-exported to `os.environ`; see `settings.py:_export_proxy_env_from_dotenv`). So
+pydantic settings do **not** guarantee (pydantic reads `.env` without exporting
+it; the server's export is `settings.py:_export_dotenv_config`). So
 the chat path was locally routable and the embeddings path silently was not —
 meaning "fully local Prax" quietly kept a dependency on api.openai.com or on
 launch-environment luck.

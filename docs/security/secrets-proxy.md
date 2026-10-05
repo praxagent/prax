@@ -54,10 +54,16 @@ and failed (live symptom, 2026-09-07: an hourly schedule dying with
 `invalid model ID` from the legacy history summariser in
 `prax/conversation_memory.py`). The OpenAI SDK would pick up `OPENAI_BASE_URL`
 from the process environment, but Pydantic loads `.env` without exporting it,
-and the startup allow-list that does export proxy variables
-(`_PROXY_ENV_ALLOWLIST` in `prax/settings.py`) covers only
-`HTTP(S)_PROXY`/`NO_PROXY`/CA-bundle names — so the fix is in code, not
-config. `prax/agent/llm_factory.py` now has `openai_client()`, the **only**
+and nothing guarantees a process has it (tests, CLIs and evals export nothing;
+the server's `_export_dotenv_config` in `prax/settings.py` exports `.env` minus
+credentials) — so the fix is in code, not config.
+
+**What the server puts in its environment.** `app.py` exports `.env` with
+every credential withheld (the registry's rows and any `*_KEY`/`*_TOKEN`/
+`*_SECRET`/`*_PASSWORD`-shaped name), because every child process inherits it.
+Until 2026-10-04 that was not what happened: Flask's `app.run()` loads the whole
+`.env` into the environment unless told `load_dotenv=False`, so every key in
+`.env` was there for any child to print. `prax/agent/llm_factory.py` now has `openai_client()`, the **only**
 sanctioned constructor of a raw `openai.OpenAI` client, with exactly
 `build_llm`'s OpenAI key/base-URL semantics (`OPENAI_KEY` = the proxy token
 when keyless; `OPENAI_BASE_URL` → the proxy; callers cannot override

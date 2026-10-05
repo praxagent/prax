@@ -1,5 +1,6 @@
 """Application settings loaded via Pydantic for validation and reuse."""
 import os
+import re
 from functools import lru_cache
 
 from pydantic import Field, field_validator
@@ -94,6 +95,11 @@ class AppSettings(BaseSettings):
     # use your paid quota for higher throughput and better reliability.
     # Sign up at https://jina.ai.
     jina_api_key: str | None = Field(default=None, alias="JINA_API_KEY")
+    # SendGrid: the phone reader e-mails an article's link on request. Read
+    # straight from the environment until 2026-10, which worked only because
+    # Flask's app.run loaded .env into it.
+    sendgrid_api_key: str | None = Field(default=None, alias="SENDGRID_API_KEY")
+    sendgrid_from_email: str = Field(default="noreply@example.com", alias="SENDGRID_FROM_EMAIL")
     # HuggingFace read-only token — for downloading GATED eval datasets
     # (e.g. GPQA-Diamond) via scripts/fetch_eval_datasets.py. Read-only + used
     # only at dataset-fetch time; never at agent runtime.
@@ -1529,42 +1535,82 @@ def get_settings() -> AppSettings:
 settings = get_settings()
 
 
-# Non-secret OS-level networking vars that requests/httpx read from ``os.environ``
-# (NOT from Pydantic). Prax deliberately does not blanket-load ``.env`` into the
-# environment — that would leak API keys to child processes (the sandbox / agent
-# could ``printenv`` them, the opposite of keyless). But the secrets-proxy needs
-# these few to be process-level so egress routes through it. So export ONLY this
-# allowlist from ``.env`` — never a key.
+# OS-level networking vars that requests/httpx read from ``os.environ`` (NOT from
+# Pydantic): the secrets-proxy needs them process-level so egress routes through
+# it. Always exported by the live server (see _export_dotenv_config).
 _PROXY_ENV_ALLOWLIST = (
     "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY",
     "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
 )
 
+# A name shaped like a credential is withheld even when no registry row names it.
+_SECRET_SHAPED = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTH|CREDENTIALS?|_API|_B64)$")
 
-def _export_proxy_env_from_dotenv(env_file: str = ".env") -> None:
-    """Export only the allow-listed proxy/TLS vars from ``.env`` into ``os.environ``.
 
-    Idempotent + safe: skips anything already set (so Docker's ``env_file`` wins),
-    and NEVER exports a secret — only the fixed networking allowlist. Makes the
-    secrets-proxy's ``HTTPS_PROXY`` setup work in host-process mode, not just Docker.
+def is_secret_env(name: str) -> bool:
+    """True for a credential: a credential-registry row, or a credential-shaped
+    name (``*_KEY``, ``*_TOKEN``, ``*_SECRET``, ``*_PASSWORD``, …), except the
+    registry's known non-secrets (``GIT_AUTHOR_NAME``, …)."""
+    from prax.services.credential_registry import NON_CREDENTIAL_ALIASES, all_envs
+
+    name = name.upper()
+    if name in NON_CREDENTIAL_ALIASES:
+        return False
+    return name in all_envs() or bool(_SECRET_SHAPED.search(name))
+
+
+def _url_has_password(value: str) -> bool:
+    """``https://user:secret@host`` — a URL carrying a credential."""
+    from urllib.parse import urlsplit
+    try:
+        return "://" in value and bool(urlsplit(value.strip()).password)
+    except ValueError:
+        return False
+
+
+def _export_dotenv_config(env_file: str = ".env") -> list[str]:
+    """Export ``.env`` into ``os.environ`` for the live server, credentials excepted.
+
+    Pydantic reads ``.env`` itself; this is for what reads the process
+    environment instead: the proxy/TLS vars HTTP clients need, per-component
+    overrides such as ``ORCHESTRATOR_TIER`` (``plugins/llm_config.py``), and
+    third-party libraries' own settings. Credentials stay out (and any URL
+    carrying a password, outside the proxy variables): every process
+    Prax starts inherits its environment, and a key there is a key any child
+    can print — the opposite of keyless.
+
+    Until this existed, Flask's ``app.run()`` loaded the WHOLE ``.env``
+    (``load_dotenv`` defaults to true), keys included, while this module only
+    meant to export the proxy vars. app.py now runs Flask with
+    ``load_dotenv=False`` and calls this instead.
+
+    Idempotent and safe: skips anything already set (so Docker's ``env_file``
+    wins) and never fails startup on a malformed ``.env``. Returns the names
+    withheld.
     """
+    if os.environ.get("PRAX_SKIP_DOTENV_EXPORT"):  # tests: CI has no .env, so local runs get none
+        return []
     from pathlib import Path
     p = Path(env_file)
     if not p.exists():
-        return
+        return []
+    withheld = []
     try:
-        for raw in p.read_text().splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, _, val = line.partition("=")
+        from dotenv import dotenv_values
+        for key, val in dotenv_values(p, encoding="utf-8").items():
             ku = key.strip().upper()
-            if ku in _PROXY_ENV_ALLOWLIST and ku not in os.environ and ku.lower() not in os.environ:
-                os.environ[ku] = val.strip().strip('"').strip("'")
+            if val is None or ku in os.environ or key in os.environ or ku.lower() in os.environ:
+                continue
+            if ku not in _PROXY_ENV_ALLOWLIST and (is_secret_env(ku) or _url_has_password(val)):
+                withheld.append(ku)
+                continue
+            os.environ[ku] = val
     except Exception:  # noqa: BLE001 - best-effort; never break startup on a malformed .env
         pass
+    return withheld
 
 
 # NOTE: not called here. Exporting HTTPS_PROXY at settings-import time would route
 # egress for EVERY process that imports settings (tests, CLI, eval runs) through the
-# proxy — wrong. Only the live server should. app.py calls this at startup.
+# proxy — wrong. Only the live server should. app.py calls _export_dotenv_config
+# at startup.

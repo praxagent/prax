@@ -22,7 +22,6 @@ SSH keys on its first run). It does not prove every authentication flow works.
 
 **Known gap (2026-09): the guard sees `settings.py` fields only.** A credential
 read straight from the process environment never enters the registry:
-`SENDGRID_API_KEY` (`prax/readers/reader_functions.py`, `os.environ.get`),
 `HF_TOKEN` / `HUGGINGFACE_TOKEN` (`prax/eval/benchmarks/datasets.py`; only
 `HF_TOKEN_RO` is registered), `ARC_API_KEY` (`prax/eval/arc3/sdk_agent.py`), and
 the deployment-level `TS_AUTHKEY` (compose) and `NGROK_AUTHTOKEN` (`.env-example`)
@@ -75,6 +74,7 @@ paths and routing in the intended configuration.
 | `TAVILY_API_KEY` | `api.tavily.com`, bearer | No successful live verification recorded. |
 | `SERPER_DEV_API_KEY` | `google.serper.dev`, API-key header | Successful historical forward request recorded. |
 | `JINA_API_KEY` | `r.jina.ai`, bearer | The map names the reader host; do not assume it also covers `s.jina.ai` search. |
+| `SENDGRID_API_KEY` | `api.sendgrid.com`, bearer | No live verification recorded. A settings field since 2026-10; before that it was read from the environment. |
 | `GOOGLE_API_KEY`, `GOOGLE_CSE_ID` | `www.googleapis.com`, query parameters | Does not cover every Google/Gemini host. Historical Custom Search request returned `403`. |
 | `VISION_API_KEY` | Provider-dependent | No fixed host; skipped by the generated map. |
 | `ELEVENLABS_API_KEY` | `api.elevenlabs.io`, `xi-api-key` | Historical request returned `401`; successful authenticated use not established. |

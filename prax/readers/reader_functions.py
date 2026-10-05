@@ -1,5 +1,4 @@
 import logging
-import os
 import re
 import threading
 import uuid
@@ -321,7 +320,7 @@ def handle_in_article_state(call_sid, article_index, resp):
                 return resp
         elif article_index == 2:
             message = Mail(
-                from_email=os.environ.get('SENDGRID_FROM_EMAIL', 'noreply@example.com'),
+                from_email=settings.sendgrid_from_email,
                 to_emails=helpers_dictionaries.email_map[
                     convo_states[call_sid]['from_num']],
                 subject=f"Requested link for article: {convo_states[call_sid]['buffer_title']}",
@@ -344,7 +343,7 @@ def handle_in_article_state(call_sid, article_index, resp):
                 """
                 )
             try:
-                sg = SendGridAPIClient(os.environ.get('SENDGRID_API_KEY'))
+                sg = SendGridAPIClient(settings.sendgrid_api_key)
                 response = sg.send(message)
                 logger.info("SendGrid response: %s", response.status_code)
                 resp.say("E-mail sent, my friend.", voice="Polly.Joanna-Neural", language='en-US')

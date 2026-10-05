@@ -55,7 +55,8 @@ def register(caps):
 
         try:
             from openai import OpenAI
-            client = OpenAI(api_key=api_key)
+            # OPENAI_KEY's own route (the secrets proxy on keyless Prax).
+            client = OpenAI(api_key=api_key, base_url=settings.openai_base_url or None)
             kwargs = {"model": model, "prompt": prompt, "n": 1, "size": size}
             if quality != "auto":
                 kwargs["quality"] = quality

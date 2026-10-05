@@ -49,10 +49,7 @@ SANCTIONED_FUNC = "openai_client"
 GRANDFATHERED: dict[str, str] = {
     "prax/agent/vision_tools.py": "own VISION_BASE_URL / VISION_API_KEY — deliberate, documented",
     "prax/services/memory/embedder.py": "own EMBEDDING_BASE_URL — deliberate, documented",
-    "prax/plugins/capabilities.py": "TTS + Whisper capabilities — still bypasses OPENAI_BASE_URL",
-    "prax/services/library_service.py": "cover-image generation — still bypasses OPENAI_BASE_URL",
-    "prax/plugins/tools/image/plugin.py": "image plugin — needs a capability (plugins can't import prax.agent)",
-    "prax/readers/latex/latext_gpt_tools.py": "voice LaTeX reader — still bypasses OPENAI_BASE_URL",
+    "prax/plugins/tools/image/plugin.py": "image plugin — plugins can't import prax.agent; passes OPENAI_BASE_URL itself",
 }
 
 _CLIENT_CLASSES = {"OpenAI", "AsyncOpenAI"}

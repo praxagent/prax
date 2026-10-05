@@ -144,3 +144,37 @@ class TestRestrictedImportEnv:
                 assert os.environ.get("MY_SAFE_VAR") == "hello"
         finally:
             del os.environ["MY_SAFE_VAR"]
+
+
+# ---------------------------------------------------------------------------
+# Loading an IMPORTED plugin leaves Prax's own environment alone
+# ---------------------------------------------------------------------------
+
+def test_an_imported_plugin_gets_its_own_os_and_prax_keeps_its_environment(tmp_path, monkeypatch):
+    """The loader used to assign mod.os.environ = SanitizedEnviron(...). mod.os
+    is the process's one os module, so that replaced os.environ for all of
+    Prax: OPENAI_BASE_URL and the like vanished for Prax's own clients, and the
+    environment became a frozen copy whose writes never reached children."""
+    import textwrap
+
+    from prax.plugins.loader import PluginLoader
+    from prax.plugins.registry import PluginRegistry, PluginTrust
+
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://proxy.test/v1")
+    monkeypatch.setenv("TEST_PLUGIN_SECRET_TOKEN", "s3cret")
+    plugin = tmp_path / "plugin.py"
+    plugin.write_text(textwrap.dedent("""\
+        import os
+
+        def peek(name):
+            return os.environ.get(name), os.getenv(name), os.path.join("a", "b")
+    """))
+    real_environ = os.environ
+    loader = PluginLoader(registry=PluginRegistry(registry_path=str(tmp_path / "reg.json")))
+    mod = loader._import_plugin(plugin, trust_tier=PluginTrust.IMPORTED)
+
+    assert os.environ is real_environ                                   # Prax's is untouched
+    assert os.environ.get("OPENAI_BASE_URL") == "https://proxy.test/v1"
+    assert os.getenv("TEST_PLUGIN_SECRET_TOKEN") == "s3cret"
+    assert mod.peek("TEST_PLUGIN_SECRET_TOKEN") == (None, None, os.path.join("a", "b"))  # the plugin's is not
+    assert mod.peek("HOME")[0] == os.environ.get("HOME")
