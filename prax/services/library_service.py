@@ -41,6 +41,7 @@ import inspect
 import logging
 import mimetypes
 import re
+import threading
 import uuid
 from contextvars import ContextVar
 from datetime import UTC, datetime
@@ -1635,6 +1636,12 @@ def set_note_status(
     return {"status": "updated", "note_status": status}
 
 
+# A note edit and a comment both rewrite the note file; without this a comment
+# posted while an edit was being checked (mermaid rendering takes a moment)
+# was silently dropped by the edit's write.
+_note_lock = threading.RLock()
+
+
 @_recorded("edited")
 def update_note(
     user_id: str,
@@ -1667,6 +1674,14 @@ def update_note(
         return {"error": str(exc)}
     if not path.exists():
         return {"error": f"Note '{project}/{notebook}/{slug}' not found"}
+    with _note_lock:
+        return _update_note_locked(user_id, project, notebook, slug, path, content=content, title=title,
+                                   tags=tags, editor=editor, override_permission=override_permission,
+                                   expected_updated_at=expected_updated_at)
+
+
+def _update_note_locked(user_id, project, notebook, slug, path, *, content, title, tags, editor,
+                        override_permission, expected_updated_at) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8")
     meta, body = _parse_frontmatter(text)
 
@@ -1733,6 +1748,177 @@ def delete_note(
     trashed = library_history.to_trash(Path(workspace_root(user_id)), path, kind="note", label=str(title))
     rebuild_index(user_id)
     return {"status": "deleted", "slug": slug, "trash_id": trashed["id"]}
+
+
+# ---------------------------------------------------------------------------
+# Comments on a passage (stored in the note's frontmatter, so they move, go to
+# the trash and are versioned with the note; adding one never changes the
+# note's updated_at, so it never makes someone's open edit "stale")
+# ---------------------------------------------------------------------------
+
+_COMMENT_ID_RE = re.compile(r"^c-[0-9a-f]{8}$")
+_PRAX_MENTION_RE = re.compile(r"(?<![\w@])@prax\b", re.IGNORECASE)
+_prax_replying: set[tuple[str, str, str, str, str]] = set()
+
+
+def mentions_prax(text: str) -> bool:
+    return bool(_PRAX_MENTION_RE.search(text or ""))
+
+
+def _edit_comments(user_id: str, project: str, notebook: str, slug: str, change) -> dict[str, Any]:
+    """Apply *change* to the note's comment list and write it back, leaving
+    the note's body, updated_at and last_edited_by alone."""
+    try:
+        path = _assert_in_library(user_id, _note_path(user_id, project, notebook, slug))
+    except ValueError as exc:
+        return {"error": str(exc)}
+    if not path.exists():
+        return {"error": f"Note '{project}/{notebook}/{slug}' not found"}
+    with _note_lock:
+        meta, body = _parse_frontmatter(path.read_text(encoding="utf-8"))
+        comments = list(meta.get("comments") or [])
+        result = change(comments)
+        if isinstance(result, dict) and "error" in result:
+            return result
+        meta["comments"] = comments
+        path.write_text(_serialize_frontmatter(meta, body), encoding="utf-8")
+    return result
+
+
+def _find_comment(comments: list[dict], comment_id: str) -> dict | None:
+    if not _COMMENT_ID_RE.match(comment_id or ""):
+        return None
+    return next((c for c in comments if c.get("id") == comment_id), None)
+
+
+def list_comments(user_id: str, project: str, notebook: str, slug: str) -> dict[str, Any]:
+    note = get_note(user_id, project, notebook, slug)
+    if note is None:
+        return {"error": f"Note '{project}/{notebook}/{slug}' not found"}
+    comments = list(note["meta"].get("comments") or [])
+    for c in comments:
+        c["prax_replying"] = (user_id, project, notebook, slug, c.get("id")) in _prax_replying
+    return {"comments": comments}
+
+
+@_recorded("commented on")
+def add_comment(user_id: str, project: str, notebook: str, slug: str, *, text: str,
+                quote: str = "", prefix: str = "", suffix: str = "",
+                author: str | None = None) -> dict[str, Any]:
+    """A comment on the note, optionally anchored to a passage: *quote* is
+    the selected text, *prefix*/*suffix* a few characters around it so the
+    passage can be found again after edits."""
+    text = (text or "").strip()
+    if not text:
+        return {"error": "A comment needs some text"}
+    comment = {
+        "id": f"c-{uuid.uuid4().hex[:8]}",
+        "author": author or library_history.library_actor.get(),
+        "text": text[:5000], "quote": (quote or "")[:2000],
+        "prefix": (prefix or "")[-64:], "suffix": (suffix or "")[:64],
+        "created_at": _now_iso(), "resolved": False, "replies": [],
+    }
+
+    def change(comments):
+        comments.append(comment)
+        return {"status": "added", "comment": comment}
+    return _edit_comments(user_id, project, notebook, slug, change)
+
+
+@_recorded("replied on")
+def reply_comment(user_id: str, project: str, notebook: str, slug: str, comment_id: str, *,
+                  text: str, author: str | None = None) -> dict[str, Any]:
+    text = (text or "").strip()
+    if not text:
+        return {"error": "A reply needs some text"}
+    reply = {"id": f"r-{uuid.uuid4().hex[:8]}", "author": author or library_history.library_actor.get(),
+             "text": text[:5000], "created_at": _now_iso()}
+
+    def change(comments):
+        comment = _find_comment(comments, comment_id)
+        if comment is None:
+            return {"error": f"No comment {comment_id!r}"}
+        comment.setdefault("replies", []).append(reply)
+        return {"status": "replied", "comment": comment}
+    return _edit_comments(user_id, project, notebook, slug, change)
+
+
+@_recorded("resolved a comment on")
+def set_comment_resolved(user_id: str, project: str, notebook: str, slug: str, comment_id: str,
+                         resolved: bool = True) -> dict[str, Any]:
+    def change(comments):
+        comment = _find_comment(comments, comment_id)
+        if comment is None:
+            return {"error": f"No comment {comment_id!r}"}
+        comment["resolved"] = bool(resolved)
+        return {"status": "resolved" if resolved else "reopened", "comment": comment}
+    return _edit_comments(user_id, project, notebook, slug, change)
+
+
+@_recorded("deleted a comment on")
+def delete_comment(user_id: str, project: str, notebook: str, slug: str, comment_id: str) -> dict[str, Any]:
+    def change(comments):
+        comment = _find_comment(comments, comment_id)
+        if comment is None:
+            return {"error": f"No comment {comment_id!r}"}
+        comments.remove(comment)
+        return {"status": "deleted", "id": comment_id}
+    return _edit_comments(user_id, project, notebook, slug, change)
+
+
+def ask_prax_about_comment(user_id: str, project: str, notebook: str, slug: str,
+                           comment_id: str, text: str) -> None:
+    """Someone wrote @prax in a comment (*text* is what they wrote): a Prax
+    turn about that note, in the background, whose answer is posted as a
+    reply. He edits the note only if he may (it is his, or the person allowed
+    it); otherwise he proposes the change in his reply.
+
+    The turn's message is the person's own words and nothing else. The
+    passage and the rest of the thread come from the note, which may hold
+    text from the web or from other agents, so Prax reads them with a tool.
+    In his message they would count as the person saying them: consent
+    checks (a public link, a risky click) read the message, never tool
+    results.
+    """
+    key = (user_id, project, notebook, slug, comment_id)
+    if key in _prax_replying:
+        return
+    _prax_replying.add(key)
+
+    def run():
+        try:
+            note = get_note(user_id, project, notebook, slug)
+            if note is None:
+                _prax_replying.discard(key)
+                return
+            meta = note["meta"]
+            may_edit = meta.get("author") != "human" or bool(meta.get("prax_may_edit"))
+            prompt = (
+                f"[You were mentioned in comment {comment_id} on the Library note "
+                f"`{project}/{notebook}/{slug}`. Read that thread and the passage it is on "
+                "through delegate_knowledge (its library_comments_list, and library_note_read "
+                "if you need more). Your final message is posted as your reply in that thread, "
+                "so answer it directly and briefly. "
+                + ("You may edit this note: if they ask for a change, make it with "
+                   "library_note_update and say what you changed.]"
+                   if may_edit else
+                   "This is their note and they have not allowed you to edit it, so do not "
+                   "try: if they ask for a change, write the proposed wording in your reply.]")
+                + f"\n\n{text.strip()}"
+            )
+            from prax.services.conversation_service import conversation_service
+            answer = conversation_service.reply(user_id, prompt, source="teamwork", space_slug=project)
+            reply = (answer or "").strip() or "(I had nothing to add.)"
+        except Exception as exc:
+            logger.exception("@prax comment reply failed")
+            reply = f"(I couldn't answer this one: {type(exc).__name__}.)"
+        try:
+            with library_history.acting_as("prax"):
+                reply_comment(user_id, project, notebook, slug, comment_id, text=reply, author="prax")
+        finally:
+            _prax_replying.discard(key)
+
+    threading.Thread(target=run, name=f"prax-comment-{comment_id}", daemon=True).start()
 
 
 # ---------------------------------------------------------------------------

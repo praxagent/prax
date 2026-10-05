@@ -93,6 +93,8 @@ _PRIVATE_NAMES = (
     "progress_detail", "progress_search",
     "trace_search", "trace_detail", "review_my_traces",
     "artifact_locator", "library_read", "browser_credentials",
+    # Comments live in the note's own file: same store as note_read.
+    "library_comments",
 )
 _SINK_NAMES = (
     "send_sms", "send_email", "send_message", "discord", "_publish", "_share",

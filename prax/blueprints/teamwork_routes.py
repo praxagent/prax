@@ -519,6 +519,90 @@ def library_note_restore(space: str, notebook: str, slug: str, commit: str):
     return jsonify(result)
 
 
+@teamwork_routes.route(
+    "/teamwork/library/notes/<space>/<notebook>/<slug>/comments",
+    methods=["GET"],
+)
+def library_note_comments(space: str, notebook: str, slug: str):
+    """Comments on a note, each with its passage and replies."""
+    from prax.services import library_service
+    result = library_service.list_comments(_get_teamwork_user_id(), space, notebook, slug)
+    if "error" in result:
+        return jsonify(result), 404
+    return jsonify(result)
+
+
+def _comment_result(result: dict, user_id: str, space: str, notebook: str, slug: str,
+                    comment_id: str | None, text: str):
+    """Shared tail of the comment-writing routes: errors, and Prax's turn
+    when the person wrote @prax."""
+    from prax.services import library_service
+    if "error" in result:
+        return jsonify(result), 404 if "not found" in result["error"] or "No comment" in result["error"] else 400
+    if comment_id and library_service.mentions_prax(text):
+        library_service.ask_prax_about_comment(user_id, space, notebook, slug, comment_id, text)
+        result = {**result, "prax_replying": True}
+    return jsonify(result)
+
+
+@teamwork_routes.route(
+    "/teamwork/library/notes/<space>/<notebook>/<slug>/comments",
+    methods=["POST"],
+)
+def library_note_comment_add(space: str, notebook: str, slug: str):
+    """A comment, optionally on a passage (``quote`` with a little
+    ``prefix``/``suffix`` around it). Writing @prax asks Prax to answer."""
+    from prax.services import library_service
+    data = request.get_json(silent=True) or {}
+    user_id = _get_teamwork_user_id()
+    text = str(data.get("text") or "")
+    result = library_service.add_comment(
+        user_id, space, notebook, slug, text=text, quote=str(data.get("quote") or ""),
+        prefix=str(data.get("prefix") or ""), suffix=str(data.get("suffix") or ""))
+    cid = (result.get("comment") or {}).get("id")
+    return _comment_result(result, user_id, space, notebook, slug, cid, text)
+
+
+@teamwork_routes.route(
+    "/teamwork/library/notes/<space>/<notebook>/<slug>/comments/<comment_id>/replies",
+    methods=["POST"],
+)
+def library_note_comment_reply(space: str, notebook: str, slug: str, comment_id: str):
+    from prax.services import library_service
+    data = request.get_json(silent=True) or {}
+    user_id = _get_teamwork_user_id()
+    text = str(data.get("text") or "")
+    result = library_service.reply_comment(user_id, space, notebook, slug, comment_id, text=text)
+    return _comment_result(result, user_id, space, notebook, slug, comment_id, text)
+
+
+@teamwork_routes.route(
+    "/teamwork/library/notes/<space>/<notebook>/<slug>/comments/<comment_id>",
+    methods=["PATCH"],
+)
+def library_note_comment_resolve(space: str, notebook: str, slug: str, comment_id: str):
+    """Resolve (``{"resolved": true}``) or reopen a comment."""
+    from prax.services import library_service
+    data = request.get_json(silent=True) or {}
+    result = library_service.set_comment_resolved(
+        _get_teamwork_user_id(), space, notebook, slug, comment_id, bool(data.get("resolved", True)))
+    if "error" in result:
+        return jsonify(result), 404
+    return jsonify(result)
+
+
+@teamwork_routes.route(
+    "/teamwork/library/notes/<space>/<notebook>/<slug>/comments/<comment_id>",
+    methods=["DELETE"],
+)
+def library_note_comment_delete(space: str, notebook: str, slug: str, comment_id: str):
+    from prax.services import library_service
+    result = library_service.delete_comment(_get_teamwork_user_id(), space, notebook, slug, comment_id)
+    if "error" in result:
+        return jsonify(result), 404
+    return jsonify(result)
+
+
 @teamwork_routes.route("/teamwork/library/trash", methods=["GET"])
 def library_trash_list():
     """Deleted notes, notebooks, spaces and space files, newest first."""
