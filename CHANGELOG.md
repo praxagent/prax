@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.51.0](https://github.com/praxagent/prax/compare/v0.50.0...v0.51.0) (2026-10-05)
+
+
+### Features
+
+* comments on a passage of a Library note, and [@prax](https://github.com/prax) in them ([#272](https://github.com/praxagent/prax/issues/272)) ([09f3b3f](https://github.com/praxagent/prax/commit/09f3b3f66bac2aa62d223c22186219f201460527))
+
+
+### Bug Fixes
+
+* credentials stay out of Prax's environment ([#273](https://github.com/praxagent/prax/issues/273)) ([1beb0fa](https://github.com/praxagent/prax/commit/1beb0faff020a2f15f49ae904a40c027d15e56d6))
+
 ## [0.50.0](https://github.com/praxagent/prax/compare/v0.49.1...v0.50.0) (2026-10-04)
 
 
