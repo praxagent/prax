@@ -1153,6 +1153,11 @@ class AppSettings(BaseSettings):
     # the action and target. Checked before earned trust, auto-approve and the
     # spoke enforce switch. Off keeps the prior behaviour.
     hard_floors_enabled: bool = Field(default=False, alias="HARD_FLOORS_ENABLED")
+    # After a turn reads untrusted content, a URL the agent composed (not seen
+    # verbatim, not built from the user's own words) goes to a person or is
+    # refused: the exfiltration step of an injected page. On by default; off
+    # restores the old behaviour. prax/agent/url_provenance.py.
+    url_provenance_guard: bool = Field(default=True, alias="URL_PROVENANCE_GUARD")
     # Extra tool names to treat as hard floors (comma-separated). Add-only:
     # the built-in floors can't be removed.
     hard_floor_extra_tools: str = Field(default="", alias="HARD_FLOOR_EXTRA_TOOLS")

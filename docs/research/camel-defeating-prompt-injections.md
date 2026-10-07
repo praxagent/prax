@@ -15,8 +15,20 @@ architecture.**
   taints the egress gate (adopt 2).
 - TeamWork loads images from other sites only on a click (adopt 1, in the
   TeamWork repo).
+- **The traced gap is closed** (adopt 6, its URL half). After a turn ingests
+  untrusted content, a URL it sends out must have been seen verbatim or be
+  built from the user's own words; otherwise a person decides or it is refused
+  ([URL provenance](../security/url-provenance.md)). Two departures from the
+  proposal below:
+  - it ships on by default, so that the gap is closed rather than available
+    behind a switch;
+  - URLs built only from the user's own words pass, to keep "search the shop
+    for what I asked" working.
 
-Adopts 3–6 and the parked 7 are still open.
+  No agent tool takes a recipient yet; a test fails if one is added without
+  the rule.
+
+Adopts 3–5 and the parked 7 are still open.
 
 **Is Prax robust to what CaMeL addresses? Not by design.** CaMeL's attacker
 controls what tools return. It wants one of two things: an extra action
