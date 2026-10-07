@@ -138,7 +138,7 @@ flowchart LR
 **Tier tracking:** Every `build_llm()` call records which tier was requested, which model it resolved to, which provider, and which span (agent/spoke) made the call. This data flows to:
 - `tiers.json` artifact — for offline analysis
 - Execution graph summary — human-readable tier annotations per span
-- Workspace `trace.log` — `[TIER_CHOICE]` entries for production trace analysis
+- The user's `trace.log` (in `RECORDS_DIR`) — `[TIER_CHOICE]` entries for production trace analysis
 - OTel spans — `prax.tier` attribute for Grafana queries
 
 **Current scenarios:**

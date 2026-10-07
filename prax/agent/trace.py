@@ -529,20 +529,12 @@ _graphs_loaded = False
 
 
 def _graphs_dir() -> Path:
-    """Return the directory for persisted graph JSONL files.
-
-    Stored INSIDE workspace_dir (not its parent) so Docker volume mounts
-    that map workspace_dir to a host path also persist graphs across
-    container restarts.
+    """Return the directory for persisted graph JSONL files: in the records
+    directory, outside the workspace the sandbox mounts (they used to be at
+    ``workspace_dir/.prax/graphs`` and move on first use).
     """
-    try:
-        from prax.settings import settings
-        base = Path(settings.workspace_dir).resolve()
-    except Exception:
-        base = Path(".")
-    d = base / ".prax" / "graphs"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    from prax.services import records
+    return records.graphs_dir()
 
 
 def _persist_graph(graph: ExecutionGraph) -> None:

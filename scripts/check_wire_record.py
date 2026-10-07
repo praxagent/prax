@@ -189,8 +189,12 @@ def changed_before_running(spans: list[tuple]) -> list[tuple]:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("wire")
+    # Prax keeps its execution graphs in the records directory (RECORDS_DIR,
+    # default records/ beside the workspace directory), out of the agent's reach.
     ap.add_argument("--graphs", default=os.path.join(
-        os.environ.get("WORKSPACE_DIR", "../workspaces"), ".prax", "graphs"))
+        os.environ.get("RECORDS_DIR") or os.path.join(
+            os.path.dirname(os.path.abspath(os.environ.get("WORKSPACE_DIR", "../workspaces"))), "records"),
+        "graphs"))
     ap.add_argument("--caller", default=None, help="only this proxy caller (e.g. prax-prod)")
     ap.add_argument("--hours", type=float, default=24.0)
     ap.add_argument("--slack", type=float, default=300.0,

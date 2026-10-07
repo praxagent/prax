@@ -28,8 +28,6 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from prax.settings import settings
-
 logger = logging.getLogger(__name__)
 
 COLLECTION = "prax_trace_summaries"
@@ -73,8 +71,8 @@ def _not_available(reason: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def _graphs_dir() -> Path:
-    base = Path(settings.workspace_dir).resolve()
-    return base / ".prax" / "graphs"
+    from prax.services import records
+    return records.graphs_dir()
 
 
 def _iter_persisted_traces():

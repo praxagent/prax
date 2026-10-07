@@ -15,7 +15,6 @@ workspaces/usr_{id8}/          ← opaque id from identity_service (pre-existing
 ├── todos.json             ← user's personal to-do list
 ├── instructions.md        ← system prompt reference (agent can re-read)
 ├── agent_plan.yaml        ← current task decomposition (transient; agent_plan.json is the legacy fallback)
-├── trace.log              ← conversation trace (rotated at 0.5 MB)
 ├── feeds.yaml             ← RSS/Atom feed subscriptions
 ├── library/               ← the Library (see ../library.md)
 │   ├── LIBRARY.md         ← schema / rules
@@ -41,9 +40,17 @@ workspaces/usr_{id8}/          ← opaque id from identity_service (pre-existing
 ├── active/                ← files the agent is currently aware of
 │   └── 2301.12345.md      ← extracted PDF with frontmatter
 └── archive/               ← agent moves files here when done
-    ├── trace_logs/        ← rotated trace logs (plain text, grep-able)
-    │   └── trace.20250301-120000.log
     └── 2301.12345.pdf     ← original PDF preserved
+
+records/                   ← RECORDS_DIR: beside workspaces/, never inside it (the sandbox
+│                            mounts the workspace). See ../security/trace-integrity.md.
+├── graphs/                ← execution graphs (trace_search, trace_detail, TeamWork graph view)
+├── feedback/              ← users' ratings of answers
+├── parked_approvals.json  ← what runs once a person approves
+└── users/{workspace}/
+    ├── trace.log          ← conversation trace + governance audit (rotated at 0.5 MB)
+    ├── trace_logs/        ← rotated trace logs, all kept (plain text, grep-able)
+    └── trajectories/      ← task trajectories
 
 adapters/                  ← LoRA adapter storage (FINETUNE_OUTPUT_DIR)
 ├── adapter_registry.json  ← active/previous adapter tracking

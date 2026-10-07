@@ -45,6 +45,15 @@ def workspace(tmp_path):
         yield tmp_path
 
 
+def _trace(workspace, uid: str):
+    """The user's trace log, in the records directory (prax/services/records.py)."""
+    from pathlib import Path
+
+    from prax.services.workspace_service import trace_log_path
+    (workspace / uid).mkdir(exist_ok=True)
+    return Path(trace_log_path(uid))
+
+
 @contextmanager
 def _pipeline(seen: list[str]):
     """Run consolidate_user keyless; every extractor input is appended to `seen`."""
@@ -97,7 +106,7 @@ def test_pointer_advances_past_blank_separators_it_consumed(workspace):
         raw.append(f"[USER] entry {i:02d}")
     assert raw.count("") == 13 and len(raw) == 63
     (workspace / uid).mkdir(exist_ok=True)
-    (workspace / uid / "trace.log").write_text("\n".join(raw) + "\n")
+    _trace(workspace, uid).write_text("\n".join(raw) + "\n")
 
     seen: list[str] = []
     with _pipeline(seen):
@@ -123,7 +132,7 @@ def test_legacy_state_without_fingerprint_resumes_from_its_pointer(workspace):
     uid = "legacy"
     raw = [f"[USER] entry {i}" for i in range(6)]
     (workspace / uid).mkdir(exist_ok=True)
-    (workspace / uid / "trace.log").write_text("\n".join(raw) + "\n")
+    _trace(workspace, uid).write_text("\n".join(raw) + "\n")
     _write_state(workspace, uid, {"last_consolidated_line": 2, "last_daily_summary": "",
                                   "last_decay_run": ""})
 
@@ -150,12 +159,12 @@ def test_rotated_trace_shorter_than_pointer_resets_to_zero(workspace):
     """
     uid = "rotated"
     new_file = [
-        "=== Log rotated at 20260907-120000 — previous entries in archive/trace_logs/ ===",
+        "=== Log rotated at 20260907-120000 — previous entries in trace_logs/ ===",
         "[USER] first entry after rotation",
         "[ASSISTANT] second entry after rotation",
     ]
     (workspace / uid).mkdir(exist_ok=True)
-    (workspace / uid / "trace.log").write_text("\n".join(new_file) + "\n")
+    _trace(workspace, uid).write_text("\n".join(new_file) + "\n")
     _write_state(workspace, uid, {
         "last_consolidated_line": 3000,
         "trace_head": "=== 2026-08-01T00:00:00Z ===",
@@ -184,7 +193,7 @@ def test_replaced_trace_already_longer_than_pointer_is_still_detected(workspace)
     uid = "replaced"
     old_file = ["=== 2026-09-01T00:00:00Z ==="] + [f"[USER] old {i}" for i in range(4)]
     (workspace / uid).mkdir(exist_ok=True)
-    trace = workspace / uid / "trace.log"
+    trace = _trace(workspace, uid)
     trace.write_text("\n".join(old_file) + "\n")
 
     seen: list[str] = []
@@ -192,7 +201,7 @@ def test_replaced_trace_already_longer_than_pointer_is_still_detected(workspace)
         consolidation.consolidate_user(uid)
     assert json.loads(_state_path(workspace, uid).read_text())["last_consolidated_line"] == 5
 
-    new_file = ["=== Log rotated at 20260907-130000 — previous entries in archive/trace_logs/ ==="]
+    new_file = ["=== Log rotated at 20260907-130000 — previous entries in trace_logs/ ==="]
     new_file += [f"[USER] new {i}" for i in range(20)]
     trace.write_text("\n".join(new_file) + "\n")
 
@@ -211,7 +220,7 @@ def test_rotation_reset_is_persisted_even_when_nothing_to_consolidate(workspace)
     """A rotated file that is still empty must not leave the stale pointer behind."""
     uid = "rotated-empty"
     (workspace / uid).mkdir(exist_ok=True)
-    (workspace / uid / "trace.log").write_text("\n\n")
+    _trace(workspace, uid).write_text("\n\n")
     _write_state(workspace, uid, {"last_consolidated_line": 500, "trace_head": "x",
                                   "last_daily_summary": "", "last_decay_run": ""})
 
@@ -244,7 +253,7 @@ def _uniform_trace(workspace, uid: str, n_lines: int, width: int) -> list[str]:
     lines = [f"[USER] {i:04d} " + "t" * (width - 12) for i in range(n_lines)]
     assert all(len(ln) == width for ln in lines)
     (workspace / uid).mkdir(exist_ok=True)
-    (workspace / uid / "trace.log").write_text("\n".join(lines) + "\n")
+    _trace(workspace, uid).write_text("\n".join(lines) + "\n")
     return lines
 
 
@@ -354,11 +363,11 @@ def test_pointer_is_saved_after_every_batch(workspace):
 
 def _rotated_file(workspace, uid: str) -> list[str]:
     new_file = [
-        "=== Log rotated at 20260908-090000 — previous entries in archive/trace_logs/ ===",
+        "=== Log rotated at 20260908-090000 — previous entries in trace_logs/ ===",
         "[USER] first entry after rotation",
     ]
     (workspace / uid).mkdir(exist_ok=True)
-    (workspace / uid / "trace.log").write_text("\n".join(new_file) + "\n")
+    _trace(workspace, uid).write_text("\n".join(new_file) + "\n")
     return new_file
 
 

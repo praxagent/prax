@@ -65,10 +65,13 @@ def action_key(capability: str, payload: dict) -> str:
 # --- store -------------------------------------------------------------------
 
 def _path() -> Path:
+    """In the records directory: what runs once a person approves must not be
+    editable from the sandbox, which mounts the workspace directory."""
+    from prax.services import records
     from prax.settings import settings
-    d = Path(settings.workspace_dir).resolve() / ".prax"
-    d.mkdir(parents=True, exist_ok=True)
-    return d / "parked_approvals.json"
+    return records.shared_file(
+        "parked_approvals.json",
+        legacy=Path(settings.workspace_dir).resolve() / ".prax" / "parked_approvals.json")
 
 
 def _load() -> list[dict]:

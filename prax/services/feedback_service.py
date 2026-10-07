@@ -59,15 +59,11 @@ class FeedbackEntry:
 # ---------------------------------------------------------------------------
 
 def _feedback_dir() -> Path:
-    """Return the directory for feedback JSONL files."""
-    try:
-        from prax.settings import settings
-        base = Path(settings.workspace_dir).resolve()
-    except Exception:
-        base = Path(".")
-    d = base / ".prax" / "feedback"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    """Return the directory for feedback JSONL files: in the records directory,
+    so the agent cannot rate its own answers from the sandbox."""
+    from prax.services import records
+    from prax.settings import settings
+    return records.shared_dir("feedback", legacy=Path(settings.workspace_dir).resolve() / ".prax" / "feedback")
 
 
 def _feedback_file() -> Path:

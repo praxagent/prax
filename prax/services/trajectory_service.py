@@ -43,9 +43,9 @@ _NEGATIVE_SIGNALS = [
 
 
 def _trajectories_dir(user_id: str) -> Path:
-    """Return the trajectories directory for a user."""
-    from prax.services.workspace_service import workspace_root
-    d = Path(workspace_root(user_id)) / ".prax" / "trajectories"
+    """Return the trajectories directory for a user, in the records directory."""
+    from prax.services import records
+    d = records.user_path(user_id, "trajectories", legacy=".prax/trajectories")
     d.mkdir(parents=True, exist_ok=True)
     return d
 

@@ -25,6 +25,9 @@ services:
     group_add: ["0"]
     volumes:
       - ${WORKSPACE_DIR:-../workspaces}:/app/workspaces
+      # The record of what Prax did, outside the workspace the sandbox mounts.
+      # See docs/security/trace-integrity.md.
+      - ${RECORDS_DIR:-../records}:/app/records
       # Service data stored in the user's workspace — visible, portable, backed up.
       - ${WORKSPACE_DIR:-../workspaces}/${PRAX_USER_ID}/.services/qdrant:/data/qdrant
       - ${WORKSPACE_DIR:-../workspaces}/${PRAX_USER_ID}/.services/neo4j:/data/neo4j

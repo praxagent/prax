@@ -243,6 +243,11 @@ class AppSettings(BaseSettings):
 
     # Workspace
     workspace_dir: str = Field(default="../workspaces", alias="WORKSPACE_DIR")
+    # The record of what Prax did (trace logs, execution graphs, trajectories,
+    # parked approvals, feedback). Must be OUTSIDE workspace_dir, which the
+    # sandbox mounts read-write. Empty = records/ next to workspace_dir. See
+    # prax/services/records.py and docs/security/trace-integrity.md.
+    records_dir: str = Field(default="", alias="RECORDS_DIR")
 
     # User identity — which user this Prax instance serves.
     # When set, the sandbox mounts only this user's workspace folder
