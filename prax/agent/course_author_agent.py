@@ -171,7 +171,11 @@ def delegate_course_author(task: str) -> str:
     """
     logger.info("Course author agent delegated: %s", task[:100])
 
-    tools = _build_course_author_tools()
+    from prax.agent.governed_tool import govern_spoke_tools
+    from prax.agent.tool_registry import apply_eval_denylist
+
+    # Governed like every other spoke loop (audit, trifecta legs, floors).
+    tools = govern_spoke_tools(apply_eval_denylist(_build_course_author_tools()))
 
     from prax.plugins.llm_config import get_component_config
     cfg = get_component_config("subagent_codegen")

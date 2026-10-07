@@ -225,12 +225,35 @@ def _self_improve_site(monkeypatch, tools):
     return captured["tools"]
 
 
+def _plugin_fix_site(monkeypatch, tools):
+    from prax.agent import plugin_fix_agent
+    captured: dict = {}
+    _capture_loop(monkeypatch, plugin_fix_agent, captured)
+    monkeypatch.setattr(plugin_fix_agent, "_build_plugin_agent_tools", lambda: list(tools))
+    plugin_fix_agent.delegate_plugin_fix.func("t")
+    return captured["tools"]
+
+
 _SITES = {
     "run_spoke": _run_spoke_site,
     "_run_subagent": _run_subagent_site,
     "_run_research": _research_site,
     "delegate_self_improve": _self_improve_site,
+    "delegate_plugin_fix": _plugin_fix_site,
 }
+
+
+def test_the_plugin_agent_cannot_step_around_a_floor(monkeypatch):
+    """delegate_plugin_fix handed its loop plugin_write / plugin_activate raw:
+    with hard floors on, the floor still never fired on this path (a MEDIUM
+    delegate). Its tools are governed now, so it does."""
+    import prax.settings
+    _flag(monkeypatch, False)
+    monkeypatch.setattr(prax.settings.settings, "hard_floors_enabled", True)
+    calls: list = []
+    [governed] = _plugin_fix_site(monkeypatch, [_high_tool(calls, name="plugin_activate")])
+    out = governed.invoke({"x": "evil-plugin"})
+    assert calls == [] and "ran:" not in out
 
 
 @pytest.mark.parametrize("site", sorted(_SITES))
@@ -272,3 +295,42 @@ def test_build_site_still_binds_request_context(monkeypatch):
         current_user_id.reset(token)
     assert current_user_id.get() != "spoke-user"
     assert governed.invoke({}) == "spoke-user"
+
+
+def test_every_agent_loop_outside_the_hub_gets_governed_tools():
+    """A loop built with raw tools steps around governance entirely: floors,
+    audit, trifecta legs. plugin_fix_agent did, with plugin_write and
+    plugin_activate (both floors) behind a MEDIUM delegate, and so did the
+    course-author and content writer/reviewer loops. Every build_agent_loop
+    call outside the orchestrator (whose tools are hub-governed) must take
+    its tools from govern_spoke_tools(...) in the same function, or none."""
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1] / "prax" / "agent"
+    offenders = []
+    for path in root.rglob("*.py"):
+        if path.name in ("agent_loop.py", "orchestrator.py"):
+            continue
+        tree = ast.parse(path.read_text())
+        for fn in ast.walk(tree):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            governed = {
+                t.id for node in ast.walk(fn) if isinstance(node, ast.Assign)
+                and isinstance(node.value, ast.Call)
+                and getattr(node.value.func, "id", getattr(node.value.func, "attr", "")) == "govern_spoke_tools"
+                for t in node.targets if isinstance(t, ast.Name)
+            }
+            for call in ast.walk(fn):
+                if not (isinstance(call, ast.Call)
+                        and getattr(call.func, "id", getattr(call.func, "attr", "")) == "build_agent_loop"):
+                    continue
+                tools = call.args[1] if len(call.args) > 1 else next(
+                    (k.value for k in call.keywords if k.arg == "tools"), None)
+                if isinstance(tools, ast.List) and not tools.elts:
+                    continue
+                if isinstance(tools, ast.Name) and tools.id in governed:
+                    continue
+                offenders.append(f"{path.relative_to(root.parents[1])}:{call.lineno}")
+    assert offenders == [], f"agent loops built with ungoverned tools: {offenders}"

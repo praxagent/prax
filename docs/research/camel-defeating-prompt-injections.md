@@ -4,6 +4,20 @@
 provenance) and five smaller fixes the comparison exposed; don't adopt the
 architecture.**
 
+**Fixed with this note (2026-10-06):**
+- Four agent loops ran with ungoverned tools, and are now governed, with a
+  guard test that fails on any new one:
+  - the plugin agent, where `plugin_write` and `plugin_activate` (floors) sat
+    behind a MEDIUM delegate;
+  - the course author;
+  - the content writer and reviewer.
+- The desktop's action tools are trifecta sinks, and running a command there
+  taints the egress gate (adopt 2).
+- TeamWork loads images from other sites only on a click (adopt 1, in the
+  TeamWork repo).
+
+Adopts 3–6 and the parked 7 are still open.
+
 **Is Prax robust to what CaMeL addresses? Not by design.** CaMeL's attacker
 controls what tools return. It wants one of two things: an extra action
 (corrupted control flow), or a different argument to an action the user did
@@ -469,7 +483,9 @@ private leg.
    through `delegate_plugin_fix`. `course_author_agent.py` and the content
    writer and reviewer loops are unwrapped too. Public links still hold on
    those paths, because the share registry checks a second time. The plugin
-   floors have no second check.
+   floors have no second check. **Fixed:** all four loops are governed now, and
+   `tests/test_spoke_governance.py` fails on any agent loop outside the hub
+   built with ungoverned tools.
 2. **`LETHAL_TRIFECTA_GUARD`.** Its description in `prax/settings.py` lists
    browser actions among the sinks it escalates. Browser clicks and fills run
    inside the browser spoke, where the gate enforces only with

@@ -886,7 +886,12 @@ def _tag_result(
 
 
 # Tools that run code inside the sandbox, where /workspace is the user's data.
-_SANDBOX_EXEC_TOOLS = frozenset({"sandbox_shell", "run_python", "data_query", "lean_check"})
+# The desktop ones type a command into a terminal there (and press Enter), or
+# launch a program: the same as sandbox_shell, on the screen the user watches.
+_SANDBOX_EXEC_TOOLS = frozenset({
+    "sandbox_shell", "run_python", "data_query", "lean_check",
+    "desktop_type", "desktop_key", "desktop_open",
+})
 
 
 # How many tool calls an over-budget turn may still attempt (each refused) to
