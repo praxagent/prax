@@ -1358,6 +1358,14 @@ class ConversationAgent:
             + history
             + [HumanMessage(content=user_input)]
         )
+        # Every URL the model is shown at the start counts as seen: copying one
+        # later is fine (prax/agent/url_provenance.py).
+        try:
+            from prax.agent.governed_tool import note_seen_text
+            for _m in messages:
+                note_seen_text(message_text(_m))
+        except Exception:
+            logger.debug("seeding seen URLs failed", exc_info=True)
 
         # Context window management — budget, clear old tool results, compact.
         try:
