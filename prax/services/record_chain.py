@@ -98,6 +98,7 @@ _KINDS: list[tuple[str, re.Pattern[str], frozenset[str]]] = [
      frozenset({"append", "write", "delete", "adopt"})),
     ("feedback", re.compile(r"feedback/[^/]+"), frozenset({"append", "adopt"})),
     ("parked approvals", re.compile(r"parked_approvals\.json"), frozenset({"write", "adopt"})),
+    ("legacy moves", re.compile(r"\.legacy-moved\.json"), frozenset({"write", "adopt"})),
 ]
 
 

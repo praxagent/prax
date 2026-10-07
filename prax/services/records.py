@@ -32,6 +32,7 @@ outside Prax altogether. See
 """
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import threading
@@ -42,6 +43,11 @@ logger = logging.getLogger(__name__)
 _adopted: set[tuple[str, str]] = set()
 _adopt_lock = threading.Lock()
 _warned_inside = False
+# Old locations already moved (or found empty), kept in RECORDS_DIR so a move
+# happens once per deployment, not once per process: the old locations are in
+# the workspace the sandbox writes to, and a file planted there after the move
+# must not become a record at the next restart.
+LEGACY_MARKER = ".legacy-moved.json"
 
 
 def _workspace_dir() -> Path:
@@ -70,16 +76,50 @@ def _warn_if_inside_workspace(root: Path) -> None:
             "to a directory outside it.", root, ws)
 
 
+def _legacy_done(root: Path) -> dict:
+    try:
+        return json.loads((root / LEGACY_MARKER).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        logger.error("records: %s is unreadable; not moving anything from old locations",
+                     root / LEGACY_MARKER, exc_info=True)
+        return {"*": "unreadable"}
+
+
+def _mark_legacy_done(root: Path, old: Path) -> None:
+    from datetime import UTC, datetime
+
+    from prax.services import record_chain
+    done = _legacy_done(root)
+    done.pop("*", None)
+    done[str(old)] = datetime.now(UTC).isoformat(timespec="seconds")
+    record_chain.write(root / LEGACY_MARKER,
+                       (json.dumps(done, indent=1, sort_keys=True) + "\n").encode("utf-8"),
+                       note="legacy location checked")
+
+
 def _adopt(old: Path, new: Path) -> None:
-    """Move a record from where it used to live, once. Never overwrites.
-    What moves in is journaled as it arrived (``record_chain.adopt``)."""
+    """Move a record from where it used to live, once per deployment. Never
+    overwrites. What moves in is journaled as it arrived
+    (``record_chain.adopt``). Once an old location has been checked, moved or
+    found empty, it is never looked at again (``LEGACY_MARKER``)."""
     key = (str(old), str(new))
     if key in _adopted:
         return
     with _adopt_lock:
         if key in _adopted:
             return
+        root = records_root()
+        done = _legacy_done(root)
+        if str(old) in done or "*" in done:
+            if old.exists() and str(old) in done:
+                logger.warning("records: %s appeared at an old location after the move; "
+                               "it is not a record and was left where it is", old)
+            _adopted.add(key)
+            return
         moved: list[Path] = []
+        failed = False
         try:
             if old.is_dir():
                 new.mkdir(parents=True, exist_ok=True)
@@ -98,7 +138,13 @@ def _adopt(old: Path, new: Path) -> None:
                 moved.append(new)
                 logger.info("records: moved %s to %s", old, new)
         except Exception:
+            failed = True
             logger.warning("records: could not move %s to %s", old, new, exc_info=True)
+        if not failed:
+            try:
+                _mark_legacy_done(root, old)
+            except Exception:
+                logger.error("records: could not record that %s was moved", old, exc_info=True)
         if moved:
             from prax.services import record_chain
             for path in moved:

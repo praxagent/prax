@@ -7,7 +7,7 @@ against the model path, which the agent doesn't control.
 The proxy's wire record (prax-secrets-proxy ``PROXY_WIRE_RECORD``) lists, per
 model response, the tool calls the model told Prax to make — names and
 argument hashes, written outside Prax. Prax's traces
-(``$WORKSPACE_DIR/.prax/graphs/graphs-*.jsonl``) list the tool calls Prax says
+(``$RECORDS_DIR/graphs/graphs-*.jsonl``) list the tool calls Prax says
 it made. A call on the wire with no matching tool span in the traces, shortly
 after, is what this reports: activity Prax didn't account for.
 

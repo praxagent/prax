@@ -85,10 +85,13 @@ def test_a_clean_run_verifies(root):
     _everything()
     result = record_chain.verify(root)
     assert result["ok"], result["problems"]
-    assert result["files"] == 5  # trace log, one day's graphs, feedback, trajectory, parked
-    ops = [json.loads(line)["op"] for line in _journal(root)]
+    # trace log, one day's graphs, feedback, trajectory, parked, and the list of
+    # old locations already moved (records.LEGACY_MARKER)
+    assert result["files"] == 6
+    entries = [json.loads(line) for line in _journal(root)]
+    ops = [e["op"] for e in entries if e["file"] != records.LEGACY_MARKER]
     assert ops.count("append") == 6 and ops.count("write") == 1
-    assert result["head"]["seq"] == len(ops)
+    assert result["head"]["seq"] == len(entries)
 
 
 def test_record_formats_are_unchanged(root):
@@ -185,7 +188,9 @@ def test_entries_another_process_added_are_picked_up(root):
     _trace("A again")
     result = record_chain.verify(root)
     assert result["ok"], result["problems"]
-    assert result["head"]["seq"] == 3
+    entries = [json.loads(line) for line in _journal(root)]
+    assert [e["op"] for e in entries if e["file"] != records.LEGACY_MARKER] == ["append"] * 3
+    assert result["head"]["seq"] == len(entries)
 
 
 def test_a_journal_ending_without_a_newline_is_continued(root):

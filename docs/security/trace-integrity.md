@@ -34,8 +34,13 @@ read-write as root. In production it mounts every user's workspace at
 
 `RECORDS_DIR` defaults to `records/` next to `WORKSPACE_DIR`: never inside it.
 Records found in their old places move there the first time each is used
-(`prax/services/records.py`). Prax logs a warning if `RECORDS_DIR` is set
-inside the workspace directory.
+(`prax/services/records.py`).
+- **Each old location is checked once per deployment, not once per process.**
+  The ones already checked are listed in `RECORDS_DIR/.legacy-moved.json`,
+  which is itself journaled. The old locations are in the workspace the sandbox
+  writes to, so a file planted there after the move is left where it is, with
+  a warning, and never becomes a record.
+- Prax logs a warning if `RECORDS_DIR` is set inside the workspace directory.
 
 ## What protects them
 

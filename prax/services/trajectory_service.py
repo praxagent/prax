@@ -6,7 +6,7 @@ outcome metadata (correction, tool_failure, success, etc.) so the
 fine-tuning pipeline can filter by quality.
 
 Trajectories are stored in:
-    {workspace}/{user_id}/.prax/trajectories/
+    {RECORDS_DIR}/users/{workspace}/trajectories/
         completed.jsonl   — successful exchanges
         failed.jsonl      — corrections, tool failures, user complaints
 

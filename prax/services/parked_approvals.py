@@ -20,8 +20,9 @@ Nothing here decides anything: the person decides in TeamWork. A re-run that
 reaches a *different* action asks again (and may park again, up to
 ``PARKED_MAX_RESUMES`` times per task).
 
-The store is one JSON file under the workspace root, so parked requests
-survive a restart.
+The store is one JSON file in the records directory, out of the sandbox's
+reach and hash-chained (prax/services/records.py), so parked requests survive a
+restart and what runs on approval can't be rewritten from the sandbox.
 """
 from __future__ import annotations
 

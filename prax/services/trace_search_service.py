@@ -10,7 +10,7 @@ Design:
   collection (``prax_trace_summaries``) so memory and trace search
   don't pollute each other's ranking.
 - **Lazy indexing.** The first time ``search_traces`` runs in a
-  process, it scans ``.prax/graphs/graphs-*.jsonl`` and upserts any
+  process, it scans ``RECORDS_DIR/graphs/graphs-*.jsonl`` and upserts any
   trace ID not already in the collection.  Subsequent calls skip
   already-indexed IDs via an in-memory set.
 - **Graceful degradation.** When Qdrant is unreachable or the

@@ -116,3 +116,28 @@ def test_identities_sharing_a_workspace_share_one_record(layout):
     trace log; keyed by the workspace's real name, they still do."""
     os.symlink(layout / USER, layout / "usr_alias")
     assert records.user_dir(USER) == records.user_dir("usr_alias")
+
+
+def test_a_file_planted_at_an_old_location_after_the_move_is_not_a_record(layout):
+    """The old locations are in the workspace the sandbox writes to. The move
+    happens once per deployment (recorded in RECORDS_DIR), not once per
+    process: otherwise a fake rotated log or graphs file dropped there would
+    become a record at the next restart."""
+    from prax.agent import trace as trace_mod
+    from prax.services import record_chain
+
+    old = layout / ".prax" / "graphs"
+    old.mkdir(parents=True)
+    (old / "graphs-2026-09-01.jsonl").write_text('{"trace_id": "real"}\n')
+    graphs = trace_mod._graphs_dir()                       # the one-time move
+    assert (graphs / "graphs-2026-09-01.jsonl").exists()
+
+    records._reset_for_tests()                             # a restart
+    old.mkdir(parents=True, exist_ok=True)
+    (old / "graphs-2026-09-02.jsonl").write_text('{"trace_id": "planted"}\n')
+    trace_mod._graphs_dir()
+
+    assert not (graphs / "graphs-2026-09-02.jsonl").exists()
+    assert (old / "graphs-2026-09-02.jsonl").exists()      # left where it was
+    assert str(old) in json.loads((records.records_root() / records.LEGACY_MARKER).read_text())
+    assert record_chain.verify(records.records_root())["ok"]
