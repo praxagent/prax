@@ -159,6 +159,16 @@ def create_app():
 
     ensure_conversation_db(database_name=settings.database_name)
 
+    # Anchor the head of the records' hash chain where Prax's own user cannot
+    # rewrite it, and keep anchoring it (prax/services/record_chain.py,
+    # docs/security/trace-integrity.md). After reconcile_workspace_dir(), which
+    # can change the workspace directory the records sit beside.
+    try:
+        from prax.services import record_chain
+        record_chain.start()
+    except Exception:
+        logger.error("Record chain: could not anchor the head at startup", exc_info=True)
+
     # In debug mode Werkzeug spawns a reloader process + a child process.
     # Both the parent and child would otherwise call init_scheduler() and
     # init_discord_bot(), causing duplicate jobs (one per scheduler instance)

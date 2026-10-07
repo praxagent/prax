@@ -6,10 +6,13 @@ graphs, trajectories, parked approvals, feedback) lived inside the workspace
 directory, which the sandbox mounts read-write as root. One `sandbox_shell`
 call could delete or rewrite all of them. They now live in `RECORDS_DIR`,
 outside every sandbox mount and workspace tool, and the system prompt carries a
-standing rule against tampering. The paper's main recommendation, a record kept
-on the model path out of the agent's reach, Prax already had in the secrets
-proxy's wire record, but only as an opt-in. What is protected, and what is
-not, is in [Trace integrity](../security/trace-integrity.md).
+standing rule against tampering. Every write to them is journaled in a hash
+chain; under systemd its head is anchored in the system journal, so tampering
+by host-side code is evident, though not prevented. The paper's main
+recommendation, a record kept on the model path out of the agent's reach, Prax
+already had in the secrets proxy's wire record, but only as an opt-in. What is
+protected, and what is not, is in
+[Trace integrity](../security/trace-integrity.md).
 
 Source: Qin, Schmotz, Prinzhorn, Beurer-Kellner, Prabhu, Andriushchenko,
 "LLM Agents Can Easily Tamper With Their Own Traces",
@@ -92,16 +95,31 @@ third finding in miniature.
    - turn on the wire record;
    - anchor its head hash off-box;
    - back up `RECORDS_DIR`.
+5. **A hash chain on Prax's own records** (`prax/services/record_chain.py`),
+   the Agent Flight Recorder idea the paper cites:
+   - every write to a record is journaled in `RECORDS_DIR/chain.jsonl`: one
+     hash-chained line per append, whole-file write, rotation, retention
+     delete or adoption, under the same lock as the write;
+   - the head is published as a `RECORD-CHAIN-HEAD` line, which goes straight
+     to the system journal under systemd (root's, out of Prax's user's
+     reach);
+   - `python -m prax.services.record_chain verify --anchors-from -` reports
+     edits, truncation, appends from outside Prax, deleted and planted files,
+     journal edits, and a rewritten journal against any earlier head line.
+
+   It adds tamper evidence against host-side code (plugin subprocesses,
+   self-improvement changes, a compromised Prax), not prevention. Such code
+   can still append entries the chain accepts, and nothing stops a
+   compromised Prax omitting or fabricating events before they are written,
+   which is the paper's own caveat. What it covers is in
+   [Tamper evidence](../security/trace-integrity.md#tamper-evidence).
 
 ## Not adopted, or still open
 
 - **Defence against full host compromise.** On one machine, every record,
   container data under rootless Docker included, belongs to Prax's own user.
-  Only an off-box copy survives that. This is an operator task, not code.
-- **A hash chain on Prax's own records.** The wire record is chained; Prax's
-  trace log and graphs are not. It would add tamper evidence against host-side
-  code (plugin subprocesses, self-improvement changes), not against the
-  agent's tools, which can no longer reach them.
+  The hash chain makes changes evident; only an off-box copy survives them.
+  This is an operator task, not code.
 - **The conversation database and the workspace's git history** are still in
   the sandbox's reach. They are memory and the user's file history rather than
   the audit, so moving the database is a follow-up.

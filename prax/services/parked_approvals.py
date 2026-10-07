@@ -85,10 +85,10 @@ def _load() -> list[dict]:
 
 
 def _save(entries: list[dict]) -> None:
-    p = _path()
-    tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(entries, indent=1))
-    tmp.replace(p)
+    """Replace the store atomically; journaled (``prax/services/record_chain.py``),
+    so an edit made outside Prax is evident."""
+    from prax.services import record_chain
+    record_chain.write(_path(), json.dumps(entries, indent=1).encode("utf-8"))
 
 
 def pending() -> list[dict]:

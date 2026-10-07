@@ -2316,8 +2316,10 @@ def _rotate_trace(trace_path: str, archive_dir: str) -> None:
 
     Rotated logs are kept. They used to be pruned to the last three, which was
     survivable only while the workspace's git history held the rest; a record
-    is not something Prax deletes.
+    is not something Prax deletes. The rename and the new file's header line
+    are journaled (``prax/services/record_chain.py``).
     """
+    from prax.services import record_chain
     try:
         if not os.path.isfile(trace_path):
             return
@@ -2325,9 +2327,9 @@ def _rotate_trace(trace_path: str, archive_dir: str) -> None:
             return
         ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
         rotated = os.path.join(archive_dir, f"trace.{ts}.log")
-        shutil.move(trace_path, rotated)
-        with open(trace_path, "w", encoding="utf-8") as f:
-            f.write(f"=== Log rotated at {ts} — previous entries in trace_logs/ ===\n")
+        header = f"=== Log rotated at {ts} — previous entries in trace_logs/ ===\n"
+        record_chain.rotate(trace_path, rotated, header=header.encode("utf-8"),
+                            min_size=_TRACE_MAX_BYTES)
     except OSError:
         logger.debug("Trace rotation failed for %s", trace_path, exc_info=True)
 
@@ -2340,8 +2342,9 @@ def append_trace(user_id: str, entries: list[dict]) -> None:
     supported types.
 
     The trace log is append-only, kept in the records directory out of the
-    agent's reach, and searchable via conversation_search /
-    conversation_history. Rotated to a plain-text archive past 0.5 MB.
+    agent's reach, hash-chained (``prax/services/record_chain.py``), and
+    searchable via conversation_search / conversation_history. Rotated to a
+    plain-text archive past 0.5 MB.
     """
     if not entries:
         return
@@ -2361,9 +2364,9 @@ def append_trace(user_id: str, entries: list[dict]) -> None:
         if len(content) > 5000:
             content = content[:5000] + "\n... [truncated]"
         lines.append(f"[{tag}] {content}\n")
+    from prax.services import record_chain
     try:
-        with open(trace_path, "a", encoding="utf-8") as f:
-            f.writelines(lines)
+        record_chain.append(trace_path, "".join(lines).encode("utf-8"))
     except OSError:
         logger.debug("Failed to write trace log for %s", user_id, exc_info=True)
 

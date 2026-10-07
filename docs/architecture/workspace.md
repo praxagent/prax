@@ -44,6 +44,7 @@ workspaces/usr_{id8}/          ← opaque id from identity_service (pre-existing
 
 records/                   ← RECORDS_DIR: beside workspaces/, never inside it (the sandbox
 │                            mounts the workspace). See ../security/trace-integrity.md.
+├── chain.jsonl            ← hash-chained journal of every write below (tamper evidence)
 ├── graphs/                ← execution graphs (trace_search, trace_detail, TeamWork graph view)
 ├── feedback/              ← users' ratings of answers
 ├── parked_approvals.json  ← what runs once a person approves

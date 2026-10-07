@@ -663,12 +663,13 @@ class TestReport:
             "_check_settings": "[OK] Settings: x",
             "_check_health_monitor": "[FAIL] Health Monitor: x",
             "_check_log_health": "[WARN] Log health: x\n    3 × WARNING a.py:1 — t",
+            "_check_records": "[OK] Records: x",
         }
         for name, value in results.items():
             monkeypatch.setattr(doctor, name, lambda value=value: value)
 
         out = doctor.prax_doctor.invoke({})
 
-        assert out.splitlines()[0] == "Prax Doctor -- 5 healthy, 3 warnings, 1 errors"
+        assert out.splitlines()[0] == "Prax Doctor -- 6 healthy, 3 warnings, 1 errors"
         assert "Spokes" not in out
         assert not hasattr(doctor, "_check_spokes")

@@ -158,9 +158,9 @@ def export_trajectory(
             "tool_count": sum(1 for m in messages if isinstance(m, ToolMessage)),
         }
 
+        from prax.services import record_chain
         filepath = _trajectories_dir(user_id) / filename
-        with open(filepath, "a") as f:
-            f.write(json.dumps(example, ensure_ascii=False) + "\n")
+        record_chain.append(filepath, (json.dumps(example, ensure_ascii=False) + "\n").encode("utf-8"))
 
         logger.debug(
             "Trajectory exported: user=%s outcome=%s file=%s",

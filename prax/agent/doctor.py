@@ -1,8 +1,8 @@
 """Self-diagnostic tool -- Prax's equivalent of ``brew doctor``.
 
 Checks LLM configuration, sandbox health, plugin status, workspace integrity,
-TeamWork connectivity, scheduler state, the health monitor, and recurring log
-warnings.
+TeamWork connectivity, scheduler state, the health monitor, recurring log
+warnings, and the head of the records' hash chain.
 
 Every reading comes from the ``settings`` object, never ``os.environ``:
 pydantic loads ``.env`` itself and does not export it, so on a host-process
@@ -27,8 +27,8 @@ def prax_doctor() -> str:
 
     Checks LLM configuration (builds a model for every enabled tier), sandbox
     availability, plugin status, workspace integrity, TeamWork connectivity,
-    scheduler state, the health monitor's verdict, and the warnings and errors
-    that keep recurring in the log.
+    scheduler state, the health monitor's verdict, the warnings and errors
+    that keep recurring in the log, and the records' hash chain.
 
     Use this when:
     - Something isn't working and you want to understand why
@@ -46,6 +46,7 @@ def prax_doctor() -> str:
     checks.append(_check_settings())
     checks.append(_check_health_monitor())
     checks.append(_check_log_health())
+    checks.append(_check_records())
 
     ok = sum(1 for c in checks if c.startswith("[OK]"))
     warn = sum(1 for c in checks if c.startswith("[WARN]"))
@@ -250,6 +251,28 @@ def _check_health_monitor() -> str:
         return f"{prefix} Health Monitor: {check.overall} ({age}) — {alert_summary}"
     except Exception as e:
         return f"[WARN] Health Monitor: {e}"
+
+
+def _check_records() -> str:
+    # The records' hash chain (prax/services/record_chain.py): its head, and
+    # any change made outside Prax that the writers noticed since startup. The
+    # full check is `python -m prax.services.record_chain verify`.
+    try:
+        from prax.services import record_chain
+        s = record_chain.status()
+        head = s["head"]
+        base = f"chain head seq={head['seq']} hash={head['hash'][:16]}"
+        issues = []
+        if s["alerts"]:
+            shown = "; ".join(f"{a['file']}: {a['detail']}" for a in s["alerts"][-3:])
+            issues.append(f"{len(s['alerts'])} change(s) made outside Prax noticed ({shown})")
+        if s["journal_errors"]:
+            issues.append(f"{s['journal_errors']} journal write(s) failed")
+        if issues:
+            return f"[WARN] Records: {base}; " + "; ".join(issues)
+        return f"[OK] Records: {base}"
+    except Exception as e:
+        return f"[WARN] Records: {e}"
 
 
 def _check_log_health() -> str:

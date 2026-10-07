@@ -22,8 +22,12 @@ mount and no workspace file tool reaches it. Existing files move there the
 first time each is used.
 
 This holds against the agent's tools. It does not hold against code running on
-the host as Prax's user (a plugin subprocess, a compromised Prax): for that the
-independent record is the secrets proxy's hash-chained wire record. See
+the host as Prax's user (a plugin subprocess, a compromised Prax), which can
+still write here. Against that, every write is journaled in a hash chain whose
+head is anchored in the system journal under systemd
+(``prax/services/record_chain.py``), so a change made outside Prax is evident,
+not prevented; and the secrets proxy's hash-chained wire record is kept
+outside Prax altogether. See
 ``docs/security/trace-integrity.md``.
 """
 from __future__ import annotations
@@ -67,13 +71,15 @@ def _warn_if_inside_workspace(root: Path) -> None:
 
 
 def _adopt(old: Path, new: Path) -> None:
-    """Move a record from where it used to live, once. Never overwrites."""
+    """Move a record from where it used to live, once. Never overwrites.
+    What moves in is journaled as it arrived (``record_chain.adopt``)."""
     key = (str(old), str(new))
     if key in _adopted:
         return
     with _adopt_lock:
         if key in _adopted:
             return
+        moved: list[Path] = []
         try:
             if old.is_dir():
                 new.mkdir(parents=True, exist_ok=True)
@@ -81,6 +87,7 @@ def _adopt(old: Path, new: Path) -> None:
                     target = new / child.name
                     if not target.exists():
                         shutil.move(str(child), str(target))
+                        moved.append(target)
                 try:
                     old.rmdir()
                 except OSError:
@@ -88,9 +95,17 @@ def _adopt(old: Path, new: Path) -> None:
             elif old.is_file() and not new.exists():
                 new.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(old), str(new))
+                moved.append(new)
                 logger.info("records: moved %s to %s", old, new)
         except Exception:
             logger.warning("records: could not move %s to %s", old, new, exc_info=True)
+        if moved:
+            from prax.services import record_chain
+            for path in moved:
+                try:
+                    record_chain.adopt(path, source="legacy")
+                except Exception:
+                    logger.error("records: could not journal %s", path, exc_info=True)
         _adopted.add(key)
 
 
@@ -140,3 +155,5 @@ def _reset_for_tests() -> None:
     global _warned_inside
     _adopted.clear()
     _warned_inside = False
+    from prax.services import record_chain
+    record_chain._reset_for_tests()

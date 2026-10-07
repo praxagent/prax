@@ -72,12 +72,12 @@ def _feedback_file() -> Path:
 
 
 def _append_feedback(entry: FeedbackEntry) -> None:
-    """Append a feedback entry to the JSONL file."""
+    """Append a feedback entry to the JSONL file (journaled: ``record_chain``)."""
+    from prax.services import record_chain
     try:
         filepath = _feedback_file()
         line = json.dumps(asdict(entry), default=str)
-        with open(filepath, "a") as f:
-            f.write(line + "\n")
+        record_chain.append(filepath, (line + "\n").encode("utf-8"))
     except Exception:
         logger.warning("Failed to persist feedback %s", entry.id, exc_info=True)
 
