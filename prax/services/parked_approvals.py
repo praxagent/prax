@@ -20,8 +20,9 @@ Nothing here decides anything: the person decides in TeamWork. A re-run that
 reaches a *different* action asks again (and may park again, up to
 ``PARKED_MAX_RESUMES`` times per task).
 
-The store is one JSON file under the workspace root, so parked requests
-survive a restart.
+The store is one JSON file in the records directory, out of the sandbox's
+reach and hash-chained (prax/services/records.py), so parked requests survive a
+restart and what runs on approval can't be rewritten from the sandbox.
 """
 from __future__ import annotations
 
@@ -65,10 +66,13 @@ def action_key(capability: str, payload: dict) -> str:
 # --- store -------------------------------------------------------------------
 
 def _path() -> Path:
+    """In the records directory: what runs once a person approves must not be
+    editable from the sandbox, which mounts the workspace directory."""
+    from prax.services import records
     from prax.settings import settings
-    d = Path(settings.workspace_dir).resolve() / ".prax"
-    d.mkdir(parents=True, exist_ok=True)
-    return d / "parked_approvals.json"
+    return records.shared_file(
+        "parked_approvals.json",
+        legacy=Path(settings.workspace_dir).resolve() / ".prax" / "parked_approvals.json")
 
 
 def _load() -> list[dict]:
@@ -82,10 +86,10 @@ def _load() -> list[dict]:
 
 
 def _save(entries: list[dict]) -> None:
-    p = _path()
-    tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(entries, indent=1))
-    tmp.replace(p)
+    """Replace the store atomically; journaled (``prax/services/record_chain.py``),
+    so an edit made outside Prax is evident."""
+    from prax.services import record_chain
+    record_chain.write(_path(), json.dumps(entries, indent=1).encode("utf-8"))
 
 
 def pending() -> list[dict]:

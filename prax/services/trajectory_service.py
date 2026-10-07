@@ -6,7 +6,7 @@ outcome metadata (correction, tool_failure, success, etc.) so the
 fine-tuning pipeline can filter by quality.
 
 Trajectories are stored in:
-    {workspace}/{user_id}/.prax/trajectories/
+    {RECORDS_DIR}/users/{workspace}/trajectories/
         completed.jsonl   — successful exchanges
         failed.jsonl      — corrections, tool failures, user complaints
 
@@ -43,9 +43,9 @@ _NEGATIVE_SIGNALS = [
 
 
 def _trajectories_dir(user_id: str) -> Path:
-    """Return the trajectories directory for a user."""
-    from prax.services.workspace_service import workspace_root
-    d = Path(workspace_root(user_id)) / ".prax" / "trajectories"
+    """Return the trajectories directory for a user, in the records directory."""
+    from prax.services import records
+    d = records.user_path(user_id, "trajectories", legacy=".prax/trajectories")
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -158,9 +158,9 @@ def export_trajectory(
             "tool_count": sum(1 for m in messages if isinstance(m, ToolMessage)),
         }
 
+        from prax.services import record_chain
         filepath = _trajectories_dir(user_id) / filename
-        with open(filepath, "a") as f:
-            f.write(json.dumps(example, ensure_ascii=False) + "\n")
+        record_chain.append(filepath, (json.dumps(example, ensure_ascii=False) + "\n").encode("utf-8"))
 
         logger.debug(
             "Trajectory exported: user=%s outcome=%s file=%s",

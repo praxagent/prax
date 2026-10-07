@@ -38,7 +38,7 @@ User rates message       ┌──────────────┐
 ## 1. Feedback Capture
 
 Users rate agent messages with thumbs up/down via TeamWork. Each rating
-is stored in `{workspace}/.prax/feedback/feedback.jsonl`.
+is stored in `{RECORDS_DIR}/feedback/feedback.jsonl` (out of the agent's reach; it was `{workspace}/.prax/feedback/`).
 
 **API:**
 

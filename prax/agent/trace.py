@@ -529,31 +529,24 @@ _graphs_loaded = False
 
 
 def _graphs_dir() -> Path:
-    """Return the directory for persisted graph JSONL files.
-
-    Stored INSIDE workspace_dir (not its parent) so Docker volume mounts
-    that map workspace_dir to a host path also persist graphs across
-    container restarts.
+    """Return the directory for persisted graph JSONL files: in the records
+    directory, outside the workspace the sandbox mounts (they used to be at
+    ``workspace_dir/.prax/graphs`` and move on first use).
     """
-    try:
-        from prax.settings import settings
-        base = Path(settings.workspace_dir).resolve()
-    except Exception:
-        base = Path(".")
-    d = base / ".prax" / "graphs"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    from prax.services import records
+    return records.graphs_dir()
 
 
 def _persist_graph(graph: ExecutionGraph) -> None:
-    """Append a completed graph as one JSON line to today's file."""
+    """Append a completed graph as one JSON line to today's file (journaled:
+    ``prax/services/record_chain.py``)."""
+    from prax.services import record_chain
     try:
         d = _graphs_dir()
         today = datetime.now(UTC).strftime("%Y-%m-%d")
         filepath = d / f"graphs-{today}.jsonl"
         line = json.dumps(graph.to_dict(), default=str)
-        with open(filepath, "a") as f:
-            f.write(line + "\n")
+        record_chain.append(filepath, (line + "\n").encode("utf-8"))
     except Exception:
         logger.warning("Failed to persist execution graph %s", graph.trace_id, exc_info=True)
 
@@ -565,8 +558,10 @@ def _rotate_graph_files() -> None:
     age window (TRACE_RETENTION_DAYS, 0 = no age limit) keeps a quiet
     instance's history, and a size cap (TRACE_RETENTION_MAX_MB, 0 = no cap)
     keeps a busy one from filling the disk. Oldest files go first; today's
-    file, still being written, is never deleted.
+    file, still being written, is never deleted. Each deletion is journaled
+    with what the file held (``prax/services/record_chain.py``).
     """
+    from prax.services import record_chain
     try:
         from prax.settings import settings
         max_mb = max(0, int(getattr(settings, "trace_retention_max_mb", 0) or 0))
@@ -581,7 +576,7 @@ def _rotate_graph_files() -> None:
         if days > 0:
             cutoff_str = (datetime.now(UTC) - timedelta(days=days)).strftime("%Y-%m-%d")
             for f in [f for f in files if f.stem.replace("graphs-", "") < cutoff_str]:
-                f.unlink(missing_ok=True)
+                record_chain.delete(f, reason=f"retention: older than {days} days")
                 logger.info("Rotated graph file %s (older than %d days)", f.name, days)
             files = [f for f in files if f.exists()]
         if max_mb > 0:
@@ -593,7 +588,7 @@ def _rotate_graph_files() -> None:
                 if f.stem.replace("graphs-", "") == today:
                     continue
                 total -= f.stat().st_size
-                f.unlink(missing_ok=True)
+                record_chain.delete(f, reason=f"retention: traces over {max_mb} MB")
                 logger.info("Rotated graph file %s (traces over %d MB)", f.name, max_mb)
     except Exception:
         logger.debug("Graph file rotation failed", exc_info=True)
@@ -1084,14 +1079,21 @@ def delete_graph(trace_id: str) -> bool:
     with _active_graphs_lock:
         removed = _active_graphs.pop(trace_id, None)
 
-    # Also remove from persisted files so it doesn't reload on restart.
+    # Also remove from persisted files so it doesn't reload on restart. The
+    # rewrite is journaled, naming the trace (prax/services/record_chain.py).
+    from prax.services import record_chain
+
+    def scrub(data: bytes) -> bytes | None:
+        lines = data.decode("utf-8").strip().splitlines()
+        kept = [ln for ln in lines if f'"trace_id": "{trace_id}"' not in ln]
+        if len(kept) == len(lines):
+            return None
+        return ("\n".join(kept) + "\n" if kept else "").encode("utf-8")
+
     try:
         d = _graphs_dir()
         for filepath in d.glob("graphs-*.jsonl"):
-            lines = filepath.read_text().strip().splitlines()
-            kept = [ln for ln in lines if f'"trace_id": "{trace_id}"' not in ln]
-            if len(kept) < len(lines):
-                filepath.write_text("\n".join(kept) + "\n" if kept else "")
+            record_chain.rewrite(filepath, scrub, note=f"delete trace {trace_id}")
     except Exception:
         logger.warning("Failed to scrub graph %s from disk", trace_id, exc_info=True)
 
@@ -1106,24 +1108,27 @@ def update_graph_session(trace_id: str, new_session_id: str) -> bool:
             return False
         graph.session_id = new_session_id
 
-    # Update on disk — rewrite the line with the new session_id.
+    # Update on disk — rewrite the line with the new session_id (journaled).
+    from prax.services import record_chain
+
+    def move(data: bytes) -> bytes | None:
+        updated = False
+        new_lines = []
+        for ln in data.decode("utf-8").strip().splitlines():
+            if f'"trace_id": "{trace_id}"' in ln:
+                entry = json.loads(ln)
+                entry["session_id"] = new_session_id
+                new_lines.append(json.dumps(entry))
+                updated = True
+            else:
+                new_lines.append(ln)
+        return ("\n".join(new_lines) + "\n").encode("utf-8") if updated else None
+
     try:
         d = _graphs_dir()
         for filepath in d.glob("graphs-*.jsonl"):
-            lines = filepath.read_text().strip().splitlines()
-            updated = False
-            new_lines = []
-            for ln in lines:
-                if f'"trace_id": "{trace_id}"' in ln:
-                    import json
-                    data = json.loads(ln)
-                    data["session_id"] = new_session_id
-                    new_lines.append(json.dumps(data))
-                    updated = True
-                else:
-                    new_lines.append(ln)
-            if updated:
-                filepath.write_text("\n".join(new_lines) + "\n")
+            record_chain.rewrite(filepath, move,
+                                 note=f"move trace {trace_id} to session {new_session_id}")
     except Exception:
         logger.warning("Failed to update session for graph %s on disk", trace_id, exc_info=True)
 

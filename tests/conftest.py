@@ -261,6 +261,13 @@ def configure_test_env(monkeypatch, tmp_path):
 
     # Use a per-test temp dir so no test writes to ./workspaces.
     monkeypatch.setenv("WORKSPACE_DIR", str(tmp_path / "ws"))
+    # ...and for the records (prax/services/records.py). Explicit, because the
+    # default (records/ beside the workspace dir) would be shared by every test
+    # that points workspace_dir at its tmp_path itself.
+    monkeypatch.setenv("RECORDS_DIR", str(tmp_path / "records"))
+    # A test run inside a systemd service (a CI runner) must not send record-
+    # chain head lines to that machine's journal (prax/services/record_chain.py).
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
 
     import prax.settings as settings_mod
 

@@ -148,6 +148,12 @@ This ledger is the honest complement to
 |---|---|---|---|
 | **Prompt prefix caching** (`PROMPT_CACHE_ENABLED`, `PromptPrefixCache` middleware) | 🧪 | **Never exercised against a real Anthropic endpoint.** The middleware marks the system prompt with `cache_control: {type: ephemeral}` and is unit-tested (`tests/test_cache_token_accounting.py`, 19 tests) for marking, idempotency, non-Anthropic pass-through and malformed input. What is NOT verified: that Anthropic actually serves a cache hit for Prax's prompt shape, and what the real saving is. The measurement path shipped with it — `cached_tokens_in` / `cache_write_tokens` now flow from `usage_metadata.input_token_details` into the trace — so the first live turn with the flag on answers it. **Do not claim a saving until that number is non-zero.** On prefix stability, checked in `orchestrator.py`: `full_prompt` is assembled ONCE per turn and the `SystemMessage` is then fixed for every tool-calling round, so the within-turn reuse — which is where the 29×-repeat cost lives — should hit. **Cross-turn** reuse will mostly miss, because `temporal_context` puts a changing timestamp near the head of the prompt; that is the thing to look at if a cross-turn number is wanted later, and it is a separate change (move volatile context out of the cached block). Proxy side IS verified transparent by test (`prax-secrets-proxy` 58894de: raw-byte body forwarding + hop-by-hop-denylist headers, both shown to fail on a re-serialising proxy). Added 2026-08-08 (task #59). |
 
+## Records hash chain (`prax/services/record_chain.py`)
+
+| Surface | Status | Verified | Not verified / needs |
+|---|---|---|---|
+| **Head line in the system journal** (`RECORD-CHAIN-HEAD`, sent over journald's native socket when Prax runs under systemd and stderr is not the journal) | 🟡 | 2026-10-06, dev VM: the native-protocol datagram was accepted by journald and read back with `journalctl -t prax-record-chain` (sent from a login shell, so the journal attributed it to the session scope). The journal, the tamper checks and the CLI are unit-tested keyless (`tests/test_record_chain.py`). | Not yet observed from inside `prax.service`: that the line shows under `journalctl -u prax` (the journal derives the unit from the sender's cgroup, so it should), and that the unit's sandboxing allows the socket. After the first deploy: `journalctl -u prax -o cat \| grep RECORD-CHAIN-HEAD`, then run `verify --anchors-from -` against it. |
+
 ## Flagged for audit (not assessed this pass)
 
 | Surface | Status | Note |

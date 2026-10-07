@@ -392,13 +392,18 @@ def _isolated_prax_scope(run_workspace: Path, task_id: str, user_prefix: str = "
     run_workspace.mkdir(parents=True, exist_ok=True)
 
     original_workspace_dir = settings.workspace_dir
+    original_records_dir = getattr(settings, "records_dir", "")
     settings.workspace_dir = str(run_workspace)
+    # The run's records (traces, graphs) go beside its own workspace, not into
+    # the deployment's RECORDS_DIR (prax/services/records.py).
+    settings.records_dir = ""
     user_token = current_user_id.set(eval_user_id)
     deny_token = eval_tool_denylist.set(frozenset(EVAL_MODE_TOOL_DENYLIST))
     try:
         yield eval_user_id
     finally:
         settings.workspace_dir = original_workspace_dir
+        settings.records_dir = original_records_dir
         # Token resets restore the exact prior state (unset stays unset) — the
         # old code re-set the previous user id only when there was one, and
         # otherwise left the synthetic eval user bound after the scope.

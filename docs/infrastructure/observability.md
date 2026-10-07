@@ -66,7 +66,7 @@ Two complementary eval paths score quality (see `prax/eval/`):
   keys (real calls), so it is **not** part of `make ci`. Run it before shipping a
   system-prompt or model-config change.
 - **Nightly live-traffic eval** (`EVAL_NIGHTLY_ENABLED`) — a scheduler job samples recent
-  execution traces from `.prax/graphs`, scores them with a **reference-free** judge, and
+  execution traces from `RECORDS_DIR/graphs`, scores them with a **reference-free** judge, and
   publishes `prax_eval_quality` to Prometheus. This is continuous drift detection on real
   traffic (`prax/eval/live_eval.py`, cron via `EVAL_NIGHTLY_CRON`).
 
