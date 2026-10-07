@@ -210,10 +210,18 @@ def resource_limits(
         yield
         return
 
+    import math
     import resource
 
+    # RLIMIT_CPU is the process's TOTAL CPU time since it started, not time
+    # from now. An absolute cpu_seconds killed any long-lived process (the test
+    # suite, a reused plugin host) already past it, at the first timer tick
+    # inside the block. The limit is what the block may use on top.
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    cpu_limit = math.ceil(usage.ru_utime + usage.ru_stime) + cpu_seconds
+
     limits_to_set = [
-        (resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds)),
+        (resource.RLIMIT_CPU, (cpu_limit, cpu_limit)),
         (resource.RLIMIT_NOFILE, (max_fds, max_fds)),
     ]
 
