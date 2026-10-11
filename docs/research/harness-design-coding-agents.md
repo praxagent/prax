@@ -153,6 +153,34 @@ Two more limitations, ours:
     where overflow is likely.
   - Ship behind a flag, default off, and A/B it with the eval gate.
 
+## What production showed, and what was built (2026-10)
+
+The measurement came first. A month of production logs: 96 turns, **no
+provider overflow at all**. But 75 turns, all in one long scheduled
+conversation:
+- started at about 128k tokens against a **50k** budget;
+- were summarized;
+- were then hard-truncated anyway.
+
+**The causes:**
+- **The wrong model.** The orchestrator passes no model name, so the budget
+  was always the tier fallback. Production's tier models are OpenRouter
+  models with **1M-token** windows, none in the table.
+- **A summarizer that barely read anything.** It saw the first 8,000
+  characters of the older half, a few of the oldest messages.
+- **No memory between turns.** The next turn did it all again.
+
+**Built** (`docs/infrastructure/context-management.md`):
+- **Budgets** come from the tier's actual model and its real window (the table,
+  else OpenRouter's `context_length`), capped by `CONTEXT_BUDGET_TOKENS`
+  (default 64k, close to production's effective budget; a 1M window is not a
+  reason to resend 800k tokens per call).
+- **Compaction** reads the whole older half and reuses the summary of a prefix
+  it summarized before. It makes no model call when the whole part was
+  summarized already, and it never splits a tool result from its call.
+- **The adopt above** is `CONTEXT_IN_LOOP_ENABLED` (`ContextBudget` loop
+  middleware), off by default.
+
 ## Re-rank: `context_recall`
 
 The queued agent-managed-context adopt ([Context Language
