@@ -414,6 +414,17 @@ class TestCompactHistory:
         assert isinstance(result[0], SystemMessage)
 
 
+@pytest.fixture
+def _window_only(monkeypatch):
+    """The window lookup on its own: no CONTEXT_BUDGET_TOKENS cap, a tier-only
+    call falls back to the tier table, and no provider catalogue."""
+    import prax.settings
+    monkeypatch.setattr(prax.settings.settings, "context_budget_tokens", 0)
+    monkeypatch.setattr("prax.agent.model_tiers.resolve_model", lambda tier=None: "")
+    monkeypatch.setattr("prax.agent.model_catalog.context_window", lambda model, **kw: None)
+
+
+@pytest.mark.usefixtures("_window_only")
 class TestGetContextLimit:
     """Per-model context limits — exact names, substrings, unknown, tiers."""
 
@@ -479,6 +490,7 @@ class TestGetContextLimit:
         assert get_context_limit(tier="high", model="") == 100_000
 
 
+@pytest.mark.usefixtures("_window_only")
 class TestContextBudgetReporting:
     """Verify ContextBudget fields are populated correctly."""
 
@@ -622,6 +634,7 @@ class TestPrepareContextPipeline:
         assert len(cleared) == 4  # 10 - 6 = 4 cleared
         assert len(kept) == 6
 
+    @pytest.mark.usefixtures("_window_only")
     def test_model_override_affects_limit(self):
         """Passing a specific model should use that model's context limit."""
         msgs = [
@@ -632,3 +645,192 @@ class TestPrepareContextPipeline:
         _, budget_gemini = prepare_context(msgs, tier="low", model="gemini-2.5-pro")
         assert budget_low.limit == 12_000
         assert budget_gemini.limit == 800_000
+
+
+# ---------------------------------------------------------------------------
+# The budget: the model that will run, its real window, and a cap (2026-10)
+# ---------------------------------------------------------------------------
+
+class TestBudget:
+    """Production's tier models (1M-token windows on OpenRouter, none in the
+    table) were budgeted at the 50k tier fallback because the orchestrator
+    passes no model name: every long turn was summarised, then truncated."""
+
+    @pytest.fixture(autouse=True)
+    def _catalogue(self, monkeypatch):
+        import prax.settings
+        from prax.agent import model_catalog
+        monkeypatch.setattr(prax.settings.settings, "context_budget_tokens", 64_000)
+        monkeypatch.setattr(model_catalog, "_context_lengths", {"z-ai/glm-5.2": 1_048_576})
+        monkeypatch.setattr(model_catalog, "discover_models", lambda *a, **k: [])
+        monkeypatch.setattr("prax.agent.model_tiers.resolve_model", lambda tier=None: "z-ai/glm-5.2")
+
+    def test_a_tier_only_call_uses_the_tiers_real_model_and_window(self, monkeypatch):
+        import prax.settings
+        from prax.agent.context_manager import get_context_limit
+        assert get_context_limit(tier="medium") == 64_000                  # capped
+        monkeypatch.setattr(prax.settings.settings, "context_budget_tokens", 0)
+        assert get_context_limit(tier="medium") == int(1_048_576 * 0.8)   # the window, less 20%
+
+    def test_the_cap_never_raises_a_small_window(self):
+        from prax.agent.context_manager import get_context_limit
+        assert get_context_limit(model="gpt-5.4-nano") == 12_000
+
+    def test_a_bare_model_name_matches_the_catalogue(self):
+        from prax.agent.model_catalog import context_window
+        assert context_window("glm-5.2") == 1_048_576
+        assert context_window("nobody/never-heard-of-it") is None
+
+    def test_an_unknown_model_still_gets_the_tier_fallback(self, monkeypatch):
+        from prax.agent.context_manager import get_context_limit
+        monkeypatch.setattr("prax.agent.model_tiers.resolve_model", lambda tier=None: "mystery-model")
+        assert get_context_limit(tier="medium") == 50_000
+
+def test_discovery_records_context_lengths(monkeypatch):
+    """OpenRouter's public model list carries context_length; the discovery
+    fetch the model picker already makes now keeps it."""
+    import requests
+
+    from prax.agent import model_catalog
+    monkeypatch.setattr(model_catalog, "_context_lengths", {})
+    monkeypatch.setattr(model_catalog, "_discovery_cache", {})
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"data": [{"id": "a/b", "context_length": 200_000}, {"id": "c/d"}]}
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _Resp())
+    assert model_catalog.discover_models("openrouter") == ["a/b", "c/d"]
+    assert model_catalog.context_window("a/b") == 200_000
+    assert model_catalog.context_window("c/d") is None
+
+
+class TestCompactionCoverage:
+    """The summariser used to see the first 8000 characters of the older
+    half: a few of the OLDEST messages, after which truncation dropped the
+    rest of a long conversation anyway."""
+
+    @pytest.fixture
+    def summarizer(self, monkeypatch):
+        prompts: list[str] = []
+
+        class _LLM:
+            def invoke(self, prompt):
+                prompts.append(prompt)
+                return AIMessage(content=f"summary #{len(prompts)}")
+        monkeypatch.setattr("prax.agent.llm_factory.build_llm", lambda **kw: _LLM())
+        from prax.agent import context_manager
+        monkeypatch.setattr(context_manager, "_prefix_summaries", {})
+        return prompts
+
+    def _conversation(self, n, size=3000):
+        msgs = [SystemMessage(content="sys")]
+        for i in range(n):
+            msgs.append(HumanMessage(content=f"question {i} " + "q" * size))
+            msgs.append(AIMessage(content=f"answer {i} " + "a" * size))
+        return msgs
+
+    def test_the_whole_older_half_reaches_the_summariser(self, summarizer):
+        from prax.agent.context_manager import compact_history
+        msgs = self._conversation(20)
+        compact_history(msgs, 2_000)
+        assert "question 0 " in summarizer[0] and "answer 9 " in summarizer[0]
+
+    def test_a_prefix_summarised_before_is_reused(self, summarizer):
+        from prax.agent.context_manager import compact_history
+        msgs = self._conversation(20)
+        compact_history(msgs, 2_000)
+        out = compact_history(msgs, 2_000)                     # the same history again
+        assert len(summarizer) == 1 and "summary #1" in out[1].content
+        longer = msgs + [HumanMessage(content="question 20 " + "q" * 3000),
+                         AIMessage(content="answer 20 " + "a" * 3000),
+                         HumanMessage(content="question 21 " + "q" * 3000),
+                         AIMessage(content="answer 21 " + "a" * 3000)]
+        compact_history(longer, 2_000)
+        assert len(summarizer) == 2
+        assert "[Earlier summary] summary #1" in summarizer[1]
+        assert "question 0 " not in summarizer[1]               # only what came after
+
+    def test_a_tool_result_is_never_separated_from_its_call(self, summarizer):
+        from prax.agent.context_manager import compact_history
+        msgs = [SystemMessage(content="sys")]
+        for i in range(8):
+            msgs.append(AIMessage(content="", tool_calls=[{"name": "search", "args": {}, "id": f"t{i}"}]))
+            msgs.append(ToolMessage(content="result " * 500, tool_call_id=f"t{i}", name="search"))
+        out = compact_history(msgs, 1_000)
+        conv = [m for m in out if not isinstance(m, SystemMessage)]
+        assert conv and not isinstance(conv[0], ToolMessage)
+
+
+class TestFitForCall:
+    @pytest.fixture(autouse=True)
+    def _budget(self, monkeypatch):
+        from prax.agent import context_manager
+        monkeypatch.setattr(context_manager, "get_context_limit", lambda tier="medium", model="": 10_000)
+        monkeypatch.setattr(context_manager, "_prefix_summaries", {})
+
+    def _turn(self, results, size):
+        msgs = [HumanMessage(content="do the thing")]
+        for i in range(results):
+            msgs.append(AIMessage(content="", tool_calls=[{"name": "read", "args": {}, "id": f"t{i}"}]))
+            msgs.append(ToolMessage(content="x " * size, tool_call_id=f"t{i}", name="read"))
+        return msgs
+
+    def test_under_the_soft_threshold_nothing_changes(self):
+        from prax.agent.context_manager import fit_for_call
+        msgs = self._turn(3, 100)
+        assert fit_for_call(msgs) is msgs
+
+    def test_past_soft_old_tool_results_become_stubs(self):
+        from prax.agent.context_manager import fit_for_call
+        msgs = self._turn(10, 1400)                     # ~7k tokens: past 60%; ~4k once stubbed
+        out = fit_for_call(msgs)
+        stubs = [m for m in out if isinstance(m, ToolMessage) and "cleared" in m.content]
+        assert len(stubs) == 4 and len(out) == len(msgs)
+
+    def test_past_hard_the_older_part_is_summarised(self, monkeypatch):
+        from prax.agent.context_manager import fit_for_call
+
+        class _LLM:
+            def invoke(self, prompt):
+                return AIMessage(content="what happened so far")
+        monkeypatch.setattr("prax.agent.llm_factory.build_llm", lambda **kw: _LLM())
+        msgs = [HumanMessage(content="h " * 4000)] + self._turn(10, 4000)[1:]   # still past 85% once stubbed
+        out = fit_for_call(msgs)
+        assert any("what happened so far" in (m.content or "") for m in out)
+
+
+def test_the_middleware_fits_the_request_and_fails_open(monkeypatch):
+    from prax.agent import context_manager
+    from prax.agent.loop_middleware import ContextBudget
+
+    class Req:
+        def __init__(self, messages):
+            self.messages, self.model, self.system_message = messages, None, None
+
+        def override(self, **kw):
+            return Req(kw["messages"])
+
+    seen = []
+    monkeypatch.setattr(context_manager, "fit_for_call", lambda msgs, **kw: msgs[-1:])
+    ContextBudget().wrap_model_call(Req([HumanMessage(content="a"), HumanMessage(content="b")]),
+                                    lambda r: seen.append(r.messages))
+    assert [m.content for m in seen[0]] == ["b"]
+
+    def boom(msgs, **kw):
+        raise RuntimeError("x")
+    monkeypatch.setattr(context_manager, "fit_for_call", boom)
+    original = Req([HumanMessage(content="a")])
+    ContextBudget().wrap_model_call(original, lambda r: seen.append(r))
+    assert seen[-1] is original
+
+
+def test_the_flag_puts_it_in_the_loop(monkeypatch):
+    import prax.settings
+    from prax.agent.loop_middleware import ContextBudget, default_middleware
+    monkeypatch.setattr(prax.settings.settings, "context_in_loop_enabled", False)
+    assert not any(isinstance(m, ContextBudget) for m in default_middleware())
+    monkeypatch.setattr(prax.settings.settings, "context_in_loop_enabled", True)
+    assert any(isinstance(m, ContextBudget) for m in default_middleware())
