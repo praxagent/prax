@@ -67,6 +67,9 @@ _DISCOVERY: dict[str, dict[str, Any]] = {
 # the order of weeks.
 _DISCOVERY_TTL_SECONDS = 3600
 _discovery_cache: dict[str, tuple[float, list[str]]] = {}
+# Context windows the providers report (OpenRouter's public catalogue carries
+# ``context_length`` for every model it serves), filled by the same fetch.
+_context_lengths: dict[str, int] = {}
 
 # Model-name prefixes/substrings that identify which provider serves a model.
 # Deliberately conservative: an unrecognised model is reported as provider
@@ -136,6 +139,9 @@ def discover_models(provider_id: str, *, timeout: float = 6.0) -> list[str]:
         resp.raise_for_status()
         payload = resp.json()
         # All three answer {"data": [{"id": ...}, ...]}.
+        for m in payload.get("data") or []:
+            if m.get("id") and isinstance(m.get("context_length"), int) and m["context_length"] > 0:
+                _context_lengths[m["id"]] = m["context_length"]
         models = [m.get("id") for m in (payload.get("data") or []) if m.get("id")]
         models = sorted({m for m in models if m})
         _discovery_cache[provider_id] = (time.time(), models)
@@ -265,3 +271,24 @@ def catalog(override: str | None = None, *, discover: bool = False) -> dict[str,
         "override": override,
         "egress_proxied": _egress_is_proxied(),
     }
+
+
+def context_window(model: str | None, *, timeout: float = 3.0) -> int | None:
+    """The context window a provider reports for *model*, in tokens, or None.
+
+    Today that is OpenRouter's public catalogue (no credential), which lists
+    ``context_length`` for every model it serves, with or without the
+    ``provider/`` prefix. Cached with the model list; never raises.
+    """
+    if not model:
+        return None
+    if model not in _context_lengths:
+        discover_models("openrouter", timeout=timeout)
+    if model in _context_lengths:
+        return _context_lengths[model]
+    # "glm-5.2" for "z-ai/glm-5.2", or the reverse.
+    bare = model.split("/", 1)[-1]
+    for known, length in _context_lengths.items():
+        if known.split("/", 1)[-1] == bare:
+            return length
+    return None
