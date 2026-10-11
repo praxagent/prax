@@ -101,6 +101,10 @@ _SINK_NAMES = (
     "workspace_share", "browser_click", "browser_press", "browser_type",
     "browser_fill", "browser_submit", "sandbox_browser_act", "schedule_create",
     "schedule_reminder", "sysadmin", "run_python", "sandbox_shell", "http_post", "post_",
+    # The desktop on the hub (DESKTOP_KERNEL_TOOLS): typing into a terminal
+    # runs commands with the sandbox's network, and clicks and keys drive any
+    # app on it. The browser_* equivalents were sinks; these were nothing.
+    "desktop_type", "desktop_key", "desktop_open", "desktop_click",
 )
 
 

@@ -290,3 +290,18 @@ def test_declared_legs_metadata_drives_the_wrapper(monkeypatch):
         assert state.trifecta_private is True
     finally:
         gt.drain_audit_log()
+
+
+def test_desktop_actions_are_sinks_and_its_screen_is_untrusted():
+    """With DESKTOP_KERNEL_TOOLS the hub types into the user's desktop
+    terminal and clicks in any app: an action with the sandbox's network,
+    like browser_click and sandbox_shell. It had no leg, so a page read in
+    the same turn could steer it with no trifecta check (found reviewing
+    CaMeL, arXiv 2503.18813)."""
+    from prax.agent import trifecta
+    for name in ("desktop_type", "desktop_key", "desktop_open", "desktop_click"):
+        assert trifecta.LEG_SINK in trifecta.legs_for(name), name
+    assert trifecta.LEG_UNTRUSTED in trifecta.legs_for("desktop_screenshot")
+    # and running a command there taints the egress gate first, like sandbox_shell
+    from prax.agent.governed_tool import _SANDBOX_EXEC_TOOLS
+    assert {"desktop_type", "desktop_key", "desktop_open"} <= _SANDBOX_EXEC_TOOLS

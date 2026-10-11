@@ -110,7 +110,14 @@ def delegate_plugin_fix(task: str) -> str:
     """
     logger.info("Plugin agent delegated: %s", task[:100])
 
-    tools = _build_plugin_agent_tools()
+    from prax.agent.governed_tool import govern_spoke_tools
+    from prax.agent.tool_registry import apply_eval_denylist
+
+    # Governed like every other spoke's tools. They used to be handed to the
+    # loop raw, so plugin_write and plugin_activate (hard floors: code that
+    # then runs with Prax's own authority) ran without the floor, through a
+    # MEDIUM delegate. Floors apply whatever SPOKE_GOVERNANCE_ENABLED says.
+    tools = govern_spoke_tools(apply_eval_denylist(_build_plugin_agent_tools()))
 
     from prax.plugins.llm_config import get_component_config
     cfg = get_component_config("subagent_codegen")

@@ -38,6 +38,7 @@ for what each control actually covers today; the headline, as of 2026-09:
 
 - [Plugin Trust & Isolation](plugin-trust.md) — Trust tiers, subprocess isolation, capabilities proxy, lifecycle audit
 - [Tool Risk Classification](tool-risk.md) — Risk levels, governance layer, supply chain hardening
+- [URL Provenance](url-provenance.md) — **A URL the agent composed doesn't leave after untrusted content.** Once a turn has read untrusted content, every URL a call would send out (a fetch, a navigation, a delegate's task, a `curl`) must have been seen verbatim or be built from the user's own words; otherwise a person decides or it is refused. Closes the injected-page exfiltration path traced in the CaMeL assessment; what it does not stop (selection channels, forms, memory).
 - [Configuration](configuration.md) — Environment variables, .env setup, all configuration options
 - [Network Exposure & Binding](network-exposure.md) — Why Prax/TeamWork bind loopback by default, and how to serve on `0.0.0.0` safely behind an authenticating proxy (Tailscale, IAP, Cloudflare Access, oauth2-proxy)
 - [Public exposure — TeamWork is trusted, public links are not](public-exposure.md) — the universal rule: nothing goes on a public (ngrok) link without a person's decision for that exact thing (always-on hard floor for every publishing tool, plus a share-registry guard so new code paths fail closed); over a tunnel only shared items and self-authenticating routes are reachable; securing TeamWork itself is the deployer's job.
