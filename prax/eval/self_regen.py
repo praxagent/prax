@@ -32,6 +32,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import re
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -140,6 +141,38 @@ helps on all queries in that class.
 
 Respond with EXACTLY this JSON: {{"approve": <bool>, "reason": "<1 sentence>"}}"""
 
+# The revision prompt (docs/research/harness-learning.md): the proposer sees the
+# overlay it is revising and a report from running the assistant WITH it, and
+# writes the overlay that replaces it. Used when the loop revises the kept
+# overlay or runs on a feedback/scoring split; the additive prompt above is
+# unchanged for the default loop.
+_REVISION_PROMPT = """\
+You are improving an AI assistant's SYSTEM PROMPT through one short section added
+to it (the "overlay"). Below are the current overlay and a report from running
+the assistant WITH it on a set of feedback tasks.
+
+## Current overlay
+{current}
+
+## Execution report (feedback tasks)
+{report}
+
+## What to do
+Find the failure MECHANISM the report shows — why the answers went wrong, not
+which answers — and write a REVISED overlay that fixes it for every task of that
+kind. The revised overlay replaces the current one: keep what still helps, drop
+what does not. 2-8 sentences, at most 1200 characters.
+
+## Hard rules
+- The revised overlay is graded on DIFFERENT tasks of the same kinds, which you
+  will never see. A change that only fixes the tasks above earns nothing, and a
+  specific number or answer from them is vetoed automatically.
+- Propose GENERAL principles — never a specific fact, answer, or task-specific
+  hack. If someone who knew the tasks could tell which ones you targeted, you
+  have failed.
+- Output ONLY the overlay text — no preamble, no markdown headers.
+"""
+
 
 # Patches longer than this are vetoed outright — so the overseer always audits the
 # EXACT bytes that get evaluated/applied (no truncated-tail spike).
@@ -184,6 +217,14 @@ def _default_proposer(base_prompt: str, weak_signal: str, tier: str = "high") ->
     return _extract_text(resp)
 
 
+def _default_reviser(context: str, tier: str = "high") -> str:
+    """The proposer for the revision loop: *context* is the full revision prompt
+    (current overlay + report), sent inoculated, exactly as recorded."""
+    from prax.agent.llm_factory import build_llm
+    llm = build_llm(tier=tier, config_key="self_regen_proposer")
+    return _extract_text(llm.invoke(inoculate(context)))
+
+
 def _default_auditor(base_prompt: str, patch: str, tier: str = "high") -> tuple[bool, str]:
     """Anti-spike overseer — lives OUTSIDE the editable surface. Fail-closed.
 
@@ -191,8 +232,6 @@ def _default_auditor(base_prompt: str, patch: str, tier: str = "high") -> tuple[
     so nothing is truncated), and extracts the first JSON object so a leading
     thinking/prose block can't force a spurious fail-closed veto.
     """
-    import re
-
     from prax.agent.llm_factory import build_llm
     from prax.settings import settings
     try:
@@ -213,48 +252,121 @@ def _default_auditor(base_prompt: str, patch: str, tier: str = "high") -> tuple[
         return False, f"auditor unavailable — vetoed (fail-closed): {exc}"
 
 
-def _spike_answer_tokens() -> set[str]:
+_NUMBER = re.compile(r"\d[\d.,:/-]*\d|\d")
+
+
+def _answer_numbers(text: str) -> set[str]:
+    """Numbers specific enough to be an answer: three or more digits, not all
+    zeros, not a round figure (``100``, ``2000``). Commas are dropped and
+    trailing decimal zeros trimmed, so ``388,800`` → ``388800`` and ``51.50`` →
+    ``51.5``. Short counts ("3 sentences", "under 20 lines") and round figures
+    are ordinary prose, and vetoing them would veto general advice."""
+    out: set[str] = set()
+    for raw in _NUMBER.findall(text or ""):
+        tok = raw.replace(",", "").strip(".:/-")
+        if re.fullmatch(r"\d+\.\d+", tok):
+            tok = tok.rstrip("0").rstrip(".")
+        digits = sum(ch.isdigit() for ch in tok)
+        if digits < 3 or not tok.strip("0.:/-") or re.fullmatch(r"[1-9]0+", tok):
+            continue
+        out.add(tok)
+    return out
+
+
+def _regex_literal_numbers(pattern: str) -> set[str]:
+    """Answer numbers written as literals in a check's regex. Character
+    classes and quantifiers are sets and counts, not literals, so they are
+    removed first: ``(?i)median[^.\\n]{0,30}\\b(47|56)\\b`` contributes 47 and
+    56, never the 0 or 30. An optional character is kept (``51\\.50?`` →
+    ``51.50`` → ``51.5``)."""
+    s = re.sub(r"\[(?:\\.|[^\]\\])*\]", " ", pattern or "")   # [^.\n], [0-9]
+    s = re.sub(r"\{\d*,?\d*\}", " ", s)                         # {0,30}, {4}
+    s = re.sub(r"\\[A-Za-z]", " ", s)                           # \b \d \s \w
+    s = s.replace("\\", "")                                     # \. → .
+    s = re.sub(r"[|()^$]", " ", s)
+    s = re.sub(r"[?*+]", "", s)
+    return _answer_numbers(s)
+
+
+def _spike_answer_tokens(cases=None) -> set[str]:
     """Specific ANSWER tokens from the capability checks a patch must not encode.
 
-    Only digit-bearing values (e.g. '536') — memorizing a numeric answer is the
-    clearest spike — so common topic words in checks don't cause false vetoes.
+    Digit-bearing values only — memorizing a numeric answer is the clearest
+    spike — so common topic words in checks don't cause false vetoes. Read from
+    every kind of check: ``contains``/``absent`` values whole (as before) and
+    as numbers, and the literal numbers inside ``regex``/``regex_absent``
+    patterns. Until 2026-10-11 only ``contains``/``absent`` were read, which
+    left two tokens: 84 of the suite's 95 checks are regexes.
     """
     try:
-        from prax.eval.capability import load_capability_cases
+        if cases is None:
+            from prax.eval.capability import load_capability_cases
+            cases = load_capability_cases()
         toks: set[str] = set()
-        for c in load_capability_cases():
+        for c in cases:
             for chk in c.checks:
                 v = (chk.value or "").strip()
-                if chk.kind in ("contains", "absent") and len(v) >= 2 and any(ch.isdigit() for ch in v):
-                    toks.add(v.lower())
+                if chk.kind in ("contains", "absent"):
+                    if len(v) >= 2 and any(ch.isdigit() for ch in v):
+                        toks.add(v.lower())
+                    toks |= _answer_numbers(v)
+                elif chk.kind in ("regex", "regex_absent"):
+                    toks |= _regex_literal_numbers(v)
         return toks
     except Exception:
         return set()
 
 
-def _deterministic_spike_veto(patch: str) -> str:
+def _deterministic_spike_veto(patch: str, tokens: set[str] | None = None) -> str:
     """A deterministic backstop the LLM auditor can't be talked out of: veto a
-    patch that literally contains an eval answer token. Returns a reason or ''."""
+    patch that literally contains an eval answer token. Returns a reason or ''.
+
+    Numbers match on digit boundaries, ignoring thousands separators and
+    trailing decimal zeros: ``604`` vetoes "604" and "604.0", not "16045";
+    ``51.5`` vetoes "51.50"."""
     low = (patch or "").lower()
-    for t in _spike_answer_tokens():
-        if t in low:
+    flat = re.sub(r"(?<=\d),(?=\d{3})", "", low)
+    for t in sorted(_spike_answer_tokens() if tokens is None else tokens):
+        if re.fullmatch(r"[\d.:/-]+", t):
+            tail = r"0*" if re.fullmatch(r"\d+\.\d+", t) else r"(?:\.0+)?"
+            if re.search(rf"(?<![\d.]){re.escape(t)}{tail}(?![\d])", flat):
+                return f"contains eval answer token {t!r}"
+        elif t in low:
             return f"contains eval answer token {t!r}"
     return ""
 
 
-def _default_evaluator(patch: str, *, base_prompt: str, tier: str) -> float:
+@dataclass
+class Evaluation:
+    """A graded run: the score that decides keeping, plus the per-case results
+    a report can be built from. Injected evaluators may return a bare float;
+    ``_as_evaluation`` wraps it with no results."""
+
+    score: float
+    results: list[dict] = field(default_factory=list)
+
+
+def _as_evaluation(value) -> Evaluation:
+    return value if isinstance(value, Evaluation) else Evaluation(float(value))
+
+
+def _default_evaluator(patch: str, *, base_prompt: str, tier: str,
+                       cases=None) -> Evaluation:
     """Score the candidate on the deterministic capability suite (the verifier).
 
     Applies the overlay for the duration of the suite and returns the average
-    total.  This is the un-gameable fitness function — the loop cannot edit it.
+    total, with the per-case results.  This is the un-gameable fitness
+    function — the loop cannot edit it.  *cases* restricts the run to a subset
+    (the scoring set, or the feedback set when building a report).
     """
     import shutil
     import tempfile
 
+    from prax.eval.batch import load_results
     from prax.eval.capability import load_capability_cases, run_capability_suite
     from prax.settings import settings as _s
     patched = _apply_overlay(base_prompt, patch)
-    n_cases = len(load_capability_cases()) or 1
+    n_cases = len(cases if cases is not None else load_capability_cases()) or 1
     # Isolated suite dir per evaluation — the capability suite's default dir is
     # stable-per-config, so baseline and every candidate would otherwise collide.
     suite_dir = Path(tempfile.mkdtemp(prefix="self_regen_eval_"))
@@ -264,7 +376,9 @@ def _default_evaluator(patch: str, *, base_prompt: str, tier: str) -> float:
     try:
         _s.prompt_selectivity_enabled = False
         with override_system_prompt(patched):
-            summary = run_capability_suite(tier=tier, resume=False, suite_dir=suite_dir)
+            summary = run_capability_suite(cases, tier=tier, resume=False,
+                                           suite_dir=suite_dir)
+        results = load_results(suite_dir)
     finally:
         _s.prompt_selectivity_enabled = _orig_sel
         shutil.rmtree(suite_dir, ignore_errors=True)
@@ -274,7 +388,88 @@ def _default_evaluator(patch: str, *, base_prompt: str, tier: str) -> float:
     # Errored/timed-out cases score 0 (fixed denominator over the FULL case set),
     # so a candidate that induces timeouts can't shrink the denominator to the
     # easy cases and inflate its score — protecting the un-gameable fitness.
-    return avg * graded / n_cases
+    return Evaluation(avg * graded / n_cases, results)
+
+
+def _dimension_signal(results: list[dict]) -> str:
+    """The abstract report: average score per dimension, no cases. What the
+    loop has always shown its proposer, computed from a run already made."""
+    dims: dict[str, list[float]] = {}
+    for r in results:
+        for key in ("content", "harness"):
+            if r.get(key) is not None:
+                dims.setdefault(key, []).append(float(r[key]))
+    parts = [f"{k}: avg {sum(v)/len(v):.2f}" for k, v in dims.items() if v]
+    return ("Lowest-scoring capability dimensions — " + "; ".join(parts)) if parts \
+        else "general capability quality"
+
+
+def _feedback_report(results: list[dict], cases, *, max_failures: int = 8) -> str:
+    """The concrete report, built only from FEEDBACK-set runs: the pass count,
+    then each failed case's task, the answer given, and the checks it did not
+    meet. Safe to show because none of these cases count toward keeping a
+    change, and their answer numbers are vetoed in any patch."""
+    by_id = {c.id: c for c in cases}
+    passed = sum(1 for r in results if r.get("passed") and not r.get("error"))
+    lines = [f"Feedback tasks: {passed}/{len(results)} passed."]
+    failed = [r for r in results if not r.get("passed") or r.get("error")]
+    for r in sorted(failed, key=lambda r: r.get("id", ""))[:max_failures]:
+        case = by_id.get(r.get("id"))
+        if case is None:
+            continue
+        missed = [k for k, v in (r.get("scores") or {}).items() if not v]
+        lines += [
+            "",
+            f"### {case.title or case.id}",
+            f"Task: {case.prompt[:600]}",
+            f"Answer given: {(r.get('answer_preview') or '')[:600] or '(none)'}",
+        ]
+        if r.get("error"):
+            lines.append(f"Error: {str(r['error'])[:300]}")
+        if missed:
+            lines.append("Checks not met: " + "; ".join(m[:160] for m in missed))
+    if len(failed) > max_failures:
+        lines.append(f"\n({len(failed) - max_failures} more failed tasks not shown.)")
+    return "\n".join(lines)
+
+
+def case_pool(*, generated_per_family: int = 8, seed: int = 0) -> list:
+    """The authored capability cases plus generated cases for every family that
+    has a generator (``prax/eval/case_generators.py``)."""
+    from prax.eval.capability import load_capability_cases
+    from prax.eval.case_generators import GENERATORS, generate_family
+    pool = list(load_capability_cases())
+    for family in sorted(GENERATORS):
+        pool += generate_family(family, generated_per_family, seed=seed)
+    return pool
+
+
+def split_cases(cases, *, seed: int = 0) -> tuple[list, list]:
+    """Split *cases* into a feedback set and a disjoint scoring set, WITHIN each
+    family: a fix for an honesty case can only show up on another honesty case.
+
+    About a third of each family goes to feedback (at least one), the rest to
+    scoring. A family with a single case goes to scoring only — its failures
+    are never shown, and it still guards against regressions. Deterministic in
+    *seed*: the order inside a family is a hash of the case id.
+    """
+    import hashlib
+
+    from prax.eval.case_generators import family_of
+    families: dict[str, list] = {}
+    for c in cases:
+        families.setdefault(family_of(c.id), []).append(c)
+    feedback, scoring = [], []
+    for fam in sorted(families):
+        members = sorted(families[fam], key=lambda c: hashlib.sha256(
+            f"{seed}:{c.id}".encode()).hexdigest())
+        if len(members) < 2:
+            scoring += members
+            continue
+        k = max(1, len(members) // 3)
+        feedback += members[:k]
+        scoring += members[k:]
+    return feedback, scoring
 
 
 def _weak_signal_from_baseline(tier: str) -> str:
@@ -344,7 +539,8 @@ def _scorer_fingerprint() -> str:
 
     here = Path(__file__).resolve().parent
     targets = sorted(
-        [here / "capability.py", here / "goldens.py", here / "self_regen.py"]
+        [here / "capability.py", here / "case_generators.py", here / "goldens.py",
+         here / "self_regen.py"]
         + list((here / "capability_cases").glob("*.yaml"))
         + list((here / "goldens").glob("*.yaml"))
     )
@@ -414,12 +610,38 @@ def _capability_case_count() -> int:
         return 1
 
 
+REVISION_RECORD_SCHEMA = 1
+
+
+def _record_revision(out_dir: Path, record: dict) -> None:
+    """Append one proposal to ``revisions.jsonl`` — the loop's training data.
+
+    Every proposal, kept or not: the exact proposer input, the patch it
+    produced, its parent, and the reward the loop measured. That is the
+    (context, edit, reward) triple a trained proposer learns from (SFT on kept
+    revisions, RL on all of them — docs/research/harness-learning.md), so the
+    data accumulates now, before there is a GPU to train on. Held-out (private
+    golden) content never enters a proposer input, so it never enters this file.
+    Best-effort: a write failure is logged, never fatal.
+    """
+    try:
+        rec = {"schema": REVISION_RECORD_SCHEMA,
+               "created_at": datetime.now(UTC).isoformat(), **record}
+        with open(out_dir / "revisions.jsonl", "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        logger.warning("self_regen: could not record a revision", exc_info=True)
+
+
 def run_self_regen(*, rounds: int = 3, apply: bool = False,
                    proposer=None, evaluator=None, auditor=None,
                    weak_signal: str | None = None,
                    min_margin: float | None = None, min_margin_cases: int = 1,
                    out_dir: Path | None = None, tier: str = "high",
-                   gate: bool = True, gate_fn=None, gate_replicates: int = 2) -> dict:
+                   gate: bool = True, gate_fn=None, gate_replicates: int = 2,
+                   revise_kept: bool = False, split: bool = False,
+                   feedback=None, generated_per_family: int = 8,
+                   split_seed: int = 0) -> dict:
     """Run the propose → verify → keep loop over the system-prompt overlay.
 
     Args:
@@ -429,6 +651,7 @@ def run_self_regen(*, rounds: int = 3, apply: bool = False,
             PROPOSAL only (graded autonomy).
         proposer/evaluator/auditor: injected for key-free testing.  Defaults call
             the live LLM (proposer/auditor) and the capability suite (evaluator).
+            An evaluator may return a float or an ``Evaluation``.
         min_margin_cases: the keep-margin on the capability suite, in CASES
             (default 1): a candidate is kept only if it gains at least this many
             cases' worth of average total (``cases / len(capability suite)``).
@@ -436,24 +659,53 @@ def run_self_regen(*, rounds: int = 3, apply: bool = False,
             30-case suite, i.e. inside a single flaky check.
         min_margin: an explicit fraction that overrides ``min_margin_cases``.
         gate_replicates: golden-suite runs per arm in the held-out gate (min 2).
+        revise_kept: each round revises the KEPT overlay, with a fresh report
+            from running it, instead of drawing an independent addition from
+            one fixed signal. Off keeps the prior loop.
+        split: three disjoint case sets. The proposer sees failed FEEDBACK
+            cases (task, answer, missed checks); a change is kept only on the
+            disjoint SCORING set; the private golden gate stays the held-out
+            set. The pool is the authored suite plus ``generated_per_family``
+            generated cases per family with a generator, split within each
+            family (``split_cases``, seeded by ``split_seed``). Off keeps the
+            prior loop.
+        feedback: ``callable(patch) -> str`` report for the proposer, injected
+            for testing. Default: the feedback-set report under ``split``,
+            else the dimension averages of the parent's own evaluation.
 
     Returns a summary dict (also archived under
     ``$PRAX_EVAL_DIR/self_regen/<run>/``) with baseline, best, the winning patch,
     the margin used, every variant + lineage, the gate verdict, and whether it
-    was applied.
+    was applied. Every proposal is also appended to ``revisions.jsonl`` there.
     """
     from prax.eval import PRAX_EVAL_DIR
 
-    n_cases = _capability_case_count()
+    revising = bool(revise_kept or split)
+    pool = feedback_cases = scoring_cases = None
+    if split:
+        pool = case_pool(generated_per_family=generated_per_family, seed=split_seed)
+        feedback_cases, scoring_cases = split_cases(pool, seed=split_seed)
+    n_cases = len(scoring_cases) if split else _capability_case_count()
     margin = (float(min_margin) if min_margin is not None
-              else max(1, int(min_margin_cases)) / n_cases)
+              else max(1, int(min_margin_cases)) / max(1, n_cases))
 
     base_prompt = _base_system_prompt()
-    ev = evaluator or (lambda p: _default_evaluator(p, base_prompt=base_prompt, tier=tier))
-    pr = proposer or (lambda ws: _default_proposer(base_prompt, ws, tier=tier))
+    ev = evaluator or (lambda p: _default_evaluator(p, base_prompt=base_prompt, tier=tier,
+                                                    cases=scoring_cases))
     au = auditor or (lambda p: _default_auditor(base_prompt, p, tier=tier))
-    signal = weak_signal if weak_signal is not None else (
-        _weak_signal_from_baseline(tier) if proposer is None else "general capability quality")
+    if revising:
+        pr = proposer or (lambda ctx: _default_reviser(ctx, tier=tier))
+        signal = weak_signal if weak_signal is not None else "general capability quality"
+        if feedback is None and split:
+            def feedback(patch: str) -> str:
+                run = _default_evaluator(patch, base_prompt=base_prompt, tier=tier,
+                                         cases=feedback_cases)
+                return _feedback_report(run.results, feedback_cases)
+    else:
+        pr = proposer or (lambda ws: _default_proposer(base_prompt, ws, tier=tier))
+        signal = weak_signal if weak_signal is not None else (
+            _weak_signal_from_baseline(tier) if proposer is None else "general capability quality")
+    veto_tokens = _spike_answer_tokens(pool)
 
     run_id = uuid.uuid4().hex[:8]
     out_dir = out_dir or (PRAX_EVAL_DIR / "self_regen" / run_id)
@@ -461,14 +713,40 @@ def run_self_regen(*, rounds: int = 3, apply: bool = False,
     # Snapshot the scorer BEFORE anything runs, so a mid-run edit is detectable.
     scorer_before = _scorer_fingerprint()
 
-    baseline = float(ev(""))
+    baseline_eval = _as_evaluation(ev(""))
+    baseline = baseline_eval.score
     best_score = baseline
     best_patch = ""
     best_id = "baseline"
+    best_eval = baseline_eval
     variants: list[Variant] = []
+    reports: dict[str, str] = {}
+
+    def _report(patch: str, evaluation: Evaluation) -> str:
+        """Fresh feedback from *patch*: computed once per distinct overlay."""
+        if patch not in reports:
+            if feedback is not None:
+                reports[patch] = str(feedback(patch) or "")
+            elif evaluation.results:
+                reports[patch] = _dimension_signal(evaluation.results)
+            else:
+                reports[patch] = signal
+        return reports[patch]
 
     for r in range(rounds):
-        patch = (pr(signal) or "").strip()
+        parent_patch, parent_id, parent_score = best_patch, best_id, best_score
+        if revising:
+            # Revise the kept overlay with feedback from running it; without
+            # revise_kept every round starts again from the bare prompt.
+            base_patch, base_eval = (best_patch, best_eval) if revise_kept \
+                else ("", baseline_eval)
+            proposer_input = _REVISION_PROMPT.format(
+                current=base_patch or "(none yet: write the first overlay)",
+                report=_report(base_patch, base_eval)[:6000])
+            template = "revision-v1"
+        else:
+            proposer_input, template = signal, "additive-v1"
+        patch = (pr(proposer_input) or "").strip()
         if not patch:
             continue
         # Cheap deterministic vetoes first (skip the expensive eval): over-length
@@ -477,11 +755,13 @@ def run_self_regen(*, rounds: int = 3, apply: bool = False,
         # talked out of).
         det = f"over-length (>{MAX_PATCH_CHARS} chars)" if len(patch) > MAX_PATCH_CHARS else ""
         if not det:
-            det = _deterministic_spike_veto(patch)
+            det = _deterministic_spike_veto(patch, veto_tokens)
+        evaluation = None
         if det:
             score, audit_ok, reason = best_score, False, det
         else:
-            score = float(ev(patch))
+            evaluation = _as_evaluation(ev(patch))
+            score = evaluation.score
             audit_ok, reason = au(patch)
         delta = round(score - best_score, 4)
         # Keep on a real improvement (beats the best by a MARGIN, not noise) AND
@@ -500,12 +780,26 @@ def run_self_regen(*, rounds: int = 3, apply: bool = False,
         variants.append(v)
         (out_dir / "variants" / f"{v.id}.json").write_text(
             json.dumps(asdict(v), indent=2), encoding="utf-8")
+        _record_revision(out_dir, {
+            "run_id": run_id, "variant_id": v.id, "round": r,
+            "mode": {"revise_kept": bool(revise_kept), "split": bool(split)},
+            "template": template, "proposer_input": proposer_input,
+            "parent_id": parent_id, "parent_patch": parent_patch,
+            "parent_score": round(parent_score, 4), "baseline": round(baseline, 4),
+            "patch": patch, "score": round(score, 4), "delta": delta,
+            "evaluated": evaluation is not None, "veto": det,
+            "audit_ok": audit_ok, "audit_reason": reason, "kept": kept,
+            "feedback_case_ids": [c.id for c in feedback_cases or []],
+            "scoring_case_ids": [c.id for c in scoring_cases or []],
+            "scorer_fingerprint": scorer_before, "tier": tier,
+        })
         logger.info("self_regen round %d: score=%.3f delta=%+.3f audit=%s kept=%s",
                     r, score, delta, audit_ok, kept)
         if kept:
             # On an Occam tie keep the incumbent (higher) score; a real gain lifts it.
             best_score = max(best_score, score)
             best_patch, best_id = patch, v.id
+            best_eval = evaluation or best_eval
 
     # --- Invariant 1: the scorer must not have moved. -----------------------
     # Checked before the gate so a tampered run cannot be rescued by a good
@@ -550,6 +844,9 @@ def run_self_regen(*, rounds: int = 3, apply: bool = False,
         "margin": round(margin, 4),
         "margin_cases": None if min_margin is not None else max(1, int(min_margin_cases)),
         "n_capability_cases": n_cases,
+        "mode": {"revise_kept": bool(revise_kept), "split": bool(split)},
+        "n_feedback_cases": len(feedback_cases) if split else None,
+        "n_scoring_cases": len(scoring_cases) if split else None,
         "rounds": rounds, "variants_kept": sum(1 for v in variants if v.kept),
         "best_patch": best_patch, "applied": applied,
         "variants": [asdict(v) for v in variants],
