@@ -1,7 +1,7 @@
 # Harness Learning Enables Generalizable Test-Time Adaptation
 
-**Verdict: document + adopt two changes to the #29 loop's protocol; decline the
-training.**
+**Verdict: document + adopt two changes to the #29 loop's protocol (built,
+PR #278); park the training until a GPU is free, and collect its data now.**
 - **What it is.** A small model (the *proposer*) is trained with RL to rewrite
   a frozen agent's harness code from execution feedback. At test time it keeps
   revising the harness of a task it never trained on.
@@ -16,8 +16,10 @@ training.**
   suite that produced its signal.
 - **Adopt 2: revise the kept candidate, with fresh feedback from it.** Prax
   draws every candidate independently from one fixed signal.
-- **Decline:** training a proposer (GPU wall). Prax's proposer is a hosted
-  frontier model.
+- **Parked, not declined:** training a proposer of our own. A training GPU
+  is expected to become available. Until then the loop records every proposal
+  as a training example (`revisions.jsonl`), so the data exists when the GPU
+  does. The plan is in [Training, when the GPU is free](#training-when-the-gpu-is-free).
 - **Correction to an existing row:** Harness-R1's "rerun the same tasks"
   reward needs the disjoint split. Rerunning the batch whose failures the
   proposer saw rewards fixing exactly those cases.
@@ -160,16 +162,29 @@ plus DOE leadership facilities.
 | A prompt directive against hard-coding, plus screened data | `inoculate()`, an LLM auditor, and `_deterministic_spike_veto` |
 | Scorer out of reach | ✅ `_scorer_fingerprint` before and after; a moved scorer voids the run |
 
-**A gap found while checking:** `_deterministic_spike_veto` collects answer
-tokens only from `contains`/`absent` checks. The capability suite checks
-84 of its 95 checks with `regex` (57) or `regex_absent` (27), so the veto set
-is two tokens (`526`, `536`). Answers checked by regex, such as the `604` in
-`computation_aggregate_exact`, are not in it. That matters little while the
-proposer is shown no cases. It becomes a precondition for Adopt 1.
+**Two gaps found while checking, both fixed in PR #278:**
+- **The spike veto saw two answers.** `_deterministic_spike_veto` collected
+  answer tokens only from `contains`/`absent` checks. 84 of the suite's 95
+  checks are `regex` (57) or `regex_absent` (27), so the veto held two tokens
+  (`526`, `536`), and an answer checked by regex, like the `604` in
+  `computation_aggregate_exact`, was not among them. It now reads the literal
+  numbers inside regex checks too, matched on digit boundaries. It ignores
+  short counts and round figures, which are ordinary advice ("under 20
+  lines").
+- **A checker that failed correct answers.** `computation_aggregate_exact`
+  failed any answer with "median" followed within 30 characters by 47 or 56,
+  the two middle values. A correct answer that shows its work ("the median is
+  the mean of 47 and 56: 51.5") failed. Only a direct statement of a middle
+  value as the median counts now. This is the fifth time an eval gap turned
+  out to be our checker under-crediting Prax.
 
 ## Adopt
 
 ### 1. Three disjoint sets: show failures, score elsewhere
+
+**Built** as `--split` (PR #278). The proposer sees the failed feedback
+cases: the task, the answer given, the checks missed. A change is kept only on
+the scoring set. The private goldens stay the held-out gate.
 
 Prax's anti-memorization defense today is **secrecy**. The proposer is told
 only which dimension is weak, so it has nothing to fix *with*: an average names no
@@ -197,12 +212,30 @@ read-only), applied to *which cases count*.
   deterministic verifier" row the tracker already holds for ARC, applied to
   the capability families that are parametric. The computation cases are: lists
   with exact sums and medians, percentages, unit conversions.
-- Until then, a split within the honesty family alone is a pilot.
+- **Built:** `prax/eval/case_generators.py` generates the computation
+  family's four failure classes: the even-length median, a compound percentage
+  on the wrong base, a unit chain that drops a unit, and plain arithmetic as
+  the control. Each generated case is tested both ways, with the answer
+  recomputed from the prompt text: the correct answer passes, and the slip
+  fails. With 8 generated cases, computation splits 4 shown and 8 scored, and
+  honesty 4 shown and 8 scored. The one-case families are scored, never shown.
 
 **Also needed before cases are shown:** the spike veto must read answer
 literals out of `regex` checks, not just `contains`/`absent`.
 
 ### 2. Revise the kept overlay, with fresh feedback from it
+
+**Built** as `--revise-kept` (PR #278). Each round, the proposer gets the
+kept overlay and a report from running it, and writes the overlay that
+replaces it.
+
+**One run is one chain. Run several.**
+- One chain is single-incumbent hill-climbing: the shape
+  [autoresearch-beam-search](autoresearch-beam-search.md) records as its
+  author's regret, since every later proposal inherits the first kept change.
+- The paper's QA results are four independent ten-round runs, not one.
+- Several `--revise-kept` runs, with the gate over their winners, are the
+  cheap form of that note's beam.
 
 - Each round should give the proposer:
   - the current kept patch;
@@ -264,10 +297,53 @@ already beat the average learned revision. Two consequences:
   volume, the proposer need not be the most expensive model. Selection,
   meaning the split and the gate, is what carries quality.
 
+## Training, when the GPU is free
+
+Parked until a training GPU is available. What it would take:
+
+- **What to train:** a proposer that writes overlay revisions for the #29
+  loop, with the agent's own models left frozen, as in the paper.
+  - The paper's sizes are the starting point: a 4B model, LoRA rank 32 for
+    SFT, then GRPO with 8 candidates per context at learning rate 1e-6.
+  - A 4B LoRA is a single-GPU job.
+- **The data, being collected now:** `revisions.jsonl`, one line per
+  proposal in every self-regen run. Each line holds:
+  - the exact proposer input;
+  - the patch, and its parent;
+  - the measured score and delta;
+  - the vetoes and the audit;
+  - whether it was kept.
+
+  The two training phases use it differently:
+  - **SFT** wants the kept revisions from a strong hosted proposer (the
+    teacher). The paper used 432, filtered for a real gain and screened for
+    answer echoing.
+  - **RL** needs contexts. Its reward comes from running candidates, not from
+    stored scores.
+  - At a few kept revisions per run, a corpus of that size takes many runs.
+    Run the loop on a fixed budget (`--split --revise-kept`) to grow it.
+- **The real cost of RL is the reward, not the GPU.** Every candidate's reward
+  is a scoring-set run through the full harness. The paper's Reasoning Gym RL
+  was 640 contexts × 8 candidates × 25 questions, about 128,000 solver calls.
+  - Through Prax's hosted models, that is API spend and days of wall clock.
+  - A local solver model is cheaper, but a proposer trained to improve a
+    local-model harness may not transfer to the hosted models production runs
+    ([harness beats model choice](crush-charm-coding-agent.md): harness effects
+    differ by model).
+  - Budget the reward before booking GPU time.
+- **Fresh scoring sets per context.** Generated families give each training
+  context its own scoring cases, from a new seed. The proposer then cannot
+  overfit one scoring set: the paper's disjoint seeds, by construction.
+- **The gate for a trained proposer:**
+  - hold out whole families from training, as the paper did;
+  - compare against the hosted proposer on those families;
+  - adopt an overlay it writes only through the same private golden gate.
+- **Contamination:** private golden content never enters a proposer input,
+  so it is never in the data. Back the records up to the private
+  `prax-eval-battery` repo, never a public one.
+
 ## Don't adopt
 
-- **Training a proposer.** GRPO on a 4B model is the same GPU wall as the
-  other weights-level assessments, and Prax's proposer is a hosted model.
 - **Interpreter loops as a discovery.** Prax's agents already have
   `run_python` and the sandbox. This is the structure the Reasoning Gym
   proposers mostly rediscover.
