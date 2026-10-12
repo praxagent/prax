@@ -1630,6 +1630,17 @@ class ConversationAgent:
                 uid, user_input, response, result.get("messages", []),
                 session_id=root_span.ctx.graph.session_id,
             )
+            # The full record — tool calls, delegations — pairs with each
+            # spoke's own line (spokes/_runner.py), linked by trace id.
+            if settings.full_trajectories_enabled:
+                from prax.agent.turn_secrets import scrubber
+                from prax.services.trajectory_service import export_agent_trajectory
+                export_agent_trajectory(
+                    uid, role="orchestrator", task=user_input, response=response,
+                    messages=result.get("messages", []), redact=scrubber(),
+                    ids={"session_id": root_span.ctx.graph.session_id,
+                         "trace_id": root_span.trace_id, "span_id": root_span.span_id},
+                )
         except Exception:
             pass
 

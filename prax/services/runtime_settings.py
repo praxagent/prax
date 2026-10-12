@@ -83,6 +83,14 @@ REGISTRY: dict[str, RuntimeSetting] = {s.key: s for s in [
         "Honesty",
     ),
     RuntimeSetting(
+        "SPOKE_SOURCES_ENABLED", "spoke_sources_enabled",
+        "Helpers report the pages they read",
+        "When Prax hands work to a helper agent, the helper's answer ends with the "
+        "links it actually opened, added by Prax rather than written by the model, so "
+        "Prax can cite them even if the helper's summary left them out.",
+        "Honesty",
+    ),
+    RuntimeSetting(
         "LOG_HEALTH_ENABLED", "log_health_enabled",
         "Log health in diagnostics",
         "prax_doctor also reads Prax's own log for recent errors and warnings.",

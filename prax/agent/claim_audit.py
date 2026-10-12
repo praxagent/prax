@@ -841,6 +841,50 @@ def _message_text(msg) -> str:
     return str(content or "")
 
 
+_CREDENTIAL_QUERY_KEY = re.compile(
+    r"key|token|secret|passw|signature|^sig$|auth|credential|session|^x-amz-",
+    re.IGNORECASE)
+
+
+def _has_credential_query(url: str) -> bool:
+    from urllib.parse import parse_qsl, urlsplit
+    try:
+        query = urlsplit(url).query
+    except ValueError:
+        return True
+    return any(_CREDENTIAL_QUERY_KEY.search(k) for k, _ in parse_qsl(query, keep_blank_values=True))
+
+
+def fetched_urls(messages: list) -> list[str]:
+    """The citable URLs *messages*' tool calls asked a tool to act on — what an
+    agent fetched or opened — in first-seen order, one per normalised address.
+
+    For a spoke's footer ("sources read"), so the orchestrator receives what
+    the spoke read even when its summary drops the link. URLs with a
+    credential-looking query parameter (``api_key=``, ``token=``, a signed S3
+    link) are left out: they are not citations, and the footer travels to the
+    orchestrator, the trace and TeamWork.
+    """
+    try:
+        from langchain_core.messages import AIMessage
+    except Exception:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for msg in messages:
+        if not isinstance(msg, AIMessage):
+            continue
+        for raw in _URL_RE.findall(_tool_call_text(msg).replace("\\/", "/")):
+            url = raw.rstrip(".,);:'\"!?*_>\\")
+            if not _is_citable(url) or _has_credential_query(url):
+                continue
+            key = _norm_url(url)[0]
+            if key not in seen:
+                seen.add(key)
+                out.append(url)
+    return out
+
+
 def audit_unread_citations(response: str, messages: list) -> dict | None:
     """Flag external URLs the reply cites that nothing this turn read or saw.
 

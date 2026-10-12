@@ -83,6 +83,7 @@ while Prax runs, with no restart:
 | `ARTIFACTS_ENABLED` | Artifacts (pages Prax keeps updating). Public links still need a person each time. |
 | `CLAIM_AUDIT_ATTENDED_QUARANTINE` | Self-check warnings appear in the reply, not only in the Auditor channel. |
 | `CITATION_AUDIT_ENABLED` | The self-check also flags a source a reply cites that nothing in the turn read (read-before-cite). |
+| `SPOKE_SOURCES_ENABLED` | A helper agent's answer ends with the links it actually opened, added by Prax, not the model. |
 | `LOG_HEALTH_ENABLED` | `prax_doctor` also reads Prax's own log. |
 
 - **Where changes go.** They are written to `.env-teamwork-override`, beside `.env` (path: `TEAMWORK_OVERRIDES_PATH`). It is not in git, and it wins over `.env`. The page shows which settings come from it, and "reset" removes a setting from it.
