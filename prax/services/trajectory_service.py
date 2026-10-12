@@ -277,10 +277,26 @@ def export_agent_trajectory(
                 "tool_count": sum(1 for m in messages if isinstance(m, ToolMessage)),
             },
         }
-        with open(_trajectories_dir(user_id) / AGENTS_FILE, "a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        _append_record_line(_trajectories_dir(user_id) / AGENTS_FILE,
+                            json.dumps(record, ensure_ascii=False) + "\n")
     except Exception:
         logger.debug("Agent trajectory export failed", exc_info=True)
+
+
+def _append_record_line(path: Path, line: str) -> None:
+    """Append *line* to a records file through the hash-chained journal
+    (``prax/services/record_chain.py``) where that module exists, so the write
+    is journaled like every other record write — a plain append to a
+    journaled file would read as tampering. Where it does not exist yet (the
+    record chain ships separately), a plain append."""
+    data = line.encode("utf-8")
+    try:
+        from prax.services import record_chain
+    except ImportError:
+        with open(path, "ab") as f:
+            f.write(data)
+        return
+    record_chain.append(path, data)
 
 
 def get_trajectory_stats(user_id: str) -> dict:

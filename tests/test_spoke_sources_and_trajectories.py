@@ -180,3 +180,22 @@ def test_both_flags_default_off():
     fields = AppSettings.model_fields
     assert fields["spoke_sources_enabled"].default is False
     assert fields["full_trajectories_enabled"].default is False
+
+
+def test_agent_lines_go_through_the_record_journal_when_it_exists(tmp_path, monkeypatch):
+    """A plain append to a journaled records file reads as tampering, so the
+    export must use record_chain.append wherever that module exists."""
+    import sys
+    import types
+
+    seen = []
+    fake = types.ModuleType("prax.services.record_chain")
+    fake.append = lambda path, data: seen.append((path.name, data))
+    monkeypatch.setitem(sys.modules, "prax.services.record_chain", fake)
+    import prax.services as services_pkg
+    monkeypatch.setattr(services_pkg, "record_chain", fake, raising=False)
+    monkeypatch.setattr(ts, "_trajectories_dir", lambda _uid: tmp_path)
+    ts.export_agent_trajectory("u1", role="orchestrator", task="hi", response="hello",
+                               messages=[HumanMessage(content="hi"), AIMessage(content="hello")])
+    assert [name for name, _ in seen] == [ts.AGENTS_FILE]
+    assert not (tmp_path / ts.AGENTS_FILE).exists()  # nothing written around the journal
