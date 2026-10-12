@@ -641,7 +641,7 @@ def run_self_regen(*, rounds: int = 3, apply: bool = False,
                    gate: bool = True, gate_fn=None, gate_replicates: int = 2,
                    revise_kept: bool = False, split: bool = False,
                    feedback=None, generated_per_family: int = 8,
-                   split_seed: int = 0) -> dict:
+                   split_seed: int = 0, keep_replicates: int = 1) -> dict:
     """Run the propose → verify → keep loop over the system-prompt overlay.
 
     Args:
@@ -672,6 +672,14 @@ def run_self_regen(*, rounds: int = 3, apply: bool = False,
         feedback: ``callable(patch) -> str`` report for the proposer, injected
             for testing. Default: the feedback-set report under ``split``,
             else the dimension averages of the parent's own evaluation.
+        keep_replicates: score the baseline and every candidate this many
+            times (default 1, the prior loop). With more than one, the score
+            is the mean, and a change is kept only if its gain exceeds both
+            the margin and the measured run-to-run spread (the larger of the
+            incumbent's and the candidate's). An identical prompt can win and
+            then lose on consecutive runs
+            (docs/research/mass-multi-agent-self-supervision.md); one run
+            cannot tell a better overlay from a lucky execution.
 
     Returns a summary dict (also archived under
     ``$PRAX_EVAL_DIR/self_regen/<run>/``) with baseline, best, the winning patch,
@@ -713,8 +721,19 @@ def run_self_regen(*, rounds: int = 3, apply: bool = False,
     # Snapshot the scorer BEFORE anything runs, so a mid-run edit is detectable.
     scorer_before = _scorer_fingerprint()
 
-    baseline_eval = _as_evaluation(ev(""))
+    n_runs = max(1, int(keep_replicates or 1))
+
+    def _evaluate(patch: str) -> tuple[Evaluation, float, list[float]]:
+        """Mean over ``n_runs`` evaluations, the spread (max − min) between
+        them, and the individual scores. The report uses the first run."""
+        runs = [_as_evaluation(ev(patch)) for _ in range(n_runs)]
+        scores = [r.score for r in runs]
+        return (Evaluation(sum(scores) / len(scores), runs[0].results),
+                max(scores) - min(scores), scores)
+
+    baseline_eval, baseline_spread, baseline_scores = _evaluate("")
     baseline = baseline_eval.score
+    best_spread = baseline_spread
     best_score = baseline
     best_patch = ""
     best_id = "baseline"
@@ -757,19 +776,21 @@ def run_self_regen(*, rounds: int = 3, apply: bool = False,
         if not det:
             det = _deterministic_spike_veto(patch, veto_tokens)
         evaluation = None
+        spread, run_scores = 0.0, []
         if det:
             score, audit_ok, reason = best_score, False, det
         else:
-            evaluation = _as_evaluation(ev(patch))
+            evaluation, spread, run_scores = _evaluate(patch)
             score = evaluation.score
             audit_ok, reason = au(patch)
         delta = round(score - best_score, 4)
+        noise_floor = max(best_spread, spread) if n_runs > 1 else 0.0
         # Keep on a real improvement (beats the best by a MARGIN, not noise) AND
         # survives the overseer.  MDL / Occam bias (Baek et al., "Learning to
         # Theorize the World" — see docs/research/learning-to-theorize.md): among
         # candidates that don't move the score, prefer the SIMPLER (shorter) theory
         # — a compact change generalizes better than accreting prompt bloat.
-        real_gain = delta >= margin
+        real_gain = delta >= margin and delta > noise_floor
         occam_tie = bool(best_patch and abs(delta) < margin and len(patch) < len(best_patch))
         kept = audit_ok and (real_gain or occam_tie)
         v = Variant(
@@ -788,6 +809,8 @@ def run_self_regen(*, rounds: int = 3, apply: bool = False,
             "parent_score": round(parent_score, 4), "baseline": round(baseline, 4),
             "patch": patch, "score": round(score, 4), "delta": delta,
             "evaluated": evaluation is not None, "veto": det,
+            "replicate_scores": [round(x, 4) for x in run_scores],
+            "noise_floor": round(noise_floor, 4),
             "audit_ok": audit_ok, "audit_reason": reason, "kept": kept,
             "feedback_case_ids": [c.id for c in feedback_cases or []],
             "scoring_case_ids": [c.id for c in scoring_cases or []],
@@ -800,6 +823,8 @@ def run_self_regen(*, rounds: int = 3, apply: bool = False,
             best_score = max(best_score, score)
             best_patch, best_id = patch, v.id
             best_eval = evaluation or best_eval
+            if evaluation is not None:
+                best_spread = spread
 
     # --- Invariant 1: the scorer must not have moved. -----------------------
     # Checked before the gate so a tampered run cannot be rescued by a good
@@ -845,6 +870,8 @@ def run_self_regen(*, rounds: int = 3, apply: bool = False,
         "margin_cases": None if min_margin is not None else max(1, int(min_margin_cases)),
         "n_capability_cases": n_cases,
         "mode": {"revise_kept": bool(revise_kept), "split": bool(split)},
+        "keep_replicates": n_runs,
+        "baseline_scores": [round(x, 4) for x in baseline_scores],
         "n_feedback_cases": len(feedback_cases) if split else None,
         "n_scoring_cases": len(scoring_cases) if split else None,
         "rounds": rounds, "variants_kept": sum(1 for v in variants if v.kept),

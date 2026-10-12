@@ -153,6 +153,7 @@ This ledger is the honest complement to
 | Surface | Status | Verified | Not verified / needs |
 |---|---|---|---|
 | `--split`: feedback / scoring / held-out sets | 🧪 | Split within each family, disjointness, the feedback-only report and the scoring-only keep decision, all with injected evaluators (`tests/test_self_regen_protocol.py`) | Never run against the live capability suite: cost per round, and whether a hosted proposer writes general overlays from concrete failures, are unmeasured |
+| `--keep-replicates` | 🧪 | Mean-of-N scoring and the spread rule, including the incumbent's spread, with scripted evaluators | The cost is N× the scoring set per candidate; whether N=2 is enough on Prax's suite is unmeasured |
 | `--revise-kept` | 🧪 | The proposer receives the kept overlay and a fresh report from it (keyless tests) | Not run live; whether revising beats independent draws on Prax's suite is the paper's claim, not our measurement |
 | Generated computation cases (`prax/eval/case_generators.py`) | 🧪 | Every generated case accepts its correct answer (worked forms included) and rejects its slip, with the answer recomputed from the prompt text in the test | Never graded against a live model's answers. Formats a real answer uses that the tests don't (units in words, scientific notation) could under-credit |
 | `revisions.jsonl` training record | 🧪 | Written for every proposal in every mode (keyless tests) | No training run has consumed it; the schema is a first guess at what SFT/RL on a proposer needs |

@@ -78,7 +78,7 @@ It is propose-only unless `--apply` and `SELF_REGEN_ENABLED` are both set, and
 nothing calls it but the CLI:
 
 ```bash
-uv run python scripts/eval_suite.py self-regen --rounds 5 --revise-kept --split
+uv run python scripts/eval_suite.py self-regen --rounds 5 --revise-kept --split --keep-replicates 2
 ```
 
 **What it enforces, whatever the mode:**
@@ -101,6 +101,7 @@ learning](../research/harness-learning.md) is the evidence for both):
 |---|---|
 | `--split` | **Three disjoint case sets.** The pool is the authored suite plus generated cases (`prax/eval/case_generators.py`; `--generated` per family, computation only today), split *within each family* (`split_cases`). The proposer sees the **feedback** set's failures: the task, the answer given, the checks missed. A change is kept only on the disjoint **scoring** set. The private goldens stay the **held-out** set. A one-case family is scored, never shown. |
 | `--revise-kept` | Each round **revises the kept overlay**, with a fresh report from running it, instead of drawing an independent addition from one fixed signal. |
+| `--keep-replicates N` | The baseline and every candidate are scored **N times**. A change is kept only if its mean gain beats the margin **and** the measured run-to-run spread (the larger of the incumbent's and the candidate's). Without it, one execution decides: [MASS](../research/mass-multi-agent-self-supervision.md) recorded an identical prompt and seed winning 6–0 and then losing 0–6. |
 
 Without `--split`, the proposer still sees only dimension averages: hiding the
 cases is the only defence against memorizing them when the same cases decide
