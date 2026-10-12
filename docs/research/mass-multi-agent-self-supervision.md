@@ -1,7 +1,8 @@
 # MASS: Recursive Self-Improvement through Multi-Agent Self-Supervision
 
-**Verdict: document + adopt two small things for the spokes; bank three
-lessons; don't adopt the method.**
+**Verdict: document + adopt two small things for the spokes (built in #279)
+and a replicated keep decision for #29 (built in #278); bank three lessons;
+don't adopt the method.**
 - **What it is.** One model plays agent, judge and optimizer. It evolves a
   multi-agent *workflow prompt* for each task, then fine-tunes itself on the
   trajectories its best workflows produce, and repeats.
@@ -14,12 +15,13 @@ lessons; don't adopt the method.**
   - The two verifiable coding benchmarks went down.
   - This is the strongest evidence yet for a point we keep relearning: the
     harness carried what the weights were credited with.
-- **Adopt (queued):**
-  - **Sources travel up.** A spoke's reply carries the URLs it actually
+- **Adopt (built):**
+  - **Sources travel up** (#279, `SPOKE_SOURCES_ENABLED`). A spoke's reply carries the URLs it actually
     fetched, appended by the harness, not written by the model. Today a spoke
     can read a page and drop its link, which is the main false-flag case for
     read-before-cite (#279).
-  - **Record spoke conversations as training data.** Prax exports
+  - **Record spoke conversations as training data** (#279,
+    `FULL_TRAJECTORIES_ENABLED`). Prax exports
     orchestrator-level trajectories only. In MASS's recipe, sub-agent windows
     are 2,054 of 2,435 training windows.
 - **Bank:**
@@ -140,6 +142,11 @@ The authors report all of the following themselves.
 
 ### 1. Sources travel up from spokes
 
+**Built in #279** as `SPOKE_SOURCES_ENABLED`, a runtime setting. The
+footer is "[Sources this agent fetched]", at most 20 URLs, taken from the
+spoke's tool-call arguments. Credential-bearing URLs are dropped. A test
+confirms it removes read-before-cite's false flag.
+
 - **The change:** extend the evidence-preservation hook so a spoke's reply
   ends with the URLs its own tools fetched this turn. The harness writes this
   from the spoke's tool calls; the model doesn't.
@@ -156,6 +163,13 @@ The authors report all of the following themselves.
 
 ### 2. Record spoke conversations as training data
 
+**Built in #279** as `FULL_TRAJECTORIES_ENABLED`. Each turn appends one line
+per agent (`orchestrator`, `spoke:<name>`) to `agents.jsonl`, in OpenAI chat
+format with tool calls, linked by trace id, with this turn's secrets masked.
+One finding while building it: the existing export kept only the user's
+message and the final reply. So the orchestrator's own tool calls were
+missing too, not just the spokes'.
+
 - **The change:** export each spoke's conversation beside the orchestrator's
   trajectory, linked by turn. It goes in the user's records
   (`RECORDS_DIR/users/<ws>/trajectories/`), behind a flag, for storage.
@@ -169,7 +183,11 @@ The authors report all of the following themselves.
   - Gate any trained model on Terminal-Bench / SWE-bench-style executable
     checks as well as judged quality.
 
-### 3. Replicate #278's keep decision (follow-up, queued)
+### 3. Replicate #278's keep decision
+
+**Built in #278** as `--keep-replicates N`. A change is kept only if its
+mean gain beats the margin *and* the larger of the incumbent's and the
+candidate's run-to-run spread.
 
 - **The change:** run the scoring set at least twice per candidate, or keep
   only on a margin above the measured run-to-run spread.
