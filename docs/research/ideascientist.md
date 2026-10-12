@@ -19,9 +19,9 @@ eval and training lanes; don't adopt the system.**
   - The harness's lead over the best open baseline falls from 14.0 to 6.3
     points.
   - The training adds about one point.
-- **Adopt:** read-before-cite. A source cited in a research answer should be
-  one Prax read in that turn. Today `claim_audit.py` skips external citations
-  by design.
+- **Adopt, built in #279:** read-before-cite. A source cited in a research
+  answer should be one Prax read in that turn. Until then, `claim_audit.py`
+  skipped external citations by design.
 - **Bank:**
   - a pairwise judge used as a reward collapsed to rewarding length (second
     sighting);
@@ -172,6 +172,14 @@ reported as a manipulation check, not counted in a quality score.
 | A temporal cutoff as the held-out set | Prax's goldens are authored; [CRUX](crux-shadow-evals.md) and [FutureSearch](futuresearch-calibrated-forecasting.md) are the other grounded designs we have read |
 
 ## Adopt: read-before-cite for research answers
+
+**Built in #279** as `audit_unread_citations`, behind `CITATION_AUDIT_ENABLED`
+(off by default). It is a runtime setting, so it can be switched on from
+TeamWork's Settings page. Read, seen and repeated sources pass; only unread
+ones are flagged. The design below is what shipped, except that an *earlier
+reply* also counts as a source ("repeated"). History holds no tool results,
+so a follow-up repeating a source fetched last turn would otherwise be a
+false flag.
 
 - **The check:** an external URL that a final answer presents as a source
   should be one Prax fetched, or at least saw in a search result, in that
