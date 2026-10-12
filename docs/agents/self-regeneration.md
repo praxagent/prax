@@ -70,6 +70,64 @@ Prax on itself:
 loop) pointed at Prax itself**, governed by #22. The engine is designed; it isn't
 aimed inward yet.
 
+## The prompt-overlay loop as built (`prax/eval/self_regen.py`)
+
+The first loop that exists is narrower than the plugin rung below: it edits a
+**system-prompt overlay** and is graded by the deterministic capability suite.
+It is propose-only unless `--apply` and `SELF_REGEN_ENABLED` are both set, and
+nothing calls it but the CLI:
+
+```bash
+uv run python scripts/eval_suite.py self-regen --rounds 5 --revise-kept --split --keep-replicates 2
+```
+
+**What it enforces, whatever the mode:**
+- **The scorer is fingerprinted** before and after: the capability cases, the
+  generators, the goldens and the loop itself. If any moved mid-run, nothing is
+  kept.
+- **The keep decision needs a margin of at least one case**, or an Occam tie
+  (shorter at equal score).
+- **The winner must pass the private golden split** (`accept_change`), measured
+  against a replicate noise floor. Without private goldens it fails closed.
+- **Two vetoes run before any evaluation:**
+  - deterministic: over-length patches, and patches containing an answer number
+    from any check, `regex` checks included;
+  - an LLM auditor, on the full patch.
+
+**Two protocol options** (both off by default; [harness
+learning](../research/harness-learning.md) is the evidence for both):
+
+| Flag | What changes |
+|---|---|
+| `--split` | **Three disjoint case sets.** The pool is the authored suite plus generated cases (`prax/eval/case_generators.py`; `--generated` per family, computation only today), split *within each family* (`split_cases`). The proposer sees the **feedback** set's failures: the task, the answer given, the checks missed. A change is kept only on the disjoint **scoring** set. The private goldens stay the **held-out** set. A one-case family is scored, never shown. |
+| `--revise-kept` | Each round **revises the kept overlay**, with a fresh report from running it, instead of drawing an independent addition from one fixed signal. |
+| `--keep-replicates N` | The baseline and every candidate are scored **N times**. A change is kept only if its mean gain beats the margin **and** the measured run-to-run spread (the larger of the incumbent's and the candidate's). Without it, one execution decides: [MASS](../research/mass-multi-agent-self-supervision.md) recorded an identical prompt and seed winning 6–0 and then losing 0–6. |
+
+Without `--split`, the proposer still sees only dimension averages: hiding the
+cases is the only defence against memorizing them when the same cases decide
+the keep. With `--split`, that defence is the measurement. A fix that works
+only on the cases shown earns nothing on the scoring set.
+
+**Every proposal is recorded** in `revisions.jsonl` beside the run's
+`summary.json`, in every mode:
+- the exact proposer input;
+- the patch, and its parent;
+- the measured score and delta;
+- the vetoes and the audit;
+- whether it was kept;
+- the case ids on each side.
+
+That is the (context, edit, reward) record a trained proposer learns from: SFT
+on kept revisions, RL on all of them. It accumulates now, for when a training
+GPU is available. Held-out content never enters a proposer input, so it never
+enters the record. The files live in `$PRAX_EVAL_DIR` (data only, never
+committed); `prax-eval-battery` is the private place to back them up.
+
+**Model weights.** "Never own training infra" above is about frontier models. A
+small proposer that edits the harness, with the agent's model frozen, is a
+different size of job: the harness-learning paper trained a 4B one. It is
+parked until a GPU is free, not declined.
+
 ## The two things that make it safe (the real bottleneck — not code-writing)
 
 1. **A graded self-modification boundary** (the capability-gateway / tool-risk model
