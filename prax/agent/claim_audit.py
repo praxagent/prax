@@ -726,8 +726,8 @@ def audit_tool_failures(response: str, tool_results: list[str]) -> dict | None:
 
 
 # Only audit URLs that look like Prax-GENERATED artifact links — the ones the
-# agent creates and could invent or get wrong. External citations are out of scope
-# (they legitimately never appear in tool output).
+# agent creates and could invent or get wrong. External citations are audited
+# separately, against what the turn read: audit_unread_citations below.
 _URL_RE = re.compile(r'https?://[^\s)\]}<>"\']+', re.IGNORECASE)
 _ARTIFACT_URL_HINTS = (
     "/notes/", "/note/", "/courses/", "/course/", "/library/",
@@ -758,6 +758,142 @@ def audit_fabricated_links(response: str, tool_results: list[str]) -> dict | Non
             continue  # grounded in a tool result
         fabricated.append(url)
     return {"urls": sorted(set(fabricated))} if fabricated else None
+
+
+# --- Read-before-cite (docs/research/ideascientist.md) ----------------------
+#
+# An external URL in a reply is presented as a source. Where did it come from?
+#   read      — a tool was asked to act on it this turn (fetch, navigate, …),
+#   seen      — a tool returned it, or the user / the turn's context contained it,
+#   repeated  — an earlier reply gave it (that reply was audited in its turn),
+#   unread    — none of these: the model wrote it from memory.
+# Only "unread" is flagged. It is not proof of a wrong link — a well-known URL
+# from memory is often right — but nothing this turn read it.
+
+_CODE_SPAN_RE = re.compile(r"```.*?```|`[^`\n]*`", re.DOTALL)
+_PLACEHOLDER_HOSTS = ("example.com", "example.org", "example.net")
+_PLACEHOLDER_SUFFIXES = (".example", ".test", ".invalid", ".localhost", ".local",
+                         ".internal", ".lan")
+
+
+def _norm_url(url: str) -> tuple[str, str]:
+    """(host+path+query, host+path) for *url*, scheme- and ``www.``-insensitive,
+    fragment dropped, trailing slash and sentence punctuation trimmed."""
+    from urllib.parse import urlsplit
+    url = url.rstrip(".,);:'\"!?*_>")
+    try:
+        p = urlsplit(url)
+    except ValueError:
+        return url.lower(), url.lower()
+    host = (p.hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    path = p.path.rstrip("/")
+    base = f"{host}{path}"
+    return (f"{base}?{p.query}" if p.query else base), base
+
+
+def _is_citable(url: str) -> bool:
+    """External, public, and not a Prax artifact (audit_fabricated_links owns
+    those) or a placeholder/local address."""
+    import ipaddress
+    from urllib.parse import urlsplit
+    low = url.lower()
+    if any(h in low for h in _ARTIFACT_URL_HINTS):
+        return False
+    try:
+        host = (urlsplit(url).hostname or "").lower()
+    except ValueError:
+        return False
+    if not host or "." not in host:
+        return False  # localhost, bare names
+    if host in _PLACEHOLDER_HOSTS or any(host.endswith("." + h) for h in _PLACEHOLDER_HOSTS):
+        return False
+    if host.endswith(_PLACEHOLDER_SUFFIXES):
+        return False
+    try:
+        return ipaddress.ip_address(host).is_global
+    except ValueError:
+        return True  # a domain name
+
+
+def _urls_in(text: str) -> set[tuple[str, str]]:
+    # JSON-encoded tool output escapes slashes ("https:\/\/…").
+    return {_norm_url(u) for u in _URL_RE.findall((text or "").replace("\\/", "/"))}
+
+
+def _tool_call_text(msg) -> str:
+    import json
+    parts = []
+    for call in getattr(msg, "tool_calls", None) or []:
+        args = call.get("args") if isinstance(call, dict) else getattr(call, "args", None)
+        try:
+            parts.append(json.dumps(args, ensure_ascii=False, default=str))
+        except Exception:
+            parts.append(str(args))
+    return " ".join(parts)
+
+
+def _message_text(msg) -> str:
+    content = getattr(msg, "content", "")
+    if isinstance(content, list):  # Responses-API content blocks
+        return " ".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in content)
+    return str(content or "")
+
+
+def audit_unread_citations(response: str, messages: list) -> dict | None:
+    """Flag external URLs the reply cites that nothing this turn read or saw.
+
+    *messages* is the turn's full list (system prompt, history, the user's
+    message, tool calls and results, the final reply). The model's own words
+    — assistant message text — never count as grounding, except an EARLIER
+    reply's (``repeated``), so a follow-up that repeats a source the last turn
+    fetched is not flagged. URLs inside code are examples, not citations, and
+    are skipped. Returns ``{"unread": [...], "read": n, "seen": n,
+    "repeated": n}`` when at least one citation is unread, else None.
+    """
+    if not response:
+        return None
+    cited: dict[tuple[str, str], str] = {}
+    for raw in _URL_RE.findall(_CODE_SPAN_RE.sub(" ", response)):
+        url = raw.rstrip(".,);:'\"!?*_>")
+        if _is_citable(url):
+            cited.setdefault(_norm_url(url), url)
+    if not cited:
+        return None
+    try:
+        from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+    except Exception:
+        return None
+    last_human = max((i for i, m in enumerate(messages) if isinstance(m, HumanMessage)),
+                     default=-1)
+    read, seen, repeated = set(), set(), set()
+    for i, msg in enumerate(messages):
+        if isinstance(msg, AIMessage):
+            read |= _urls_in(_tool_call_text(msg))
+            if i < last_human:
+                repeated |= _urls_in(_message_text(msg))
+        elif isinstance(msg, ToolMessage):
+            seen |= _urls_in(_message_text(msg))
+        else:  # system prompt, the user's messages
+            seen |= _urls_in(_message_text(msg))
+
+    def _in(keys: set, norm: tuple[str, str]) -> bool:
+        full, base = norm
+        return any(full == k[0] or base == k[1] for k in keys)
+
+    tiers = {"read": 0, "seen": 0, "repeated": 0}
+    unread: list[str] = []
+    for norm, url in cited.items():
+        if _in(read, norm):
+            tiers["read"] += 1
+        elif _in(seen, norm):
+            tiers["seen"] += 1
+        elif _in(repeated, norm):
+            tiers["repeated"] += 1
+        else:
+            unread.append(url)
+    return {"unread": sorted(unread), **tiers} if unread else None
 
 
 # Phrases that promise the user a retrievable thing *in this reply*.
