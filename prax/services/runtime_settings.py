@@ -74,6 +74,15 @@ REGISTRY: dict[str, RuntimeSetting] = {s.key: s for s in [
         "Honesty",
     ),
     RuntimeSetting(
+        "CITATION_AUDIT_ENABLED", "citation_audit_enabled",
+        "Check that cited sources were read",
+        "Prax's self-check also flags a link a reply gives as a source when nothing "
+        "in that turn fetched it or returned it, and no earlier reply gave it: a "
+        "source written from memory. Flags go to the Auditor channel, and into the "
+        "reply only when self-check warnings are shown in replies.",
+        "Honesty",
+    ),
+    RuntimeSetting(
         "LOG_HEALTH_ENABLED", "log_health_enabled",
         "Log health in diagnostics",
         "prax_doctor also reads Prax's own log for recent errors and warnings.",

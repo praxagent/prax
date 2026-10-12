@@ -932,6 +932,18 @@ class AppSettings(BaseSettings):
             "of AGENT_MIDDLEWARE_ENABLED."
         ),
     )
+    citation_audit_enabled: bool = Field(
+        default=False, alias="CITATION_AUDIT_ENABLED",
+        description=(
+            "Read-before-cite: the claim audit also flags external URLs a reply "
+            "cites that no tool fetched or returned this turn, and that no "
+            "earlier reply gave — sources written from memory "
+            "(prax/agent/claim_audit.py:audit_unread_citations). Logged and "
+            "posted to the Auditor channel like the other checks; shown to the "
+            "user only when CLAIM_AUDIT_ATTENDED_QUARANTINE is also on. Off keeps "
+            "the prior behaviour: external citations are not audited."
+        ),
+    )
     claim_audit_attended_quarantine: bool = Field(
         default=False, alias="CLAIM_AUDIT_ATTENDED_QUARANTINE",
         description=(
