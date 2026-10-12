@@ -148,6 +148,15 @@ This ledger is the honest complement to
 |---|---|---|---|
 | **Prompt prefix caching** (`PROMPT_CACHE_ENABLED`, `PromptPrefixCache` middleware) | 🧪 | **Never exercised against a real Anthropic endpoint.** The middleware marks the system prompt with `cache_control: {type: ephemeral}` and is unit-tested (`tests/test_cache_token_accounting.py`, 19 tests) for marking, idempotency, non-Anthropic pass-through and malformed input. What is NOT verified: that Anthropic actually serves a cache hit for Prax's prompt shape, and what the real saving is. The measurement path shipped with it — `cached_tokens_in` / `cache_write_tokens` now flow from `usage_metadata.input_token_details` into the trace — so the first live turn with the flag on answers it. **Do not claim a saving until that number is non-zero.** On prefix stability, checked in `orchestrator.py`: `full_prompt` is assembled ONCE per turn and the `SystemMessage` is then fixed for every tool-calling round, so the within-turn reuse — which is where the 29×-repeat cost lives — should hit. **Cross-turn** reuse will mostly miss, because `temporal_context` puts a changing timestamp near the head of the prompt; that is the thing to look at if a cross-turn number is wanted later, and it is a separate change (move volatile context out of the cached block). Proxy side IS verified transparent by test (`prax-secrets-proxy` 58894de: raw-byte body forwarding + hop-by-hop-denylist headers, both shown to fail on a re-serialising proxy). Added 2026-08-08 (task #59). |
 
+## Self-regeneration loop protocol (`scripts/eval_suite.py self-regen --split --revise-kept`)
+
+| Surface | Status | Verified | Not verified / needs |
+|---|---|---|---|
+| `--split`: feedback / scoring / held-out sets | 🧪 | Split within each family, disjointness, the feedback-only report and the scoring-only keep decision, all with injected evaluators (`tests/test_self_regen_protocol.py`) | Never run against the live capability suite: cost per round, and whether a hosted proposer writes general overlays from concrete failures, are unmeasured |
+| `--revise-kept` | 🧪 | The proposer receives the kept overlay and a fresh report from it (keyless tests) | Not run live; whether revising beats independent draws on Prax's suite is the paper's claim, not our measurement |
+| Generated computation cases (`prax/eval/case_generators.py`) | 🧪 | Every generated case accepts its correct answer (worked forms included) and rejects its slip, with the answer recomputed from the prompt text in the test | Never graded against a live model's answers. Formats a real answer uses that the tests don't (units in words, scientific notation) could under-credit |
+| `revisions.jsonl` training record | 🧪 | Written for every proposal in every mode (keyless tests) | No training run has consumed it; the schema is a first guess at what SFT/RL on a proposer needs |
+
 ## Flagged for audit (not assessed this pass)
 
 | Surface | Status | Note |

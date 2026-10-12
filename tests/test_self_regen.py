@@ -36,6 +36,10 @@ def test_lineage_and_archive_written(tmp_path):
         proposer=lambda _s: next(patches),
         evaluator=lambda p: {"": 0.5, "a": 0.6, "b": 0.7}[p],
         auditor=lambda _p: (True, "ok"),
+        # The archive is written whatever the gate decides. Left on, the gate
+        # ran the live golden suite against a blocked network — about 160 s for
+        # a test of file writes.
+        gate=False,
     )
     assert (tmp_path / "summary.json").exists()
     assert (tmp_path / "PROPOSAL.md").exists()
@@ -130,7 +134,13 @@ def test_apply_aborts_on_missing_base_prompt(tmp_path, monkeypatch):
         proposer=lambda _s: "win",
         evaluator=lambda p: 0.9 if p == "win" else 0.5,
         auditor=lambda _p: (True, "ok"),
+        # An ACCEPTING gate, so the winner reaches the apply path this test is
+        # about. With the live gate it was rejected first (no private goldens,
+        # no network) and the test passed without ever reaching _finalize's
+        # missing-prompt check — and spent about 160 s doing it.
+        gate_fn=lambda _p: {"accept": True, "reason": "test"},
     )
+    assert summary["best_patch"] == "win"  # the gate accepted: apply was attempted
     assert summary["applied"] is False  # sentinel base → refused to apply
 
 
