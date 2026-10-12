@@ -338,6 +338,8 @@ def run_spoke(
                 result.get("messages", []),
                 preserve_tool_result_prefixes,
             )
+            final_content = _append_sources_read(final_content, result.get("messages", []))
+            _export_spoke_trajectory(label, task, final_content, result.get("messages", []), span)
             # The sinks get a copy with this turn's secret values masked: a spoke
             # that echoes a password it was handed must not post it to TeamWork,
             # the trace or the logs. The model gets the answer as written.
@@ -361,6 +363,58 @@ def run_spoke(
     span.end(status="completed", summary="No output produced", tool_calls=tool_count)
     _finish(role_name, label=label, status="success", start_time=_spoke_start)
     return f"Spoke [{label}] completed but produced no output."
+
+
+def _append_sources_read(response: str, messages: list, *, limit: int = 20) -> str:
+    """End a spoke's reply with the URLs its own tools fetched or opened.
+
+    Under SPOKE_SOURCES_ENABLED. Written by the harness from the spoke's tool
+    calls, not by the model, so a source the spoke read reaches the
+    orchestrator even when its summary drops the link. The orchestrator can
+    cite it, and read-before-cite (claim_audit.audit_unread_citations) sees
+    it. URLs the reply already contains are not repeated. Off: unchanged.
+    """
+    from prax.settings import settings
+
+    if not getattr(settings, "spoke_sources_enabled", False):
+        return response
+    try:
+        from prax.agent.claim_audit import fetched_urls
+
+        urls = [u for u in fetched_urls(messages) if u not in response]
+    except Exception:
+        logger.debug("sources-read footer failed", exc_info=True)
+        return response
+    if not urls:
+        return response
+    lines = "\n".join(f"- {u}" for u in urls[:limit])
+    if len(urls) > limit:
+        lines += f"\n- … and {len(urls) - limit} more"
+    return f"{response.rstrip()}\n\n[Sources this agent fetched]\n{lines}"
+
+
+def _export_spoke_trajectory(label: str, task: str, response: str, messages: list, span) -> None:
+    """Record the spoke's whole conversation (tool calls and results included)
+    as training data, linked to the turn by session, trace and span ids.
+    Under FULL_TRAJECTORIES_ENABLED; this turn's secrets are masked. Never
+    raises."""
+    from prax.settings import settings
+
+    if not getattr(settings, "full_trajectories_enabled", False):
+        return
+    try:
+        from prax.agent.turn_secrets import scrubber
+        from prax.agent.user_context import current_user_id
+        from prax.services.trajectory_service import export_agent_trajectory
+
+        export_agent_trajectory(
+            current_user_id.get() or "", role=f"spoke:{label}", task=task,
+            response=response, messages=messages, redact=scrubber(),
+            ids={"session_id": getattr(span.ctx.graph, "session_id", ""),
+                 "trace_id": span.trace_id, "span_id": span.span_id},
+        )
+    except Exception:
+        logger.debug("spoke trajectory export failed", exc_info=True)
 
 
 def _failure_limit_refusal(label: str) -> str:

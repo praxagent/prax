@@ -755,3 +755,130 @@ def test_generic_error_mention_does_not_suppress_a_crash():
     out = audit_tool_failures(resp, ["Spoke agent failed: 'list' object has no attribute 'lower'"])
     assert out is not None
     assert len(out["failures"]) == 1
+
+
+class TestAuditUnreadCitations:
+    """audit_unread_citations — read-before-cite (docs/research/ideascientist.md).
+
+    An external URL a reply cites must have come from somewhere this turn: a
+    tool call (read), a tool result or the user/context (seen), or an earlier
+    reply (repeated). Only a URL from none of these — the model's memory — is
+    flagged."""
+
+    PAPER = "https://arxiv.org/abs/2610.04074"
+
+    @staticmethod
+    def _turn(*, system="", history=(), user="find the paper", tools=(), reply=""):
+        from langchain_core.messages import HumanMessage, SystemMessage
+        msgs = [SystemMessage(content=system or "You are Prax.")]
+        for role, text in history:
+            msgs.append(HumanMessage(content=text) if role == "user" else AIMessage(content=text))
+        msgs.append(HumanMessage(content=user))
+        for name, args, result in tools:
+            msgs.append(AIMessage(content="", tool_calls=[
+                {"name": name, "args": args, "id": f"c-{name}"}]))
+            msgs.append(ToolMessage(content=result, name=name, tool_call_id=f"c-{name}"))
+        msgs.append(AIMessage(content=reply))
+        return msgs
+
+    def _audit(self, msgs):
+        from prax.agent.claim_audit import audit_unread_citations
+        return audit_unread_citations(msgs[-1].content, msgs)
+
+    def test_a_source_from_memory_is_flagged(self):
+        reply = f"The method is described in {self.PAPER}."
+        out = self._audit(self._turn(reply=reply))
+        assert out is not None and out["unread"] == [self.PAPER]
+
+    def test_a_fetched_source_is_read(self):
+        reply = f"Per [the paper]({self.PAPER}), the judge was Qwen."
+        msgs = self._turn(reply=reply, tools=[
+            ("fetch_url_content", {"url": self.PAPER}, "IdeaScientist: Orchestrating …")])
+        assert self._audit(msgs) is None
+
+    def test_a_search_result_counts_as_seen(self):
+        reply = f"Found it: {self.PAPER}."
+        msgs = self._turn(reply=reply, tools=[
+            ("background_search", {"query": "IdeaScientist arxiv"},
+             f'[{{"title": "IdeaScientist", "url": "{self.PAPER}"}}]')])
+        assert self._audit(msgs) is None
+
+    def test_json_escaped_slashes_in_tool_output_count(self):
+        reply = f"Source: {self.PAPER}"
+        escaped = self.PAPER.replace("/", "\\/")
+        msgs = self._turn(reply=reply, tools=[("search", {"q": "x"}, f'{{"url": "{escaped}"}}')])
+        assert self._audit(msgs) is None
+
+    def test_the_users_own_link_counts(self):
+        reply = f"Here is a summary of {self.PAPER}."
+        assert self._audit(self._turn(user=f"summarize {self.PAPER}", reply=reply)) is None
+
+    def test_an_earlier_reply_counts_but_this_turns_words_do_not(self):
+        reply = f"As before, see {self.PAPER}."
+        history = [("user", "what is new in ideation?"), ("ai", f"Read {self.PAPER}.")]
+        assert self._audit(self._turn(history=history, reply=reply)) is None
+        # The reply cannot ground itself.
+        assert self._audit(self._turn(reply=reply)) is not None
+
+    def test_normalisation(self):
+        # scheme, www., trailing slash, fragment and a tracking query all differ
+        reply = "See https://www.Example-Lab.org/papers/x/#sec2 and http://news.site/a?utm_source=x"
+        msgs = self._turn(reply=reply, tools=[(
+            "fetch_url_content", {"url": "https://example-lab.org/papers/x"},
+            "and https://news.site/a")])
+        assert self._audit(msgs) is None
+
+    @pytest.mark.parametrize("url", [
+        "http://localhost:8000/docs", "http://127.0.0.1:5001/health",
+        "https://192.168.1.4/x", "https://api.example.com/v1", "https://foo.test/a",
+        "https://host.ts.net/notes/n/",   # a Prax artifact: audit_fabricated_links owns it
+    ])
+    def test_local_placeholder_and_artifact_urls_are_not_citations(self, url):
+        assert self._audit(self._turn(reply=f"Call {url} to check.")) is None
+
+    def test_urls_in_code_are_examples_not_citations(self):
+        reply = ("Run this:\n```bash\ncurl https://api.github.com/repos/x/y\n```\n"
+                 "or `wget https://pypi.org/simple/`.")
+        assert self._audit(self._turn(reply=reply)) is None
+
+    def test_tiers_are_reported_alongside_the_unread(self):
+        reply = (f"Sources: {self.PAPER}, https://github.com/jiarui-liu/IdeaScientist, "
+                 "https://openreview.net/forum?id=abc")
+        msgs = self._turn(reply=reply, tools=[
+            ("fetch_url_content", {"url": self.PAPER}, "paper text"),
+            ("search", {"q": "repo"}, "https://github.com/jiarui-liu/IdeaScientist")])
+        out = self._audit(msgs)
+        assert out == {"unread": ["https://openreview.net/forum?id=abc"],
+                       "read": 1, "seen": 1, "repeated": 0}
+
+    def test_no_urls_no_finding(self):
+        assert self._audit(self._turn(reply="No sources needed.")) is None
+
+
+def test_citation_audit_is_off_by_default():
+    from prax.settings import AppSettings
+    assert AppSettings.model_fields["citation_audit_enabled"].default is False
+
+
+class TestUnreadCitationWiring:
+    """The orchestrator runs the check only behind CITATION_AUDIT_ENABLED, and a
+    finding reaches the attended-quarantine notice with its own phrase."""
+
+    REPLY = "The method is described in https://arxiv.org/abs/2610.04074."
+
+    def _run(self, monkeypatch, *, enabled: bool) -> str:
+        from langchain_core.messages import HumanMessage
+
+        from prax.agent.orchestrator import ConversationAgent
+        from prax.settings import settings
+        monkeypatch.setattr(settings, "citation_audit_enabled", enabled)
+        monkeypatch.setattr(settings, "claim_audit_attended_quarantine", True)
+        msgs = [HumanMessage(content="which paper?"), AIMessage(content=self.REPLY)]
+        return ConversationAgent._audit_claims(self.REPLY, msgs, None)
+
+    def test_on_it_flags_the_unread_source(self, monkeypatch):
+        out = self._run(monkeypatch, enabled=True)
+        assert "a source I cited without reading it this turn" in out
+
+    def test_off_nothing_changes(self, monkeypatch):
+        assert self._run(monkeypatch, enabled=False) == self.REPLY

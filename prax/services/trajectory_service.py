@@ -170,6 +170,135 @@ def export_trajectory(
         logger.debug("Trajectory export failed", exc_info=True)
 
 
+# --- Full multi-agent trajectories (FULL_TRAJECTORIES_ENABLED) --------------
+#
+# export_trajectory above keeps only the user's message and the final reply.
+# A training run on Prax's own multi-agent traffic needs the rest: the
+# orchestrator's tool calls and delegations, and each spoke's own conversation
+# (docs/research/mass-multi-agent-self-supervision.md — sub-agent windows were
+# most of that method's supervision). One JSONL line per agent per turn, in
+# OpenAI chat format with tool calls, linked by session/trace/span ids.
+
+AGENTS_FILE = "agents.jsonl"
+_MAX_MESSAGE_CHARS = 16_000
+
+
+def _content_text(content) -> str:
+    if isinstance(content, list):  # provider content blocks
+        return "".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in content)
+    return str(content or "")
+
+
+def _clip(text: str) -> str:
+    if len(text) <= _MAX_MESSAGE_CHARS:
+        return text
+    cut = len(text) - _MAX_MESSAGE_CHARS
+    return text[:_MAX_MESSAGE_CHARS] + f"\n[… {cut} characters cut]"
+
+
+def full_chat(messages: list, redact=None) -> list[dict]:
+    """*messages* as OpenAI-format chat, tool calls and tool results kept.
+    *redact* is applied to every text and argument string (the caller passes
+    the turn's secret scrubber); long tool results are clipped."""
+    from langchain_core.messages import SystemMessage
+
+    def r(text: str) -> str:
+        text = _clip(text)
+        return redact(text) if redact else text
+
+    out: list[dict] = []
+    for msg in messages:
+        if isinstance(msg, SystemMessage):
+            out.append({"role": "system", "content": r(_content_text(msg.content))})
+        elif isinstance(msg, HumanMessage):
+            out.append({"role": "user", "content": r(_content_text(msg.content))})
+        elif isinstance(msg, AIMessage):
+            entry: dict = {"role": "assistant", "content": r(_content_text(msg.content))}
+            calls = []
+            for call in getattr(msg, "tool_calls", None) or []:
+                args = call.get("args") if isinstance(call, dict) else getattr(call, "args", {})
+                name = call.get("name") if isinstance(call, dict) else getattr(call, "name", "")
+                cid = call.get("id") if isinstance(call, dict) else getattr(call, "id", "")
+                calls.append({"id": cid or "", "type": "function", "function": {
+                    "name": name or "",
+                    "arguments": r(json.dumps(args or {}, ensure_ascii=False, default=str)),
+                }})
+            if calls:
+                entry["tool_calls"] = calls
+            out.append(entry)
+        elif isinstance(msg, ToolMessage):
+            out.append({"role": "tool", "tool_call_id": getattr(msg, "tool_call_id", "") or "",
+                        "name": getattr(msg, "name", "") or "",
+                        "content": r(_content_text(msg.content))})
+    return out
+
+
+def export_agent_trajectory(
+    user_id: str,
+    *,
+    role: str,
+    task: str,
+    response: str,
+    messages: list,
+    redact=None,
+    ids: dict | None = None,
+) -> None:
+    """Append one agent's full conversation for this turn to ``agents.jsonl``.
+
+    *role* is ``"orchestrator"`` or ``"spoke:<name>"``; *ids* links the lines
+    of one turn (``session_id``, ``trace_id``, ``span_id``). The caller checks
+    FULL_TRAJECTORIES_ENABLED and passes the secret scrubber as *redact*.
+    Fire-and-forget: errors are logged, never raised.
+    """
+    if not user_id:
+        return
+    try:
+        if role == "orchestrator":
+            outcome, _ = _classify_outcome(task, response, messages)
+        elif not response:
+            outcome = "empty_response"
+        elif any(isinstance(m, ToolMessage) and any(
+                sig in _content_text(m.content).lower()
+                for sig in ("error:", "failed:", "exception:", "traceback"))
+                for m in messages):
+            outcome = "tool_failure"
+        else:
+            outcome = "success"
+        record = {
+            "messages": full_chat(messages, redact),
+            "metadata": {
+                "role": role,
+                "outcome": outcome,
+                "user_id": user_id,
+                **{k: str(v) for k, v in (ids or {}).items() if v},
+                "scheduled": task.startswith(("[SCHEDULED_TASK", "[Reminder]")),
+                "timestamp": datetime.now(UTC).isoformat(),
+                "agent": settings.agent_name,
+                "tool_count": sum(1 for m in messages if isinstance(m, ToolMessage)),
+            },
+        }
+        _append_record_line(_trajectories_dir(user_id) / AGENTS_FILE,
+                            json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        logger.debug("Agent trajectory export failed", exc_info=True)
+
+
+def _append_record_line(path: Path, line: str) -> None:
+    """Append *line* to a records file through the hash-chained journal
+    (``prax/services/record_chain.py``) where that module exists, so the write
+    is journaled like every other record write — a plain append to a
+    journaled file would read as tampering. Where it does not exist yet (the
+    record chain ships separately), a plain append."""
+    data = line.encode("utf-8")
+    try:
+        from prax.services import record_chain
+    except ImportError:
+        with open(path, "ab") as f:
+            f.write(data)
+        return
+    record_chain.append(path, data)
+
+
 def get_trajectory_stats(user_id: str) -> dict:
     """Return trajectory counts for a user."""
     d = _trajectories_dir(user_id)

@@ -1622,6 +1622,17 @@ class ConversationAgent:
                 uid, user_input, response, result.get("messages", []),
                 session_id=root_span.ctx.graph.session_id,
             )
+            # The full record — tool calls, delegations — pairs with each
+            # spoke's own line (spokes/_runner.py), linked by trace id.
+            if settings.full_trajectories_enabled:
+                from prax.agent.turn_secrets import scrubber
+                from prax.services.trajectory_service import export_agent_trajectory
+                export_agent_trajectory(
+                    uid, role="orchestrator", task=user_input, response=response,
+                    messages=result.get("messages", []), redact=scrubber(),
+                    ids={"session_id": root_span.ctx.graph.session_id,
+                         "trace_id": root_span.trace_id, "span_id": root_span.span_id},
+                )
         except Exception:
             pass
 
@@ -2252,6 +2263,7 @@ class ConversationAgent:
                 audit_scheduled_task_grounding,
                 audit_tool_failures,
                 audit_undelivered_artifact,
+                audit_unread_citations,
                 audit_unseen_on_screen,
                 decide_scheduled_briefing_action,
                 format_audit_warning,
@@ -2279,6 +2291,8 @@ class ConversationAgent:
             plan_mismatch = audit_plan_completion(response, messages)
             tool_failures = audit_tool_failures(response, tool_results)
             fabricated_links = audit_fabricated_links(response, tool_results)
+            unread_citations = (audit_unread_citations(response, messages)
+                                if settings.citation_audit_enabled else None)
             undelivered = audit_undelivered_artifact(response, messages)
             from prax.agent.user_context import current_active_view
             unseen_on_screen = audit_unseen_on_screen(response, messages, current_active_view.get())
@@ -2328,6 +2342,14 @@ class ConversationAgent:
                     f"Prax link(s) that no tool produced (e.g. {urls[0]!r}) — the "
                     f"agent likely invented where it saved something; verify the "
                     f"link before presenting it"
+                )
+            if unread_citations:
+                urls = unread_citations["unread"]
+                flagged_parts.append(
+                    f"UNREAD CITATION: response cites {len(urls)} source(s) that no "
+                    f"tool fetched or returned this turn and no earlier reply gave "
+                    f"(e.g. {urls[0]!r}) — written from memory; fetch it before "
+                    f"presenting it as a source"
                 )
             if undelivered:
                 flagged_parts.append(
@@ -2386,6 +2408,8 @@ class ConversationAgent:
                     _guard_types.append("tool_failure")
                 if fabricated_links:
                     _guard_types.append("fabricated_link")
+                if unread_citations:
+                    _guard_types.append("unread_citation")
                 if undelivered:
                     _guard_types.append("undelivered_artifact")
                 if unseen_on_screen:
@@ -2457,6 +2481,7 @@ class ConversationAgent:
                         "plan_completion": "a completion claim that may be only partial",
                         "tool_failure": "a tool that crashed without being mentioned",
                         "fabricated_link": "a link no tool actually produced",
+                        "unread_citation": "a source I cited without reading it this turn",
                         "undelivered_artifact": "a promised file/link that was never sent",
                         "unseen_on_screen": "something I said is on your screen that no tool put there",
                         "lethal_trifecta": "an external send after reading private data",

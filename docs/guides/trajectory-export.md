@@ -62,6 +62,40 @@ ChatML is the most widely supported format and maps directly to how LLMs process
 └── failed.jsonl      — corrections, tool failures, complaints
 ```
 
+## Full multi-agent trajectories (`FULL_TRAJECTORIES_ENABLED`)
+
+The files above keep the user's message and Prax's final reply, and nothing
+in between. Training on Prax's own multi-agent traffic needs the rest:
+- the orchestrator's tool calls and delegations;
+- every spoke's own conversation.
+
+In the one multi-agent training study we have assessed
+([MASS](https://arxiv.org/abs/2610.12176)), sub-agent
+conversations were 2,054 of 2,435 training windows.
+
+With `FULL_TRAJECTORIES_ENABLED=true` (off by default), each turn also
+appends one line per agent to `agents.jsonl`, in the same directory:
+- **Format:** OpenAI chat format, with `tool_calls` on assistant messages and
+  `tool` messages for results.
+- **Metadata:** `role` (`orchestrator` or `spoke:<name>`), `outcome`, the
+  turn's `session_id` and `trace_id`, and the agent's `span_id`.
+- **Linking:** a turn's lines share a `trace_id`, so an orchestrator line and
+  the spoke lines it delegated to can be paired.
+- **Secrets:** this turn's secret values are masked, in arguments and
+  results alike.
+- **Size:** tool results longer than 16,000 characters are clipped.
+- **Scheduled turns** are kept, and marked `scheduled`.
+
+The file holds the content of conversations and fetched pages, like the
+trace log, and lives with the user's other records.
+
+Before training on it:
+- **Rank by a grounded signal**, such as the user's acceptance or a
+  verifiable check, never by the model judging its own output. MASS's
+  self-ranked data cost it the two benchmarks with executable checks.
+- **Run a prompt-only control.** The same paper found that telling the base
+  model to organize a team captured most of what training bought.
+
 ## Outcome classification
 
 Each trajectory is tagged with one of:
