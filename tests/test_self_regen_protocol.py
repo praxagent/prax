@@ -231,3 +231,65 @@ def test_the_generators_are_part_of_the_scorer_fingerprint(tmp_path, monkeypatch
     import inspect
     src = inspect.getsource(sr._scorer_fingerprint)
     assert "case_generators.py" in src
+
+
+class TestReplicatedKeep:
+    """keep_replicates: a gain must beat the margin AND the run-to-run spread
+    (docs/research/mass-multi-agent-self-supervision.md: the same prompt won
+    6-0 and then lost 0-6 on consecutive runs)."""
+
+    @staticmethod
+    def _evaluator(runs: dict):
+        its = {k: iter(v) for k, v in runs.items()}
+        calls = []
+
+        def ev(patch):
+            calls.append(patch)
+            return next(its[patch])
+        return ev, calls
+
+    def test_a_lucky_run_is_not_a_gain(self, tmp_path):
+        ev, _ = self._evaluator({"": [0.50, 0.50], "lucky": [0.90, 0.50]})
+        s = run_self_regen(rounds=1, weak_signal="w", out_dir=tmp_path, gate=False,
+                           min_margin=0.05, keep_replicates=2,
+                           proposer=lambda _s: "lucky", evaluator=ev,
+                           auditor=lambda _p: (True, "ok"))
+        # mean 0.70 is +0.20 over 0.50, above the margin — but the two runs
+        # disagree by 0.40, so the gain is inside the noise.
+        assert s["variants_kept"] == 0 and s["best_patch"] == ""
+        rec = _records(tmp_path)[0]
+        assert rec["replicate_scores"] == [0.9, 0.5] and rec["noise_floor"] == 0.4
+
+    def test_a_steady_gain_is_kept(self, tmp_path):
+        ev, _ = self._evaluator({"": [0.50, 0.52], "steady": [0.70, 0.72]})
+        s = run_self_regen(rounds=1, weak_signal="w", out_dir=tmp_path, gate=False,
+                           min_margin=0.05, keep_replicates=2,
+                           proposer=lambda _s: "steady", evaluator=ev,
+                           auditor=lambda _p: (True, "ok"))
+        assert s["best_patch"] == "steady"
+        assert s["keep_replicates"] == 2 and s["baseline_scores"] == [0.5, 0.52]
+
+    def test_the_incumbents_spread_counts_too(self, tmp_path):
+        # "first" is kept, but its own runs disagree by 0.10. A later candidate
+        # that improves on it by less than that is inside the incumbent's noise.
+        ev, _ = self._evaluator({"": [0.50, 0.50], "first": [0.75, 0.65],
+                                 "second": [0.78, 0.78], "third": [0.90, 0.90]})
+        patches = iter(["first", "second", "third"])
+        s = run_self_regen(rounds=3, weak_signal="w", out_dir=tmp_path, gate=False,
+                           min_margin=0.05, keep_replicates=2,
+                           proposer=lambda _s: next(patches), evaluator=ev,
+                           auditor=lambda _p: (True, "ok"))
+        recs = _records(tmp_path)
+        # first: +0.20 over a steady baseline → kept.
+        # second: +0.08 ≥ margin, steady itself, but ≤ the incumbent's 0.10 spread.
+        # third: +0.20 over first → kept.
+        assert [r["kept"] for r in recs] == [True, False, True]
+        assert recs[1]["noise_floor"] == 0.1
+        assert s["best_patch"] == "third"
+
+    def test_default_is_one_run_per_patch(self, tmp_path):
+        ev, calls = self._evaluator({"": [0.5], "p": [0.6]})
+        run_self_regen(rounds=1, weak_signal="w", out_dir=tmp_path, gate=False,
+                       proposer=lambda _s: "p", evaluator=ev,
+                       auditor=lambda _p: (True, "ok"))
+        assert calls == ["", "p"]
