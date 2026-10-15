@@ -1060,6 +1060,27 @@ class AppSettings(BaseSettings):
             "See docs/guides/judge-audit.md."
         ),
     )
+    context_budget_tokens: int = Field(
+        default=64_000, alias="CONTEXT_BUDGET_TOKENS",
+        description=(
+            "The most context Prax sends per model call, whatever the model's "
+            "window (which comes from the model table or its provider's "
+            "catalogue). 0 = up to the window. A 1M-token window is not a "
+            "reason to resend 800k tokens on every tool call; past this, old "
+            "tool results become stubs and older history is summarised. "
+            "prax/agent/context_manager.py."
+        ),
+    )
+    context_in_loop_enabled: bool = Field(
+        default=False, alias="CONTEXT_IN_LOOP_ENABLED",
+        description=(
+            "Apply the context policy before every model call inside a turn "
+            "(stub old tool results past 60% of the budget, summarise past "
+            "85%), not only when the turn starts. Spokes start from just "
+            "their task, so without this nothing manages their growing "
+            "context. docs/research/harness-design-coding-agents.md."
+        ),
+    )
     prompt_cache_enabled: bool = Field(
         default=False, alias="PROMPT_CACHE_ENABLED",
         description=(

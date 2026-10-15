@@ -611,6 +611,49 @@ class IdempotentToolCache(AgentMiddleware):
             logger.debug("IdempotentToolCache store failed", exc_info=True)
 
 
+class ContextBudget(AgentMiddleware):
+    """Fit each model call into the context budget (``CONTEXT_IN_LOOP_ENABLED``).
+
+    The turn-start context manager runs once; inside the ReAct loop every tool
+    result is re-sent on every later call. Past 60% of the budget, old tool
+    results become stubs; past 85%, the older part is summarised (see
+    ``context_manager.fit_for_call``). Only the outgoing request changes: the
+    loop's own state, and the record, keep everything.
+    """
+
+    def wrap_model_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
+        return handler(self._fit(request))
+
+    async def awrap_model_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
+        return await handler(self._fit(request))
+
+    @staticmethod
+    def _model_name(request: Any) -> str:
+        model = getattr(request, "model", None)
+        for attr in ("model_name", "model", "model_id"):
+            value = getattr(model, attr, None)
+            if isinstance(value, str) and value:
+                return value
+        return ""
+
+    @classmethod
+    def _fit(cls, request: Any) -> Any:
+        try:
+            from prax.agent.context_manager import fit_for_call
+            messages = list(getattr(request, "messages", None) or [])
+            fitted = fit_for_call(messages, model=cls._model_name(request),
+                                  system=getattr(request, "system_message", None))
+            if fitted is messages:
+                return request
+            if hasattr(request, "override"):
+                return request.override(messages=fitted)
+            request.messages = fitted
+            return request
+        except Exception:  # never fail a model call over this
+            logger.warning("ContextBudget failed open", exc_info=True)
+            return request
+
+
 # ---------------------------------------------------------------------------
 # Stack assembly
 # ---------------------------------------------------------------------------
@@ -628,8 +671,9 @@ def default_middleware() -> list[AgentMiddleware]:
         spiral = bool(getattr(settings, "spiral_recovery_enabled", False))
         memoize = bool(getattr(settings, "tool_memoize_enabled", False))
         prompt_cache = bool(getattr(settings, "prompt_cache_enabled", False))
+        in_loop = bool(getattr(settings, "context_in_loop_enabled", False))
     except Exception:  # pragma: no cover - settings unavailable in odd contexts
-        base = spiral = memoize = prompt_cache = False
+        base = spiral = memoize = prompt_cache = in_loop = False
     stack: list[AgentMiddleware] = []
     # Memoizer first so a cache hit short-circuits before taint re-processing;
     # the cached result was already tainted on the miss that stored it.
@@ -639,6 +683,9 @@ def default_middleware() -> list[AgentMiddleware]:
         stack += [UntrustedContentTaint(), LoopHeartbeat()]
     if spiral:
         stack.append(SteadyingCounsel())
+    # Before the prefix cache: it fits the history the cache marker then sees.
+    if in_loop:
+        stack.append(ContextBudget())
     # Last: it only annotates the outgoing prompt, so it must see whatever the
     # other middleware injected (taint banners, steadying counsel) rather than
     # caching a prefix that is about to change underneath it.
