@@ -113,7 +113,7 @@ on top of whatever the cloud credential itself is scoped to.
 
 **Lifecycle:**
 
-1. **Write** — `plugin_write("weather", code)` creates the folder, saves `plugin.py` + `README.md`, runs sandbox tests
+1. **Write** — `plugin_write("weather", code)` creates the folder, saves `plugin.py` + `README.md`, runs sandbox tests. These check that the plugin imports and registers named tools. Pass `example_call='{"tool": "get_weather", "args": {"city": "Paris"}, "expect": "°"}'` to also call a tool and check its output; without it the reply says no tool was called
 2. **Activate** — `plugin_activate("weather")` hot-swaps it into the live agent
 3. **Monitor** — runtime failures are counted; after 3 consecutive failures, the plugin auto-rolls back
 4. **Rollback** — `plugin_rollback("weather")` reverts to the previous version instantly

@@ -177,6 +177,7 @@ def plugin_write(
     capabilities: str = "",
     allowed_commands: str = "",
     secrets: str = "",
+    example_call: str = "",
 ) -> str:
     """Write or update a plugin and run sandbox tests.
 
@@ -212,7 +213,15 @@ def plugin_write(
                           capabilities includes "commands".
         secrets: Comma-separated ENV keys the plugin may request via
                  permissions.md approval.
+        example_call: Optional JSON ``{"tool": "<tool name>", "args": {...},
+                 "expect": "<text the output must contain>"}``. The sandbox
+                 calls that tool and the write is reverted if it raises or the
+                 output lacks ``expect``. Without it only the structure is
+                 checked (imports, registers tools) and no tool is called.
     """
+    example, bad = _parse_example_call(example_call)
+    if bad:
+        return f"Error: {bad}"
     try:
         abs_path = _safe_plugin_path(name)
     except ValueError as e:
@@ -246,7 +255,7 @@ def plugin_write(
 
     # Run sandbox test.
     from prax.plugins.sandbox import sandbox_test_plugin
-    result = sandbox_test_plugin(str(abs_path))
+    result = sandbox_test_plugin(str(abs_path), example=example)
 
     if not result["passed"]:
         if loader.registry.restore_file(str(abs_path)):
@@ -295,7 +304,7 @@ def plugin_write(
         f"action=write tools={result['tools']}",
     )
     return (
-        f"Plugin written and sandbox test PASSED.\n"
+        f"Plugin written. {_describe_check(result, example)}\n"
         f"Tools defined: {result['tools']}\n"
         f"Manifest route: {route}; risk: {risk}\n"
         f"Use plugin_activate('{name}') to make it live.\n"
@@ -402,12 +411,18 @@ def _csv_items(value: str) -> list[str]:
 
 
 @tool
-def plugin_test(name: str) -> str:
+def plugin_test(name: str, example_call: str = "") -> str:
     """Run sandbox tests on a plugin without activating it.
 
     Args:
         name: Plugin name (e.g. "weather").
+        example_call: Optional JSON ``{"tool": ..., "args": {...}, "expect": ...}``
+            — call that tool and check its output. Without it only the
+            structure is checked.
     """
+    example, bad = _parse_example_call(example_call)
+    if bad:
+        return f"Error: {bad}"
     try:
         abs_path = _safe_plugin_path(name)
     except ValueError as e:
@@ -421,11 +436,38 @@ def plugin_test(name: str) -> str:
         return f"NOT RUN — {refusal}"
 
     from prax.plugins.sandbox import sandbox_test_plugin
-    result = sandbox_test_plugin(str(abs_path))
+    result = sandbox_test_plugin(str(abs_path), example=example)
 
     if result["passed"]:
-        return f"PASSED. Tools: {result['tools']}"
+        return f"PASSED. {_describe_check(result, example)} Tools: {result['tools']}"
     return f"FAILED.\nErrors: {result['errors']}"
+
+
+def _parse_example_call(example_call: str) -> tuple[dict | None, str]:
+    """``(example, "")`` from the JSON argument, ``(None, "")`` when empty, or
+    ``(None, reason)`` when it is malformed."""
+    if not (example_call or "").strip():
+        return None, ""
+    try:
+        example = json.loads(example_call)
+    except ValueError as e:
+        return None, f"example_call is not valid JSON: {e}"
+    if not isinstance(example, dict) or not example.get("tool"):
+        return None, 'example_call needs {"tool": "<name>", "args": {...}, "expect": "<text>"}'
+    if not isinstance(example.get("args", {}), dict):
+        return None, "example_call args must be a JSON object"
+    return example, ""
+
+
+def _describe_check(result: dict, example: dict | None) -> str:
+    """Say what the sandbox check covered — never more than that."""
+    n = len(result.get("tools") or [])
+    if result.get("behaviour") == "tested" and example:
+        return (f"Sandbox test: it imports, registers {n} tool(s), and the example "
+                f"call to {example['tool']} returned the expected output.")
+    return (f"Sandbox check: it imports and registers {n} tool(s). No tool was "
+            "called, so what the tools do is untested — pass example_call to "
+            "test one.")
 
 
 @risk_tool(risk=RiskLevel.HIGH)
