@@ -178,7 +178,7 @@ def test_plugin_write_records_what_it_wrote(tmp_path, ledger, enforced, monkeypa
 
     out = plugin_tools.plugin_write.func(name="written", code=code, description="d")
 
-    assert "PASSED" in out
+    assert out.startswith("Plugin written.") and "No tool was called" in out
     assert ledger.check(base / "written") == (True, "")
 
 
