@@ -937,6 +937,40 @@ class AppSettings(BaseSettings):
             "of AGENT_MIDDLEWARE_ENABLED."
         ),
     )
+    spoke_sources_enabled: bool = Field(
+        default=False, alias="SPOKE_SOURCES_ENABLED",
+        description=(
+            "A spoke's reply ends with the URLs its own tools fetched or opened, "
+            "written by the harness from its tool calls (spokes/_runner.py), so the "
+            "orchestrator can cite what the spoke read even when the summary drops "
+            "the link. URLs with credential-like query parameters are left out. "
+            "Off keeps the prior behaviour."
+        ),
+    )
+    full_trajectories_enabled: bool = Field(
+        default=False, alias="FULL_TRAJECTORIES_ENABLED",
+        description=(
+            "Record full multi-agent trajectories as training data: the "
+            "orchestrator's tool calls and delegations, and every spoke's own "
+            "conversation, one line per agent per turn in the user's trajectories "
+            "directory (agents.jsonl), linked by trace id, this turn's secrets "
+            "masked. Holds the content of conversations and fetched pages, like "
+            "the trace log. Off keeps the prior behaviour (user message + final "
+            "reply only, in completed/failed.jsonl)."
+        ),
+    )
+    citation_audit_enabled: bool = Field(
+        default=False, alias="CITATION_AUDIT_ENABLED",
+        description=(
+            "Read-before-cite: the claim audit also flags external URLs a reply "
+            "cites that no tool fetched or returned this turn, and that no "
+            "earlier reply gave — sources written from memory "
+            "(prax/agent/claim_audit.py:audit_unread_citations). Logged and "
+            "posted to the Auditor channel like the other checks; shown to the "
+            "user only when CLAIM_AUDIT_ATTENDED_QUARANTINE is also on. Off keeps "
+            "the prior behaviour: external citations are not audited."
+        ),
+    )
     claim_audit_attended_quarantine: bool = Field(
         default=False, alias="CLAIM_AUDIT_ATTENDED_QUARANTINE",
         description=(
