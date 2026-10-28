@@ -1,7 +1,7 @@
 """Reference-free live-traffic evaluation.
 
 The harness already traces *all* production traffic to
-``.prax/graphs/graphs-YYYY-MM-DD.jsonl``.  This module turns that store into
+``RECORDS_DIR/graphs/graphs-YYYY-MM-DD.jsonl``.  This module turns that store into
 the "live-traffic eval batch" pattern: it samples recently completed traces,
 scores each with a cheap LLM judge **without a reference answer**
 (grounding / relevancy / correctness), and publishes daily aggregate quality
@@ -44,12 +44,9 @@ Respond with EXACTLY this JSON (no other text):
 
 
 def _graphs_dir() -> Path:
-    try:
-        from prax.settings import settings
-        base = Path(settings.workspace_dir).resolve()
-    except Exception:
-        base = Path(".")
-    return base / ".prax" / "graphs"
+    """The execution graphs, in the records directory (prax/services/records.py)."""
+    from prax.services import records
+    return records.graphs_dir()
 
 
 def _iter_recent_graphs(limit: int):

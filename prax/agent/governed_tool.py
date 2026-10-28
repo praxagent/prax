@@ -110,6 +110,11 @@ class TurnGovernanceState:
     human_approved: set[str] = field(default_factory=set)
     # Whether this turn has told the sandbox egress gate it read private data.
     egress_tainted: bool = False
+    # URL provenance (prax/agent/url_provenance.py): every URL this turn has
+    # seen verbatim (messages, context, tool results), and whether untrusted
+    # content has actually come back from a tool (not merely been delegated to).
+    seen_urls: set[str] = field(default_factory=set)
+    untrusted_ingested: bool = False
     tool_call_count: int = 0
     tool_call_budget: int = 0
     # The registry entry a person can cancel (prax.services.turn_registry).
@@ -442,6 +447,13 @@ def wrap_with_governance(
                 # decision (prax/services/exposure_gate.py).
                 exposure_decision = prov.get("approval") or "person"
 
+        # --- A URL composed after untrusted content (URL_PROVENANCE_GUARD) ---
+        # Like a floor, whatever the spoke enforce switch says: this is the
+        # exfiltration step of an injected page, decided by a person or not at all.
+        url_refusal = _url_provenance_gate(state, tool_name, kwargs, prov)
+        if url_refusal:
+            return url_refusal
+
         # --- Active Inference: extract expected observation (Phase 1) ---
         expected_observation = kwargs.pop("expected_observation", None)
 
@@ -695,6 +707,11 @@ def wrap_with_governance(
             # pages AND acts).  Recorded unconditionally — it is two booleans;
             # only the escalation is flag-gated.
             _record_legs(state)
+            # URLs in the result are now "seen" (copying one is fine); and if the
+            # tool reads untrusted content, that content has now been ingested.
+            _note_result_urls(state, result_str)
+            if LEG_UNTRUSTED in static_legs:
+                state.untrusted_ingested = True
 
             if not hub:
                 # Spoke layer: the result reaches the spoke's LLM exactly as the
@@ -886,7 +903,12 @@ def _tag_result(
 
 
 # Tools that run code inside the sandbox, where /workspace is the user's data.
-_SANDBOX_EXEC_TOOLS = frozenset({"sandbox_shell", "run_python", "data_query", "lean_check"})
+# The desktop ones type a command into a terminal there (and press Enter), or
+# launch a program: the same as sandbox_shell, on the screen the user watches.
+_SANDBOX_EXEC_TOOLS = frozenset({
+    "sandbox_shell", "run_python", "data_query", "lean_check",
+    "desktop_type", "desktop_key", "desktop_open",
+})
 
 
 # How many tool calls an over-budget turn may still attempt (each refused) to
@@ -1000,6 +1022,60 @@ def _floor_gate(state: TurnGovernanceState, tool_name: str, kwargs: dict,
     state.audit.append(log_action(
         tool_name, RiskLevel.HIGH, kwargs, result="REFUSED — hard floor, no person's decision", from_tool=False))
     return hard_floors.refusal(tool_name, target, approvals=False)
+
+
+def note_seen_text(text: str) -> None:
+    """Add the URLs in *text* (the turn's messages and context) to what the
+    current turn has seen. Copying a URL the turn was shown is fine."""
+    try:
+        from prax.agent.url_provenance import seen_in
+        current_turn_state().seen_urls |= seen_in(text)
+    except Exception:
+        logger.debug("noting seen URLs failed", exc_info=True)
+
+
+def _note_result_urls(state: TurnGovernanceState, result_str: str | None) -> None:
+    if not result_str:
+        return
+    try:
+        from prax.agent.url_provenance import seen_in
+        state.seen_urls |= seen_in(result_str)
+    except Exception:
+        logger.debug("noting result URLs failed", exc_info=True)
+
+
+def _url_provenance_gate(state: TurnGovernanceState, tool_name: str, kwargs: dict,
+                         prov: dict) -> str | None:
+    """``None`` = go ahead. After the turn ingested untrusted content, a call
+    that would send out a URL the agent composed (not copied, not built from the
+    user's own words) goes to a person, or is refused."""
+    from prax.agent import url_provenance as up
+    if not (state.untrusted_ingested and up.guard_enabled()):
+        return None
+    try:
+        user_words = up.tokens(_attended_user_message())
+        urls = up.composed(tool_name, kwargs, state.seen_urls, user_words)
+    except Exception:
+        logger.warning("URL provenance check failed for %s", tool_name, exc_info=True)
+        return None
+    if not urls:
+        return None
+    call_key = _trifecta_key(tool_name, kwargs)
+    if call_key in state.human_approved:
+        prov["approval"] = "person"
+        return None
+    reason = ("This turn read untrusted content, and this call sends a URL the agent composed "
+              "rather than copied from anything it was shown or built from the user's words: "
+              + ", ".join(urls[:3]))
+    from prax.agent import human_approval
+    if human_approval.enabled():
+        return _ask_a_person(state, tool_name, kwargs, call_key, kind="composed_url",
+                             reason=reason, prov=prov)
+    state.audit.append(log_action(
+        tool_name, RiskLevel.HIGH, kwargs,
+        result="REFUSED — composed URL after untrusted content: " + ", ".join(urls[:3]),
+        from_tool=False))
+    return up.refusal(urls)
 
 
 def _ask_a_person(state: TurnGovernanceState, tool_name: str, kwargs: dict,

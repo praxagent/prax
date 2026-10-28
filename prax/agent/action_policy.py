@@ -283,8 +283,8 @@ def log_action(
     provenance on every tool call).
 
     The entry does not stay in memory, though: the orchestrator writes every
-    one to the workspace ``trace.log`` (committed with the workspace,
-    searchable, shown in TeamWork's file browser) and to a debug log. So for
+    one to the user's ``trace.log`` (kept for good in the records directory,
+    searchable) and to a debug log. So for
     every caller:
 
     - a tool that returns a secret (``hard_floors.SECRET_RETURNING_TOOLS``:

@@ -60,12 +60,14 @@ def _write_trace(graphs_dir, trace_id: str, trigger: str, status: str = "complet
 
 @pytest.fixture
 def trace_dir(tmp_path, monkeypatch):
-    """Create a .prax/graphs dir with a couple of sample traces and point settings at it."""
+    """Create the records' graphs dir with a couple of sample traces and point settings at it."""
+    import prax.settings
     ws = tmp_path / "workspaces"
     ws.mkdir()
-    graphs = ws / ".prax" / "graphs"
+    graphs = tmp_path / "records" / "graphs"
     graphs.mkdir(parents=True)
-    monkeypatch.setattr(trace_search_service.settings, "workspace_dir", str(ws))
+    monkeypatch.setattr(prax.settings.settings, "workspace_dir", str(ws))
+    monkeypatch.setattr(prax.settings.settings, "records_dir", "")
     _write_trace(graphs, "trace-plan-tokyo", "plan a 3-day trip to Tokyo with budget $2000")
     _write_trace(graphs, "trace-arxiv-rag", "find arxiv papers on RAG and summarise them")
     _write_trace(graphs, "trace-broken", "pay bills", status="failed")

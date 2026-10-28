@@ -41,7 +41,11 @@ def run_writer(
         tier=cfg.get("tier") or "medium",
     )
 
-    tools = _build_writer_tools()
+    from prax.agent.governed_tool import govern_spoke_tools
+    from prax.agent.tool_registry import apply_eval_denylist
+
+    # Governed like every other spoke loop (audit, trifecta legs, floors).
+    tools = govern_spoke_tools(apply_eval_denylist(_build_writer_tools()))
     graph = build_agent_loop(llm, tools)
     prompt = WRITER_PROMPT.format(agent_name=settings.agent_name)
 

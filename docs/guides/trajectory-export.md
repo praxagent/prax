@@ -57,7 +57,7 @@ ChatML is the most widely supported format and maps directly to how LLMs process
 ## File locations
 
 ```
-{workspace}/{user_id}/.prax/trajectories/
+{RECORDS_DIR}/users/{workspace}/trajectories/   (was {workspace}/{user_id}/.prax/trajectories/)
 ├── completed.jsonl   — successful exchanges
 └── failed.jsonl      — corrections, tool failures, complaints
 ```

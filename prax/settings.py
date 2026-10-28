@@ -243,6 +243,11 @@ class AppSettings(BaseSettings):
 
     # Workspace
     workspace_dir: str = Field(default="../workspaces", alias="WORKSPACE_DIR")
+    # The record of what Prax did (trace logs, execution graphs, trajectories,
+    # parked approvals, feedback). Must be OUTSIDE workspace_dir, which the
+    # sandbox mounts read-write. Empty = records/ next to workspace_dir. See
+    # prax/services/records.py and docs/security/trace-integrity.md.
+    records_dir: str = Field(default="", alias="RECORDS_DIR")
 
     # User identity — which user this Prax instance serves.
     # When set, the sandbox mounts only this user's workspace folder
@@ -1060,6 +1065,27 @@ class AppSettings(BaseSettings):
             "See docs/guides/judge-audit.md."
         ),
     )
+    context_budget_tokens: int = Field(
+        default=64_000, alias="CONTEXT_BUDGET_TOKENS",
+        description=(
+            "The most context Prax sends per model call, whatever the model's "
+            "window (which comes from the model table or its provider's "
+            "catalogue). 0 = up to the window. A 1M-token window is not a "
+            "reason to resend 800k tokens on every tool call; past this, old "
+            "tool results become stubs and older history is summarised. "
+            "prax/agent/context_manager.py."
+        ),
+    )
+    context_in_loop_enabled: bool = Field(
+        default=False, alias="CONTEXT_IN_LOOP_ENABLED",
+        description=(
+            "Apply the context policy before every model call inside a turn "
+            "(stub old tool results past 60% of the budget, summarise past "
+            "85%), not only when the turn starts. Spokes start from just "
+            "their task, so without this nothing manages their growing "
+            "context. docs/research/harness-design-coding-agents.md."
+        ),
+    )
     prompt_cache_enabled: bool = Field(
         default=False, alias="PROMPT_CACHE_ENABLED",
         description=(
@@ -1153,6 +1179,11 @@ class AppSettings(BaseSettings):
     # the action and target. Checked before earned trust, auto-approve and the
     # spoke enforce switch. Off keeps the prior behaviour.
     hard_floors_enabled: bool = Field(default=False, alias="HARD_FLOORS_ENABLED")
+    # After a turn reads untrusted content, a URL the agent composed (not seen
+    # verbatim, not built from the user's own words) goes to a person or is
+    # refused: the exfiltration step of an injected page. On by default; off
+    # restores the old behaviour. prax/agent/url_provenance.py.
+    url_provenance_guard: bool = Field(default=True, alias="URL_PROVENANCE_GUARD")
     # Extra tool names to treat as hard floors (comma-separated). Add-only:
     # the built-in floors can't be removed.
     hard_floor_extra_tools: str = Field(default="", alias="HARD_FLOOR_EXTRA_TOOLS")

@@ -67,9 +67,23 @@ flowchart TD
 
 ## Strategies
 
-### 1. Token budgeting — per-model limits
+### 1. Token budgeting — per-model limits, capped
 
-Context limits are resolved from the specific model name first, not a per-tier lowest common denominator. A Claude model with 160K context gets a much larger budget than a nano model with 12K, even if both happen to be assigned to the same tier.
+The budget for a call is worked out in three steps:
+1. **The model is the one that will run.** A component configured by tier
+   only (the usual case for the orchestrator) uses its tier's model.
+2. **Its window comes from the table below,** else from what its provider
+   reports (OpenRouter's public catalogue lists `context_length` for every
+   model), less 20% for the response; else the tier fallback.
+3. **The result is capped by `CONTEXT_BUDGET_TOKENS`** (default 64,000; 0 = up
+   to the window). A 1M-token window is not a reason to resend 800k tokens
+   on every tool call.
+
+**Fixed 2026-10.** Before this, an empty model name always meant the tier
+fallback, so production's 1M-window OpenRouter models were budgeted at
+50,000. Every turn in one long scheduled conversation (75 of 96 turns in a
+month of logs) started at about 128k tokens, was summarized, and was still
+truncated. Nothing was persisted, so the next turn did it all again.
 
 The orchestrator logs token usage every turn:
 
@@ -90,7 +104,18 @@ The agent's interpretation of the results (in its AIMessage response) is preserv
 
 ### 3. LLM compaction — summarize oldest half
 
-When the conversation exceeds the budget after tool result clearing, the oldest half of turns are summarized by a cheap LLM. The summary preserves:
+When the conversation exceeds the budget after tool result clearing, the oldest half of turns are summarized by a cheap LLM.
+- **What the summarizer sees.** All of that half: each message is clipped to
+  4,000 characters and tool results to 600, up to 240,000 characters in total,
+  most recent first. It used to see only the first 8,000 characters, a few of
+  the oldest messages.
+- **Reuse.** A prefix summarized before is reused, and only what came after
+  it is summarized, with the earlier summary as context. If exactly that part
+  was summarized before, no model call is made. The cache is in memory, so a
+  restart costs one full summary.
+- **The split never separates a tool result from its call.**
+
+The summary preserves:
 - Key decisions and their reasoning
 - Unresolved issues or bugs
 - User preferences and corrections
@@ -103,6 +128,20 @@ If the LLM summarization call fails, compaction falls back to hard truncation.
 ### 4. Hard truncation — oldest-first, always preserve system message
 
 If compaction still leaves the context over budget, the oldest messages are dropped one at a time. The system message is always preserved. After dropping, the message list is adjusted to ensure it starts with a valid HumanMessage (not an orphaned AIMessage or ToolMessage).
+
+### 4b. Inside the turn — before every model call (`CONTEXT_IN_LOOP_ENABLED`)
+
+Steps 1–4 run once, when a turn starts. Inside the turn, every tool result is
+re-sent on every later call. Spokes start from just their task, so nothing
+managed their context at all. With `CONTEXT_IN_LOOP_ENABLED`, a loop
+middleware (`ContextBudget`) applies the same policy before each model call:
+- past 60% of the budget, tool results beyond the last six become stubs;
+- past 85%, the older part is summarized.
+
+Only the outgoing request changes; the loop's state and the record keep
+everything. There is no recall tool: "An Empirical Study of Harness Design
+for Coding Agents" ([assessment](../research/harness-design-coding-agents.md))
+finds models almost never use one.
 
 ### 5. Spoke architecture — 67 to 35 tools
 
@@ -148,7 +187,7 @@ The context manager maintains a lookup table of known models and their context b
 | **Local / Ollama** | |
 | `qwen3-8b` | 25,000 |
 
-When a model is not in the table, `get_context_limit` tries substring matching (e.g., `claude-sonnet-4-6-20260101` matches `claude-sonnet-4-6`), then falls back to tier-based defaults:
+When a model is not in the table, `get_context_limit` tries substring matching (e.g., `claude-sonnet-4-6-20260101` matches `claude-sonnet-4-6`), then the window its provider reports (`model_catalog.context_window`, from OpenRouter's catalogue, cached with the model list), then the tier-based defaults. Whichever applies, `CONTEXT_BUDGET_TOKENS` caps it:
 
 | Tier | Fallback Budget |
 |------|----------------|
@@ -254,7 +293,12 @@ Returns current context usage for the user:
 
 ## Configuration
 
-Context limits are defined per model in `context_manager.py` with tier-based fallbacks. The orchestrator's tier is determined by the `orchestrator` component config in `llm_routing.yaml`. The model override (if set) takes precedence over both.
+Context limits are defined per model in `context_manager.py`, with provider-reported windows and tier-based fallbacks. The orchestrator's tier is determined by the `orchestrator` component config in `llm_routing.yaml`. The model override (if set) takes precedence over both.
+
+| Setting | Default | |
+|---|---|---|
+| `CONTEXT_BUDGET_TOKENS` | `64000` | Most context sent per call, whatever the window (0 = up to the window) |
+| `CONTEXT_IN_LOOP_ENABLED` | `false` | Apply the policy before every model call inside a turn, not only at its start |
 
 ## References
 

@@ -1,6 +1,6 @@
 """LangChain tool wrappers for trace semantic search + detail fetch.
 
-These turn Prax's ``.prax/graphs/*.jsonl`` trace archive into an
+These turn Prax's ``RECORDS_DIR/graphs/*.jsonl`` trace archive into an
 introspectable "have I solved this before?" surface.  Complements
 ``review_my_traces`` — which digests traces into LLM advice — by
 giving the agent direct, structured read access.

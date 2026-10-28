@@ -585,7 +585,7 @@ Converts episodic conversation traces into durable memories.
 ### Pipeline steps
 
 ```
- 1. Read unconsolidated trace entries from {workspace}/trace.log, in batches
+ 1. Read unconsolidated trace entries from the user's trace.log (in RECORDS_DIR), in batches
     ├── Batch = non-blank lines up to EXTRACTION_CHAR_BUDGET (4 000 chars) —
     │   the same cap the extractor enforces, so nothing batched is truncated
     ├── Up to MAX_BATCHES_PER_RUN (8) batches per run — ≤ 32 KB of trace and
@@ -601,7 +601,7 @@ Converts episodic conversation traces into durable memories.
     └── Rotation/replacement of trace.log (512 KB rotation, or a changed first
         line) resets the pointer to 0.  **Everything past the pointer in the old
         file is dropped from consolidation** — the archive under
-        archive/trace_logs/ is not read — so the reset logs at WARNING how many
+        trace_logs/ is not read — so the reset logs at WARNING how many
         content lines were pending at the last run (a floor: lines appended
         since are lost uncounted).  `rotation_resets`, `last_rotation_reset_at`
         and `last_rotation_dropped_lines` are recorded in the state file

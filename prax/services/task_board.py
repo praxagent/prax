@@ -116,8 +116,8 @@ def _rotate_task_log(path: str) -> None:
 def _extract_task_trace(user_id: str, task_id: str) -> list[str]:
     """Extract trace entries correlated with a task ID from the trace log."""
     try:
-        from prax.services.workspace_service import workspace_root
-        trace_path = os.path.join(workspace_root(user_id), "trace.log")
+        from prax.services.workspace_service import trace_log_path
+        trace_path = trace_log_path(user_id)
         if not os.path.isfile(trace_path):
             return []
 

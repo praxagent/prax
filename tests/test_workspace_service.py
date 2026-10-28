@@ -474,17 +474,15 @@ class TestTraceLog:
 
     def test_rotation_creates_plain_text_archive(self, ws_dir):
         workspace_service._ensure_workspace(USER)
-        root = workspace_service._workspace_root(USER)
-        trace_path = os.path.join(root, "trace.log")
+        trace_path = workspace_service.trace_log_path(USER)
+        archive_dir = workspace_service.trace_archive_dir(USER)
 
         # Write more than 0.5 MB to trigger rotation.
         with open(trace_path, "w") as f:
             f.write("x" * (600 * 1024))
 
-        workspace_service._rotate_trace(trace_path)
+        workspace_service._rotate_trace(trace_path, archive_dir)
 
-        archive_dir = os.path.join(root, "archive", "trace_logs")
-        assert os.path.isdir(archive_dir)
         archives = [f for f in os.listdir(archive_dir) if f.endswith(".log")]
         assert len(archives) == 1
         # Should be plain text, not gzip.
@@ -494,13 +492,12 @@ class TestTraceLog:
 
     def test_rotation_truncates_current(self, ws_dir):
         workspace_service._ensure_workspace(USER)
-        root = workspace_service._workspace_root(USER)
-        trace_path = os.path.join(root, "trace.log")
+        trace_path = workspace_service.trace_log_path(USER)
 
         with open(trace_path, "w") as f:
             f.write("x" * (600 * 1024))
 
-        workspace_service._rotate_trace(trace_path)
+        workspace_service._rotate_trace(trace_path, workspace_service.trace_archive_dir(USER))
 
         with open(trace_path) as f:
             content = f.read()
@@ -564,17 +561,14 @@ class TestTraceLog:
 
     def test_search_includes_archived_files(self, ws_dir):
         workspace_service._ensure_workspace(USER)
-        root = workspace_service._workspace_root(USER)
 
         # Write an archived file directly.
-        archive_dir = os.path.join(root, "archive", "trace_logs")
-        os.makedirs(archive_dir, exist_ok=True)
+        archive_dir = workspace_service.trace_archive_dir(USER)
         with open(os.path.join(archive_dir, "trace.20250101-000000.log"), "w") as f:
             f.write("\n=== 2025-01-01T00:00:00Z ===\n[USER] old quantum discussion\n")
 
         # Write something different in current trace.
-        trace_path = os.path.join(root, "trace.log")
-        with open(trace_path, "w") as f:
+        with open(workspace_service.trace_log_path(USER), "w") as f:
             f.write("\n=== 2025-03-01T00:00:00Z ===\n[USER] recent topic\n")
 
         # Search for "quantum" should find the archived entry.
@@ -582,27 +576,56 @@ class TestTraceLog:
         assert len(results) == 1
         assert "quantum" in results[0]["excerpt"]
 
-    def test_rotation_prunes_old_archives(self, ws_dir):
+    def test_rotation_keeps_every_archive(self, ws_dir):
+        """A record is not something Prax deletes. (Rotation used to keep only
+        the last three, survivable only while the workspace's git history held
+        the rest; the log is no longer in the workspace.)"""
         workspace_service._ensure_workspace(USER)
-        root = workspace_service._workspace_root(USER)
-        archive_dir = os.path.join(root, "archive", "trace_logs")
-        os.makedirs(archive_dir, exist_ok=True)
-
-        # Create 5 old archive files (beyond _TRACE_KEEP_ROTATED=3).
+        archive_dir = workspace_service.trace_archive_dir(USER)
         for i in range(5):
             with open(os.path.join(archive_dir, f"trace.2025010{i}-000000.log"), "w") as f:
                 f.write(f"old log {i}")
-
-        # Trigger rotation.
-        trace_path = os.path.join(root, "trace.log")
+        trace_path = workspace_service.trace_log_path(USER)
         with open(trace_path, "w") as f:
             f.write("x" * (600 * 1024))
 
-        workspace_service._rotate_trace(trace_path)
+        workspace_service._rotate_trace(trace_path, archive_dir)
 
-        archives = [f for f in os.listdir(archive_dir) if f.endswith(".log")]
-        # Should keep only _TRACE_KEEP_ROTATED (3) archives.
-        assert len(archives) <= workspace_service._TRACE_KEEP_ROTATED
+        assert len([f for f in os.listdir(archive_dir) if f.endswith(".log")]) == 6
+
+    def test_the_trace_log_is_outside_the_workspace(self, ws_dir, tmp_path, monkeypatch):
+        """The sandbox mounts the workspace read-write: a record inside it is
+        one `rm` away from the agent (arXiv 2609.30266)."""
+        from pathlib import Path
+
+        from prax.settings import settings
+        monkeypatch.setattr(settings, "workspace_dir", str(tmp_path / "workspaces"))
+        monkeypatch.setattr(settings, "records_dir", "")       # the default: records/ beside it
+        root = Path(workspace_service._ensure_workspace(USER)).resolve()
+        workspace_service.append_trace(USER, [{"type": "user", "content": "hello"}])
+        trace = Path(workspace_service.trace_log_path(USER)).resolve()
+        workspace_dir = Path(settings.workspace_dir).resolve()
+        assert trace.is_file() and "hello" in trace.read_text()
+        assert workspace_dir not in trace.parents and root not in trace.parents
+        assert not (root / "trace.log").exists()
+
+    def test_a_trace_log_left_in_the_workspace_moves_to_the_records(self, ws_dir):
+        from pathlib import Path
+
+        from prax.services import records
+        root = Path(workspace_service._ensure_workspace(USER))
+        (root / "trace.log").write_text("\n=== 2025-02-01T00:00:00Z ===\n[USER] from before the move\n")
+        (root / "archive" / "trace_logs").mkdir(parents=True)
+        (root / "archive" / "trace_logs" / "trace.20250101-000000.log").write_text("[USER] older\n")
+        records._reset_for_tests()
+
+        workspace_service.append_trace(USER, [{"type": "user", "content": "after the move"}])
+
+        text = Path(workspace_service.trace_log_path(USER)).read_text()
+        assert "from before the move" in text and "after the move" in text
+        assert not (root / "trace.log").exists()
+        assert [r["excerpt"] for r in workspace_service.search_trace(USER, "older")]
+        assert not (root / "archive" / "trace_logs").exists()
 
 
 class TestPluginImport:
