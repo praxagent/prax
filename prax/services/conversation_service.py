@@ -9,10 +9,11 @@ There are two memory layers in Prax:
    by ``(channel, user_id)``.  This is used to reload history when a session
    resumes and is the *only* remaining consumer of ``conversation_memory``.
 
-2. **Workspace trace log** (``workspace_service.append_trace`` / ``search_trace``)
-   — the newer, git-backed log.  Every assistant turn is appended as a plain-
-   text line to ``<workspace>/trace.log`` (auto-rotated at 0.5 MB).  Use this
-   for debugging, audit trails, and cross-session search.
+2. **Trace log** (``workspace_service.append_trace`` / ``search_trace``)
+   — the newer log.  Every assistant turn is appended as plain text to the
+   user's ``trace.log`` in the records directory, out of the agent's reach
+   (``prax/services/records.py``; auto-rotated at 0.5 MB).  Use this for
+   debugging, audit trails, and cross-session search.
 
 New features should use workspace traces for persistence and avoid adding
 new call sites into ``conversation_memory``.

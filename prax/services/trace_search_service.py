@@ -10,7 +10,7 @@ Design:
   collection (``prax_trace_summaries``) so memory and trace search
   don't pollute each other's ranking.
 - **Lazy indexing.** The first time ``search_traces`` runs in a
-  process, it scans ``.prax/graphs/graphs-*.jsonl`` and upserts any
+  process, it scans ``RECORDS_DIR/graphs/graphs-*.jsonl`` and upserts any
   trace ID not already in the collection.  Subsequent calls skip
   already-indexed IDs via an in-memory set.
 - **Graceful degradation.** When Qdrant is unreachable or the
@@ -27,8 +27,6 @@ import logging
 import threading
 from pathlib import Path
 from typing import Any
-
-from prax.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -73,8 +71,8 @@ def _not_available(reason: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def _graphs_dir() -> Path:
-    base = Path(settings.workspace_dir).resolve()
-    return base / ".prax" / "graphs"
+    from prax.services import records
+    return records.graphs_dir()
 
 
 def _iter_persisted_traces():

@@ -96,8 +96,8 @@ ALLOWLIST: set[str] = {
     "prax/plugins/tools/rss_reader/plugin.py:11 -> prax.agent.user_context",
     # Services reaching back into agent.  Each is a real architectural
     # smell to pay down; none are load-bearing enough to fix right now.
-    "prax/services/conversation_service.py:28 -> prax.agent",
-    "prax/services/feedback_service.py:214 -> prax.agent.trace",
+    "prax/services/conversation_service.py:29 -> prax.agent",
+    "prax/services/feedback_service.py:210 -> prax.agent.trace",
     "prax/services/scheduler_service.py:296 -> prax.agent.orchestrator",
     # task_runner_service spawns a synthetic orchestrator turn per
     # picked-up task — same pattern as scheduler_service.  Both
@@ -109,7 +109,7 @@ ALLOWLIST: set[str] = {
     # existing carve-out for prax.agent.trace — these are "trace as
     # data" reads, not "run the agent" calls.  A future refactor
     # should move ExecutionGraph persistence into a service layer.
-    "prax/services/trace_search_service.py:338 -> prax.agent.trace",
+    "prax/services/trace_search_service.py:336 -> prax.agent.trace",
     # Services reaching into blueprints.  teamwork_hooks is a bridge
     # module and could legitimately move.
     "prax/services/teamwork_hooks.py:66 -> prax.blueprints.teamwork_routes",

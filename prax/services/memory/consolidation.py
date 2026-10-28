@@ -175,10 +175,9 @@ def _read_unconsolidated(user_id: str, state: dict) -> _Batch:
     single line longer than the budget is sent alone, truncated, and the
     truncated tail is reported in `bytes_skipped` rather than silently lost.
     """
-    from prax.services.workspace_service import workspace_root
+    from prax.services.workspace_service import trace_log_path
 
-    root = workspace_root(user_id)
-    trace_path = os.path.join(root, "trace.log")
+    trace_path = trace_log_path(user_id)
     batch = _Batch()
     if not os.path.exists(trace_path):
         return batch
@@ -241,7 +240,7 @@ def _commit_pointer(state: dict, batch: _Batch) -> None:
 def _record_rotation(user_id: str, state: dict, batch: _Batch) -> None:
     """Log a pointer reset — and what it abandons.
 
-    A rotation moves trace.log to archive/trace_logs/, which consolidation
+    A rotation moves trace.log to trace_logs/ beside it, which consolidation
     never reads, so every content line of the old file past the pointer is
     lost to long-term memory.  The state file knows the backlog as of the last
     run; lines appended between that run and the rotation are lost too and
@@ -269,7 +268,7 @@ def _record_rotation(user_id: str, state: dict, batch: _Batch) -> None:
         "from line %d to 0 (reset #%d). At the last run the old file had %d lines "
         "with %d content lines (%d bytes) past the pointer; those lines, plus "
         "anything appended since, were never consolidated and will not be (the "
-        "archived copy under archive/trace_logs/ is not read by consolidation)",
+        "archived copy under trace_logs/ is not read by consolidation)",
         user_id, old_pointer, state["rotation_resets"], int(old_total), dropped,
         int(state.get("trace_pending_bytes", 0) or 0),
     )

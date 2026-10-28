@@ -59,15 +59,11 @@ class FeedbackEntry:
 # ---------------------------------------------------------------------------
 
 def _feedback_dir() -> Path:
-    """Return the directory for feedback JSONL files."""
-    try:
-        from prax.settings import settings
-        base = Path(settings.workspace_dir).resolve()
-    except Exception:
-        base = Path(".")
-    d = base / ".prax" / "feedback"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    """Return the directory for feedback JSONL files: in the records directory,
+    so the agent cannot rate its own answers from the sandbox."""
+    from prax.services import records
+    from prax.settings import settings
+    return records.shared_dir("feedback", legacy=Path(settings.workspace_dir).resolve() / ".prax" / "feedback")
 
 
 def _feedback_file() -> Path:
@@ -76,12 +72,12 @@ def _feedback_file() -> Path:
 
 
 def _append_feedback(entry: FeedbackEntry) -> None:
-    """Append a feedback entry to the JSONL file."""
+    """Append a feedback entry to the JSONL file (journaled: ``record_chain``)."""
+    from prax.services import record_chain
     try:
         filepath = _feedback_file()
         line = json.dumps(asdict(entry), default=str)
-        with open(filepath, "a") as f:
-            f.write(line + "\n")
+        record_chain.append(filepath, (line + "\n").encode("utf-8"))
     except Exception:
         logger.warning("Failed to persist feedback %s", entry.id, exc_info=True)
 

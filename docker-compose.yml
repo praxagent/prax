@@ -37,6 +37,10 @@ services:
     group_add: ["0"]
     volumes:
       - ${WORKSPACE_DIR:-../workspaces}:/app/workspaces
+      # The record of what Prax did (trace logs, execution graphs, approvals):
+      # outside the workspace, which the sandbox mounts. Never mount this into
+      # the sandbox. See docs/security/trace-integrity.md.
+      - ${RECORDS_DIR:-../records}:/app/records
       - ./static:/app/static
       - ./logs:/app/logs
       # Persistent data for embedded services — scoped per-user.

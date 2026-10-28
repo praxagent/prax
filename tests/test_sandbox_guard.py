@@ -155,14 +155,16 @@ class TestResourceLimits:
         old_cpu = resource.getrlimit(resource.RLIMIT_CPU)
         old_fds = resource.getrlimit(resource.RLIMIT_NOFILE)
 
-        # Use a high CPU limit (600s) so we don't hit cumulative CPU time
-        # already consumed by earlier tests in the full suite (RLIMIT_CPU is
-        # a lifetime cap, not per-call).
-        with resource_limits(cpu_seconds=600, max_fds=32):
+        # RLIMIT_CPU is the process's lifetime CPU time; the guard gives the
+        # block cpu_seconds on top of what the process has already used (an
+        # absolute 600 killed this suite once it had spent more than that).
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        used = usage.ru_utime + usage.ru_stime
+        with resource_limits(cpu_seconds=5, max_fds=32):
             cur_cpu = resource.getrlimit(resource.RLIMIT_CPU)
             cur_fds = resource.getrlimit(resource.RLIMIT_NOFILE)
-            # Soft limits should be tightened.
-            assert cur_cpu[0] <= 600
+            # Soft limits should be tightened, relative to what was used.
+            assert used + 5 <= cur_cpu[0] <= used + 7
             assert cur_fds[0] <= 32
 
         # After exiting, limits should be restored.
@@ -180,12 +182,9 @@ class TestResourceLimits:
         old = resource.getrlimit(resource.RLIMIT_NOFILE)
         try:
             resource.setrlimit(resource.RLIMIT_NOFILE, (16, old[1]))
-            # Use a high CPU limit (3600s) for the same reason the sibling
-            # test does: RLIMIT_CPU is a lifetime cap on the pytest
-            # process, and the 30s default would fire SIGXCPU immediately
-            # because pytest has already burned through far more than that
-            # by the time this test runs in the full suite.
-            with resource_limits(cpu_seconds=3600, max_fds=100):
+            # The CPU limit is relative to what the process has used, so the
+            # default is safe in a long-running suite.
+            with resource_limits(max_fds=100):
                 cur = resource.getrlimit(resource.RLIMIT_NOFILE)
                 # Should keep the tighter limit (16), not loosen to 100.
                 assert cur[0] <= 16

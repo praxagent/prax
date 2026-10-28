@@ -122,8 +122,9 @@ library/spaces/*/.cover.*
 # record a broken gitlink. They have their own history already.
 library/spaces/*/repos/
 
-# === Rotated logs (kept as plain text for grep) ===
-# archive/trace_logs/ — tracked by git for searchability
+# === Rotated logs ===
+# Trace logs live in the records directory now (prax/services/records.py);
+# archive/trace_logs/ is moved there on first use.
 
 # === Shared temp dir (sandbox ↔ app scratch space) ===
 .tmp/
@@ -2291,63 +2292,68 @@ def get_published_file(token: str, filename: str | None = None) -> str | None:
 
 _TRACE_FILENAME = "trace.log"
 _TRACE_MAX_BYTES = 512 * 1024  # 0.5 MB — rotate when exceeded
-_TRACE_KEEP_ROTATED = 3  # keep last 3 rotated files
 
 
-def _rotate_trace(trace_path: str) -> None:
-    """Rotate trace.log when it exceeds the size limit.
+def trace_log_path(user_id: str) -> str:
+    """The user's live trace log. It is in the records directory, outside the
+    workspace the sandbox mounts (``prax/services/records.py``); a trace.log
+    still at the workspace root moves there on first use."""
+    from prax.services import records
+    return str(records.user_path(user_id, _TRACE_FILENAME, legacy=_TRACE_FILENAME))
 
-    Moves trace.log → archive/trace_logs/trace.<timestamp>.log (plain text
-    for grep-ability) and prunes old rotated files beyond _TRACE_KEEP_ROTATED.
+
+def trace_archive_dir(user_id: str) -> str:
+    """Where rotated trace logs are kept (were ``archive/trace_logs/``)."""
+    from prax.services import records
+    d = records.user_path(user_id, "trace_logs", legacy=os.path.join("archive", "trace_logs"))
+    d.mkdir(parents=True, exist_ok=True)
+    return str(d)
+
+
+def _rotate_trace(trace_path: str, archive_dir: str) -> None:
+    """Rotate the trace log when it exceeds the size limit: it moves to
+    *archive_dir* as ``trace.<timestamp>.log`` (plain text, for grep).
+
+    Rotated logs are kept. They used to be pruned to the last three, which was
+    survivable only while the workspace's git history held the rest; a record
+    is not something Prax deletes. The rename and the new file's header line
+    are journaled (``prax/services/record_chain.py``).
     """
+    from prax.services import record_chain
     try:
         if not os.path.isfile(trace_path):
             return
         if os.path.getsize(trace_path) < _TRACE_MAX_BYTES:
             return
-
-        root = os.path.dirname(trace_path)
-        archive_dir = os.path.join(root, "archive", "trace_logs")
-        os.makedirs(archive_dir, exist_ok=True)
-
         ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
         rotated = os.path.join(archive_dir, f"trace.{ts}.log")
-        shutil.move(trace_path, rotated)
-        # Create a fresh trace file with a pointer to archives.
-        with open(trace_path, "w", encoding="utf-8") as f:
-            f.write(f"=== Log rotated at {ts} — previous entries in archive/trace_logs/ ===\n")
-        git_commit(root, f"Rotate trace log ({ts})")
-
-        # Prune old rotated files.
-        rotated_files = sorted(
-            [f for f in os.listdir(archive_dir) if f.endswith(".log")],
-            reverse=True,
-        )
-        for old in rotated_files[_TRACE_KEEP_ROTATED:]:
-            os.remove(os.path.join(archive_dir, old))
+        header = f"=== Log rotated at {ts} — previous entries in trace_logs/ ===\n"
+        record_chain.rotate(trace_path, rotated, header=header.encode("utf-8"),
+                            min_size=_TRACE_MAX_BYTES)
     except OSError:
         logger.debug("Trace rotation failed for %s", trace_path, exc_info=True)
 
 
 def append_trace(user_id: str, entries: list[dict]) -> None:
-    """Append structured trace entries to the user's workspace trace log.
+    """Append structured trace entries to the user's trace log.
 
     Each entry is a dict with at least ``type`` and ``content`` keys.
     See :class:`prax.trace_events.TraceEvent` for the canonical list of
     supported types.
 
-    The trace file is append-only, committed to git, and searchable via
-    conversation_search / conversation_history tools.  Rotated to plain-text
-    archive when it exceeds 0.5 MB.
+    The trace log is append-only, kept in the records directory out of the
+    agent's reach, hash-chained (``prax/services/record_chain.py``), and
+    searchable via conversation_search / conversation_history. Rotated to a
+    plain-text archive past 0.5 MB.
     """
     if not entries:
         return
     root = workspace_root(user_id)
     if not os.path.isdir(root):
         return  # workspace not initialised yet
-    trace_path = os.path.join(root, _TRACE_FILENAME)
+    trace_path = trace_log_path(user_id)
 
-    _rotate_trace(trace_path)
+    _rotate_trace(trace_path, trace_archive_dir(user_id))
 
     ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     lines: list[str] = [f"\n=== {ts} ===\n"]
@@ -2358,17 +2364,16 @@ def append_trace(user_id: str, entries: list[dict]) -> None:
         if len(content) > 5000:
             content = content[:5000] + "\n... [truncated]"
         lines.append(f"[{tag}] {content}\n")
+    from prax.services import record_chain
     try:
-        with open(trace_path, "a", encoding="utf-8") as f:
-            f.writelines(lines)
+        record_chain.append(trace_path, "".join(lines).encode("utf-8"))
     except OSError:
         logger.debug("Failed to write trace log for %s", user_id, exc_info=True)
 
 
 def read_trace_tail(user_id: str, lines: int = 200) -> str:
     """Return the last *lines* lines of the user's trace log."""
-    root = workspace_root(user_id)
-    trace_path = os.path.join(root, _TRACE_FILENAME)
+    trace_path = trace_log_path(user_id)
     if not os.path.isfile(trace_path):
         return ""
     with open(trace_path, encoding="utf-8", errors="replace") as f:
@@ -2427,7 +2432,7 @@ def search_trace(user_id: str, query: str, max_results: int = 20,
                  type_filter: str | None = None) -> list[dict]:
     """Search the trace log for blocks containing *query*.
 
-    Searches both the current trace.log and any rotated plain-text
+    Searches both the current trace log and any rotated plain-text
     archives.  Returns a list of dicts with ``timestamp`` and ``excerpt``
     keys, most recent first.
 
@@ -2435,17 +2440,15 @@ def search_trace(user_id: str, query: str, max_results: int = 20,
     blocks containing at least one line with the corresponding ``[TAG]``
     prefix are returned, and excerpts only include matching-type lines.
     """
-    root = workspace_root(user_id)
     query_lower = query.lower()
     results: list[dict] = []
 
     # Search current trace first (most recent).
-    trace_path = os.path.join(root, _TRACE_FILENAME)
-    _search_trace_file(trace_path, query_lower, results, max_results,
+    _search_trace_file(trace_log_path(user_id), query_lower, results, max_results,
                        type_filter=type_filter)
 
     # Then search archived files newest-first.
-    archive_dir = os.path.join(root, "archive", "trace_logs")
+    archive_dir = trace_archive_dir(user_id)
     if os.path.isdir(archive_dir):
         for fname in sorted(os.listdir(archive_dir), reverse=True):
             if len(results) >= max_results:

@@ -7,7 +7,7 @@ against the model path, which the agent doesn't control.
 The proxy's wire record (prax-secrets-proxy ``PROXY_WIRE_RECORD``) lists, per
 model response, the tool calls the model told Prax to make — names and
 argument hashes, written outside Prax. Prax's traces
-(``$WORKSPACE_DIR/.prax/graphs/graphs-*.jsonl``) list the tool calls Prax says
+(``$RECORDS_DIR/graphs/graphs-*.jsonl``) list the tool calls Prax says
 it made. A call on the wire with no matching tool span in the traces, shortly
 after, is what this reports: activity Prax didn't account for.
 
@@ -189,8 +189,12 @@ def changed_before_running(spans: list[tuple]) -> list[tuple]:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("wire")
+    # Prax keeps its execution graphs in the records directory (RECORDS_DIR,
+    # default records/ beside the workspace directory), out of the agent's reach.
     ap.add_argument("--graphs", default=os.path.join(
-        os.environ.get("WORKSPACE_DIR", "../workspaces"), ".prax", "graphs"))
+        os.environ.get("RECORDS_DIR") or os.path.join(
+            os.path.dirname(os.path.abspath(os.environ.get("WORKSPACE_DIR", "../workspaces"))), "records"),
+        "graphs"))
     ap.add_argument("--caller", default=None, help="only this proxy caller (e.g. prax-prod)")
     ap.add_argument("--hours", type=float, default=24.0)
     ap.add_argument("--slack", type=float, default=300.0,
