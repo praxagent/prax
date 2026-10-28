@@ -104,24 +104,56 @@ class ContextBudget:
     overflow: bool = False
 
 
+def _budget_cap() -> int:
+    """``CONTEXT_BUDGET_TOKENS``: how much context Prax sends per call at
+    most, whatever the window. 0 = no cap."""
+    try:
+        from prax.settings import settings
+        return int(getattr(settings, "context_budget_tokens", 64_000) or 0)
+    except Exception:
+        return 64_000
+
+
+def _known_window(model: str) -> int | None:
+    """Usable tokens for *model*: the table (already ~80% of the window),
+    then the window its provider reports, less 20% for the response."""
+    if model in _MODEL_CONTEXT_WINDOWS:
+        return _MODEL_CONTEXT_WINDOWS[model]
+    for known, limit in _MODEL_CONTEXT_WINDOWS.items():
+        if known in model or model in known:
+            return limit
+    try:
+        from prax.agent.model_catalog import context_window
+        reported = context_window(model)
+    except Exception:
+        reported = None
+    return int(reported * 0.8) if reported else None
+
+
 def get_context_limit(tier: str = "low", model: str = "") -> int:
     """Return the context token limit for a specific model or tier.
 
-    Checks the model name against known context windows first.
-    Falls back to the tier-based default if the model isn't recognized.
-    This ensures we use the actual model's capacity, not a lowest
-    common denominator.
-    """
-    if model:
-        # Try exact match
-        if model in _MODEL_CONTEXT_WINDOWS:
-            return _MODEL_CONTEXT_WINDOWS[model]
-        # Try substring match (e.g., "claude-sonnet-4-6" matches "claude-sonnet-4-6-xxxx")
-        for known, limit in _MODEL_CONTEXT_WINDOWS.items():
-            if known in model or model in known:
-                return limit
+    The model is the one that will actually run: when the caller has none
+    (a component configured by tier only, the usual case), the tier's model.
+    Its window comes from the table, else from what its provider reports
+    (OpenRouter's catalogue), else the tier fallback. The result is capped by
+    ``CONTEXT_BUDGET_TOKENS``: a 1M-token window is not a reason to send
+    800k tokens on every call.
 
-    return _TIER_FALLBACKS.get(tier, _TIER_FALLBACKS["low"])
+    Before 2026-10 an empty model name always meant the tier fallback, so
+    production's 1M-window models were budgeted at 50k: every long turn was
+    summarised and then truncated.
+    """
+    if not model:
+        try:
+            from prax.agent.model_tiers import resolve_model
+            model = resolve_model(tier) or ""
+        except Exception:
+            model = ""
+    window = _known_window(model) if model else None
+    limit = window if window else _TIER_FALLBACKS.get(tier, _TIER_FALLBACKS["low"])
+    cap = _budget_cap()
+    return min(limit, cap) if cap > 0 else limit
 
 
 # ---------------------------------------------------------------------------
@@ -219,6 +251,72 @@ def truncate_history(
 # Compaction (LLM-based summarization)
 # ---------------------------------------------------------------------------
 
+# The summarizer sees all of the older half (each message clipped), up to this
+# many characters, the most recent kept. It used to see the first 8000
+# characters only: a few of the OLDEST messages of a long conversation, after
+# which truncation dropped the rest anyway.
+_SUMMARY_INPUT_CHARS = 240_000
+_PER_MESSAGE_CHARS = 4_000
+_TOOL_RESULT_CHARS = 600
+_prefix_summaries: dict[str, str] = {}
+_PREFIX_CACHE_MAX = 64
+
+
+def _render(msgs: list[BaseMessage]) -> str:
+    out = []
+    for msg in msgs:
+        role = type(msg).__name__.replace("Message", "")
+        content = msg.content if isinstance(msg.content, str) else str(msg.content)
+        cap = _TOOL_RESULT_CHARS if isinstance(msg, ToolMessage) else _PER_MESSAGE_CHARS
+        if len(content) > cap:
+            content = content[:cap] + "..."
+        out.append(f"[{role}] {content}")
+    return "\n\n".join(out) + ("\n\n" if out else "")
+
+
+def _safe_split(conv: list[BaseMessage], idx: int) -> int:
+    """Move a split point forward past tool results, so the verbatim part
+    never starts with a result whose call is in the summarised part."""
+    while idx < len(conv) and isinstance(conv[idx], ToolMessage):
+        idx += 1
+    return idx
+
+
+def _prefix_keys(msgs: list[BaseMessage]) -> list[str]:
+    """The key of every prefix of *msgs* (``keys[k-1]`` covers ``msgs[:k]``),
+    in one pass."""
+    import hashlib
+    h = hashlib.sha256()
+    keys = []
+    for m in msgs:
+        content = m.content if isinstance(m.content, str) else str(m.content)
+        h.update(type(m).__name__.encode())
+        h.update(b"\0")
+        h.update(content.encode("utf-8", "replace"))
+        h.update(b"\1")
+        keys.append(h.hexdigest())
+    return keys
+
+
+def _cached_prefix_summary(old_msgs: list[BaseMessage]) -> tuple[str, int]:
+    """The summary of the longest prefix of *old_msgs* summarised before,
+    and its length; ("", 0) when none."""
+    keys = _prefix_keys(old_msgs)
+    for k in range(len(keys), 0, -1):
+        summary = _prefix_summaries.get(keys[k - 1])
+        if summary:
+            return summary, k
+    return "", 0
+
+
+def _remember_prefix_summary(old_msgs: list[BaseMessage], summary: str) -> None:
+    if not old_msgs:
+        return
+    if len(_prefix_summaries) >= _PREFIX_CACHE_MAX:
+        _prefix_summaries.pop(next(iter(_prefix_summaries)))
+    _prefix_summaries[_prefix_keys(old_msgs)[-1]] = summary
+
+
 def compact_history(
     messages: list[BaseMessage],
     max_tokens: int,
@@ -248,20 +346,27 @@ def compact_history(
         # Too few messages to compact meaningfully — fall back to truncation
         return truncate_history(messages, max_tokens, model)
 
-    # Split: older half gets summarized, recent half stays verbatim
-    split_point = len(conv_msgs) // 2
+    # Split: older half gets summarized, recent half stays verbatim. Never
+    # between a tool call and its result: a result whose call was summarised
+    # away is rejected by the provider.
+    split_point = _safe_split(conv_msgs, len(conv_msgs) // 2)
     old_msgs = conv_msgs[:split_point]
     recent_msgs = conv_msgs[split_point:]
+    if not old_msgs:
+        return truncate_history(messages, max_tokens, model)
 
-    # Build a text representation of old messages for summarization
-    old_text = ""
-    for msg in old_msgs:
-        role = type(msg).__name__.replace("Message", "")
-        content = msg.content if isinstance(msg.content, str) else str(msg.content)
-        # Truncate very long tool results
-        if isinstance(msg, ToolMessage) and len(content) > 200:
-            content = content[:200] + "..."
-        old_text += f"[{role}] {content}\n\n"
+    # Reuse the summary of a prefix already summarised (a long conversation
+    # that is compacted every turn grows by a few messages between turns),
+    # and summarise only what came after it.
+    prior_summary, done = _cached_prefix_summary(old_msgs)
+    if prior_summary and done == len(old_msgs):
+        # Exactly this part was summarised before: no model call.
+        return system_msgs + [SystemMessage(
+            content=f"[COMPACTED CONVERSATION HISTORY]\n{prior_summary}\n[END COMPACTED HISTORY]"
+        )] + recent_msgs
+    old_text = _render(old_msgs[done:])
+    if prior_summary:
+        old_text = f"[Earlier summary] {prior_summary}\n\n" + old_text
 
     # Summarize via LLM
     try:
@@ -280,11 +385,12 @@ def compact_history(
             "- Redundant tool outputs\n"
             "- Superseded information\n"
             "- Pleasantries and filler\n\n"
-            f"Conversation to summarize:\n{old_text[:8000]}\n\n"
+            f"Conversation to summarize:\n{old_text[-_SUMMARY_INPUT_CHARS:]}\n\n"
             "Summary (be concise but preserve critical context):"
         )
         result = llm.invoke(summary_prompt)
         summary = result.content.strip()
+        _remember_prefix_summary(old_msgs, summary)
 
         # Create a compacted history
         compaction_msg = SystemMessage(
@@ -380,3 +486,37 @@ def prepare_context(
     )
 
     return messages, budget
+
+
+# ---------------------------------------------------------------------------
+# Per model call (CONTEXT_IN_LOOP_ENABLED; prax/agent/loop_middleware.py)
+# ---------------------------------------------------------------------------
+
+SOFT_FRACTION = 0.6
+HARD_FRACTION = 0.85
+
+
+def fit_for_call(
+    messages: list[BaseMessage],
+    *,
+    model: str = "",
+    tier: str = "medium",
+    system: BaseMessage | None = None,
+) -> list[BaseMessage]:
+    """The staged policy, before each model call inside a turn.
+
+    ``prepare_context`` runs once, when a turn starts; inside the turn tool
+    results accumulate. Past ``SOFT_FRACTION`` of the budget, old tool results
+    become stubs (the last six stay); past ``HARD_FRACTION``, the older part
+    is summarised. No recall tool: "An Empirical Study of Harness Design for
+    Coding Agents" (arXiv 2609.20804) finds models almost never use one.
+    Returns *messages* itself when nothing had to change.
+    """
+    budget = get_context_limit(tier, model)
+    extra = [system] if system is not None else []
+    if count_message_tokens(extra + messages, model) < budget * SOFT_FRACTION:
+        return messages
+    fitted = clear_old_tool_results(messages, keep_last_n=6)
+    if count_message_tokens(extra + fitted, model) < budget * HARD_FRACTION:
+        return fitted
+    return compact_history(fitted, int(budget * SOFT_FRACTION), model, tier)
