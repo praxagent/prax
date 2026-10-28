@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.52.0](https://github.com/praxagent/prax/compare/v0.51.0...v0.52.0) (2026-10-28)
+
+
+### Features
+
+* context budgets from the real model, compaction that reads the history, and an in-loop context policy ([#277](https://github.com/praxagent/prax/issues/277)) ([196a750](https://github.com/praxagent/prax/commit/196a750e23579289eb306fadd365327b7c2c528d))
+* read-before-cite, spokes report the pages they read, and full multi-agent trajectories are recorded ([#279](https://github.com/praxagent/prax/issues/279)) ([d9ef856](https://github.com/praxagent/prax/commit/d9ef856d71ff1ebd11c662eb36b9636e547531ea))
+* self-regen shows its proposer failures from one case set and keeps changes on another ([#278](https://github.com/praxagent/prax/issues/278)) ([338825e](https://github.com/praxagent/prax/commit/338825e3493c4e17765f04af61765ac2caf27a7b))
+
+
+### Bug Fixes
+
+* an injected page can no longer send your data out, and no agent loop runs ungoverned tools ([#276](https://github.com/praxagent/prax/issues/276)) ([5461e6e](https://github.com/praxagent/prax/commit/5461e6e0f6c492438e51158887c5940f8eadc3b6))
+* plugin_write says what its sandbox test checked, and can test a tool's behaviour ([#280](https://github.com/praxagent/prax/issues/280)) ([e492786](https://github.com/praxagent/prax/commit/e4927860fbf68f85ab863b0d22147036553e0a23))
+* the agent can no longer reach or quietly rewrite the record of what it did ([#275](https://github.com/praxagent/prax/issues/275)) ([24e6a29](https://github.com/praxagent/prax/commit/24e6a293d3c8202d584de7ea85aa3fc28e68fb98))
+
 ## [0.51.0](https://github.com/praxagent/prax/compare/v0.50.0...v0.51.0) (2026-10-05)
 
 
