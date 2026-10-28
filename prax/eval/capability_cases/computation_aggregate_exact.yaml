@@ -24,9 +24,12 @@ checks:
     weight: 2.0
   # THE FAILURE: reporting a middle ELEMENT instead of the mean of the two.
   # The classic even-length median slip, and the reason this case uses twelve
-  # values rather than eleven.
+  # values rather than eleven. Only a DIRECT statement counts ("median is 47",
+  # "median: 56"). The earlier pattern, 'median' then 47 or 56 within 30
+  # characters, failed correct answers that show the work — "the median is the
+  # mean of 47 and 56: 51.5", "median (47 + 56) / 2 = 51.5" (found 2026-10-11).
   - kind: regex_absent
-    value: '(?i)median[^.\n]{0,30}\b(47|56)\b'
+    value: '(?i)median\s*(is|=|:)?\s*(47|56)(?![\d.])'
     weight: 1.0
 notes: >-
   Sum = 604, median = 51.5, both verified independently before the case was

@@ -154,6 +154,16 @@ This ledger is the honest complement to
 |---|---|---|---|
 | **Head line in the system journal** (`RECORD-CHAIN-HEAD`, sent over journald's native socket when Prax runs under systemd and stderr is not the journal) | 🟡 | 2026-10-06, dev VM: the native-protocol datagram was accepted by journald and read back with `journalctl -t prax-record-chain` (sent from a login shell, so the journal attributed it to the session scope). The journal, the tamper checks and the CLI are unit-tested keyless (`tests/test_record_chain.py`). | Not yet observed from inside `prax.service`: that the line shows under `journalctl -u prax` (the journal derives the unit from the sender's cgroup, so it should), and that the unit's sandboxing allows the socket. After the first deploy: `journalctl -u prax -o cat \| grep RECORD-CHAIN-HEAD`, then run `verify --anchors-from -` against it. |
 
+## Self-regeneration loop protocol (`scripts/eval_suite.py self-regen --split --revise-kept`)
+
+| Surface | Status | Verified | Not verified / needs |
+|---|---|---|---|
+| `--split`: feedback / scoring / held-out sets | 🧪 | Split within each family, disjointness, the feedback-only report and the scoring-only keep decision, all with injected evaluators (`tests/test_self_regen_protocol.py`) | Never run against the live capability suite: cost per round, and whether a hosted proposer writes general overlays from concrete failures, are unmeasured |
+| `--keep-replicates` | 🧪 | Mean-of-N scoring and the spread rule, including the incumbent's spread, with scripted evaluators | The cost is N× the scoring set per candidate; whether N=2 is enough on Prax's suite is unmeasured |
+| `--revise-kept` | 🧪 | The proposer receives the kept overlay and a fresh report from it (keyless tests) | Not run live; whether revising beats independent draws on Prax's suite is the paper's claim, not our measurement |
+| Generated computation cases (`prax/eval/case_generators.py`) | 🧪 | Every generated case accepts its correct answer (worked forms included) and rejects its slip, with the answer recomputed from the prompt text in the test | Never graded against a live model's answers. Formats a real answer uses that the tests don't (units in words, scientific notation) could under-credit |
+| `revisions.jsonl` training record | 🧪 | Written for every proposal in every mode (keyless tests) | No training run has consumed it; the schema is a first guess at what SFT/RL on a proposer needs |
+
 ## Flagged for audit (not assessed this pass)
 
 | Surface | Status | Note |

@@ -130,7 +130,11 @@ def cmd_multiturn(args) -> int:
 
 def cmd_self_regen(args) -> int:
     from prax.eval.self_regen import run_self_regen
-    summary = run_self_regen(rounds=args.rounds, apply=args.apply, tier=args.tier)
+    summary = run_self_regen(rounds=args.rounds, apply=args.apply, tier=args.tier,
+                             revise_kept=args.revise_kept, split=args.split,
+                             generated_per_family=args.generated,
+                             split_seed=args.split_seed,
+                             keep_replicates=args.keep_replicates)
     print(f"\n>>> Self-regeneration (#29): baseline {summary['baseline']} → "
           f"best {summary['best']} (+{summary['improvement']}) over {args.rounds} rounds; "
           f"kept={summary['variants_kept']}, applied={summary['applied']}")
@@ -238,6 +242,18 @@ def main() -> int:
     sp_sr.add_argument("--rounds", type=int, default=3, help="candidate patches to try")
     sp_sr.add_argument("--apply", action="store_true",
                        help="auto-apply the winner (also needs SELF_REGEN_ENABLED); else propose-only")
+    sp_sr.add_argument("--revise-kept", action="store_true",
+                       help="each round revises the kept overlay, with a fresh report from running it")
+    sp_sr.add_argument("--split", action="store_true",
+                       help="show the proposer failed FEEDBACK cases; keep a change only on a disjoint "
+                            "SCORING set (authored + generated cases, split within each family)")
+    sp_sr.add_argument("--generated", type=int, default=8,
+                       help="generated cases per family that has a generator, under --split (default 8)")
+    sp_sr.add_argument("--split-seed", type=int, default=0,
+                       help="seed for the generated cases and the split (default 0)")
+    sp_sr.add_argument("--keep-replicates", type=int, default=1,
+                       help="score each candidate (and the baseline) this many times; keep a change "
+                            "only if its gain beats the margin AND the run-to-run spread (default 1)")
     sp_sr.set_defaults(func=cmd_self_regen)
 
     sp_gaia = sub.add_parser("gaia", help="resumable GAIA batch (external scoreboard)")
