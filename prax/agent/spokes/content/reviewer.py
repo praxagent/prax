@@ -103,7 +103,11 @@ def run_reviewer(
     The feedback starts with APPROVED or REVISE, followed by categorized issues.
     """
     llm = _pick_reviewer_llm(writer_provider)
-    tools = _build_reviewer_tools()
+    from prax.agent.governed_tool import govern_spoke_tools
+    from prax.agent.tool_registry import apply_eval_denylist
+
+    # Governed like every other spoke loop (audit, trifecta legs, floors).
+    tools = govern_spoke_tools(apply_eval_denylist(_build_reviewer_tools()))
     graph = build_agent_loop(llm, tools)
     prompt = REVIEWER_PROMPT.format(agent_name=settings.agent_name)
 
